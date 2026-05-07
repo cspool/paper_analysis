@@ -1,0 +1,883 @@
+            Scaling GPU-to-CPU Migration for Efficient
+              Distributed Execution on CPU Clusters
+                          Ruobing Han                                                        Hyesoon Kim
+                 Georgia Institute of Technology                                     Georgia Institute of Technology
+                          Atlanta, USA                                                        Atlanta, USA
+                      rhan38@gatech.edu                                                 hyesoon@cc.gatech.edu
+
+Abstract                                                                  coupled with supply chain shortages, has significantly con-
+   The growing demand for GPU resources has led to wide-                  strained their availability [9, 20, 39].
+spread shortages in data centers, prompting the exploration                  Data center maintainers frequently observe an imbalance
+of CPUs as an alternative for executing GPU programs. While               in usage between CPUs and GPUs. We measure the utiliza-
+prior research supports executing GPU programs on single                  tion of four CPU partitions and four GPU partitions in the
+CPUs, these approaches struggle to achieve competitive per-               Georgia Tech PACE cluster. By monitoring the Slurm sched-
+formance due to the computational capacity gap between                    uling system, we record the waiting time of all jobs submitted
+GPUs and CPUs.                                                            between March 2nd and 8th, 2025 in Figure 1. The waiting
+   To further improve performance, we introduce CuCC, a                   time represents the duration jobs wait for resources to be-
+framework that scales GPU-to-CPU migration to CPU clus-                   come available for execution. Figure 1 shows that CPU par-
+ters and utilizes distributed CPU nodes to execute GPU pro-               titions experience significantly shorter waiting times than
+grams. Compared to single-CPU execution, CPU cluster exe-                 GPU partitions. This indicates that while users wait for GPU
+cution requires cross-node communication to maintain data                 resources, a substantial number of CPUs remain idle.
+consistency. We present the CuCC execution workflow and
+communication optimizations, which aim to reduce network
+overhead. Evaluations demonstrate that CuCC achieves high
+scalability on large-scale CPU clusters and delivers runtimes
+approaching those of GPUs. In terms of cluster-wide through-
+put, CuCC enables CPUs to achieve an average of 2.59×
+higher throughput than GPUs.
+CCS Concepts: • Computing methodologies → Distributed
+computing methodologies.
+Keywords: compiler optimization, GPU-to-CPU migration,
+CPU cluster
+ACM Reference Format:                                                       Figure 1. Waiting times for CPU and GPU partitions.
+Ruobing Han and Hyesoon Kim. 2026. Scaling GPU-to-CPU Mi-
+gration for Efficient Distributed Execution on CPU Clusters. In
+Proceedings of the 31st ACM SIGPLAN Annual Symposium on Princi-
+ples and Practice of Parallel Programming (PPoPP ’26), January 31            The imbalance in CPU/GPU usage motivates researchers
+– February 4, 2026, Sydney, NSW, Australia. ACM, New York, NY,            to explore using CPUs to alleviate the GPU shortage. Re-
+USA, 14 pages. https://doi.org/10.1145/3774934.3786435                    searchers [7, 16, 21, 23, 32, 38, 42] propose compiler and
+                                                                          runtime solutions. With these optimizations, GPU programs
+1    Introduction                                                         can be executed on single CPUs with high performance.
+  Numerous GPU applications are released weekly in fields                    However, a gap still exists between GPU and CPU run-
+such as artificial intelligence [24, 45] and high-performance             times due to differences in computational capacity. CPUs are
+computing [5, 14]. The growing demand for GPU resources,                  designed to support a broad range of general applications
+                                                                          and cannot match the computational power of GPUs, which
+                                                                          are optimized for high-throughput workloads. For instance,
+                                                                          in 2020, NVIDIA released the A100 GPU, which delivers 19.5
+This work is licensed under a Creative Commons Attribution-               TFLOP/s for single-precision floating-point computation. In
+NonCommercial-NoDerivatives 4.0 International License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                          contrast, one of the most advanced CPUs released a year
+© 2026 Copyright held by the owner/author(s).                             later, AMD EPYC 7713, achieves only 4.096 TFLOP/s. As
+ACM ISBN 979-8-4007-2310-0/2026/01                                        GPUs continue to integrate more computational units, the
+https://doi.org/10.1145/3774934.3786435                                   performance gap between CPUs and GPUs is widening.
+
+
+
+                                                                    355
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                   Ruobing Han and Hyesoon Kim
+
+
+   Given that CPUs are typically more accessible in data cen-               Although this paper focuses on migrating CUDA applica-
+ters, this paper explores a new direction: executing GPU pro-            tions to CPU clusters, the proposed approach is general and
+grams on CPU clusters. By leveraging multiple CPU nodes,                 not restricted to any specific GPU programming language.
+this approach aggregates greater computational resources,
+bringing the overall capacity closer to that of a single GPU             2     Background
+and enabling GPU programs to migrate to CPUs without                     2.1    Programming Model
+significant performance loss.
+                                                                         2.1.1 GPU. The programming model is structured with
+   Compared to a single CPU, CPU cluster migration is sig-
+                                                                         two levels of parallelism. The GPU block represents coarse-
+nificantly more challenging, as CPU clusters and GPUs have
+                                                                         grained parallelism, while each GPU block consists of a fixed
+different memory models. The GPU programming model fol-
+                                                                         number of GPU threads that provide fine-grained parallelism.
+lows a shared memory model, where all threads can access
+                                                                         Importantly, there are no dependencies among execution
+a global memory space, and data consistency is implicitly
+                                                                         units at either level, enabling highly parallel execution.
+maintained by hardware. In contrast, CPU clusters use a
+                                                                            All GPU threads access the same memory space, and modi-
+distributed memory model, where each node has its own
+                                                                         fications made by one thread are visible to all other threads. 1
+memory space. Thus, to support the migration of GPU pro-
+grams (shared memory model) to CPU clusters (distributed                 2.1.2 CPU Cluster. A CPU cluster consists of multiple
+memory model), auxiliary cross-node communication opera-                 CPU nodes (Figure 2). All nodes are connected through net-
+tions are required to ensure data consistency.                           works such as an InfiniBand. In contrast to the GPU model,
+   The distributed shared memory (DSM) problem, which                    where all threads access the same memory space, CPU clus-
+aims to provide a shared memory model on a distributed                   ters follow a distributed memory model, with each node
+system, is a classical challenge for which researchers have              maintaining its own memory space. As a result, cross-node
+proposed numerous solutions [4, 11, 26, 33, 46]. However,                network communication is required to ensure memory con-
+existing DSM solutions are designed for traditional CPU pro-             sistency among the distributed nodes.
+grams, which are typically Multiple Program Multiple Data
+(MPMD) and contain relatively few memory accesses with ir-
+regular patterns. Consequently, peer-to-peer communication
+is often used to provide flexibility. When these DSM solu-
+tions are applied to programs migrated from GPUs, which
+contain a vast number of memory accesses, they introduce
+significant communication overhead that degrades overall
+performance. A detailed analysis is provided in Section 3.1.
+   In this paper, we propose CuCC (CUDA on CPU Clusters),
+a new solution tailored for migrating GPU programs to CPU
+clusters. GPU programs follow a Single Program Multiple                                  Figure 2. CPU Cluster Structure.
+Data (SPMD) model, where all threads execute the same pro-
+grams. This results in memory access patterns that are highly
+regular. Our solution exploits this regularity by coalescing
+                                                                         2.2    Executing GPU Programs on Single CPUs
+multiple memory accesses into a single, larger operation and
+uses collective communication primitives to achieve high                    GPUs are designed to execute a large number of light-
+bandwidth to lower network overhead.                                     weight tasks, while CPUs are optimized for a smaller number
+   We implement CuCC as an end-to-end framework that                     of heavier tasks. To address this disparity, researchers [21,
+translates CUDA programs into CPU cluster executables. We                22, 32, 38, 42] apply compiler transformations to wrap the
+demonstrate that CuCC is 12.81× faster than existing single-             workload within a CUDA block into a CPU function, which
+CPU solutions and achieves runtimes approaching those of                 is then executed by a CPU thread.
+GPUs. The contributions are summarized as follows:                          An example is shown above. For the GPU program (List-
+                                                                         ing 1), 5 * 256 GPU threads are invoked during execution.
+    • Propose a solution for executing GPU programs on                   Since thread operation overhead on CPUs is significantly
+      CPU clusters with low communication overhead.                      higher than on GPUs, CPUs cannot efficiently support the
+    • Introduce an auxiliary compiler analysis for GPU-to-               same number of threads. With the proposed compiler opti-
+      CPU-cluster migration.                                             mization (Listing 2), the entire workload of a GPU block is
+    • Implement an end-to-end framework for migrating                    1We only discuss GPU global memory for CPU cluster migration. The GPU
+      GPU programs to CPU clusters.                                      shared memory and local memory do not require cross-node communication
+    • Evaluate the proposed solution on CPU clusters and                 to maintain consistency, as all threads within a GPU block are scheduled to
+      compare its performance against GPUs.                              the same CPU node for execution.
+
+
+
+
+                                                                   356
+Scaling GPU-to-CPU Migration for Efficient Distributed Execution on CPU Clusters       PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+mapped to a single function (line 1), reducing the require-
+ment to just 5 CPU threads (line 10).
+ 1   # define N 1200
+ 2   __global__ void vec_copy ( char * src , char * dest ) {
+ 3      int id = blockDim . x * blockIdx . x + threadIdx . x ;
+ 4      if ( id < N)
+ 5         dest [ id ] = src [ id ];
+ 6   }                                                                                                 (a) In-place Allgather.
+ 7   int main () {
+ 8      vec_copy <<< ceil ( N /256) , 256 > > >( src , dest ) ;
+ 9   }
+
+                Listing 1. Original GPU program.
+ 1   void vec_copy ( char * src , char * dest , int block_id ) {
+ 2   # pragma omp simd
+ 3      for ( int thread_id =0; thread_id <256; thread_id ++) {
+ 4        int id = 256 * block_id + thread_id ;
+ 5        if ( id < N)
+ 6              dest [ id ] = src [ id ];
+ 7      }                                                                                           (b) Out-of-place Allgather.
+ 8   }
+ 9   int main () {
+10   # pragma omp parallel for                                                               Figure 3. Allgather communication.
+11      for ( int block_id =0; block_id < ceil ( N /256) ; block_id ++)
+12        vec_copy ( src , dest , block_id ) ;
+13   }
+                                                                                   In addition to data placement, we observe that data dis-
+     Listing 2. Transformed single-node CPU program.                            tribution also affects communication overhead. Specifically,
+   The transformed CPU program utilizes CPU resources for                       a balanced Allgather, where all distributed nodes have the
+high performance. In Listing 2, a for-loop is introduced (line                  same data size, is typically faster than an imbalanced All-
+3), where each iteration represents a GPU thread. Since there                   gather. For example, in a 2-node cluster with a total data size
+are no dependencies among these iterations, the for-loop is                     of 𝑁 GB, a balanced Allgather—where each node holds 𝑁2
+well-suited for optimization using CPU SIMD instructions.                       GB—usually outperforms an imbalanced Allgather, where
+Similarly, the host program contains a parallelized for-loop                    one node has 𝑁4 GB and the other has 3𝑁  4 GB.
+(line 11), where each iteration corresponds to a GPU block.                        Based on our network evaluation, we observe that balanced-
+This for-loop can be executed by multiple CPU threads to                        in-place Allgather consistently achieves the highest perfor-
+maximize performance.                                                           mance. Therefore, CuCC utilizes balanced-in-place Allgather
+   For single-CPU migration, GPU global memory is mapped                        communication to maintain data consistency.
+to CPU heap memory, which is accessible to all CPU threads,
+with consistency maintained by the OS and hardware. How-                        3     Problem Statement and Solution
+ever, when extending to a CPU cluster, CPU threads are                          3.1   Challenges of Existing Solutions
+distributed across multiple nodes, and no unified memory
+                                                                                   It is challenging to migrate the GPU shared memory model
+space exists among all CPU threads. Thus, auxiliary commu-
+                                                                                to the distributed memory space of CPU nodes. A possible
+nication operations are required to maintain consistency.
+                                                                                solution is to first migrate a GPU program to a single-CPU
+2.3     Allgather Communication                                                 program. Then, scale this single-CPU program to a CPU
+                                                                                cluster using DSM frameworks by replacing local memory
+   Our solution utilizes Allgather communication to maintain                    accesses with distributed memory accesses. An example of
+data consistency across CPU nodes. Allgather collects data                      migrating the program in Listing 1 with a popular DSM
+from each node, concatenates them sequentially, and returns                     solution, PGAS, is shown in Listing 3.
+the concatenated data to all nodes (Figure 3).                                     Although state-of-the-art PGAS solutions [4, 11] integrate
+   From a data placement perspective, Allgather can be cat-                     network optimizations like GASNet-EX [8] and RDMA, they
+egorized into two types: in-place and out-of-place. In                          perform poorly for GPU program migration due to heavy
+in-place Allgather (Figure 3a), the input and output share                      communication overhead. For example, Listing 3 introduces
+the same buffers, so the local data in the input buffer does                    1200 remote memory accesses (line 7), where each access
+not need to be moved to another location. In contrast, out-                     is only 1 byte. This large number of fragmented communi-
+of-place Allgather (Figure 3b) uses separate buffers for input                  cations limits overall performance. We evaluate the perfor-
+and output. Processing the output buffer requires not only                      mance on a 32-node cluster (Figure 4); most GPU programs
+communication between nodes but also local memory move-                         do not achieve high scalability, and some even slow down
+ment from the input buffer to the output buffer. Additionally,                  when scaled to distributed nodes, as the communication
+out-of-place Allgather requires two buffers, resulting in dou-                  overhead significantly exceeds the performance gains.
+ble memory usage compared to in-place Allgather.
+
+
+
+                                                                          357
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                 Ruobing Han and Hyesoon Kim
+
+
+
+ 1   void vec_copy ( char * src , pgas :: global_ptr < char > dest ,
+                                                                             4    CuCC Execution Workflow
+ 2                     int block_id ) {                                         To execute a GPU kernel on CPU cluster, CuCC follows a
+ 3     for ( int tid =0; tid <256; tid ++) {
+ 4       int id = 256 * block_id + tid ;                                     three-phase workflow. In Section 6, we prove that the work-
+ 5       if ( id < N)                                                        flow is theoretically capable of supporting the execution of
+ 6           // Async one - side remote memory access
+ 7           pgas :: remote_put ( dest + id , src [ id ]) ;                  all types of GPU programs on CPU clusters.
+ 8     }
+ 9   }
+10   int main () {
+11     // Cluster - level global variable                                        1. Partial Block Execution: In this phase, each CPU
+12
+13
+       pgas :: global_ptr < char > global_dest ( N ) ;
+       // Distributed Execution
+                                                                                    node executes a distinct set of GPU blocks in parallel.
+14     int c_rank = pgas :: rank_me () ;                                            These GPU blocks write to non-overlapping memory
+15
+16
+       int c_size = pgas :: rank_n () ;
+       int local_size = ceil ( N /256) / c_size ;
+                                                                                    locations, with all blocks writing the same amount
+17     for ( int bid = local_size * c_rank ;                                        of data. Importantly, some GPU blocks may not be
+18
+19
+             bid < local_size * ( c_rank +1) ; bid ++)
+         vec_copy ( src , global_dest , bid ) ;
+                                                                                    executed during this phase. Specifically, if a block does
+20   }                                                                              not meet the requirements introduced in Section 6, its
+                                                                                    execution is deferred to the third phase. These deferred
+Listing 3. The PGAS migration for GPU program in Listing 1.
+                                                                                    blocks are referred to as callback blocks.
+                                                                                 2. Balanced-In-Place Allgather: After the first phase,
+                                                                                    each CPU node holds a unique memory copy. To en-
+                                                                                    sure consistency across the cluster, balanced-in-place
+                                                                                    Allgather is applied to synchronize memory spaces.
+                                                                                 3. Callback Block Execution: After Allgather, all CPU
+                                                                                    nodes have an identical memory copy. The callback
+                                                                                    blocks, which were not executed in the first phase,
+                                                                                    are then executed independently by all CPU nodes.
+                                                                                    Since all CPU nodes execute the same set of blocks,
+                                                                                    the memory space remains identical across the cluster.
+
+
+                                                                                We use GPU kernel in Listing 1 to illustrate the workflow.
+                                                                             The program consists of five GPU blocks: blocks 0-3 each
+                                                                             write 256 elements, while block 4 writes only 176 elements to
+Figure 4. Performance of CPU cluster migration using PGAS.                   𝑑𝑒𝑠𝑡. Figure 5 illustrates the workflow for executing the GPU
+                                                                             program on a two-node CPU cluster. Before kernel execution,
+                                                                             both CPU nodes have identical copies of the memory space.
+3.2     Insight of CuCC                                                         During the partial block execution phase, GPU blocks are
+   As summarized in Section 3.1, GPU programs contain a                      split between CPU nodes for execution. To ensure that the
+large number of threads, and each thread typically issues                    results can later be synchronized using balanced-in-place
+a small number of memory accesses. When migrated with                        Allgather, CuCC assigns blocks 0 and 1 to Node 0 and blocks
+existing solutions, this massive number of fine-grained mem-                 2 and 3 to Node 1. Each CPU node then writes 512 elements
+ory accesses turns into a large volume of fragmented network                 to the 𝑑𝑒𝑠𝑡 array locally. GPU block 4 is designated as a
+communications, which introduces significant overhead.                       callback block and is not executed during this phase.
+   We propose a new solution, CuCC, that executes with                          After the first phase, each CPU node holds a different copy
+low network overhead. The insight is that, since GPU pro-                    of the memory space. To synchronize the memory spaces,
+grams follow the SPMD model, all threads execute the same                    CuCC invokes balanced-in-place Allgather across the CPU
+programs, differing only by their thread index. This leads                   cluster. After this communication, both CPU nodes have
+many GPU programs to contain memory access patterns                          identical memory spaces, equivalent to executing GPU blocks
+where sequential threads access consecutive memory loca-                     0 through 3 independently on each node.
+tions. Therefore, instead of issuing a separate network com-                    Finally, in the callback block execution phase, each CPU
+munication for each GPU thread’s memory access, CuCC                         node executes the callback block (GPU block 4) indepen-
+coalesces all memory accesses within a GPU block and ser-                    dently. From a sequential perspective, the CuCC execution
+vices them with a single coarse-grained network operation.                   workflow is equivalent to executing all callback blocks after
+Additionally, as all GPU blocks execute the same program,                    the other blocks. Since the GPU programming model does
+their memory accesses are highly symmetric. This symmetry                    not enforce a specific GPU block execution order, the results
+allows CuCC to use collective communication primitives.                      will be consistent with those produced by the GPUs.
+
+
+
+                                                                       358
+Scaling GPU-to-CPU Migration for Efficient Distributed Execution on CPU Clusters    PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                                                            developed by extending the codebase of CuPBoP [21], a GPU-
+                                                                            to-single-CPU project reported to achieve high performance
+                                                                            on single CPUs. Therefore, the single-node performance is
+                                                                            equivalent to that of CuPBoP, which is used as the baseline.
+                                                                               The transformed modules are linked with the CuCC run-
+                                                                            time library, which provides implementations of cluster op-
+                                                                            erations. In our evaluation, CuCC utilizes MPI primitives to
+                                                                            implement these functions.
+
+                                                                            6      Allgather Distributable Analysis
+    Figure 5. CuCC execution workflow for Listing 1.                           To generate CPU programs that follow the CuCC three-
+                                                                            phase workflow, the most important decision is how to assign
+                                                                            GPU blocks to each CPU node. To make balanced-in-place
+                                                                            Allgather feasible for maintaining consistency, CuCC must
+                                                                            distribute GPU blocks across CPU nodes in the partial block
+5    Implementation                                                         execution phase such that each node performs the same
+   CuCC consists of both compilation and runtime compo-                     amount of memory writes (balanced) and the order of mem-
+nents. CuCC first compiles the GPU source code to LLVM                      ory writes aligns with the cluster ranks of the CPU nodes
+IR, then applies compiler analysis and transformations to                   (in-place). We propose a compiler analysis, Allgather dis-
+generate CPU object files. These object files are subsequently              tributable analysis, to analyze GPU programs and distribute
+linked with the CuCC runtime library to produce CPU clus-                   workloads in alignment with the requirements.
+ter executables. The generated CPU cluster program follows
+the workflow introduced in Section 4.                                       6.1    Terminology
+   Figure 6 illustrates the process of migrating the GPU pro-               Definition: Write Interval
+gram in Listing 1. All analysis and transformations are ap-                    The Write Interval of a GPU thread represents the range
+plied at the LLVM IR level. The source code shown in Figure 6               of global memory addresses written by that thread. For a
+is provided for illustrative purposes only.                                 GPU block, the Write Interval can be expressed as:
+   The GPU program is first analyzed by a compiler analysis,                                               Ø
+Allgather distributable analysis (Section 6), to collect meta-                   write_interval(𝑏𝑙𝑜𝑐𝑘) =        write_interval(𝑡),
+data used for generating CPU executable. Metadata values                                                          𝑡 ∈𝑏𝑙𝑜𝑐𝑘
+
+are based on symbolic analysis. Thus, for programs with                     where 𝑡 denotes a thread within 𝑏𝑙𝑜𝑐𝑘.
+runtime-dependent values (e.g., dynamic GPU block size),                      For a set of GPU blocks B = {block1 , block2 , . . . , block𝐾 },
+CuCC can still perform the migration.                                       the Write Interval is the union of the Write Intervals of all
+   With the metadata, CuCC applies a template-based ap-                     blocks in the set:
+proach to generate CPU host module. The template consists
+                                                                                                        Ø
+                                                                                write_interval(B) =          write_interval(𝑏𝑙𝑜𝑐𝑘).
+of three code sections corresponding to three phases in the                                                 𝑏𝑙𝑜𝑐𝑘 ∈B
+workflow. The first code section (Figure 6 lines 1–4 in CPU
+                                                                             As an example, in the GPU kernel shown in Listing 1, the
+host module) represents the Partial Block Execution phase.
+                                                                            Write Intervals for block 0 through 4 are:
+To generate this section, CuCC analyzes the GPU host mod-
+ule to determine the grid size (𝑐𝑒𝑖𝑙 (𝑁 /256)) and retrieves the            [dest, dest + 256), [dest + 256, dest + 512), .., [dest + 1024, dest + 1200).
+tail-divergent information from the metadata. Using these                      CuCC considers only the write interval for GPU global
+values, CuCC generates the instruction (line 1) to calculate                memory access, as GPU local and shared memory accesses
+the number of GPU blocks to be executed by each CPU node.                   do not require cross-node communication.
+This variable (p_size) is also used to generate the Callback                Definition: Allgather Distributable
+Block Execution section (line 6–8). The second code section                    Let a set of blocks B = {block1 , block2 , . . . , block𝐾 } rep-
+(line 5) represents the Balanced-In-Place Allgather phase. To               resent the GPU blocks of a GPU kernel. The GPU kernel
+generate this section, CuCC retrieves metadata information                  is considered Allgather distributable for an 𝑁 -node cluster
+(𝑚𝑒𝑚_𝑝𝑡𝑟 , 𝑢𝑛𝑖𝑡_𝑠𝑖𝑧𝑒) to determine the variables and their                  if there exist a subset C ⊆ B, and the set difference B − C
+sizes that need to be communicated.                                         can be partitioned into 𝑁 disjoint subsets 𝑆 = {𝑆𝑖 }, where
+   In CuCC, all GPU threads within a GPU block are always                   𝑖 = 1, . . . , 𝑁 , such that the following conditions are satisfied:
+executed by the same CPU node. Thus, for CPU kernel mod-
+                                                                                1. Equal Length of Write Intervals: All subsets 𝑆𝑖 have
+ule generation, which corresponds to the execution of a
+                                                                                   write intervals of equal length:
+single GPU block, CuCC utilizes the same compiler transfor-
+mations as existing GPU-to-single-CPU solutions. CuCC is                     len(write_interval(𝑆𝑖 )) = len(write_interval(𝑆 𝑗 )),         ∀𝑆𝑖 , 𝑆 𝑗 ∈ 𝑆.
+
+
+
+                                                                      359
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                  Ruobing Han and Hyesoon Kim
+
+
+
+
+                                       Figure 6. GPU-to-CPU-cluster migration process in CuCC.
+
+      2. Disjoint Write Intervals: The write intervals of any                 static analysis. During compiler analysis, CuCC identifies all
+         two subsets are disjoint:                                            write instructions that target GPU global memory. For each
+write_interval(𝑆𝑖 ) ∩ write_interval(𝑆 𝑗 ) = ∅,        ∀𝑆𝑖 ≠ 𝑆 𝑗 ∈ 𝑆.         write instruction, the following conditions are checked.
+                                                                                  1. When treating the GPU block index and block size as
+   3. No Gaps between Write Intervals: The union of all                              constants, the index of the write position is an affine
+      write intervals in the subsets must cover the entire                           function of the thread index, with an invariant coeffi-
+      write interval of the set difference:                                          cient and intercept.
+                                 ∑︁
+len(write_interval(B − C)) =         len(write_interval(𝑆𝑖 )).                    2. The write instruction is not enclosed within condi-
+                                    𝑆𝑖 ∈𝑆                                            tional statements with thread-variant conditions, un-
+   Allgather distributable GPU kernels can be executed on                            less the conditional statements are tail divergent.
+CPU clusters using the three-phase workflow. In the partial                       3. When treating the thread index and block size as con-
+block execution phase, each CPU node executes the workload                           stants, the index of the write position is an affine func-
+of a subset in 𝑆. Then, a balanced-in-place Allgather opera-                         tion of the block index with a positive coefficient.
+tion is invoked to synchronize the memory space across all                       The first condition ensures that each block writes the
+CPU nodes, with a length equal to len(write_interval(𝑆𝑖 )).                   same number of bytes. In most real GPU applications, each
+Finally, in the callback block execution phase, the GPU blocks                thread writes to a memory location determined by its global
+in C are executed independently on each CPU node.                             index (i.e., 𝑏𝑙𝑜𝑐𝑘𝐼𝑑𝑥.𝑥 × 𝑏𝑙𝑜𝑐𝑘𝐷𝑖𝑚.𝑥 + 𝑡ℎ𝑟𝑒𝑎𝑑𝐼𝑑𝑥.𝑥). When
+   Theoretically, all GPU kernels are Allgather distributable.                the memory write index is an affine function of the thread
+Even GPU kernels that contain irregular memory access can                     index, each thread writes the same amount of data. Since the
+still satisfy the definition of Allgather distributable by setting            GPU programming model enforces that all blocks contain
+𝐶 equal to 𝐵. We refer to these kernels as trivial Allgather dis-             the same number of threads, this guarantees that all blocks
+tributable. When three-phase workflow executes these trivial                  write the same number of bytes to memory.
+kernels, the first and second phases do not perform any work,                    The second condition extends the first condition to cases
+and all GPU blocks are executed in the third phase, similar                   where write instructions are enclosed within conditional
+to GPU-to-single-CPU execution. With the generalization                       statements (e.g., if-else statements). If the conditional state-
+of Allgather distributable, CuCC is theoretically capable of                  ment is thread-variant, it cannot be guaranteed that each
+supporting all types of GPU programs.                                         block has the same number of threads executing the write in-
+   In this paper, we primarily discuss non-trivial kernels that               struction; thus, blocks may write different amounts of bytes,
+benefit from distributed execution. Unless explicitly stated                  which is not suitable for three-phase workflow.
+otherwise, all references to Allgather distributable refer to                    We observe that the second condition frequently excludes
+this non-trivial subset. In Section 7.1, we analyze real-world                GPU applications that satisfy all other conditions. For exam-
+GPU kernels in AI/HPC applications and demonstrate that a                     ple, the GPU program in Figure 6 contains a global memory
+large number of them are non-trivial Allgather distributable                  write, where the write index is an affine function of both the
+and can be accelerated by cluster execution.                                  thread index and block index. Nevertheless, this write instruc-
+                                                                              tion is enclosed within an if-statement with a thread-variant
+6.2     Compiler Analysis Implementation                                      condition (id<N), causing it to fail the second condition.
+   Given the abstract definition, implementing a compiler                        To enable more GPU kernels to be migrated to CPU clus-
+analysis to detect the Allgather distributable property poses                 ters, we relax the second condition and introduce a concept
+challenges. To address this, we break down the Allgather                      called tail divergence. The key insight is that a specific if-
+distributable criteria into a series of conditions suitable for               statement pattern is widely present in GPU programs. When
+
+
+
+                                                                        360
+Scaling GPU-to-CPU Migration for Efficient Distributed Execution on CPU Clusters         PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+the output data size is not a multiple of the block size, GPU                        For performance evaluation, to reduce noise, we filter out
+programs include if-statements to filter out out-of-bound                          GPU programs with kernel execution times less than 100
+memory accesses. These if-statements evaluate to True for                          ms on an NVIDIA A100 GPU. Each experiment is executed
+all blocks except the last block. We refer to such if-statements                   seven times, and the median is reported as the final result.
+as tail divergent, as they only diverge at the tail block. The
+GPU kernel in Figure 6 is tail divergent, as the if-statement                      7.1   Coverage Evaluation
+(line 3) can evaluate to false only in the last block. For GPU                         We analyze the generalization of Allgather distributable
+kernels with tail-divergent write instructions, the last block                     in real-world GPU kernels. We analyze the kernels in two
+can be designated as a callback block, while the remaining                         popular AI models: BERT [15], for Natural Language Process-
+blocks write an equal number of bytes.                                             ing, and Vision Transformer (ViT) [18], for Computer Vision.
+   The first and second conditions ensure that all GPU blocks                      Since many GPU programs in AI applications are generated
+(except the tail block) write the same amount of data, a re-                       by Deep Learning Compilers, we compile the PyTorch im-
+quirement for achieving 𝑏𝑎𝑙𝑎𝑛𝑐𝑒𝑑. The third condition, on                          plementations of these models with Triton [44] to generate
+the other hand, ensures that the write locations increase                          GPU programs (NVVM IR) and analyze them. We also ana-
+linearly with the GPU block index, which is necessary for                          lyze GPU programs implemented manually in CUDA from
+achieving 𝑖𝑛 −𝑝𝑙𝑎𝑐𝑒. This enables CuCC to partition the GPU                        Hetero-Mark GPU benchmarks [43] for HPC applications.
+blocks evenly in ascending order and assign each partition                             The coverage is demonstrated in Figure 7. All 21 kernels
+to the CPU node corresponding to its cluster rank.                                 in the ViT and BERT models are Allgather distributable.
+   Kernels that satisfy all three conditions are classified as                     The high coverage is due to the kernels being lowered from
+Allgather distributable, and the compiler records the corre-                       the Triton language. Compared to low-level GPU program-
+sponding information in the metadata. As shown in Figure 6,                        ming languages like CUDA and OpenCL, Triton provides a
+the metadata includes tail divergence (𝑡𝑎𝑖𝑙_𝑑𝑖𝑣𝑒𝑟𝑔𝑒𝑛𝑡), the                        more abstract programming interface. For example, Triton
+memory variables that require communication (𝑚𝑒𝑚_𝑝𝑡𝑟 ),                            does not support inter-block barriers, which encourages the
+and the number of bytes each block writes (𝑢𝑛𝑖𝑡_𝑠𝑖𝑧𝑒). This                        generation of GPU programs with regular memory access
+metadata is then used to generate CPU cluster executable.                          patterns that do not have data races between blocks, making
+   The conditions form a sufficient but not necessary condi-                       it favorable to execute these blocks in distributed nodes.
+tion for the actual Allgather distributable criteria. As a result,                     On the other hand, the Hetero-Mark benchmark contains
+the analysis may produce false negatives. In CuCC, GPU ker-                        manually written CUDA kernels, each with a unique code
+nels mistakenly identified as not Allgather distributable are                      structure. In this benchmark, 8 of the 13 GPU kernels are
+executed independently by all CPU nodes. This ensures that                         Allgather distributable. Of the remaining five, four have mem-
+false-negative cases still maintain correctness. Despite the po-                   ory access patterns that overlap the written interval, which
+tential for false negatives, our evaluation demonstrates that                      makes it difficult to maintain data consistency in a distributed
+these conditions accurately identify Allgather distributable                       system, and one contains indirect memory access, making
+kernels in real-world benchmarks.                                                  it impossible to analyze statically. To support these kernels,
+                                                                                   peer-to-peer communication is needed, which introduces
+7     Evaluation                                                                   high network overhead and may outweigh the performance
+  We use two CPU clusters: a Thread-Focused cluster that fea-                      gain from CPU cluster execution.
+tures CPUs with high thread-level parallelism, and a SIMD-
+Focused cluster that is equipped with CPUs supporting wide
+SIMD instructions. It is important to note that while these
+names highlight specific architectural strengths, both CPUs
+support SIMD instructions and multi-core execution; we en-
+able both optimizations on both clusters. Both clusters are
+connected via a 100 Gb/s InfiniBand network with RDMA
+support. Detailed specifications are provided in Table 1.
+
+                   Table 1. Cluster Specifications.
+
+                            Single Node      Cores/ FLOPs
+       Name         Nodes               Year              Network
+                              Config.         SMs (Tera)
+    SIMD-Focused     32     2 × Intel 6226 2019   24    4.15   100 Gbps IB
+ Thread-Focused       4     2 × AMD 7713 2021     128   8.19   100 Gbps IB         Figure 7. Coverage Evaluation for Allgather Distributable.
+     A100 GPU         1     NVIDIA A100 2020      108   19.5      N/A
+     V100 GPU         1     NVIDIA V100 2017      80    15.7      N/A
+
+
+
+
+                                                                             361
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                              Ruobing Han and Hyesoon Kim
+
+
+7.2   Performance Evaluation
+   Eight GPU programs, previously used in other GPU mi-
+gration projects [6, 10, 17, 21, 22, 27, 28], are used to evaluate
+the performance. We do not directly reuse the kernels in Sec-
+tion 7.1, as we find that their execution times are too short
+to reflect meaningful speedup. Specifically, as GPU kernels
+generated by Triton are hard-coded with bound checking,
+making it hard to scale the data size to increase the workload
+to make the runtime evaluation stable.
+   We execute CuCC on clusters of varying sizes and present
+the results in Figure 8. The scalability evaluations follow
+the principle of strong scalability, where the problem size
+remains fixed across all cluster configurations.
+                                                                                              (a) SIMD-Focused cluster.
+   For SIMD-Focused cluster, most kernels demonstrate high
+scalability on 2-node and 4-node clusters. As the cluster size
+increases, Kmeans and Transpose fail to achieve further per-
+formance gains and even experience slower execution times.
+Similar behavior is observed on Thread-Focused cluster.
+   The Matrix Transpose kernel consists of lightweight oper-
+ations primarily involving memory movement. As the cluster
+size increases, the memory access overhead on each node
+decreases. However, the overall communication volume re-
+mains constant since the matrix size does not change. Con-
+sequently, as the per-node execution time decreases, the
+communication overhead becomes increasingly significant,
+limiting scalability. In contrast, for other kernels, the com-
+munication overhead is negligible compared to the total                                      (b) Thread-Focused cluster.
+execution time. This overhead is illustrated in Figure 9.
+   For the Kmeans, the GPU program consists of 313 GPU                            Figure 8. CuCC scalability evaluation results.
+blocks. When executed on a 16-node cluster, each CPU node
+is assigned 19 GPU blocks. Each GPU block is executed by
+                                                                            communication overhead is much lower than the computa-
+a CPU thread, resulting in a CPU thread count close to the
+                                                                            tion, making it well-suited for scaling to large clusters.
+number of available CPU cores (24 cores). However, when
+                                                                               Thread-Focused cluster also achieves speedup compared
+scaling up to a 32-node cluster, each CPU node is assigned
+                                                                            to single-node, however, the scalability is lower than SIMD-
+fewer GPU blocks, which cannot efficiently utilize the CPU
+                                                                            Focused cluster. For instance, the Transpose kernel achieves
+cores, thereby limiting further scalability.
+                                                                            a 2.88× speedup on the 4-node SIMD-Focused cluster, but
+   Another reason for the Kmeans slowdown is the overhead
+                                                                            only a 1.14× speedup on 4-node Thread-Focused cluster.
+caused by the callback blocks. When executed on a 16-node
+cluster, each CPU node processes 19 GPU blocks (⌊ 313    16 ⌋) dur-
+ing the partial block execution phase, while 9 GPU blocks
+(313 − 16 × 19) are designated as callback blocks to be exe-
+cuted after the Allgather operation. Each CPU node executes
+28 GPU blocks in total. However, when the cluster scales up
+to 32 nodes, each CPU node processes only 9 GPU blocks
+during the partial block execution phase and executes 25
+callback blocks. Thus, each node executes 34 GPU blocks in
+total, which leads to a overall execution time slowdown.
+   On the other hand, the FIR (Finite Impulse Response)
+achieves near-linear scalability, even on a 32-node cluster.
+FIR involves heavy computation, including a for-loop that                     Figure 9. Network overhead in SIMD-Focused cluster.
+traverses the input sequence to accumulate results. The com-
+puted results are scalars, making FIR computation-intensive                   The difference in scalability can be attributed to two fac-
+with minimal memory access overhead. Consequently, the                      tors. First, a single Thread-Focused node contains 128 CPU
+                                                                            cores, whereas a single SIMD-Focused node has only 24 CPU
+
+
+
+                                                                      362
+Scaling GPU-to-CPU Migration for Efficient Distributed Execution on CPU Clusters   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+cores. Consequently, for GPU kernels with 𝑁 blocks, the
+Thread-Focused cluster cannot achieve further speedup be-
+yond 128
+       𝑁
+          nodes, as adding more nodes would result in idle
+CPU cores. In contrast, the upper bound of scalability for the
+SIMD-Focused cluster is much higher, at 24   𝑁
+                                               nodes. Second,
+as further discussed in Section 8.2, a single Thread-Focused
+node usually achieves significantly higher performance than
+a single SIMD-Focused node. The expected speedup for a
+𝐾-node cluster can be estimated using Amdahl’s law:
+
+
+                            𝑠𝑖𝑛𝑔𝑙𝑒 𝑛𝑜𝑑𝑒 𝑒𝑥𝑒𝑐𝑢𝑡𝑖𝑜𝑛
+      𝑠𝑝𝑒𝑒𝑑𝑢𝑝 =                          𝑠𝑖𝑛𝑔𝑙𝑒 𝑛𝑜𝑑𝑒 𝑒𝑥𝑒𝑐𝑢𝑡𝑖𝑜𝑛
+                   𝑐𝑜𝑚𝑚𝑢𝑛𝑖𝑐𝑎𝑡𝑖𝑜𝑛 +                 𝐾
+
+   Since both SIMD-Focused and Thread-Focused clusters
+have the same network bandwidth, their communication                        Figure 10. CuCC and PGAS solution runtime comparison.
+overheads are similar. However, the single node execution
+time on the SIMD-Focused nodes is greater than that on the
+Thread-Focused nodes. Consequently, for the same 𝐾, the
+SIMD-Focused cluster demonstrates better scalability.                         CuCC and PGAS achieve similar performance on the GA
+                                                                            and BinomialOption benchmarks. In GA (Gene Alignment),
+7.3   Comparison with PGAS Solution                                         remote memory access occurs only when specific target gene
+   PGAS is another approach for GPU-to-CPU-cluster migra-                   sequences are found in the query gene sequence, which hap-
+tion. To migrate a GPU program, the corresponding mem-                      pens infrequently for the given dataset. In BinomialOption
+ory variables are replaced with PGAS global variables, and                  benchmark, only the first thread in each GPU block writes to
+their associated read/write operations are substituted with                 global memory, resulting in minimal communication over-
+remote memory access (Section 3.1). PGAS is designed for                    head. As a result, CuCC and PGAS exhibit similar runtimes.
+general programs, which uses fine-grained remote access for
+flexibility. For the example in Listing 3, the PGAS solution                7.4    CPU Cluster vs GPU
+performs 1200 cluster-level communication operations (line                    We compare the performance of CPU clusters and GPUs.
+7). In contrast, CuCC utilizes coarse-grained collective com-               Two GPUs, the NVIDIA A100 and V100, released in the
+munication. The CPU program generated by CuCC contains                      same era as the evaluated CPUs, are used for comparison.
+only a single collective communication operation (Figure 6,
+CPU host module, line 5).                                                   7.4.1 Runtime Analysis. We measure the execution time
+   We migrate the GPU benchmark using UPC++ [4], one                        of GPUs running the original GPU programs and the exe-
+of the most popular PGAS implementations, and execute it                    cution time of CPUs running the migrated CPU programs.
+on SIMD-focused cluster. We calculate the relative runtime                  The results are presented in Figure 11. For CPU runtimes, we
+of PGAS and CuCC and present the results in Figure 10.                      report the best result achieved across various cluster sizes.
+Compared to PGAS, CuCC achieves higher performance                             On average (geometric mean), the SIMD-Focused cluster
+across all benchmarks and scales. Moreover, the speedup                     has a runtime that is 2.55× slower than the NVIDIA V100
+becomes increasingly significant as the cluster size grows.                 GPU and 4.14× slower than the NVIDIA A100 GPU. In com-
+After filtering out the Transpose benchmark as an outlier,                  parison, the Thread-Focused cluster achieves a runtime that
+CuCC achieves an average speedup of 4.09× over the PGAS                     is 1.57× slower than the V100 and 2.54× slower than the A100.
+solution on 2-node cluster and 12.81× on 32-node cluster.                   We provide a detailed analysis of representative applications:
+   CuCC and PGAS exhibit the most significant runtime dif-                     Transpose: Both CPU platforms achieve lower execution
+ference in Transpose benchmark. In Transpose, data move-                    times than the V100 and A100 GPUs. The Matrix Transpose
+ment constitutes the majority of the workload. This data                    is memory-intensive, involving frequent transfers between
+movement involves GPU global memory, which, in PGAS                         global memory and shared memory. CPUs benefit from large
+solution, is mapped to remote memory access. The original                   last-level caches (SIMD-Focused CPU: 19.25 MB, Thread-
+GPU program assigns a single thread to handle each matrix                   Focused CPU: 256 MB), which are comparable in size to
+element. Therefore, for an 𝑁 × 𝑁 matrix, the PGAS program                   those on GPUs (V100: 6 MB, A100: 40 MB). Additionally,
+results in 𝑁 2 communications, introducing substantial over-                these memory transfers can be efficiently optimized using
+head. In contrast, CuCC coalesces all memory accesses and                   SIMD instructions, enabling CPUs to deliver performance
+requires only a single Allgather communication.                             that is close to or even better than GPUs.
+
+
+
+                                                                      363
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                              Ruobing Han and Hyesoon Kim
+
+
+
+
+                                                                         Figure 12. Throughput provided by GPUs and GPUs+CPUs.
+Figure 11. Runtime Comparison between CPUs and GPUs.
+
+                                                                         Thread-Focused CPUs, providing substantial aggregated com-
+                                                                         putational capacity. On average, instead of executing pro-
+   BinomialOption: The program features a two-level nested               grams on GPU nodes alone, utilizing these additional CPU
+for-loop and is highly compute-intensive, resulting in signif-           nodes improves throughput by 3.59×.
+icant workloads for each GPU thread. Each GPU block per-                    Based on this cluster-wide throughput analysis, we con-
+forms an internal reduction, with only the first GPU thread              clude that GPU-to-CPU migration can unlock the potential
+writing a scalar value to global memory. This memory ac-                 of idle CPU resources to alleviate GPU shortages. Specifi-
+cess pattern is ideal for CPU cluster migration, as it incurs            cally, for batch-processing applications that are less sensitive
+low communication overhead. Consequently, the Thread-                    to latency, executing on CPU clusters can achieve higher
+Focused CPU cluster achieves the highest performance with                throughput compared to GPU execution.
+4-node execution. With a computational capacity of up to
+32 TFLOPs, the 4-node Thread-Focused CPU cluster outper-                 8     Discussion
+forms both the A100 (19.5 TFLOPs) and V100 (14 TFLOPs).
+                                                                         8.1 Target GPU Applications
+   The SIMD-Focused CPU cluster achieves its highest per-
+formance with 32 nodes, further demonstrating that Bino-                    Our solution proposes integrating multiple CPU nodes
+mialOption is well-suited for CPU clusters. However, the                 to execute GPU programs with minimal network overhead.
+SIMD-Focused cluster does not achieve the same level of per-             Thus, the benefit a GPU application receives depends highly
+formance as the Thread-Focused cluster. This is because the              on two factors.
+nested for-loop in the GPU program has loop dependencies                    Parallelism: Our solution applies GPU block-level paral-
+that cannot be parallelized with SIMD.                                   lelism, in which GPU blocks are distributed to CPU nodes for
+   EP and GA: On both benchmarks, GPUs outperform CPU                    parallel execution. Therefore, it is critical to have a sufficient
+clusters by a factor of 5×–10×. These programs contain rel-              number of GPU blocks to distribute. For example, to achieve
+atively few GPU blocks (EP: 512, GA: 256), which cannot                  linear scalability for a CPU cluster with 𝐶 nodes, where each
+fully utilize thread-level parallelism in large-scale CPU clus-          node has 𝑇 CPU cores, we need at least 𝐶 × 𝑇 GPU blocks to
+ters. Additionally, the kernel code includes for-loops that              fully utilize the CPU resources.
+cannot be optimized with SIMD instructions. As a result,                    Local Execution Overhead: If the local execution (e.g.,
+these programs are unable to effectively leverage either the             computation, local memory access) is heavy, migrating to
+thread-level or data-level parallelism available in CPUs.                CPU-cluster execution significantly decreases the execu-
+                                                                         tion time, bringing an end-to-end speedup. In Sec. 7.2, we
+7.4.2 Throughput Analysis. In data centers, CPUs, de-                    found that all GPU applications achieve a speedup from
+signed for general applications, are typically much more                 CPU-cluster migration compared to the single-CPU solu-
+accessible than GPUs. For example, the TACC Lonestar6 clus-              tion. This is because the input GPU programs are originally
+ter [2] has 560 CPU nodes but only 16 GPU nodes. Similarly,              designed for single-GPU execution. As a single GPU typi-
+the Frontera cluster [1] contains 8,368 CPU nodes and only               cally has higher capacity than a single CPU, the workload
+90 GPU nodes. This vast difference in quantity enables CPUs              designed for a single GPU is inherently heavy for a single
+to provide significantly more aggregate compute capacity,                CPU execution, which allows it to benefit from distributing
+making them well-suited to complement GPU resources.                     the workload to CPU clusters.
+   We estimate the cluster-wide throughput for the TACC
+Lonestar6 cluster (Figure 12). The throughput of batch pro-              8.2   Target CPU Architectures
+cessing for each GPU program is measured over a one-second                 The SIMD-Focused CPU (Intel Gold 6226) provides wide
+time frame. The cluster contains a significant number of                 SIMD instructions (AVX-512), while the Thread-Focused
+
+
+
+                                                                   364
+Scaling GPU-to-CPU Migration for Efficient Distributed Execution on CPU Clusters   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+CPU (AMD EPYC 7713) offers high thread-level parallelism
+with 64 cores per socket. To ensure a fair comparison be-
+tween them, in this section, we limit execution on the Thread-
+Focused cluster nodes to 64 CPU cores. This results in compa-
+rable theoretical computational capacities: 4.147 TFLOPs for
+the SIMD-Focused cluster and 4.096 TFLOPs for the Thread-
+Focused cluster.
+   We compare the runtime performance of the two clus-
+ters. As shown in Figure 13, the Thread-Focused cluster
+demonstrates significantly higher performance for migrated
+GPU programs. Based on the geometric mean, the Thread-                                            (a) Single-Node Cluster.
+Focused cluster is 4.61×, 4.66×, and 4.32× faster than the
+SIMD-Focused cluster for 1, 2, and 4 nodes, respectively.
+   For a single-node, the largest performance difference is ob-
+served in the BinomialOption kernel, where Thread-Focused
+CPUs are 55× faster than SIMD-Focused CPUs. The Binomi-
+alOption contains 1024 GPU blocks, each with a non-parallel
+for-loop to calculate accumulated values. This structure is
+highly suited to thread-level parallelism, as the large number
+of blocks can be executed in parallel. Conversely, since the
+kernel includes a non-parallel for-loop as its inner loop, it
+is challenging to apply SIMD optimization. As a result, the                                         (b) 2-Node Cluster.
+SIMD-Focused CPU, which is optimized for data-parallel
+operations, achieves lower performance compared to the
+Thread-Focused CPU, which excels in thread-parallel work-
+loads.
+   The SIMD-Focused and Thread-Focused clusters show the
+closest performance on the Transpose kernel. In single-node
+execution, the Thread-Focused CPU is 1.3× faster than the
+SIMD-Focused CPU. The Transpose consists of parallelized
+for-loops, with the loop body primarily containing memory
+movement operations, which are highly amenable to SIMD
+optimization. To further analyze performance, we measured                                            (c) 4-Node Cluster.
+execution time with SIMD optimization disabled. Compared
+to execution with SIMD optimization enabled, the Thread-                       Figure 13. Runtime in SIMD/Thread-Focused clusters.
+Focused CPU showed no performance degradation, while
+the SIMD-Focused CPU experienced a slowdown of 61.66%.
+   Based on the evaluation, we conclude that for executing
+migrated GPU programs, CPUs with a higher core count are
+more likely to achieve high performance, and thread-level
+parallelism is more effective than data-level parallelism.                  a CPU thread, effectively replacing a GPU Streaming Multi-
+                                                                            processor (SM) with a CPU core. Since GPU SMs and CPU
+                                                                            cores have different computational capacities, workloads
+8.3   Future Directions for GPU-to-CPU Migration                            optimized for an SM may not be well-suited for a CPU core.
+   Based on the evaluation result, we propose several sug-                     However, in practical GPU programs, developers often
+gestions for future GPU-to-CPU migration solutions.                         hard-code block sizes to control resource utilization within a
+Workload Redistribution: Our evaluation reveals that                        GPU SM, such as shared memory and registers. These hard-
+GPU programs with few GPU blocks cannot scale effectively                   coded values create challenges when attempting to modify
+to large CPU clusters. For instance, for a 4-node CPU cluster               the number of blocks through compiler transformations.
+with 64 cores per node, at least 256 GPU blocks are required                   Therefore, we suggest developing a more flexible GPU
+to fully utilize thread-level parallelism in CPUs.                          programming framework that enables the adjustment of GPU
+   In addition to parallelism, adjustable block sizes could also            block workloads through compiler transformations. Such a
+help redistribute workloads to align with hardware capabili-                framework would not only facilitate GPU-to-CPU migration
+ties. After GPU-to-CPU migration, each GPU block maps to                    but also benefit other portable programming solutions.
+
+
+
+                                                                      365
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                          Ruobing Han and Hyesoon Kim
+
+
+SIMD Optimization: CPUs leverage both data-parallelism                   and StarPU [3] are frameworks that offload workloads to
+and thread-parallelism to achieve high performance. How-                 distributed nodes. These solutions focus on inter-kernel
+ever, our evaluation reveals that utilizing data-parallelism in          parallelism, where a single task is executed exclusively by
+transformed CPU programs is more challenging.                            one device. In contrast, our project focuses on intra-kernel
+   In the transformed CPU programs, a GPU thread is re-                  parallelism, where multiple distributed nodes collaborate to
+placed by an iteration of a for-loop. To achieve high per-               execute a single task (i.e., GPU kernel).
+formance, each GPU thread should ideally be executed by                     Other intra-kernel parallelism solutions either rely on
+a lane of an SIMD instruction. Although these iterations                 hardware-supported shared memory to maintain data con-
+are independent, applying SIMD optimization to such for-                 sistency [12, 13] or use peer-to-peer communication to syn-
+loops remains challenging. This is because these parallel                chronize CPU and GPU memory on the same node [29, 34].
+for-loops are usually the outermost loops in transformed                 Our work is the first to migrate a single GPU program to a
+CPU programs, whereas SIMD instructions are most suitable                CPU cluster, an environment with no hardware-supported
+for parallelizing inner loops. Additionally, Han et al. [23]             shared memory and where peer-to-peer communication is
+suggest that transformed CPU programs often involve com-                 too expensive for high performance.
+plex control flow and data flow, making them difficult for
+static analysis.                                                         9.3   Partitioned Global Address Space
+   In our evaluation, we observed that Thread-Focused CPUs                 PGAS is a parallel programming model that maintains a
+typically achieve higher performance than SIMD-Focused                   global memory space across distributed nodes. The global
+CPUs, even when both have the same peak theoretical perfor-              memory is partitioned among nodes, and PGAS provides
+mance. This observation highlights the need for developing               primitives that allow each node to access memory located
+SIMD optimizations tailored for CPU programs transformed                 on other nodes. PGAS is a widely used model with many
+from GPU programs.                                                       implementations (e.g., UPC++ [4], SHMEM [11]).
+                                                                           These solutions are designed for general programs, utiliz-
+8.4   Cost and Energy Aspects                                            ing flexible but costly communication operations. However,
+   Our solution proposes a way to utilize idle CPU resources             for GPU-to-CPU-cluster migration, communication over-
+to alleviate the GPU shortage. It is important to note that              head is a significant concern due to the high volume of com-
+idle CPUs have non-negligible energy consumption [30, 36].               munication. Our work analyzes common patterns in GPU
+Consequently, cloud providers often offer spot services at               programs and proposes the use of coarse-grained collective
+discounted rates [25, 31], encouraging users to leverage these           communication to reduce network overhead.
+idle resources. Based on these observations, we believe our
+solution, which offers a new way to utilize idle CPUs, pro-              10    Conclusion
+vides an attractive option for saving energy and reducing
+                                                                            We introduce CuCC, a framework for migrating GPU pro-
+costs in data centers.                                                   grams to CPU clusters. CuCC incorporates compiler analysis
+                                                                         and transformations to generate CPU cluster programs with
+9     Related Work                                                       low communication overhead. Our evaluation demonstrates
+9.1   GPU-to-CPU Migration                                               that GPU programs can be efficiently executed on CPU clus-
+   To address the disparity in parallelism between GPU pro-              ters, achieving execution times within the same order of
+grams and CPU architectures, researchers [42] propose com-               magnitude as GPUs. Furthermore, since modern data centers
+piler transformations to group lightweight GPU workloads.                typically contain far more CPU nodes than GPUs, cluster-
+This approach significantly reduces the number of threads                wide throughput analysis shows that CPUs achieve 2.59×
+required for the transformed CPU programs and is widely                  higher throughput compared to GPU execution.
+adopted in projects supporting SPMD programs on CPUs [7,                    As the industry moves toward higher-bandwidth networks
+16, 35, 37, 40, 41, 47]. Han et al. [23] highlight that trans-           such as 400 Gbps and 800 Gbps, the performance of clustered
+formed CPU programs are often incompatible with existing                 CPUs will continue to improve. Hence, we expect that run-
+optimizations and propose novel compiler and runtime opti-               ning GPU programs on clustered CPUs will become even
+mizations. Moses et al. [32] propose to optimize the migra-              more compelling.
+tion with a polyhedral model.
+   All existing GPU-to-CPU projects focus on single CPUs,                Acknowledgments
+whereas our solution extends migration to CPU clusters.              We thank the anonymous reviewers for their insightful
+                                                                   feedback. This work was supported in part by NSF grants
+9.2 Single-Device to Multi-Device Migration                        CCF-2316176 and CCF-2452082. We also thank Georgia Tech’s
+  Researchers propose solutions to migrate programs writ-          CRNCH (Center for Research into Novel Compute Hierar-
+ten for a single device to execute on multiple devices. OmpSS [19] chies) Rogues Gallery.
+
+
+
+                                                                   366
+Scaling GPU-to-CPU Migration for Efficient Distributed Execution on CPU Clusters             PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+References                                                                                 OpenCL kernels. In 2013 IEEE 21st International Symposium on Mod-
+ [1] 2025. TACC Frontera. https://docs.tacc.utexas.edu/hpc/frontera/                       elling, Analysis and Simulation of Computer and Telecommunication
+ [2] 2025. TACC Lonestar6. https://tacc.utexas.edu/systems/lonestar6/                      Systems. IEEE, 556–566.
+ [3] Cédric Augonnet, Samuel Thibault, Raymond Namyst, and Pierre-                    [18] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weis-
+     André Wacrenier. 2009. StarPU: a unified platform for task scheduling                 senborn, Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani,
+     on heterogeneous multicore architectures. In European Conference on                   Matthias Minderer, Georg Heigold, Sylvain Gelly, et al. 2020. An
+     Parallel Processing. Springer, 863–874.                                               image is worth 16x16 words: Transformers for image recognition at
+ [4] John Bachan, Scott B Baden, Steven Hofmeyr, Mathias Jacquelin, Amir                   scale. arXiv preprint arXiv:2010.11929 (2020).
+     Kamil, Dan Bonachea, Paul H Hargrove, and Hadia Ahmed. 2019.                     [19] Alejandro Duran, Eduard Ayguadé, Rosa M Badia, Jesús Labarta, Luis
+     UPC++: A high-performance communication framework for asynchro-                       Martinell, Xavier Martorell, and Judit Planas. 2011. Ompss: a proposal
+     nous computation. In 2019 IEEE International Parallel and Distributed                 for programming heterogeneous multi-core architectures. Parallel
+     Processing Symposium (IPDPS). IEEE, 963–973.                                          processing letters 21, 02 (2011), 173–193.
+ [5] Peter J Baddoo, Benjamin Herrmann, Beverley J McKeon, J                          [20] Nándor Hajdu. 2021. COVID-19 pandemic and managing supply chain
+     Nathan Kutz, and Steven L Brunton. 2023. Physics-informed dynamic                     risks: NVIDIA’s graphics card shortage case analysis. (2021).
+     mode decomposition. Proceedings of the Royal Society A 479, 2271                 [21] Ruobing Han, Jun Chen, Bhanu Garg, Xule Zhou, John Lu, Jeffrey
+     (2023), 20220576.                                                                     Young, Jaewoong Sim, and Hyesoon Kim. 2024. CuPBoP: Making
+ [6] Tal Ben-Nun, Ely Levy, Amnon Barak, and Eri Rubin. 2015. Memory                       CUDA a Portable Language. ACM Transactions on Design Automation
+     access patterns: The missing piece of the multi-GPU puzzle. In Proceed-               of Electronic Systems 29, 4 (2024), 1–25.
+     ings of the International Conference for High Performance Computing,             [22] Ruobing Han, Jaewon Lee, Jaewoong Sim, and Hyesoon Kim. 2022.
+     Networking, Storage and Analysis. 1–12.                                               COX: Exposing CUDA Warp-Level Functions to CPUs. ACM Transac-
+ [7] Vera Blomkvist Karlsson. 2021. Cumulus-translating CUDA to sequen-                    tions on Architecture and Code Optimization (TACO) (2022).
+     tial C++: Simplifying the process of debugging CUDA programs.                    [23] Ruobing Han, Jisheng Zhao, and Hyesoon Kim. 2024. Unleashing CPU
+ [8] Dan Bonachea and Paul H Hargrove. 2018. GASNet-EX: A high-                            Potential for Executing GPU Programs through Compiler/Runtime Op-
+     performance, portable communication library for exascale. In Interna-                 timizations. In Proceedings of the 57th Annual IEEE/ACM International
+     tional Workshop on Languages and Compilers for Parallel Computing.                    Symposium on Microarchitecture.
+     Springer, 138–158.                                                               [24] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep
+ [9] Javier Borrachero Prieto. 2022. Confronting technology’s greatest                     residual learning for image recognition. In Proceedings of the IEEE
+     crisis: Global chip shortage. Design of an innovative new supply chain.               conference on computer vision and pattern recognition. 770–778.
+     (2022).                                                                          [25] Syed M Iqbal, Haley Li, Shane Bergsma, Ivan Beschastnikh, and Alan J
+[10] Javier Cabezas, Lluís Vilanova, Isaac Gelado, Thomas B Jablin, Nacho                  Hu. 2022. Cospot: a cooperative vm allocation framework for increased
+     Navarro, and Wen-mei W Hwu. 2015. Automatic parallelization of                        revenue from spot instances. In Proceedings of the 13th Symposium on
+     kernels in shared-memory multi-gpu nodes. In Proceedings of the 29th                  Cloud Computing. 540–556.
+     ACM on International Conference on Supercomputing. 3–13.                         [26] Stefanos Kaxiras, David Klaftenegger, Magnus Norgren, Alberto Ros,
+[11] Barbara Chapman, Tony Curtis, Swaroop Pophale, Stephen Poole,                         and Konstantinos Sagonas. 2015. Turning centralized coherence and
+     Jeff Kuehn, Chuck Koelbel, and Lauren Smith. 2010. Introducing                        distributed critical-section execution on their head: A new approach
+     OpenSHMEM: SHMEM for the PGAS community. In Proceedings of the                        for scalable distributed shared memory. In Proceedings of the 24th
+     Fourth Conference on Partitioned Global Address Space Programming                     International Symposium on High-Performance Parallel and Distributed
+     Model. 1–3.                                                                           Computing. 3–14.
+[12] Younghyun Cho, Florian Negele, Seohong Park, Bernhard Egger, and                 [27] Jungwon Kim, Honggyu Kim, Joo Hwan Lee, and Jaejin Lee. 2011.
+     Thomas R Gross. 2018. On-the-fly workload partitioning for inte-                      Achieving a single compute device image in OpenCL for multiple
+     grated CPU/GPU architectures. In Proceedings of the 27th International                GPUs. ACM Sigplan Notices 46, 8 (2011), 277–288.
+     Conference on Parallel Architectures and Compilation Techniques. 1–13.           [28] Janghaeng Lee, Mehrzad Samadi, Yongjun Park, and Scott Mahlke.
+[13] Younghyun Cho, Jiyeon Park, Florian Negele, Changyeon Jo, Thomas R                    2013. Transparent CPU-GPU collaboration for data-parallel kernels
+     Gross, and Bernhard Egger. 2022. Dopia: online parallelism manage-                    on heterogeneous systems. In Proceedings of the 22nd international
+     ment for integrated CPU/GPU architectures. In Proceedings of the                      conference on Parallel architectures and compilation techniques. IEEE,
+     27th ACM SIGPLAN Symposium on Principles and Practice of Parallel                     245–255.
+     Programming. 32–45.                                                              [29] Janghaeng Lee, Mehrzad Samadi, Yongjun Park, and Scott Mahlke.
+[14] Salvatore Cuomo, Vincenzo Schiano Di Cola, Fabio Giampaolo, Gi-                       2015. Skmd: Single kernel on multiple devices for transparent cpu-gpu
+     anluigi Rozza, Maziar Raissi, and Francesco Piccialli. 2022. Scientific               collaboration. ACM Transactions on Computer Systems (TOCS) 33, 3
+     machine learning through physics–informed neural networks: Where                      (2015), 1–27.
+     we are and what’s next. Journal of Scientific Computing 92, 3 (2022),            [30] Jie Li, George Michelogiannakis, Brandon Cook, Dulanya Cooray, and
+     88.                                                                                   Yong Chen. 2023. Analyzing resource utilization in an hpc system: A
+[15] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.                     case study of nersc’s perlmutter. In International Conference on High
+     2019. Bert: Pre-training of deep bidirectional transformers for lan-                  Performance Computing. Springer, 297–316.
+     guage understanding. In Proceedings of the 2019 conference of the North          [31] Liduo Lin, Li Pan, and Shijun Liu. 2022. Methods for improving the
+     American chapter of the association for computational linguistics: human              availability of spot instances: A survey. Computers in Industry 141
+     language technologies, volume 1 (long and short papers). 4171–4186.                   (2022), 103718.
+[16] Gregory Diamos, Andrew Kerr, Sudhakar Yalamanchili, and Nathan                   [32] William S Moses, Ivan R Ivanov, Jens Domke, Toshio Endo, Johannes
+     Clark. 2010. Ocelot: a dynamic optimization framework for bulk-                       Doerfert, and Oleksandr Zinenko. 2023. High-performance gpu-to-cpu
+     synchronous applications in heterogeneous systems. In 2010 19th In-                   transpilation and optimization via high-level parallel constructs. In
+     ternational Conference on Parallel Architectures and Compilation Tech-                Proceedings of the 28th ACM SIGPLAN Annual Symposium on Principles
+     niques (PACT). IEEE, 353–364.                                                         and Practice of Parallel Programming. 119–134.
+[17] Tahir Diop, Steven Gurfinkel, Jason Anderson, and Natalie Enright
+     Jerger. 2013. DistCL: A framework for the distributed execution of
+
+
+
+
+                                                                                367
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                              Ruobing Han and Hyesoon Kim
+
+
+[33] Jacob Nelson, Brandon Holt, Brandon Myers, Preston Briggs, Luis                      of fine-grained SPMD-threaded programs for multicore CPUs. In Pro-
+     Ceze, Simon Kahan, and Mark Oskin. 2015. {Latency-Tolerant} soft-                    ceedings of the 8th annual IEEE/ACM international symposium on Code
+     ware distributed shared memory. In 2015 USENIX Annual Technical                      generation and optimization. 111–119.
+     Conference (USENIX ATC 15). 291–305.                                            [41] John A Stratton, Hee-Seok Kim, Thoman B Jablin, and Wen-Mei W
+[34] Prasanna Pandit and R Govindarajan. 2014. Fluidic kernels: Coopera-                  Hwu. 2013. Performance portability in accelerated parallel kernels.
+     tive execution of opencl programs on multiple heterogeneous devices.                 Center for Reliable and High-Performance Computing (2013).
+     In Proceedings of Annual IEEE/ACM International Symposium on Code               [42] John A Stratton, Sam S Stone, and Wen-Mei W Hwu. 2008. MCUDA:
+     Generation and Optimization. 273–283.                                                An efficient implementation of CUDA kernels for multi-core CPUs.
+[35] Atmn Patel, Shilei Tian, Johannes Doerfert, and Barbara Chapman.                     In Languages and Compilers for Parallel Computing: 21th International
+     2021. A virtual GPU as developer-friendly OpenMP offload target. In                  Workshop, LCPC 2008, Edmonton, Canada, July 31-August 2, 2008, Re-
+     50th International Conference on Parallel Processing Workshop. 1–7.                  vised Selected Papers 21. Springer, 16–30.
+[36] Arman Shehabi, Alex Hubbard, Alex Newkirk, Nuoa Lei,                            [43] Yifan Sun, Xiang Gong, Amir Kavyan Ziabari, Leiming Yu, Xiangyu Li,
+     Md Abu Bakkar Siddik, Billie Holecek, Jonathan Koomey, Eric                          Saoni Mukherjee, Carter McCardwell, Alejandro Villegas, and David
+     Masanet, Dale Sartor, et al. 2024. 2024 United States Data Center                    Kaeli. 2016. Hetero-mark, a benchmark suite for CPU-GPU collabo-
+     Energy Usage Report. (2024).                                                         rative computing. In 2016 IEEE International Symposium on Workload
+[37] Jun Shirako, Jisheng M Zhao, V Krishna Nandivada, and Vivek N Sarkar.                Characterization (IISWC). IEEE, 1–10.
+     2009. Chunking parallel loops in the presence of synchronization. In            [44] Philippe Tillet, Hsiang-Tsung Kung, and David Cox. 2019. Triton: an
+     Proceedings of the 23rd international conference on Supercomputing.                  intermediate language and compiler for tiled neural network computa-
+     181–192.                                                                             tions. In Proceedings of the 3rd ACM SIGPLAN International Workshop
+[38] Jan Solanti, Michal Babej, Julius Ikkala, Vinod Kumar Malamal Vadak-                 on Machine Learning and Programming Languages. 10–19.
+     ital, and Pekka Jääskeläinen. 2021. PoCL-R: A scalable low latency              [45] A Vaswani. 2017. Attention is all you need. Advances in Neural
+     distributed OpenCL runtime. In International Conference on Embedded                  Information Processing Systems (2017).
+     Computer Systems. Springer, 78–94.                                              [46] Jin Zhang, Xiangyao Yu, Zhengwei Qi, and Haibing Guan. 2022. Falcon:
+[39] Foteini Strati, Paul Elvinger, Tolga Kerimoglu, and Ana Klimovic. 2024.              A Timestamp-based Protocol to Maximize the Cache Efficiency in the
+     ML Training with Cloud GPU Shortages: Is Cross-Region the Answer?.                   Distributed Shared Memory. In 2022 IEEE International Parallel and
+     In Proceedings of the 4th Workshop on Machine Learning and Systems.                  Distributed Processing Symposium (IPDPS). IEEE, 974–984.
+     107–116.                                                                        [47] Yao Zhang, Mark Sinclair, and Andrew A Chien. 2013. Improving
+[40] John A Stratton, Vinod Grover, Jaydeep Marathe, Bastiaan Aarts, Mike                 performance portability in OpenCL programs. In International Super-
+     Murphy, Ziang Hu, and Wen-mei W Hwu. 2010. Efficient compilation                     computing Conference. Springer, 136–150.
+
+                                                                                     Received 2025-08-31; accepted 2025-11-10
+
+
+
+
+                                                                               368
+

@@ -1,0 +1,1297 @@
+                                                                                                                                                                                      2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+
+                                                                                                                                                                         Adaptive Draft Sequence Length: Enhancing
+                                                                                                                                                                      Speculative Decoding Throughput on PIM-Enabled
+                                                                                                                                                                                          Systems
+                                                                                                                                                                          Runze Wang† , Qinggang Wang∗† , Haifeng Liu† , Long Zheng† , Xiaofei Liao† , Hai Jin† and Jingling Xue‡
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408598
+
+
+
+
+                                                                                                                                                                              †
+                                                                                                                                                                                National Engineering Research Center for Big Data Technology and System/Services Computing Technology
+                                                                                                                                                                                     and System Lab/Cluster and Grid Computing Lab, School of Computer Science and Technology,
+                                                                                                                                                                                               Huazhong University of Science and Technology, Wuhan, 430074, China
+                                                                                                                                                                             ‡
+                                                                                                                                                                               School of Computer Science and Engineering, University of New South Wales, Sydney, NSW 2052, Australia
+                                                                                                                                                                                         {rzwang, qgwang, hfliu, longzh, xfliao, hjin}@hust.edu.cn, jingling@cse.unsw.edu.au
+
+
+
+                                                                                                                                                                        Abstract—Transformer-based large language models (LLMs)                      LLM inference typically consists of two phases: prefill and
+                                                                                                                                                                     exhibit remarkable generative capabilities, but their inference              decoding. In the prefill phase, the model processes all input
+                                                                                                                                                                     throughput is limited by the autoregressive decoding process,                tokens in the prompt (e.g., a request sequence) to generate the
+                                                                                                                                                                     which generates only one token per iteration. Speculative decoding
+                                                                                                                                                                     mitigates this bottleneck by using a lightweight draft language              first output token. In the subsequent decoding phase, the model
+                                                                                                                                                                     model (DLM) to generate multiple draft tokens, which are then                generates one output token per iteration in an autoregressive
+                                                                                                                                                                     verified in parallel by a more accurate target language model                manner, where each token generation depends on the token
+                                                                                                                                                                     (TLM). To accommodate the differing computational patterns                   produced in the previous iteration. As a result, generating
+                                                                                                                                                                     of the DLM and TLM, prior work has leveraged heterogeneous                   T output tokens requires T −1 sequential decoding steps,
+                                                                                                                                                                     systems combining xPUs and processing-in-memory (PIM) units
+                                                                                                                                                                     to offload compute- and memory-intensive operators, respectively.            which leads to low throughput and underutilization of compute
+                                                                                                                                                                        However, existing systems often adopt a fixed draft sequence              resources during inference.
+                                                                                                                                                                     length, leading to excessive rejection of draft tokens during                   To improve inference throughput during the decoding phase,
+                                                                                                                                                                     verification—especially under large-batch scenarios—resulting                speculative decoding [5], [21], [29], [46], [60] has emerged
+                                                                                                                                                                     in redundant computation and reduced efficiency. This paper                  as a promising technique. It first employs a lightweight draft
+                                                                                                                                                                     proposes a runtime adaptive draft length adjustment technique
+                                                                                                                                                                     that dynamically tailors the draft length for each request by mon-           language model (DLM) to predict the next d tokens for
+                                                                                                                                                                     itoring cumulative acceptance probabilities, thereby minimizing              a given request, where d is a user-defined hyperparameter
+                                                                                                                                                                     the generation and verification of invalid tokens. Yet, integrating          known as the draft sequence length. The original LLM,
+                                                                                                                                                                     adaptive draft lengths into existing PIM-enabled heterogeneous               referred to as the target language model (TLM), then verifies
+                                                                                                                                                                     systems introduces two new challenges: (1) sequential execution              these d draft tokens in parallel. During verification, if a
+                                                                                                                                                                     of the DLM and TLM becomes inefficient due to synchronization
+                                                                                                                                                                     bubbles caused by request-wise variability in draft lengths, and             draft token is rejected by the TLM, it is replaced with the
+                                                                                                                                                                     (2) static operator mappings become suboptimal as draft length               TLM’s own output token, and all subsequent draft tokens are
+                                                                                                                                                                     variability alters operator arithmetic intensities dynamically. To           discarded. Since DLM prediction is significantly faster than
+                                                                                                                                                                     address these issues, we introduce SADDLE, a PIM-enabled                     TLM verification, speculative decoding can substantially im-
+                                                                                                                                                                     heterogeneous system designed to exploit adaptive draft lengths              prove inference throughput—provided that a high proportion
+                                                                                                                                                                     effectively. SADDLE incorporates two key mechanisms: (1) an
+                                                                                                                                                                     asynchronous speculative decoding pipeline that decouples DLM                of DLM-generated tokens are accepted by the TLM.
+                                                                                                                                                                     prediction and TLM verification to reduce idle time, and (2)                    The DLM prediction and TLM verification stages in specu-
+                                                                                                                                                                     an arithmetic intensity-aware operator scheduler that dynamically            lative decoding exhibit distinct computational characteristics.
+                                                                                                                                                                     assigns operators to the most suitable hardware units. Experi-               The DLM still performs autoregressive decoding, predicting
+                                                                                                                                                                     mental results show that SADDLE achieves average speedups of                 one draft token per iteration through memory-intensive matrix-
+                                                                                                                                                                     2.88× over a state-of-the-art GPU-only solution and 1.71× over
+                                                                                                                                                                     the best-performing GPU+PIM baseline.                                        vector multiplication operations. In contrast, the TLM verifies
+                                                                                                                                                                                                                                                  multiple draft tokens in parallel, relying on compute-intensive
+                                                                                                                                                                                             I. I NTRODUCTION                                     matrix-matrix multiplication operations. This computational
+                                                                                                                                                                        Transformer-based large language models (LLMs) [3], [35],                 heterogeneity has spurred research into xPU–PIM heteroge-
+                                                                                                                                                                     [47], [62] are revolutionizing the AI application ecosystem                  neous acceleration strategies for speculative decoding. Recent
+                                                                                                                                                                     with their exceptional generative capabilities. They are widely              studies [16], [22], [38], [44] have explored PIM-enabled
+                                                                                                                                                                     deployed in a range of applications, including chatbots [8],                 heterogeneous systems that coordinate computation-centric
+                                                                                                                                                                     [10], [36], code auto-completion [6], [31], [54], and complex                xPUs (e.g., GPUs and TPUs) with memory-centric PIM units
+                                                                                                                                                                     reasoning services [12], [42].                                               (e.g., HBM-based devices with integrated PIM dies). These
+                                                                                                                                                                                                                                                  systems accelerate speculative decoding by statically mapping
+                                                                                                                                                                       *Corresponding author: Qinggang Wang (qgwang@hust.edu.cn).                 compute-intensive operators to xPUs and memory-intensive
+
+
+
+
+                                                                                                                                                                             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+operators to PIM units.                                                     lengths change at runtime, such static mapping can assign
+   However, existing PIM-enabled heterogeneous systems [15],                compute-intensive operators to PIM units or memory-intensive
+[22] fall short of fully exploiting the acceleration potential of           operators to xPUs, resulting in inefficient execution.
+speculative decoding. As shown in §III, increasing the number                  This paper develops a PIM-enabled heterogeneous system
+of concurrent requests (i.e., batch size) leads to lower through-           for high-throughput speculative decoding that supports adap-
+put than systems using conventional autoregressive decoding                 tive draft sequence lengths while mitigating the associated per-
+without speculative decoding. This performance degradation                  formance challenges. We introduce SADDLE, a PIM-enabled
+arises from a large number of draft tokens being discarded                  heterogeneous System that leverages ADaptive Draft sequence
+during the verification phase, rendering the computation spent              LEngths to enhance speculative decoding throughput.
+on their generation and verification ineffective. While such
+redundant computation may be tolerable under small batch                       SADDLE embodies three key technical innovations. First, it
+sizes, it becomes increasingly detrimental as the batch size                features a runtime adaptive draft length adjustment mechanism
+grows—consuming valuable hardware resources that could                      that dynamically tunes the draft length for each request based
+otherwise be used for effective inference and ultimately re-                on its cumulative acceptance probability, thereby reducing
+sulting in a significant drop in overall throughput.                        invalid draft token generation and verification while preserv-
+   Our investigation reveals that the root cause of redundant               ing parallelism. Second, SADDLE employs an asynchronous
+computation in existing systems is the use of a fixed draft                 speculative decoding pipeline that decouples DLM prediction
+sequence length. In practice, draft token acceptance rates—the              from TLM verification to alleviate pipeline stalls. Third, it
+ratio of accepted to predicted tokens—vary significantly across             integrates an arithmetic intensity-aware operator scheduling
+models, datasets, and batch sizes [25], [57]. As a result, the              strategy that continuously monitors operator arithmetic in-
+optimal draft length should adapt dynamically at runtime.                   tensity and dynamically maps operators to the most suitable
+When the optimal draft length is shorter than the fixed one,                hardware units, thereby maximizing the acceleration potential
+the DLM generates superfluous tokens that are likely to be                  of the heterogeneous architecture.
+rejected, resulting in wasted computation and reduced infer-                In summary, this paper makes the following contributions:
+ence throughput. Conversely, when the optimal draft length
+exceeds the fixed one, the DLM could have generated more                       • We identify the intrinsic cause of suboptimal speculative
+tokens that the TLM would accept in a single verification                        decoding throughput in existing PIM-enabled heteroge-
+round. However, the fixed-length constraint forces repeated                      neous systems and elucidate the key challenges these
+interruptions of DLM prediction and incurs multiple TLM                          systems face when adopting adaptive draft sequence
+verification rounds, reducing parallelism and further degrading                  lengths.
+throughput.                                                                    • We propose SADDLE, a heterogeneous system that com-
+   To enable high-throughput speculative decoding on PIM-                        bines GPUs with HBM-based PIM devices to enable
+enabled heterogeneous systems, we propose leveraging an                          high-throughput speculative decoding. SADDLE dynam-
+adaptive draft sequence length to allow flexible, on-demand                      ically adjusts the draft sequence length per request to
+draft token generation that addresses both redundant com-                        reduce invalid token generation and verification, repre-
+putation and degraded parallelism. However, incorporating                        senting the first use of adaptive draft lengths in PIM-
+adaptive draft lengths introduces three key challenges.                          enabled heterogeneous systems.
+   First, determining the optimal draft sequence length is non-                • SADDLE incorporates two novel mechanisms: an asyn-
+trivial, as it depends on dynamic factors such as the model,                     chronous speculative decoding pipeline to mitigate
+dataset, and input request. Identifying an appropriate length for                pipeline stalls, and an arithmetic intensity–aware operator
+each request on-the-fly must incur minimal runtime overhead.                     scheduler that maximizes the acceleration potential of the
+   Second, variable draft lengths across requests combined                       heterogeneous architecture.
+with the sequential execution of the DLM and TLM can                           • We evaluate SADDLE on diverse LLM models and
+lead to severe pipeline bubbles. Specifically, the TLM must                      datasets, demonstrating that it outperforms the state-
+wait for the DLM to complete its predictions before starting                     of-the-art GPU-only and GPU+PIM systems, achieving
+verification, and the DLM must stall until verification finishes                 average throughput improvements of 2.88× and 1.71×,
+before proceeding to the next round. Within a batch, requests                    respectively.
+with shorter draft lengths are forced to wait for those with
+longer ones to finish DLM prediction before triggering TLM                     The rest of this paper is organized as follows. §II introduces
+verification, further exacerbating idle time and increasing                 the necessary background on speculative decoding and PIM-
+overall inference latency.                                                  enabled heterogeneous systems. §III presents a comprehensive
+   Third, the varying draft lengths dynamically alter the arith-            performance analysis of speculative decoding on a PIM-
+metic intensity of operators, making static operator-to-device              enabled heterogeneous system and motivates our design. §IV
+mappings suboptimal. For example, SpecPIM [22] determines                   details the proposed SADDLE architecture along with its three
+its operator mapping through offline analysis based on initial              key components. §V reports and analyzes our experimental
+configuration and does not adjust during execution. When draft              results. §VI reviews related work, and §VII concludes.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+Input Sequence                 x0                     x1                                                                               Tokens
+                                                                                                   #0
+
+
+
+
+                                                                                         Request
+                                                                                                   #1
+                                                                         Layer Norm                #2               Prefill                     Decoding                                 Decoding
+    Token                    Token                   Token                                         #3
+  Embedding                Embedding               Embedding                                       #4                                            Iteration 1
+                                                                                                                   Iteration 0                                                                Iteration i
+                                                                        QKV Generation
+                                                                                                                                                 (a)
+  Decoder 0                Decoder 0               Decoder 0
+                 Append                   Append
+                   KV                       KV                           Multi-head
+                                                                                                                                   Prediction Verification
+                                                                         Attention                                                   Stage       Stage
+  Decoder 1      Append
+                           Decoder 1      Append
+                                                   Decoder 1                                                                           DLM                     Tokens    DLM
+                   KV                       KV                            Projection
+                                                                                                                Prefill                                           √
+
+
+
+
+                                                                                                                                                                               Draft Tokens
+                                                                                                   Request #0
+                                                                                                                                       DLM                               DLM
+                                                                                                                                                  TLM                                            TLM
+ Decoder N Append Decoder N Append Decoder N                                                                                           DLM                        √      DLM
+                                                                         Layer Norm                             Prefill       Append
+                                                                                                                                KV
+                    KV                       KV
+                                                                                                                                                                  ×
+                                                                        Feed-Forward                                                   Speculative Decoding             Speculative Decoding
+  LM Head                  LM Head                 LM Head                                                      Iteration 0
+                                                                                                                                                                             Iteration i
+                                                                                                                                            Iteration 1
+                                                                          Networks
+           Iteration0               Iteration1             Iteration2                                                                            (b)
+      x0                       x1                     x2
+  Prefill Phase                 Decoding Phase                                           Fig. 2. Batching and speculative decoding in LLM inference. (a) Batching
+                                                                                         enables request-level parallelism. (b) Speculative decoding enables token-level
+                         Fig. 1. Transformer-based LLM structure                         parallelism via draft token generation (DLM) and parallel verification (TLM).
+
+
+
+                                    II. BACKGROUND                                          Batching. As illustrated in Figure 2(a), batching [1], [23],
+   In this section, we review transformer-based LLM inference,                           [40], [58], [63] allows a single decoding iteration to generate
+its parallelism optimizations, and PIM-enabled heterogeneous                             multiple tokens in parallel across different user requests. In the
+acceleration solutions.                                                                  FC operator, which multiplies each token’s activation vector
+                                                                                         with a shared weight matrix, batching transforms multiple
+A. Transformer-based LLM Inference                                                       GEMVs from different requests into a single general matrix-
+   As shown in Figure 1, mainstream LLMs are composed of                                 matrix multiplication (GEMM), enabling efficient request-
+multiple Transformer decoder [48] layers and operate in two                              level parallelism.
+phases: the prefill phase and the decoding phase. In the prefill                            In the attention operator, the query vector of the current
+phase, the LLM processes the entire input sequence in parallel                           token is multiplied by a matrix composed of the key vectors
+to generate the first output token. In the decoding phase,                               from all previous tokens, followed by another matrix-vector
+the LLM takes the concatenation of the original prompt and                               multiplication with the corresponding value vectors. These
+all previously generated tokens as input to generate the next                            operations require frequent access to the KV cache, and
+token. This process repeats until an end-of-sequence token                               in large-batch scenarios, the resulting memory traffic can
+is produced. Since only one token is generated per iteration,                            become a bottleneck, constraining LLM inference by memory
+autoregressive decoding is inherently sequential and results in                          bandwidth.
+low throughput.                                                                             Speculative Decoding. As shown in Figure 2(b), speculative
+   Each decoder layer primarily consists of three kernels:                               decoding [4], [24], [60] introduces a parallel decoding mech-
+QKV (query, key, and value) generation, multi-head attention                             anism comprising two stages: serial draft token generation
+(MHA), and feed-forward networks (FFN). These kernels                                    (prediction) and parallel draft token verification (verification).
+fall into two categories: QKV generation and FFN are fully                               First, a lightweight draft language model (DLM) rapidly
+connected (FC) operators, while MHA represents the attention                             predicts the next d draft tokens through d sequential decoding
+operator. All these operators rely on general matrix-vector                              iterations. These tokens are then simultaneously verified by
+multiplication (GEMV). During MHA execution, keys and                                    the target language model (TLM), enabling token-level paral-
+values from all previously generated tokens must be accessed                             lelism.
+to compute the next token. To avoid redundant KV compu-                                     Draft tokens that pass verification are accepted as output.
+tations, a caching mechanism—commonly known as the KV                                    If a token is rejected, it and all subsequent draft tokens are
+cache [19], [58]—is employed to store previously generated                               discarded. The TLM corrects the first erroneous token and
+keys and values for reuse in future decoding iterations.                                 uses it as the input for the next speculative iteration. Notably,
+                                                                                         verifying multiple tokens with the TLM is only slightly slower
+B. Parallel Optimization Techniques in LLM Inference                                     than generating a single token with the original LLM. Thus,
+   In production LLM inference systems, users issue requests                             when draft tokens are accepted, speculative decoding can
+continuously. To overcome the low throughput of serial autore-                           produce multiple output tokens in one iteration. Even in the
+gressive decoding and ensure timely responses, two parallel                              worst case, it still yields one corrected token.
+optimization techniques are introduced: batching and specu-                                 Specifically, during the prediction stage, the DLM iteratively
+lative decoding. These techniques enable concurrent decoding                             generates d draft tokens (x1 , x2 , . . . , xd ), while in the verifica-
+of multiple tokens, improving overall inference throughput by                            tion stage, the TLM simultaneously computes the correspond-
+generating more than one token per decoding iteration.                                   ing probabilities pT (x1 ), pT (x2 ), . . . , pT (xd ). A draft token
+
+
+
+
+           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                                          summarization   open_qa   creating_writing                                        summarization               open_qa           creating_writing
+                            Baseline(OPT-66B)                            Baseline(OPT-66B)
+                                                                                                                                     1                                                                          10                                       10
+                            Speculative Decoding(OPT-66B+OPT-1.3B)
+
+
+
+
+                                                                                                                                                                                       No. Of Accepted Tokens
+                                                                         Speculative Decoding(OPT-66B+OPT-1.3B)                           OPT-66B+OPT-1.3B                                                            OPT-66B+OPT-1.3B                         Llama3-70B+Llama3-1B
+                        4                                            2                                                              0.8                                                                         8                                         8
+
+
+
+
+                                                                                                                  Acceptance Rate
+Normalized Throughput
+
+
+
+                            Draft Length=8                               Batch Size=64                                                                                                                          6                                         6
+                                                                                                                                    0.6
+                        3                                         1.5
+                                                                                                                                    0.4                                                                         4                                         4
+
+                                                                                                                                    0.2                                                                         2                                         2
+                        2                                            1
+                                                                                                                                     0                                                                          0                                         0
+                                                                                                                                               4             8            12                                           1    4    8       12   16   20             1   4    8     12   16     20
+                        1                                         0.5                                                                                Draft Length                                                    Speculative Decoding Iteration           Speculative Decoding Iteration
+                                                                                                                                                           (a)                                                                       (b)                                       (c)
+                        0                                            0
+                             8       16       32       64   128          2    3     4     5     6    8    12
+                                          Batch Size                                Draft Length
+                                                                                                                  Fig. 4. (a) Token acceptance rates of the OPT-66B + OPT-1.3B model pair
+                                              (a)                                            (b)
+                                                                                                                  across three task categories in the Dolly dataset under different fixed draft
+                                                                                                                  lengths. (b) Per-iteration distribution of accepted tokens during speculative
+Fig. 3. Inference throughput of SpecPIM (OPT-66B+OPT-1.3B) versus the                                             decoding for each task category using OPT-66B + OPT-1.3B. (c) Same as
+baseline (OPT-66B) under (a) varying batch sizes (draft length = 8) and (b)                                       (b) using LLaMA3-70B + LLaMA3-1B. The results reveal dynamic and task-
+varying draft lengths (batch size = 64). Throughput is normalized to the                                          specific variations in optimal draft lengths across iterations and model pairs.
+baseline. SpecPIM’s throughput peaks at d = 4, but degrades with longer
+drafts due to increased token rejection and wasted computation.
+
+                                                                                                                                                                                 III. M OTIVATION
+xi is accepted if the DLM probability pD (xi ) is less than or                                                      In this section, we analyze speculative decoding throughput
+equal to the TLM probability pT (xi ); otherwise, it is rejected                                                  on a PIM-enabled heterogeneous system, motivating the design
+with probability 1 − ppDT (xi )
+                          (xi ) and resampled from a normalized                                                   of our approach.
+distribution proportional to max(0, pT (xi ) − pD (xi )). More-
+over, if all d draft tokens are accepted, the TLM proceeds to                                                     A. Bottleneck Analysis of Speculative Decoding on Existing
+generate an additional token xd+1 , which then serves as the                                                      PIM-Enabled Heterogeneous Systems
+input for the next round of DLM prediction. This prediction-                                                         We analyze inefficiencies in existing solutions using
+verification cycle repeats until the end-of-sequence token is                                                     SpecPIM [22], a state-of-the-art PIM-enabled heterogeneous
+produced.                                                                                                         system with four NVIDIA A100 GPUs, each paired with
+                                                                                                                  five HBM-PIM devices [38]. We adopt OPT-66B [61] as the
+C. PIM-Enabled Heterogeneous Systems for LLM Inference                                                            TLM and OPT-1.3B as the DLM (denoted OPT-66B+OPT-
+   Recent studies [15], [22], [38], [59], [64] have explored                                                      1.3B). The baseline uses the same hardware as SpecPIM but
+PIM-based acceleration for LLM inference. By embedding                                                            runs conventional autoregressive decoding with OPT-66B. By
+processing elements (PEs) within memory and offloading                                                            default, we set the batch size to 64, draft length to 8, and use
+memory-bound operators to them, PIM leverages bank-level                                                          the Dolly [7] dataset for evaluation.
+parallelism to deliver higher internal bandwidth and reduces                                                         Figure 3(a) shows the inference throughput of SpecPIM
+data movement by transferring only the final results.                                                             and the baseline system under varying batch sizes. SpecPIM’s
+   AttAcc [38] accelerates autoregressive decoding by offload-                                                    throughput first increases with batch size but then decreases,
+ing attention operators to HBM-based PIM units, while execut-                                                     and notably, falls below that of the baseline with standard
+ing other operators on the GPU. NeuPIM [16] and IANUS [44]                                                        autoregressive decoding when the batch size reaches 64.
+integrate NPUs with PIM units to build heterogeneous systems                                                         The root cause of the throughput degradation lies in the
+for LLM inference. They employ dual-buffering and PIM-                                                            fixed draft sequence length. Figure 3(b) shows SpecPIM’s
+aware scheduling, respectively, to enable concurrent execution                                                    throughput at batch size 64 under varying draft lengths.
+across NPUs and PIM units.                                                                                        Throughput peaks at d = 4, beating the baseline by 1.41×, but
+   SpecPIM [22] is the first PIM-enabled heterogeneous sys-                                                       degrades as d increases, falling below the baseline at d = 8.
+tem tailored for speculative decoding. It performs offline anal-                                                     While longer draft lengths theoretically offer higher TLM
+ysis to assign different operators to either PIM units or xPUs                                                    parallelism, they lower token acceptance rates. As shown in
+based on the initial parameter configuration (e.g., a fixed draft                                                 Figure 4(a), acceptance rates across creative_writing,
+sequence length) before execution and maintains the operator-                                                     summarization, and open_qa drop with longer drafts,
+to-device mapping scheme unchanged throughout inference.                                                          leading to more discarded tokens that waste compute and
+Invoking offline analysis to reassign operators in response to                                                    memory. Conversely, short draft lengths (e.g., d = 2) produce
+dynamic changes in configuration parameters introduces non-                                                       too few tokens per prediction stage, increasing verification
+negligible runtime overhead, which can easily outweigh the                                                        frequency and reducing TLM parallelism. For example, d = 2
+potential performance gains from remapping.                                                                       yields 1.12× lower throughput than d = 4.
+   PAPI [15] supports operator remapping in response to                                                              Moreover, while an appropriate draft length can be selected
+changes in batch size, enabling flexible hardware config-                                                         for a given batch size (e.g., d = 4 in Figure 3(b)), applying
+urations. However, it is primarily designed for a single                                                          the same fixed draft length to all requests in the batch results
+model—the TLM—and falls short of achieving end-to-end                                                             in suboptimal throughput due to wasted computation (Fig-
+acceleration for speculative decoding. In particular, it does not                                                 ure 5(a)). This inefficiency arises because, in each speculative
+address the idle time introduced by the sequential execution                                                      decoding iteration—consisting of a DLM prediction stage
+between the DLM and TLM.                                                                                          followed by a TLM verification stage—each request has its
+
+
+
+
+                                 Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+               Fixed Draft Length
+
+
+
+
+                                                                                                     Performance (TFLOPS)
+                                                                     Adaptive Draft Length
+                                                                                                                            102
+          #0                                                    #0                                                                                                                Operators             Models
+
+
+
+
+                                                      Request
+Request
+
+          #1                                                    #1                                                                    PIM-benefit          GPU-benefit
+          #2                           TLM                      #2                             TLM                          101                                                      Attention            OPT-66B
+                                                                                                                                                                                     Operator              (TLM)
+          #3                                                    #3
+                    Prediction         Verification
+                      Stage              Stage                                                                                                                                         FC                 OPT-1.3B
+                                                                                         (b)                                                                                         Operator              (DLM)
+                                 (a)                                                                                        100
+                                                                                                                                                                                 (Effective Batch Size, Draft Length)
+
+Fig. 5. Inefficiencies in speculative decoding pipeline designs: (a) Fixed                                                                                                           (4,1)                (12,8)
+                                                                                                                            0
+draft lengths lead to wasted computation when draft tokens are later rejected
+by the TLM (marked by X); (b) A naive realization of adaptive draft length                                                        0          100              101          102
+                                                                                                                                       Arithmetic Intensity (FLOPs/Byte)
+introduces pipeline bubbles due to synchronization delays when requests in
+the same batch have varying draft lengths.
+                                                                                                     Fig. 6.     Roofline analysis of speculative decoding operators on OPT-
+                                                                                                     66B (TLM) + OPT-1.3B (DLM) under varying draft sequence lengths and
+                                                                                                     effective batch sizes. The arithmetic intensity (FLOPs/Byte) and performance
+own optimal draft length, defined as the maximum number of                                           (TFLOPS) of the attention and FC operators shift significantly across configu-
+draft tokens that can be accepted in that iteration.                                                 rations, highlighting transitions in bottlenecks (PIM compute-bound vs. GPU
+   Figure 4(b) presents the optimal draft lengths across dif-                                        bandwidth-bound) and the corresponding optimal hardware execution targets.
+ferent speculative decoding iterations for three request tasks.
+For instance, in the creative_writing task, the optimal
+                                                                                                     mappings in existing systems [38] suboptimal. To examine this
+draft length decreases from 5 in the first iteration to 1 by the
+                                                                                                     effect, we conduct a roofline analysis on OPT-66B + OPT-1.3B
+12th iteration. Consequently, using a fixed draft length across
+                                                                                                     under varying draft lengths and effective batch sizes, as shown
+all requests and decoding iterations leads to either redundant
+                                                                                                     in Figure 6. Here, effective batch size refers to the number of
+computation (when the fixed value exceeds the optimal length)
+                                                                                                     active requests at each stage of draft token generation. This
+or reduced parallelism (when it falls short), both of which
+                                                                                                     number decreases as requests complete early and increases
+degrade overall inference efficiency.
+                                                                                                     again when completed requests pass verification and resume
+B. Our Proposal: Adaptive Draft Sequence Length for PIM-                                             prediction. The analysis shows that operator arithmetic inten-
+Enabled Heterogeneous Systems                                                                        sity (FLOPs/byte) varies substantially with these parameters,
+   Through the above comprehensive analysis, a seemingly                                             thereby shifting the optimal hardware execution target. For
+intuitive solution for achieving high-throughput speculative                                         instance, as the draft length increases from 1 to 8, the GPU
+decoding is to adopt adaptive draft sequence lengths in exist-                                       outperforms PIM units for the TLM attention operator, even
+ing PIM-enabled heterogeneous systems. This would enable                                             though the operator remains memory-bound on the GPU.
+flexible and on-demand draft token generation to mitigate                                               A more complex case arises when a batch starts with 12
+redundant computation and parallelism degradation. However,                                          requests, each with a distinct draft length. Once 8 shorter
+realizing this goal poses three significant challenges.                                              requests complete token generation, the effective batch size for
+   First, several dynamically changing factors—such as the                                           subsequent DLM computation drops to 4. This change lowers
+request task and model architecture—jointly determine the                                            the arithmetic intensity of the DLM’s FC operator, transition-
+optimal draft sequence length. As shown in Figure 4(b), under                                        ing it from GPU bandwidth-bound to PIM compute-bound.
+the OPT-1.3B model, the three request tasks exhibit different                                        Hence, the optimal hardware target shifts from GPU to PIM.
+optimal draft lengths across speculative decoding iterations.                                        Static mappings thus result in inefficiencies, and repeatedly
+Moreover, Figure 4(c) reveals that switching from OPT-1.3B to                                        invoking offline remapping tools incurs high overhead, which
+LLaMA3-1B alters the optimal draft lengths for the same tasks                                        may outweigh any gains from re-optimization.
+and decoding iterations. These observations demonstrate that                                                                             IV. T HE SADDLE A RCHITECTURE
+both task semantics and model choice significantly influence
+the optimal draft sequence length, creating a vast search space                                         In this section, we first present the overall architecture of
+that is infeasible to exhaustively explore at runtime.                                               S ADDLE, then describe its workflow, and finally elaborate on
+   Second, using adaptive draft sequence lengths together with                                       its three key techniques.
+the inherently sequential execution of the DLM and TLM
+introduces severe pipeline bubbles. In standard speculative                                          A. Architecture Overview
+decoding, the DLM first performs d decoding iterations to                                               Figure 7(a) illustrates the overall architecture of S ADDLE,
+generate d draft tokens per request, after which the TLM                                             which consists of a host, a hardware manager, and multiple
+verifies all tokens in parallel. However, as illustrated in                                          S ADDLE PIM devices to enable end-to-end acceleration of
+Figure 5(b), when requests in a batch have different draft                                           speculative decoding with adaptive draft sequence lengths.
+lengths, those with shorter drafts must wait until the DLM                                           The host communicates with the PIM devices through high-
+completes the longest draft before verification can proceed.                                         speed interconnects (e.g., CXL [45] or NVLink [33]). The
+This synchronization introduces significant idle time, inflating                                     hardware manager dynamically adjusts draft sequence lengths,
+the overall inference latency.                                                                       coordinates pipeline scheduling between the DLM and TLM,
+   Third, dynamically varying draft lengths alter the arithmetic                                     and performs runtime operator scheduling. Model weights
+intensity of operators, making the static operator-to-device                                         and KV caches for both the TLM and DLM reside on the
+
+
+
+
+                   Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+              Host                                                                   Bank 0
+                                                                                       PE
+                                                                                                         Bank 4
+                                                                                                            PE                                                         Max
+
+                      SADDLE
+                                          PIM             Centralized
+                                                                        PIM          Bank
+                                                                                       PE                   PE                cell
+                                                                                                                                                                           …
+                                          Chip                          Chip         Group
+                                                                                     Bank 1              Bank 5
+
+
+
+
+                                                                                                                                          Global Buffer
+                      Manager                              Processor                                                         Bank I/O
+                                                                                     Bank 2              Bank 6
+
+
+
+
+                                                                                                                                                          Buffer
+            Interconnect                                  (GPU,TPU,                    PE                   PE
+                                                                                                                       16b       16b
+                                                                                                                                                                   Exponentials
+
+                                                             etc.)                     PE                   PE                                                      Adder Tree
+
+                                          PIM                           PIM          Bank 3              Bank 7              Adder Tree
+                                                                                                                                                                     Divider
+    SADDLE
+      PIM
+              SADDLE
+                PIM
+                        SADDLE
+                          PIM
+                                          Chip              Router
+                                                                        Chip           TSV’s & periphery                        Reg
+                                                                                                                                                                           …
+                                                                                   Accumulator         Global Buffer
+
+
+
+                (a)                                           (b)                                (c)                              (d)                                (e)
+
+Fig. 7. Overview of the SADDLE computing system, consisting of a host, SADDLE Manager, and multiple SADDLE PIM devices interconnected via
+high-speed links (e.g., CXL or NVLink). (b) Architecture of a SADDLE PIM device, including a centralized processor (e.g., GPU or TPU), router, and
+multiple PIM chips. (c) Internal structure of a PIM chip based on the HBM-PIM architecture, showing the pseudo-channel (pCH) with PE-attached banks,
+global buffer, and accumulator. (d) Datapath architecture of a Processing Element (PE) supporting parallel matrix computations. (e) Specialized functional
+unit (SFU) for softmax and related operations such as normalization.
+
+
+
+                                                                                pCH contains four bank groups (BGs), with each bank group
+                           SADDLE Manager                     SADDLE PIM
+                                                                Devices
+                                                                                comprising four banks. Figure 7(c) illustrates a subset of a
+                Draft Generator                                                 pCH, which includes a global buffer and an accumulator.
+                                  Eager
+                                              Scheduler
+    Host
+
+
+
+
+                 Controller                                    Prediction          PEs. Each bank is paired with a dedicated PE. As illustrated
+                                   Pool
+                                                                                in Figure 7(d), each PE consists of 16 FP16 multipliers, 16
+                                                                                FP16 adders, and associated registers. It processes two 256-
+                       Shared Pool                            Verification      bit operands per cycle, sourced from the bank’s local row
+                                                                                buffer and the pCH’s global buffer. This architecture has been
+                                                                                validated as feasible in prior work [38], [64]. While adding
+                 Fig. 8. Overview of the SADDLE Manager                         more arithmetic units could further increase bandwidth, doing
+                                                                                so would violate HBM’s stringent area and power constraints,
+                                                                                as these units are fabricated using a DRAM process rather
+PIM devices. The number of PIM devices can be scaled to                         than a logic-optimized one. All PEs within a pCH operate
+accommodate varying model sizes and inference workloads.                        in parallel across banks, thereby maximizing internal memory
+   SADDLE Manager. Leveraging pipeline parallelism, the                         bandwidth.
+SADDLE Manager assigns a Draft Generator to each micro-                            SFUs. In addition to GEMV, Transformer layers involve
+batch, consisting of a Controller and an Eager Pool. As shown                   operations such as residual addition, softmax, layer normal-
+in Figure 8, the Manager also includes a Shared Pool and a                      ization, and activation functions. To support these operations,
+Scheduler. The Controller adaptively adjusts the draft sequence                 we integrate a Specialized Functional Unit (SFU) on the buffer
+length for each request in the batch and determines whether                     die of each HBM stack, as depicted in Figure 7(e). The SFU
+a request already has draft tokens undergoing verification.                     is designed to efficiently handle these non-matrix operations,
+If not, the newly generated token is placed in the Shared                       complementing the PEs and enhancing overall support for end-
+Pool; otherwise, it is temporarily held in the Eager Pool.                      to-end Transformer inference.
+All the tokens in the Shared Pool are verified in parallel,                     B. Execution Flow and Data Mapping
+while the Scheduler performs dynamic operator remapping                            As LLM parameters and KV cache sizes continue to grow,
+to appropriate hardware resources (PIMs or GPUs) to ensure                      their memory demands can easily exceed the capacity of a
+optimal execution.                                                              single device. Pipeline parallelism [2], [17], [30], [56], [63]
+   SADDLE PIM Devices. As shown in Figure 7(b), each                            is a widely adopted technique for distributing LLM inference
+SADDLE PIM device consists of a centralized processor, a                        workloads. Following prior work [22], [30], [63], we partition
+router, and multiple PIM chips. In our design, the centralized                  PIM devices into S groups and assign model layers to S
+processor is a GPU, although other high-performance proces-                     pipeline stages, each responsible for sequentially processing
+sors (e.g., TPUs) optimized for compute-intensive operators                     its assigned layers. A batch is divided into slightly more than
+can also be used. To maximize throughput, we employ HBM-                        S micro-batches—each comprising a subset of requests in the
+based PIM chips due to their high bandwidth. The router                         batch—to fully occupy all pipeline stages, thereby maximizing
+handles data transfers between the PIM devices.                                 resource utilization and hiding communication overhead.
+   PIM Chips. Each PIM chip is based on the commercial                             As a caveat, this pipelined execution operates on micro-
+HBM-PIM architecture [20]. It comprises a buffer die stacked                    batches, with each stage processing one at a time. Hereafter,
+beneath eight DRAM dies, all vertically integrated using                        references to micro-batches are made in this context.
+through-silicon vias (TSVs). Each DRAM die exposes eight                           Due to the distinct computational characteristics of DLM
+independently operable pseudo channels (pCHs), and each                         and TLM operators in speculative decoding—along with dy-
+
+
+
+
+           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                                             BG0 BG1 BG2 BG3
+  Column-wise                    Row-wise                   Column-wise       Row-wise                                               Bank0
+   Partitioning                 Partitioning                 Partitioning    Partitioning                                            Bank1
+                                                                                                                                     Bank2
+                                                                                                                                                                                   KT(d×L)
+                                                                                                                                     Bank3
+
+           ×      KK ×   VV ×          ×                             ×                 ×
+
+
+
+
+                                                                                                                                                   Bank0
+                                                                                                                                                           Bank1
+                                                                                                                                                                   Bank2
+                                                                                                                                                                           Bank3
+                                                                                                                                             BG0
+
+
+
+           ×                           ×                                               ×
+                                                                                                                                             BG1
+                  KK ×   VV ×                                        ×                                                                                                             V(L×d)
+                                                                                                                                             BG2
+
+
+                                                                                                                                             BG3
+
+
+
+           ×      KK ×   VV ×           ×                            ×                 ×                              (a)                                     (b)                            (c)
+
+
+
+           ×      KK ×   VV ×          ×                             ×                 ×                 Fig. 10.     Mapping strategy for the KV cache. (a) Each attention head
+                                               All Reduce                                   All Reduce
+                                                                                                         is assigned to a specific HBM stack, with heads from different requests
+QKV Generation    Multi-head
+                                Projection                     Feed-Forward Networks                     potentially sharing the same stack. (b) K ⊤ is partitioned column-wise at
+                  Attention
+                                                                                                         the pCH and BG levels, and row-wise at the bank level. V is partitioned
+                                                                                                         row-wise at the pCH and BG levels, and column-wise at the bank level. (c)
+Fig. 9. Data sharding and execution flow of the decoder. QKV and first FFN                               Bank-level layout and dataflow for computing attention: K T and V matrices
+layers use column-wise partitioning, while attention projections and second                              are partitioned across bank groups and striped across banks to balance load and
+FFN layers use row-wise partitioning. AllReduce consolidates intermediate                                maximize row buffer reuse and internal memory bandwidth. The q vector is
+results to enable parallel execution with minimal communication.                                         broadcast from the global buffer to all banks in a group for parallel processing.
+
+
+
+namically varying draft lengths and effective micro-batch                                                   KV Cache Mapping. Figure 10(a) illustrates our KV
+sizes—the optimal hardware accelerator for each operator may                                             cache mapping strategy. Each attention head is assigned to
+shift at runtime. This necessitates a carefully designed data                                            a specific HBM stack, and multiple heads from different
+mapping scheme that encompasses both the placement of                                                    requests may share the same stack. As attention heads operate
+model weight parameters in memory banks and the allocation                                               independently, no inter-head communication is required.
+of reserved space for KV caches used in attention computa-                                                  K T matrices are first partitioned column-wise across dif-
+tions, as these caches dynamically expand with each generated                                            ferent BGs. Within each BG, K T matrices are further striped
+token.                                                                                                   row-wise across all banks. In contrast, V matrices are first
+   To maximize inference throughput, the data mapping                                                    partitioned row-wise across BGs and further striped column-
+scheme must meet three key objectives [53]. First, it should                                             wise across all banks within each BG. This partitioning
+exploit data locality by co-locating weights so that activations                                         strategy balances load and maximizes row buffer reuse and
+from multiple requests in a micro-batch access the same bank                                             internal memory bandwidth.
+or buffer, improving reuse [55]. Second, it should balance                                                  To fully utilize peak internal bandwidth, our design maxi-
+the workload by evenly assigning non-reusable operators                                                  mizes row buffer usage by ensuring broad data consumption
+across bank groups or pCHs, thereby improving parallelism                                                from it. Figure 10(c) illustrates an example of computing the
+and bandwidth utilization. Third, it should reduce inter-PIM-                                            multiplication between the q and v vectors: the q vector is
+device communication by minimizing data migration between                                                broadcast from the global buffer to all banks in the bank group,
+operators or memory banks, lowering both latency and energy.                                             enabling parallel computation across banks.
+   Figure 9 illustrates SADDLE’s execution flow and data
+mapping for the QKV and FFN layers, as detailed below.                                                   C. Adaptive Draft Length Adjustment
+   Weight Matrix Partitioning. Weight matrices can be parti-                                                The goal of adjusting the draft sequence length for each
+tioned along rows or columns. For QKV generation, as shown                                               request is to closely approximate its optimal value. However,
+in Figure 9, we apply row-wise partitioning (i.e., by attention                                          determining this optimal length before the prediction stage
+heads) to keep each head’s weights contiguous. The input                                                 begins is inherently difficult. Fortunately, it can be estimated
+dimension equals the model’s hidden size dmodel , and each                                               adaptively during prediction by monitoring the cumulative
+head generates an output of size dh = dmodel /n, where n is                                              probability of the generated tokens. This allows the system
+the number of heads. This layout allows the QKV outputs to                                               to decide when to halt drafting early, thereby avoiding unnec-
+be directly consumed by the MHA stage, where each head                                                   essary computation on tokens that are likely to be rejected.
+computes a dh -dimensional output vector.                                                                   Specifically, at each drafting iteration t, the Controller first
+   In the subsequent projection step, the weight matrix is                                               computes the DLM’spredicted distribution over next tokens,
+partitioned column-wise, with each partition producing a                                                 denoted P xt | x<t and samples a token xt from it. Let
+partial output vector of size dmodel . An all-reduce operation                                           pt := P xt | x<t denote the probability of the sampled
+then aggregates these partial results into a complete output                                             token. The cumulative probability of the Q current draft sequence
+                                                                                                                                                       t
+vector before feeding into the FFN. The FFN’s two FC layers                                              up to step t is then computed as Ht = i=1 pi .
+adopt a similar scheme: the first FC layer uses column-wise                                                 As the draft sequence grows, the cumulative probability Ht
+partitioning, while the second uses row-wise. This alternating                                           typically decreases. To avoid drafting tokens with low confi-
+partitioning maximizes inter-PIM-device bandwidth utilization                                            dence, we introduce a threshold-based stopping mechanism:
+while preserving computational continuity within each opera-                                             if Ht drops below a predefined threshold τ after sampling a
+tor.                                                                                                     token, the Controller terminates drafting for that request.
+
+
+
+
+            Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                        Micro-Batch #0                       Micro-Batch #1          Single Batch   Idleness
+   The threshold τ is learned offline using a validation set
+                                                                             Device 0    DLM    DLM                                             DLM   DLM
+of real-world input sequences. For each request, we run the                                                                             ×N                                     ×N
+                                                                             Device 1           DLM         DLM                                       DLM     DLM
+
+full prediction-verification pipeline, recording Hj and the final                              Eager Pool   Eager Pool
+                                                                                                                                                Locked
+verification outcome at each draft step j. We estimate the                                          Shared Pool
+
+                                                                                                                                                                Unlock
+conditional success rate curve over Hj and identify the 20%                                                              Draft Tokens
+                                                                             Devices N
+                                                                                                                                                   TLM                              TLM        Time
+interval that yields the highest average draft length while
+maintaining at least a 90% verification success rate. These
+empirical criteria strike a balance between throughput and                              Fig. 11. Example execution timelines of synchronous pipeline
+correctness. A discrete grid search over this interval selects
+the optimal τ .
+   At runtime, τ can be further adjusted dynamically. Lowering               riods. Since tokens from multiple requests are aggregated into
+τ under light system load allows longer drafts, boosting                     the Shared Pool, the pool can quickly reach its verification
+parallelism and throughput. This adaptive strategy ensures that              threshold after collecting only a few draft tokens per request.
+only high-confidence tokens are produced. If a token has low                 This premature saturation forces some requests to stop drafting
+probability, the resulting drop in Ht triggers early stopping,               earlier than optimal, limiting the depth of draft generation. For
+avoiding wasteful computation on likely-to-be-invalid tokens.                instance, a request that could ideally generate five draft tokens
+   The Controller integrates a softmax unit, multipliers, and                may be compelled to proceed to verification after producing
+comparators to enable fast, low-latency decisions for dynam-                 only two, due to the Shared Pool filling up. As a result, the
+ically determining draft lengths.                                            request fails to fully exploit its drafting potential, reducing
+   Despite the benefits of adaptive draft lengths, applying them             overall efficiency.
+independently to each request in a micro-batch introduces syn-                  To this end, we decouple the prediction and verification
+chronization challenges. As illustrated in Figure 5(b), requests             stages to break their strict sequential dependency, allowing
+that complete drafting early are forced to idle until the slowest            requests to continue drafting tokens even while verification is
+request finishes, delaying the transition to the verification                underway. This mechanism relies on an optimistic assumption:
+stage. While this synchronization barrier enables more draft                 all draft tokens currently under verification will be accepted.
+tokens to be verified in parallel, it also causes early-finished             Based on this assumption, any new tokens generated by the
+requests to incur additional waiting time, increasing their inter-           DLM during the verification stage are treated as valid and
+token latency and partially offsetting the gains from adaptive               will be seamlessly incorporated into the next round of TLM
+drafting.                                                                    verification.
+   To address this issue, we introduce a cross-micro-batch                      Figure 11 illustrates the parallel execution of DLM predic-
+Shared Pool for draft tokens. Rather than verifying tokens                   tion and TLM verification. Initially, draft tokens generated for
+immediately after generation, each micro-batch’s Draft Gen-                  each micro-batch are directly inserted into the Shared Pool.
+erator accumulates them in the Shared Pool. When the total                   Once the Shared Pool is full, the TLM verification is invoked
+reaches the GPU’s parallel verification capacity C or the                    to validate all draft tokens currently stored in the Shared
+GPU becomes idle, all tokens are dispatched to the TLM                       Pool. Meanwhile, for any request whose cumulative accep-
+for verification. This cross-micro-batch verification strategy               tance probability Ht remains above the threshold τ , DLM
+improves utilization and reduces idle time. The Shared Pool                  prediction continues to generate new draft tokens, which are
+leverages Content Addressable Memory (CAM) for efficient                     temporarily stored into the Eager Pool. After TLM verification
+storage, indexing, and retrieval.                                            completes, draft tokens in the Eager Pool are processed as
+   Simple requests are granted longer draft lengths, while more              follows. If all previously generated draft tokens of a request
+complex ones receive shorter lengths. This is because simple                 are accepted by the TLM, the newly generated draft tokens
+requests tend to produce high-confidence tokens that are more                for that same request are migrated from the Eager Pool into
+likely to pass verification, making it efficient to generate                 the Shared Pool. In contrast, if a draft token of a request is
+longer drafts for them. In contrast, complex requests are more               rejected by the TLM, all newly generated draft tokens for
+prone to verification failures, so limiting their draft length               that request are discarded, and DLM prediction is resumed
+helps avoid unnecessary computation and reduces wasted                       using the TLM-corrected token as the new input. Note that
+effort. The Manager adopts a greedy strategy to prioritize and               whenever the Shared Pool is not full, newly generated draft
+verify draft tokens that are most likely to pass verification                tokens bypass the Eager Pool and are inserted directly into
+across all requests. This approach maximizes effective system                the Shared Pool. In this way, the DLM prediction executes
+throughput and prevents any single request with an excessively               concurrently with the TLM verification, minimizing idle time
+long draft from delaying verification for the entire micro-batch,            and improving overall hardware resource utilization. Note that
+thereby ensuring low latency and high responsiveness.                        draft token migration between the Shared Pool and the Eager
+                                                                             Pool involves only lightweight on-chip memory operations and
+D. Prediction-Verification Decoupled Asynchronous Pipeline                   therefore incurs negligible performance overhead. Moreover,
+  While our cross-micro-batch verification mechanism en-                     since these cached draft tokens are refreshed after each verifi-
+hances parallelism, it may inadvertently exacerbate idle pe-                 cation iteration, the required capacities of both the Eager Pool
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+and the Shared Pool remain extremely small (∼1 KB).                            We use the Dolly dataset [7], an open-source, instruction-
+                                                                            following dataset created by thousands of employees, spanning
+E. Arithmetic Intensity-Aware Operator Scheduling                           several behavior categories defined in InstructGPT [37]. To
+   With dynamic draft lengths and cross-micro-batch verifi-                 characterize system load, we vary batch sizes from 16 to
+cation, the arithmetic intensity of each operator fluctuates at             128 and set the maximum sequence length to 1024 tokens in
+runtime due to varying draft lengths and batch sizes (Figure 6).            most experiments. Due to memory constraints, the maximum
+Additionally, concurrent execution of the target and draft                  sequence length for OPT-175B is limited to 512 tokens.
+models further impacts operator mapping. To address these                      Baselines. We compare S ADDLE against four state-of-
+dynamics, we now establish an initial execution mapping                     the-art baselines: (1) GPU-AD [2]: Autoregressive decoding
+scheme based on the system’s average workload profile.                      using the TLM on GPUs. (2) GPU-SD [2]: Speculative
+   The peak compute performance and memory bandwidth of                     decoding on GPUs. (3) PIM-AD [38]: Autoregressive decod-
+each hardware device are known in advance. Based on this                    ing on a heterogeneous PIM–GPU system, using the TLM.
+information, the Scheduler initially assigns the DLM’s atten-               (4) PIM-SD [22]: Speculative decoding on a heterogeneous
+tion operators and the TLM’s FC operators to fixed hardware                 PIM–GPU system.
+resources. For the DLM, each iteration generates exactly one                   The two GPU baselines are evaluated on the A100 DGX
+token per request, resulting in low arithmetic intensity for its            system [32], which consists of eight A100 GPUs, each with
+attention operations, which are therefore mapped to PIMs.                   80 GB of memory, totaling 640 GB. The system delivers an
+For the TLM, each iteration verifies a variable number of                   aggregate memory bandwidth of 16 TB/s. All GPU baselines
+tokens per request. By pooling tokens before verification, the              are implemented using DeepSpeed Inference [2].
+FC operations become consistently compute-bound and are                        The two PIM baselines are based on the HBM-PIM architec-
+scheduled onto xPUs.                                                        ture used in AttAcc [38], where each memory bank is paired
+   In contrast, whether the DLM’s FC operations and the                     with one PE. These baselines are configured with the same
+TLM’s attention operations are scheduled to PIMs or xPUs                    number of GPUs as the DGX setup and feature 40 HBM
+is determined dynamically.                                                  stacks, each with 16 GB of memory, also totaling 640 GB.
+   After each prediction, the Scheduler identifies which re-                The internal memory bandwidth is 144 TB/s—nine times that
+quests are eligible for additional DLM iterations and uses                  of the DGX system. For PIM-AD, attention operators are
+this to determine the effective micro-batch size. Fluctuations              offloaded to the PIM while FC operators are executed on the
+in the effective micro-batch size directly affect the arith-                GPU. For PIM-SD, we follow the operator mapping strategy
+metic intensity of the DLM’s FC operator. The Scheduler                     of SpecPIM [22], which performs design-space exploration
+quickly approximates this intensity and compares it against                 before execution based on the initial batch size and maximum
+pre-characterized thresholds—PIM compute-bound and GPU                      sequence length.
+memory-bound—to decide whether the operator should be                          Configurations. We adopt the NVIDIA A100 GPU as the
+remapped.                                                                   centralized processor for S ADDLE. All HBM modules used
+   Before the verification stage begins, the Scheduler also                 in our experiments are HBM3 [18], operating at 5.2 Gbps per
+counts the number of draft tokens per request in the Shared                 pin. For PIM PEs, we follow the same design as in PIM-AD
+Pool to estimate the arithmetic intensity of the TLM’s attention            and PIM-SD, in which each PE is placed near an HBM bank.
+operator. It then applies the same decision process as for the                 To ensure a fair comparison, each S ADDLE device is
+DLM’s FC operator to determine the most suitable execution                  provisioned with five HBM stacks connected via NVLink,
+engine.                                                                     each offering 16 GB of memory, totaling 80 GB—matching
+   At runtime, the Scheduler dynamically remaps operators in                the memory capacity of an A100 GPU. We deploy eight
+response to variations in micro-batch size and draft length,                S ADDLE PIM devices in total, resulting in an aggregate
+enabling the system to consistently select the most efficient               memory capacity equivalent to the PIM baselines.
+execution engine under any workload [51], [52].                                For the SADDLE Manager, we provision a 1 KB Shared
+                                                                            Pool and a 1 KB Eager Pool, with the latter subdivided by the
+                         V. E VALUATION                                     number of micro-batches, allowing each pool to store up to
+  In this section, we evaluate the efficiency and effectiveness             512 tokens. Additionally, a 1 KB SRAM is allocated to store
+of S ADDLE compared to state-of-the-art approaches.                         logit values and cumulative acceptance probabilities.
+                                                                               Simulation. We develop a cycle-accurate simulator by
+A. Experimental Setup                                                       modifying Ramulator2 [27] and ATTACC [38] to evaluate the
+  Benchmarks. We evaluate three transformer-based LLMs as                   performance and energy efficiency of both GPU systems and
+TLMs: Llama-3.1-70B-Instruct [47], OPT-66B [61], and OPT-                   S ADDLE. The simulator takes system configuration and model
+175B [61], each paired with a corresponding DLM from the                    specifications as input and outputs the execution time and
+same model family: Llama-3.2-1B-Instruct, OPT-1.3B [61],                    energy consumption for each system.
+and OPT-6.7B [61], respectively. The model configurations are                  To assess area and energy overhead, we synthesize the PEs
+summarized in Table I. All models use the FP16 data type,                   using Synopsys Design Compiler with a 28 nm technology
+which is standard for inference tasks.                                      node at a 1 GHz clock frequency. The area overhead is
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+                                                          GPU-AD             GPU-SD            PIM-AD         PIM-SD     SADDLE
+                                         OPT-66B                                              Llama3.1-70B                                   OPT-175B
+             4
+Throughput
+Normalized
+
+
+             3
+             2
+             1
+             0
+                      16            32             64       128              16               32         64        128       16         32              64   128
+
+
+Fig. 12. Throughput of SADDLE compared to four baselines across models and batch sizes (normalized to GPU-AD), highlighting SADDLE’s consistent
+performance gains
+
+                                                                GPU-AD           GPU-SD            PIM-AD     PIM-SD     SADDLE
+                                           OPT-66B                                             Llama3.1-70B                                   OPT-175B
+             10
+Efficiency
+
+
+
+
+              8
+ Energy
+
+
+
+
+              6
+              4
+              2
+              0
+                       16           32             64           128             16            32         64        128        16        32              64   128
+
+
+Fig. 13. Energy efficiency of SADDLE compared to four baselines across models and batch sizes (normalized to GPU-AD), demonstrating SADDLE’s
+consistent energy advantages
+
+
+
+                                        TABLE I                                                    inating pipeline stalls between prediction and verification. This
+                                 M ODEL C ONFIGURATIONS                                            enables parallel execution of the DLM and TLM, unlocking
+                                                                                                   greater acceleration potential.
+    Model             #Parameters                       dmodel        #Layers        #Heads
+                      1.3B                               2048           24            32             Third, SADDLE dynamically maps each operator to either
+                      6.7B                               4096           32            32
+    OPT                                                                                            PIM or GPU based on its arithmetic intensity and bandwidth
+                      66B                                9216           64            72
+                      175B                              12288           96            96           requirements, further boosting overall system efficiency.
+                      1B                                 2048           16            32
+    Llama3                                                                                            Energy Efficiency. Figure 13 characterizes the energy ef-
+                      70B                                8192           80            64
+                                                                                                   ficiency achieved by SADDLE compared to our baselines.
+                                                                                                   Specifically, SADDLE improves average energy efficiency
+scaled to the DRAM process [9]. For HBM energy modeling,                                           by 6.81×, 5.96×, 2.32×, and 1.45× compared to GPU-AD,
+we reference activation and read energy values from prior                                          GPU-SD, PIM-AD, and PIM-SD, respectively. Compared to
+work [34].                                                                                         GPU-AD/SD, SADDLE offloads memory-bound operators to
+                                                                                                   the PIM chip, thereby avoiding the high energy cost of fre-
+B. Overall Performance                                                                             quently transferring intermediate activation matrices to GPU
+   Throughput. As shown in Figure 12, SADDLE consis-                                               global memory. Relative to PIM-AD, although speculative
+tently achieves the highest throughput across all workloads.                                       decoding introduces additional FLOPs, overall energy con-
+Compared to GPU-AD, GPU-SD, PIM-AD, and PIM-SD, it                                                 sumption decreases due to significantly reduced global mem-
+improves average throughput by 3.36×, 2.88×, 1.94×, and                                            ory accesses. Compared to PIM-SD, SADDLE further lowers
+1.71×, respectively.                                                                               energy overhead by eliminating redundant computations for
+   At batch sizes of 16 and 32, both GPU/PIM-SD and                                                invalid tokens. In summary, the performance gains delivered
+SADDLE outperform GPU/PIM-AD, showing that under light                                             by SADDLE directly translate into substantial improvements
+workloads, speculative decoding benefits from its predictive                                       in energy efficiency.
+mechanism. However, as batch size increases, the performance
+advantage of GPU/PIM-SD over GPU/PIM-AD diminishes                                                    The impact of PIM on power consumption is twofold.
+or even reverses. In contrast, SADDLE sustains a clear per-                                        On the one hand, PIM substantially reduces data movement
+formance lead, demonstrating its effectiveness under heavier                                       between the HBM and the GPU for memory-bound operators,
+workloads. These gains arise from several factors. First, SAD-                                     thereby lowering overall device power. On the other hand,
+DLE adaptively adjusts the number of draft tokens per request                                      DRAM access power scales with the number of concurrently
+at runtime, avoiding the computational waste inherent in                                           accessed banks, and bank-level parallel accesses issued by all
+fixed-length speculative decoding. When optimal draft lengths                                      PEs account for the majority of power consumption. In our
+vary significantly across requests, this fine-grained control                                      design, the TLM attention and DLM FC operators exploit
+reduces unnecessary computation, resulting in higher effective                                     token-level and request-level data reuse to increase arithmetic
+throughput—especially evident under larger batch sizes.                                            intensity, thereby reducing the number of bank accesses and
+   Second, SADDLE mitigates the imbalance caused by vari-                                          mitigating DRAM access power. As a result, the overall device
+able draft lengths through cross-micro-batch verification, elim-                                   power remains within the assumed thermal design envelope.
+
+
+
+
+                  Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                                                                 GPU-AD   GPU-SD    PIM-AD      PIM-SD   SADDLE
+                 PIM-SD    SADDLE-d      SADDLE-p      SADDLE-s      SADDLE                    4
+                                                                                                   GPU-AD   GPU-SD   PIM-AD   PIM-SD   SADDLE
+                                                                                                                                                             4
+
+
+
+
+                                                                                  Throughput
+
+
+
+
+                                                                                                                                                Throughput
+                                                                                  Normalized
+
+
+
+
+                                                                                                                                                Normalized
+Throughput   3                                                                                 3                                                             3
+
+                                                                                               2
+Normalized
+                                                                                                                                                             2
+                                                                                               1                                                             1
+             2
+                                                                                               0                                                             0
+                                                                                                    1024       2048       4096         8192                        1          2             4            8
+                                                                                                               Sequence Length                                                    Batch Size
+             1                                                                                                        (a)                                                             (b)
+
+
+
+
+             0                                                                    Fig. 15. Throughput sensitivity of SADDLE to (a) sequence length and (b)
+                     16              32          64                128            batch size, showing increasing gains with longer sequences and competitive
+                                      Batch Size                                  performance under small batches
+
+
+Fig. 14. Throughput of SADDLE (OPT-66B+OPT-1.3B) and its variants
+across batch sizes (normalized to PIM-SD), highlighting gains from adaptive       outperforming other baselines, demonstrating its robustness
+length, shared pool, eager pool, and dynamic mapping                              even at low system utilization.
+                                                                                  E. Performance Discussion
+C. Ablation Analysis                                                                 Latency Breakdown. Figure 16 shows the breakdown of
+   To assess the contribution of each design component to                         the end-to-end inference latency of PIM-SD and SADDLE.
+overall performance, we evaluate several SADDLE variants                          We observe that only 0.83% of SADDLE’s end-to-end latency
+on OPT-66B and OPT-1.3B. These include: using only the                            is spent in monitoring and decision-making. This overhead
+adaptive draft length strategy (SADDLE-d); combining adap-                        is negligible because monitoring and decisionQmaking only
+                                                                                                                                     t
+tive draft length with the Shared Pool for cross-micro-batch                      require a few multiplications to update Ht = i=1 pi and a
+verification (Section IV-C), while still executing the DLM and                    simple comparison Ht > τ , both implemented as dedicated
+TLM sequentially (SADDLE-p); and a configuration that adds                        hardware modules in the SADDLE Manager. By adaptively
+the eager pool mechanism (Section IV-D) while mapping FC                          adjusting the draft length, redundant computation and paral-
+operators to the GPU and attention operators (Section IV-E)                       lelism degradation are effectively mitigated. SADDLE reduces
+to PIM (SADDLE-s). Figure 14 presents the performance of                          the prediction and verification latency by 1.18× and 1.23×, re-
+these variants, normalized to PIM-SD.                                             spectively, compared to PIM-SD. Furthermore, the decoupled
+                                                                                  asynchronous pipeline overlaps prediction and verification,
+   We observe that applying only adaptive draft length
+                                                                                  achieving 1.73× end-to-end latency reduction.
+(SADDLE-d) results in an average throughput reduction of
+                                                                                     Communication Costs. Figure 17 breaks down the the
+1.22× compared to PIM-SD. This highlights that adaptive
+                                                                                  execution time of SADDLE’s TLM verification phase. We see
+drafting alone does not improve performance due to inter-
+                                                                                  that only 13.54% of the TLM verification time is spent in
+stage pipeline bubbles (Figure 5(b)) and fluctuating operator
+                                                                                  cross-pCH communication. The reasons are twofold. First, ac-
+intensity (Figure 6). Introducing the Shared Pool for cross-
+                                                                                  cumulators are placed on each DRAM die to locally aggregate
+micro-batch verification in SADDLE-p improves performance
+                                                                                  partial results from different bank groups, thereby reducing
+by 1.52× over SADDLE-d and by 1.25× over PIM-SD on
+                                                                                  the volume of data transmitted across pCHs. Second, the high
+average. Incorporating the eager pool mechanism yields an
+                                                                                  internal memory bandwidth further mitigates communication
+additional 1.24× speedup. Finally, SADDLE-s, which dynam-
+                                                                                  latency. Similarly, cross-stack communication accounts for
+ically maps operators to GPUs or PIMs, achieves a further
+                                                                                  7.51% and does not become a performance bottleneck due
+1.13× improvement.
+                                                                                  to the following two reasons. First, we integrate an SFU on
+   These results confirm each component’s contribution to
+                                                                                  the buffer die of each HBM stack to aggregate partial results
+SADDLE’s performance gains.
+                                                                                  from different pCHs, effectively minimizing cross-stack data
+                                                                                  movement volume. Second, high internal (2 TB/s intra-device)
+D. Sensitivity Analysis
+                                                                                  and inter-device (600 GB/s) bandwidths further hide the cross-
+   Sequence Length. LLMs are trending toward longer se-                           stack communication latency.
+quence lengths to capture extended contexts. Figure 15(a)                            Hardware Utilization. A key contributor to SADDLE’s
+shows SADDLE’s performance on Llama3.1-70B+Llama3.2-                              throughput improvement is its higher hardware resource uti-
+1B for decoding lengths from 1024 to 8192 with batch size                         lization across both the GPU and PIM subsystems. Figure 18
+16, normalized to GPU-AD. SADDLE’s advantage grows                                depicts the average utilization of GPU and PIM for PIM-AD,
+with longer sequences, as the attention layer’s execution time                    PIM-SD, and SADDLE at a batch size of 64 across three
+increases due to the expanded KV cache. Offloading attention                      models. Compared with PIM-AD and PIM-SD, SADDLE im-
+to PIM yields greater performance gains. Overall, SADDLE                          proves the GPU utilization by 1.13× and 1.37×, and enhances
+consistently outperforms across varying sequence lengths.                         the PIM utilization by 1.84× and 1.18×, respectively. These
+   Batch Size. Figure 15(b) shows SADDLE’s performance                            gains arise from SADDLE’s asynchronous decoding pipeline,
+on OPT-66B+OPT-1.3B for small batch sizes (1, 2, 4 and 8),                        which effectively alleviates pipeline stalls.
+normalized to GPU-AD. Under light loads, SADDLE matches                              As shown in Figure 19, without arithmetic intensity-aware
+PIM-SD as wasted computation has minimal impact, while still                      operator scheduling, SADDLE executes 9.51% of operations
+
+
+
+
+             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                            Stack Com.   pCH Com.   FC
+
+
+
+
+                                                                                  Latency Breakdown
+                                                                                                            Attention    Others                                          PIM-AD   PIM-SD       SADDLE                            PIM          GPU     Throughput
+                                                                                                 100%                                                        100                                                                                                          2
+                       Verification   Prediction   Monitoring   Decision-Making                                                                                                                                        100
+
+
+
+
+                                                                                                                                            Utilization(%)
+
+
+
+
+                                                                                                                                                                                                                                                                                Throughput
+                                                                                                                                                                    OPT-66B       Llama3-70B     OPT-175B                       OPT-66B       Llama3-70B OPT-175B
+
+
+
+
+                                                                                                                                                                                                                                                                                Normalized
+                                                                                                                                                                                                              #of Ops(%)
+                300
+                             BS=16          BS=32         BS=64        BS=128                         80%                                                     80                                                           80
+                                                                                                                                                                                                                                      1.24×                               1.5
+  Latency (s)
+
+                                                                                                                                                                                                                                                    1.21×         1.17×
+                                                                                                      60%                                                     60                                                           60
+                200
+                                                                       Overlap                                                                                                                                                                                            1
+                                                                                                      40%                                                     40                                                           40
+                100                                                                                   20%                                                     20                                                                                                          0.5
+                                                                                                                                                                                                                           20
+                                                                                                      0%                                                      0                                                            0                                              0
+                  0
+                                                                                                            1024    2048     4096    8196                          PIM     GPU    PIM   GPU     PIM     GPU                     W/O    W      W/O    W      W/O    W
+                      PIM-SD SADDLE PIM-SD SADDLE PIM-SD SADDLE PIM-SD SADDLE
+                                                                                                                   Token Length
+
+  Fig. 16. Latency breakdown of PIM-SD and Fig. 17. The execution time Fig. 18. The PIM and GPU utiliza- Fig. 19. The FLOPS break-
+  SADDLE                                   breakdown of SADDLE’s tion of SADDLE and baselines across down and the throughput of SAD-
+                                           TLM verification phase      models                            DLE without and with operator
+                                                                                                         scheduling
+
+on PIM and 90.49% on the GPU, respectively. After enabling                                                                                  exceeding that of standard DRAM channels, making it ideal
+operator scheduling, these proportions shift to 14.89% and                                                                                  for memory-bound workloads like autoregressive decoding,
+85.11%, yielding a 1.21× throughput improvement by fully                                                                                    where KV cache size scales with context length and batch
+exploiting the acceleration potential of the heterogeneous                                                                                  size. TransPIM [64] pioneers memory-centric transformer in-
+architecture.                                                                                                                               ference by placing QKV tiles in adjacent banks and computing
+                                                                                                                                            attention entirely in DRAM, while offloading softmax and
+F. Area Overhead
+                                                                                                                                            residual paths to the host via an interposer. CENT [11] links
+   SADDLE introduces an area overhead of approximately                                                                                      CXL-attached PIM modules in a GPU-free fabric, promoting
+16.24 mm2 per DRAM die and 1.62 mm2 per buffer die                                                                                          modular near-bank compute with memory expansion as a
+in an HBM stack. Each pCH integrates 16 PEs and 4 ac-                                                                                       cost-effective scaling strategy. However, PIM-only designs fall
+cumulators. In a 1z-nm DRAM process [39], [43], a PE                                                                                        short in accelerating compute-bound FC layers.
+occupies 0.116 mm2 and an accumulator 0.044 mm2 . PE
+                                                                                                                                               PIM-Enabled Heterogeneous Systems for LLM Infer-
+area is split among arithmetic units (57%), on-chip buffers
+                                                                                                                                            ence: AttAcc [38] offloads attention to HBM-PIM while re-
+(16%), and control logic (27%), while accumulator area is
+                                                                                                                                            taining FC operators on the GPU, aligning operator placement
+dominated by arithmetic. Our PE control logic is specialized
+                                                                                                                                            with bandwidth and compute demands to support batched
+for matrix-vector products, keeping it compact compared
+                                                                                                                                            generation. IANUS [44] combines an NPU and PIM behind a
+to prior PIM designs supporting general operations. Given
+                                                                                                                                            shared memory fabric, avoiding explicit copies but limiting
+a 121 mm2 HBM3 die, our PIM logic contributes 13.4%
+                                                                                                                                            concurrency between normal accesses and PIM execution,
+DRAM-die area overhead, which is comparable to prior HBM-
+                                                                                                                                            favoring low-latency over throughput. SpecPIM [22] addresses
+PIM accelerators [15], [38]. Therefore, in our design, the
+                                                                                                                                            speculative decoding via offline scheduling using genetic
+additional computational logic does not compromise memory
+                                                                                                                                            algorithms and Monte Carlo Tree Search to optimize task
+capacity. On the 7 nm buffer die, the softmax accelerator and
+                                                                                                                                            placement per batch size and draft length, though it lacks
+its accumulator occupy 1.44 mm2 and 0.18 mm2 , respectively,
+                                                                                                                                            adaptability at runtime. PAPI [15] dynamically profiles op-
+with most area attributed to buffering in the softmax unit.
+                                                                                                                                            erator intensity and reallocates workloads between GPU and
+                                              VI. R ELATED W ORK                                                                            PIM to minimize idle time as decoding progresses. These
+   ASIC-based LLM Accelerators: A3 [13] accelerates at-                                                                                     systems highlight the trend of dynamic scheduling based on
+tention by identifying key connections and applying top-k ap-                                                                               workload behavior. SADDLE advances this line by adap-
+proximation to handle long sequences. SpAtten [49] optimizes                                                                                tively orchestrating speculative decoding end-to-end, achieving
+different Transformer stages using cascaded tokens, head prun-                                                                              higher throughput.
+ing, and progressive quantization to exploit token/head sparsity                                                                               Adaptive Draft Sequence Length: The concept of adaptive
+and quantization. Sanger [26] predicts sparse attention with                                                                                draft sequence length has been explored in prior work [28],
+low-precision computation and improves hardware efficiency                                                                                  [50]. Disco [28] employs a lightweight classifier to decide,
+via pack and split methods. ELSA [14] computes input hashes                                                                                 after generating each draft token, whether to continue drafting
+at runtime to find the most similar keys based on hash                                                                                      or switch to verification. OPT-Tree [50], under a given node
+distance and restricts attention to these pairs. DOTA [41]                                                                                  budget, performs a stepwise greedy search to construct an
+introduces a dynamic sparse attention predictor that learns                                                                                 optimal draft tree that maximizes the expected accepted length.
+attention weight patterns via an approximate detector. These                                                                                These studies demonstrate that adaptive draft length methods
+approaches reduce attention computation via sparsification                                                                                  effectively reduce latency in single-request scenarios. How-
+(e.g., top-k, head pruning), low-precision quantization, hash-                                                                              ever, a long-standing practical challenge lies in enabling large-
+based filtering, and dynamic sparsity prediction. However, as                                                                               batch speculative decoding. SADDLE employs a lightweight,
+they target only the attention layer, they struggle to deliver                                                                              hardware-friendly adaptive draft length method that is plug-
+high end-to-end speedups under large batch sizes.                                                                                           and-play and requires no additional training. More importantly,
+   PIM-based LLM Accelerators: PIM brings compute ker-                                                                                      SADDLE integrates adaptive drafting with batching and intro-
+nels like GEMV and attention closer to DRAM banks, reduc-                                                                                   duces a novel prediction–verification decoupled asynchronous
+ing off-chip transfers and latency. With processing elements                                                                                pipeline to mitigate pipeline stalls exacerbated by varying
+near memory arrays, PIM leverages on-chip bandwidth far                                                                                     draft lengths across requests within a batch. This enables
+
+
+
+
+                       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+the hardware to achieve significant throughput gains with                         [4] T. Cai, Y. Li, Z. Geng, H. Peng, J. D. Lee, D. Chen, and T. Dao,
+speculative decoding, rather than only reducing latency for a                         “Medusa: Simple LLM inference acceleration framework with multiple
+                                                                                      decoding heads,” in Proceedings of the 41st International Conference
+single batch. Advanced adaptive drafting algorithms can also                          on Machine Learning (ICML), 2024.
+be incorporated into SADDLE, as they are orthogonal and                           [5] C. Chen, S. Borgeaud, G. Irving, J. Lespiau, L. Sifre, and J. Jumper, “Ac-
+complementary to our system-level design.                                             celerating large language model decoding with speculative sampling,”
+                                                                                      arXiv preprint arXiv:2302.01318, 2023.
+                     VII. C ONCLUSION                                             [6] M. Chen, J. Tworek, H. Jun, Q. Yuan, H. P. de Oliveira Pinto, J. Kaplan,
+                                                                                      H. Edwards, Y. Burda, N. Joseph, G. Brockman, A. Ray, R. Puri,
+   Speculative decoding enhances LLM throughput but suf-                              G. Krueger, M. Petrov, H. Khlaaf, G. Sastry, P. Mishkin, B. Chan,
+fers from redundant computation and limited parallelism on                            S. Gray, N. Ryder, M. Pavlov, A. Power, L. Kaiser, M. Bavarian,
+PIM-enabled heterogeneous systems, particularly under large                           C. Winter, P. Tillet, F. P. Such, D. Cummings, M. Plappert, F. Chantzis,
+                                                                                      E. Barnes, A. Herbert-Voss, W. H. Guss, A. Nichol, A. Paino, N. Tezak,
+batch sizes. To address this, we present SADDLE, a PIM-                               J. Tang, I. Babuschkin, S. Balaji, S. Jain, W. Saunders, C. Hesse,
+enabled heterogeneous system that adaptively adjusts draft                            A. N. Carr, J. Leike, J. Achiam, V. Misra, E. Morikawa, A. Rad-
+sequence lengths and overcomes key performance bottlenecks.                           ford, M. Knight, M. Brundage, M. Murati, K. Mayer, P. Welinder,
+                                                                                      B. McGrew, D. Amodei, S. McCandlish, I. Sutskever, and W. Zaremba,
+SADDLE incorporates three core optimizations: (1) runtime                             “Evaluating large language models trained on code,” arXiv preprint
+draft-length tuning based on cumulative acceptance probabil-                          arXiv:2107.03374, 2021.
+ity to reduce invalid tokens and maintain TLM parallelism,                        [7] M. Conover, M. Hayes, A. Mathur, J. Xie, J. Wan, S. Shah, A. Ghodsi,
+                                                                                      P. Wendell, M. Zaharia, and R. Xin, “Free dolly: Introducing the
+(2) an asynchronous decoding pipeline that decouples DLM                              world’s first truly open instruction-tuned llm,” 2023. [Online]. Available:
+and TLM to avoid pipeline stalls, and (3) arithmetic inten-                           https://github.com/databrickslabs/dolly
+sity–aware operator scheduling that dynamically maps tasks to                     [8] D. Dai, C. Deng, C. Zhao, R. X. Xu, H. Gao, D. Chen, J. Li, W. Zeng,
+                                                                                      X. Yu, Y. Wu, Z. Xie, Y. K. Li, P. Huang, F. Luo, C. Ruan, Z. Sui,
+PIM or GPU for efficient hardware utilization. Experimental                           and W. Liang, “Deepseekmoe: Towards ultimate expert specialization in
+results show that SADDLE improves inference throughput by                             mixture-of-experts language models,” in Proceedings of the 62nd Annual
+2.88× over GPU-only and 1.71× over existing PIM-enabled                               Meeting of the Association for Computational Linguistics (ACL), 2024,
+                                                                                      pp. 1280–1297.
+speculative decoding systems on average.
+                                                                                  [9] F. Devaux, “The true processing in memory accelerator,” in Proceedings
+                   ACKNOWLEDGEMENTS                                                   of the 2019 IEEE Hot Chips Symposium (HCS), 2019, pp. 1–24.
+                                                                                 [10] Google, “Gemini,” 2025. [Online]. Available: https://gemini.google.com/
+   This work is supported by the National Key Research                           [11] Y. Gu, A. Khadem, S. Umesh, N. Liang, X. Servot, O. Mutlu, R. R.
+and Development Program of China under Grant No.                                      Iyer, and R. Das, “PIM is all you need: A cxl-enabled gpu-free system
+2023YFB4503400 and the National Natural Science Founda-                               for large language model inference,” in Proceedings of the 30th ACM
+                                                                                      International Conference on Architectural Support for Programming
+tion of China (Nos. 62402456, 62450064, and 62322205). The                            Languages and Operating Systems (ASPLOS), 2025, pp. 862–881.
+correspondence of this paper should be addressed to Qinggang                     [12] M.-H. Guo, J. Xu, Y. Zhang, J. Song, H. Peng, Y.-X. Deng, X. Dong,
+Wang.                                                                                 K. Nakayama, Z. Geng, C. Wang, B. Ni, G.-W. Yang, Y. Rao, H. Peng,
+                                                                                      H. Hu, G. Wetzstein, and S.-M. Hu, “R-bench: Graduate-level multi-
+                             R EFERENCES                                              disciplinary benchmarks for llm & mllm complex reasoning evaluation,”
+                                                                                      arXiv preprint arXiv:2505.02018, 2025.
+[1] A. Agrawal, N. Kedia, A. Panwar, J. Mohan, N. Kwatra, B. S. Gulavani,
+                                                                                 [13] T. J. Ham, S. Jung, S. Kim, Y. H. Oh, Y. Park, Y. Song, J. Park,
+    A. Tumanov, and R. Ramjee, “Taming throughput-latency tradeoff in
+                                                                                      S. Lee, K. Park, J. W. Lee, and D. Jeong, “A3 : Accelerating attention
+    LLM inference with sarathi-serve,” in Proceedings of the 18th USENIX
+                                                                                      mechanisms in neural networks with approximation,” in Proceedings
+    Symposium on Operating Systems Design and Implementation (OSDI),
+                                                                                      of the IEEE International Symposium on High Performance Computer
+    2024, pp. 117–134.
+                                                                                      Architecture (HPCA), 2020, pp. 328–341.
+[2] R. Y. Aminabadi, S. Rajbhandari, A. A. Awan, C. Li, D. Li, E. Zheng,
+    O. Ruwase, S. Smith, M. Zhang, J. Rasley, and Y. He, “Deepspeed-             [14] T. J. Ham, Y. Lee, S. H. Seo, S. Kim, H. Choi, S. J. Jung, and J. W.
+                                                                                      Lee, “ELSA: hardware-software co-design for efficient, lightweight self-
+    inference: Enabling efficient inference of transformer models at unprece-
+    dented scale,” in Proceedings of the International Conference for High            attention mechanism in neural networks,” in Proceedings of the 48th
+    Performance Computing, Networking, Storage and Analysis (SC), 2022,               ACM/IEEE Annual International Symposium on Computer Architecture
+                                                                                      (ISCA), 2021, pp. 692–705.
+    pp. 46:1–46:15.
+[3] R. Anil, A. M. Dai, O. Firat, M. Johnson, D. Lepikhin, A. Passos,            [15] Y. He, H. Mao, C. Giannoula, M. Sadrosadati, J. Gómez-Luna, H. Li,
+    S. Shakeri, E. Taropa, P. Bailey, Z. Chen, E. Chu, J. H. Clark, L. E.             X. Li, Y. Wang, and O. Mutlu, “PAPI: exploiting dynamic parallelism
+    Shafey, Y. Huang, K. Meier-Hellstern, G. Mishra, E. Moreira, M. Omer-             in large language model decoding with a processing-in-memory-enabled
+    nick, K. Robinson, S. Ruder, Y. Tay, K. Xiao, Y. Xu, Y. Zhang, G. H.              computing system,” in Proceedings of the 30th ACM International
+    Abrego, J. Ahn, J. Austin, P. Barham, J. Botha, J. Bradbury, S. Brahma,           Conference on Architectural Support for Programming Languages and
+    K. Brooks, M. Catasta, Y. Cheng, C. Cherry, C. A. Choquette-Choo,                 Operating Systems (ASPLOS), 2025, pp. 766–782.
+    A. Chowdhery, C. Crepy, S. Dave, M. Dehghani, S. Dev, J. Devlin,             [16] G. Heo, S. Lee, J. Cho, H. Choi, S. Lee, H. Ham, G. Kim, D. Maha-
+    M. Dı́az, N. Du, E. Dyer, V. Feinberg, F. Feng, V. Fienber, M. Freitag,           jan, and J. Park, “Neupims: NPU-PIM heterogeneous acceleration for
+    X. Garcia, S. Gehrmann, L. Gonzalez, G. Gur-Ari, S. Hand, H. Hashemi,             batched LLM inferencing,” in Proceedings of the 29th ACM Interna-
+    L. Hou, J. Howland, A. Hu, J. Hui, J. Hurwitz, M. Isard, A. Ittycheriah,          tional Conference on Architectural Support for Programming Languages
+    M. Jagielski, W. Jia, K. Kenealy, M. Krikun, S. Kudugunta, C. Lan,                and Operating Systems (ASPLOS), 2024, pp. 722–737.
+    K. Lee, B. Lee, E. Li, M. Li, W. Li, Y. Li, J. Li, H. Lim, H. Lin, Z. Liu,   [17] S. Hong, S. Moon, J. Kim, S. Lee, M. Kim, D. Lee, and J. Kim, “DFX:
+    F. Liu, M. Maggioni, A. Mahendru, J. Maynez, V. Misra, M. Moussalem,              A low-latency multi-fpga appliance for accelerating transformer-based
+    Z. Nado, J. Nham, E. Ni, A. Nystrom, A. Parrish, M. Pellat, M. Polacek,           text generation,” in Proceedings of the 55th IEEE/ACM International
+    A. Polozov, R. Pope, S. Qiao, E. Reif, B. Richter, P. Riley, A. C. Ros,           Symposium on Microarchitecture (MICRO), 2022, pp. 616–630.
+    A. Roy, B. Saeta, R. Samuel, R. Shelby, A. Slone, D. Smilkov, D. R.          [18] JEDEC, “High bandwidth memory dram (hbm3),” 2022.
+    So, D. Sohn, S. Tokumine, D. Valter, V. Vasudevan, K. Vodrahalli,            [19] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. Gonzalez,
+    X. Wang, P. Wang, Z. Wang, T. Wang, J. Wieting, Y. Wu, K. Xu,                     H. Zhang, and I. Stoica, “Efficient memory management for large
+    Y. Xu, L. Xue, P. Yin, J. Yu, Q. Zhang, S. Zheng, C. Zheng, W. Zhou,              language model serving with pagedattention,” in Proceedings of the
+    D. Zhou, S. Petrov, and Y. Wu, “Palm 2 technical report,” arXiv preprint          29th Symposium on Operating Systems Principles (SOSP), 2023, pp.
+    arXiv:2305.10403, 2023.                                                           611–626.
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+[20] S. Lee, S. Kang, J. Lee, H. Kim, E. Lee, S. Seo, H. Yoon, S. Lee,                 with human feedback,” in Proceedings of the 36th International Con-
+     K. Lim, H. Shin, J. Kim, S. O, A. Iyer, D. Wang, K. Sohn, and                     ference on Neural Information Processing Systems (NeurIPS), 2022, pp.
+     N. S. Kim, “Hardware architecture and software stack for PIM based                27 730–27 744.
+     on commercial DRAM technology: Industrial product,” in Proceedings           [38] J. Park, J. Choi, K. Kyung, M. J. Kim, Y. Kwon, N. S. Kim, and J. H.
+     of the 48th ACM/IEEE Annual International Symposium on Computer                   Ahn, “Attacc! unleashing the power of PIM for batched transformer-
+     Architecture (ISCA), 2021, pp. 43–56.                                             based generative model inference,” in Proceedings of the 29th ACM
+[21] Y. Leviathan, M. Kalman, and Y. Matias, “Fast inference from trans-               International Conference on Architectural Support for Programming
+     formers via speculative decoding,” in Proceedings of the International            Languages and Operating Systems (ASPLOS), 2024, pp. 103–119.
+     Conference on Machine Learning (ICML), 2023, pp. 19 274–19 286.              [39] M.-J. Park, J. Lee, K. Cho, J. Park, J. Moon, S.-H. Lee, T.-K. Kim, S. Oh,
+[22] C. Li, Z. Zhou, S. Zheng, J. Zhang, Y. Liang, and G. Sun, “Specpim: Ac-           S. Choi, Y. Choi, H. S. Cho, T. Yun, Y. J. Koo, J.-S. Lee, B.-K. Yoon,
+     celerating speculative inference on pim-enabled system via architecture-          Y.-J. Park, S. Oh, C. K. Lee, S.-H. Lee, H.-W. Kim, Y. Ju, S.-K. Lim,
+     dataflow co-exploration,” in Proceedings of the 29th ACM International            K. Y. Lee, S.-H. Lee, W. S. We, S. Kim, S. M. Yang, K. Lee, I.-K. Kim,
+     Conference on Architectural Support for Programming Languages and                 Y. Jeon, J.-H. Park, J. C. Yun, S. Kim, D.-Y. Lee, S.-H. Oh, J.-H. Shin,
+     Operating Systems (ASPLOS), 2024, pp. 950–965.                                    Y. Lee, J. Jang, and J. Cho, “A 192-gb 12-high 896-gb/s hbm3 dram
+[23] K. Li, W. Huang, Q. Wang, L. Zheng, X. Liao, H. Jin, and J. Xue, “Diff-           with a tsv auto-calibration scheme and machine-learning-based layout
+     moe: Efficient batched moe inference with priority-driven differential            optimization,” IEEE Journal of Solid-State Circuits, vol. 58, no. 1, pp.
+     expert caching,” in Proceedings of the International Conference for High          256–269, 2023.
+     Performance Computing, Networking, Storage and Analysis (SC), 2025,          [40] P. Patel, E. Choukse, C. Zhang, A. Shah, Í. Goiri, S. Maleki, and
+     pp. 1951–1965.                                                                    R. Bianchini, “Splitwise: Efficient generative LLM inference using phase
+[24] T. Liu, Y. Li, Q. Lv, K. Liu, J. Zhu, W. Hu, and X. Sun, “PEARL:                  splitting,” in Proceedings of the 51st ACM/IEEE Annual International
+     parallel speculative decoding with adaptive draft length,” in Proceedings         Symposium on Computer Architecture (ISCA), 2024, pp. 118–132.
+     of the Thirteenth International Conference on Learning Representations       [41] Z. Qu, L. Liu, F. Tu, Z. Chen, Y. Ding, and Y. Xie, “DOTA: detect
+     (ICLR), 2025.                                                                     and omit weak attentions for scalable transformer acceleration,” in
+[25] X. Liu, J. Park, L. Hu, W. Kwon, Z. Li, C. Zhang, K. Du, X. Mo, K. You,           Proceedings of the 27th ACM International Conference on Architectural
+     A. Cheung, Z. Deng, I. Stoica, and H. Zhang, “Turbospec: Closed-loop              Support for Programming Languages and Operating Systems (ASPLOS),
+     speculation control system for optimizing llm serving goodput,” arXiv             2022, pp. 14–26.
+     preprint arXiv:2406.14066, 2025.                                             [42] R. Ruiz-Dolz, Z. Kikteva, and J. Lawrence, “Mining complex patterns of
+[26] L. Lu, Y. Jin, H. Bi, Z. Luo, P. Li, T. Wang, and Y. Liang, “Sanger: A            argumentative reasoning in natural language dialogue,” in Proceedings
+     co-design framework for enabling sparse attention using reconfigurable            of the 63rd Annual Meeting of the Association for Computational
+     architecture,” in Proceedings of the 54th Annual IEEE/ACM Interna-                Linguistics (ACL), 2025, pp. 7421–7435.
+     tional Symposium on Microarchitecture (MICRO), 2021, pp. 977–991.            [43] Y. Ryu, S.-G. Ahn, J. H. Lee, J. Park, Y. K. Kim, H. Kim, Y. G. Song,
+[27] H. Luo, Y. C. Tuğrul, F. N. Bostancı, A. Olgun, A. G. Yağlıkçı, and            H.-W. Cho, S. Cho, S. H. Song, H. Lee, U. Shin, J. Ahn, J.-M. Ryu,
+     O. Mutlu, “Ramulator 2.0: A modern, modular, and extensible dram                  S. Lee, K.-H. Lim, J. Lee, J. H. Park, J.-S. Jeong, S. Joo, D. Cho, S. Y.
+     simulator,” IEEE Computer Architecture Letters, vol. 23, no. 1, pp. 112–          Kim, M. Lee, H. Kim, M. Kim, J.-S. Kim, J. Kim, H. G. Kang, M.-K.
+     116, 2024.                                                                        Lee, S.-R. Kim, Y.-C. Kwon, Y. Y. Byun, K. Lee, S. Park, J. Youn, M.-O.
+[28] J. Mamou, O. Pereg, D. Korat, M. Berchansky, N. Timor, M. Wasserblat,             Kim, K. Sohn, S.-J. Hwang, and J. Lee, “A 16 gb 1024 gb/s hbm3 dram
+     and R. Schwartz, “Dynamic speculation lookahead accelerates spec-                 with source-synchronized bus design and on-die error control scheme
+     ulative decoding of large language models,” in Proceedings of the                 for enhanced ras features,” IEEE Journal of Solid-State Circuits, vol. 58,
+     NeurIPS Workshop on Efficient Natural Language and Speech Process-                no. 4, pp. 1051–1061, 2023.
+     ing (ENLSP), vol. 262, 2024, pp. 456–467.
+                                                                                  [44] M. Seo, X. T. Nguyen, S. J. Hwang, Y. Kwon, G. Kim, C. Park, I. Kim,
+[29] X. Miao, G. Oliaro, Z. Zhang, X. Cheng, Z. Wang, Z. Zhang, R. Y. Y.
+                                                                                       J. Park, J. Kim, W. Shin, J. Won, H. Choi, K. Kim, D. Kwon, C. Jeong,
+     Wong, A. Zhu, L. Yang, X. Shi, C. Shi, Z. Chen, D. Arfeen, R. Ab-
+                                                                                       S. Lee, Y. Choi, W. Byun, S. Baek, H. Lee, and J. Kim, “IANUS:
+     hyankar, and Z. Jia, “Specinfer: Accelerating large language model
+                                                                                       integrated accelerator based on NPU-PIM unified memory system,” in
+     serving with tree-based speculative inference and verification,” in Pro-
+                                                                                       Proceedings of the 29th ACM International Conference on Architectural
+     ceedings of the 29th ACM International Conference on Architectural
+                                                                                       Support for Programming Languages and Operating Systems (ASPLOS),
+     Support for Programming Languages and Operating Systems(ASPLOS),
+                                                                                       2024, pp. 545–560.
+     2024, pp. 932–949.
+                                                                                  [45] D. D. Sharma, R. Blankenship, and D. S. Berger, “An introduction to
+[30] D. Narayanan, M. Shoeybi, J. Casper, P. LeGresley, M. Patwary,
+                                                                                       the compute express link (cxl) interconnect,” ACM Computing Surveys,
+     V. Korthikanti, D. Vainbrand, P. Kashinkunti, J. Bernauer, B. Catanzaro,
+                                                                                       vol. 56, no. 11, pp. 290:1–290:37, 2024.
+     A. Phanishayee, and M. Zaharia, “Efficient large-scale language model
+     training on GPU clusters using megatron-lm,” in Proceedings of the           [46] B. Spector and C. Re, “Accelerating llm inference with staged specula-
+     International Conference for High Performance Computing, Networking,              tive decoding,” arXiv preprint arXiv:2308.04623, 2023.
+     Storage and Analysis (SC), 2021, pp. 58:1–58:15.                             [47] L. Team, “The llama 3 herd of models,” arXiv preprint
+[31] E. Nijkamp, B. Pang, H. Hayashi, L. Tu, H. Wang, Y. Zhou, S. Savarese,            arXiv:2407.21783, 2024.
+     and C. Xiong, “Codegen: An open large language model for code                [48] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+     with multi-turn program synthesis,” in Proceedings of the Eleventh                L. Kaiser, and I. Polosukhin, “Attention is all you need,” in Proceedings
+     International Conference on Learning Representations (ICLR), 2023.                of the 31st International Conference on Neural Information Processing
+[32] NVIDIA, “NVIDIA DGX A100,” 2023. [Online]. Available: https:                      Systems (NIPS), 2017, pp. 5998–6008.
+     //resources.nvidia.com/enus-dgx-systems/dgx-ai                               [49] H. Wang, Z. Zhang, and S. Han, “Spatten: Efficient sparse attention
+[33] NVIDIA, “Nvlink and nvlink switch,” 2025. [Online]. Available:                    architecture with cascade token and head pruning,” in Proceedings
+     https://www.nvidia.com/en-us/data-center/nvlink/                                  of the IEEE International Symposium on High-Performance Computer
+[34] M. O’Connor, N. Chatterjee, D. Lee, J. M. Wilson, A. Agrawal, S. W.               Architecture (HPCA), 2021, pp. 97–110.
+     Keckler, and W. J. Dally, “Fine-grained DRAM: energy-efficient DRAM          [50] J. Wang, Y. Su, J. Li, Q. Xia, Z. Ye, X. Duan, Z. Wang, and M. Zhang,
+     for extreme bandwidth systems,” in Proceedings of the 50th Annual                 “Opt-tree: Speculative decoding with adaptive draft tree structure,”
+     IEEE/ACM International Symposium on Microarchitecture (MICRO),                    Transactions of the Association for Computational Linguistics, vol. 13,
+     2017, pp. 41–54.                                                                  pp. 188–199, 2025.
+[35] OpenAI, “Gpt-4 technical report,” arXiv preprint arXiv:2303.08774,           [51] Q. Wang, L. Zheng, Z. An, H. Huang, H. Zhu, Y. Huang, P. Yao,
+     2024.                                                                             X. Liao, and H. Jin, “High-performance and resource-efficient dynamic
+[36] OpenAI, “Chatgpt,” 2025. [Online]. Available: https://openai.com/blog/            memory management in high-level synthesis,” in Proceedings of the 61st
+     chatgpt                                                                           ACM/IEEE Design Automation Conference (DAC), 2024, pp. 203:1–
+[37] L. Ouyang, J. Wu, X. Jiang, D. Almeida, C. L. Wainwright, P. Mishkin,             203:6.
+     C. Zhang, S. Agarwal, K. Slama, A. Ray, J. Schulman, J. Hilton,              [52] Q. Wang, L. Zheng, Z. An, S. Xiong, R. Wang, Y. Huang, P. Yao,
+     F. Kelton, L. Miller, M. Simens, A. Askell, P. Welinder, P. F. Christiano,        X. Liao, H. Jin, and J. Xue, “A scalable, efficient, and robust dynamic
+     J. Leike, and R. Lowe, “Training language models to follow instructions           memory management library for hls-based fpgas,” in Proceedings of
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+     the 57th IEEE/ACM International Symposium on Microarchitecture
+     (MICRO), 2024, pp. 437–450.
+[53] Q. Wang, L. Zheng, A. Hu, Y. Huang, P. Yao, C. Gui, X. Liao, H. Jin,
+     and J. Xue, “A data-centric accelerator for high-performance hypergraph
+     processing,” in Proceedings of the 55th IEEE/ACM International Sym-
+     posium on Microarchitecture (MICRO), 2022, pp. 1326–1341.
+[54] Q. Wang, L. Zheng, Y. Huang, P. Yao, C. Gui, X. Liao, H. Jin,
+     W. Jiang, and F. Mao, “Grasu: A fast graph update library for fpga-based
+     dynamic graph processing,” in Proceedings of the 2021 ACM/SIGDA
+     International Symposium on Field Programmable Gate Array (FPGA),
+     2021, pp. 149–159.
+[55] Q. Wang, L. Zheng, J. Yuan, Y. Huang, P. Yao, C. Gui, A. Hu, X. Liao,
+     and H. Jin, “Hardware-accelerated hypergraph processing with chain-
+     driven scheduling,” in Proceedings of the IEEE International Symposium
+     on High-Performance Computer Architecture (HPCA), 2022, pp. 184–
+     198.
+[56] Q. Wang, L. Zheng, J. Zhao, X. Liao, H. Jin, and J. Xue, “A conflict-
+     free scheduler for high-performance graph processing on multi-pipeline
+     fpgas,” ACM Transactions on Architecture and Code Optimization,
+     vol. 17, no. 2, pp. 14:1–14:26, 2020.
+[57] S. Wang, H. Yang, X. Wang, T. Liu, P. Wang, Y. Xu, X. Liang, K. Ma,
+     T. Feng, X. You, R. Gong, R. Wang, Z. Luan, Y. Liu, and D. Qian,
+     “Towards efficient llm inference via collective and adaptive speculative
+     decoding,” in Proceedings of the International Conference for High
+     Performance Computing, Networking, Storage and Analysis (SC), 2025,
+     pp. 973–990.
+[58] G. Yu, J. S. Jeong, G. Kim, S. Kim, and B. Chun, “Orca: A distributed
+     serving system for transformer-based generative models,” in Proceedings
+     of the 16th USENIX Symposium on Operating Systems Design and
+     Implementation (OSDI), 2022, pp. 521–538.
+[59] S. Yun, K. Kyung, J. Cho, J. Choi, J. Kim, B. Kim, S. Lee, K. Sohn,
+     and J. H. Ahn, “Duplex: A device for large language models with
+     mixture of experts, grouped query attention, and continuous batching,”
+     in Proceedings of the 57th IEEE/ACM International Symposium on
+     Microarchitecture (MICRO), 2024, pp. 1429–1443.
+[60] J. Zhang, J. Wang, H. Li, L. Shou, K. Chen, G. Chen, and S. Mehrotra,
+     “Draft& verify: Lossless large language model acceleration via self-
+     speculative decoding,” in Proceedings of the 62nd Annual Meeting of
+     the Association for Computational Linguistics (ACL), 2024, pp. 11 263–
+     11 282.
+[61] S. Zhang, S. Roller, N. Goyal, M. Artetxe, M. Chen, S. Chen, C. Dewan,
+     M. Diab, X. Li, X. V. Lin, T. Mihaylov, M. Ott, S. Shleifer, K. Shuster,
+     D. Simig, P. S. Koura, A. Sridhar, T. Wang, and L. Zettlemoyer,
+     “Opt: Open pre-trained transformer language models,” arXiv preprint
+     arXiv:2205.01068, 2022.
+[62] C. Zhao, C. Deng, C. Ruan, D. Dai, H. Gao, J. Li, L. Zhang, P. Huang,
+     S. Zhou, S. Ma, W. Liang, Y. He, Y. Wang, Y. Liu, and Y. X.
+     Wei, “Insights into deepseek-v3: Scaling challenges and reflections on
+     hardware for AI architectures,” in Proceedings of the 52nd Annual
+     International Symposium on Computer Architecture (ISCA), 2025, pp.
+     1731–1745.
+[63] L. Zheng, Z. Li, H. Zhang, Y. Zhuang, Z. Chen, Y. Huang, Y. Wang,
+     Y. Xu, D. Zhuo, E. P. Xing, J. E. Gonzalez, and I. Stoica, “Alpa:
+     Automating inter- and intra-operator parallelism for distributed deep
+     learning,” in Proceedings of the 16th USENIX Symposium on Operating
+     Systems Design and Implementation (OSDI), 2022, pp. 559–578.
+[64] M. Zhou, W. Xu, J. Kang, and T. Rosing, “Transpim: A memory-
+     based acceleration via software-hardware co-design for transformer,” in
+     Proceedings of the IEEE International Symposium on High-Performance
+     Computer Architecture (HPCA), 2022, pp. 1071–1085.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:28:51 UTC from IEEE Xplore. Restrictions apply.
+

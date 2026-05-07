@@ -1,0 +1,1035 @@
+  MetaAttention: A Unified and Performant Attention
+       Framework across Hardware Backends
+                Feiyang Chen                                       Yu Cheng                                        Lei Wang
+       Shanghai Jiao Tong University                          Peking University                               Peking University
+             Shanghai, China                                   Beijing, China                                   Beijing, China
+        chenfeiyang04@sjtu.edu.cn                          ryucheng@outlook.com                           leiwang1999@outlook.com
+
+                 Yuqing Xia                                     Ziming Miao                                      Lingxiao Ma
+             Microsoft Research                             Microsoft Research                                 Microsoft Research
+               Beijing, China                                  Beijing, China                                    Beijing, China
+        xiayuqing0622@outlook.com                       ziming.miao@microsoft.com                              xysmlx@gmail.com
+
+                   Fan Yang                                       Jilong Xue                                        Zhi Yang
+              Microsoft Research                              Microsoft Research                               Peking University
+                Beijing, China                                  Beijing, China                                   Beijing, China
+           fanyang@microsoft.com                             xuejilong@gmail.com                              yangzhi@pku.edu.cn
+
+                  Mao Yang                                       Xingda Wei                                       Haibo Chen
+            Microsoft Research                         Shanghai Jiao Tong University                     Shanghai Jiao Tong University
+              Beijing, China                                 Shanghai, China                                   Shanghai, China
+          maoyang@microsoft.com                            wxdwfc@sjtu.edu.cn                               haibochen@sjtu.edu.cn
+
+Abstract                                                                        previously unsupported by state-of-the-art systems. Addi-
+Computing attention is the backbone of transformer-based                        tionally, MetaAttention achieves performance comparable
+models like large language models. However, the increasing                      to manually-optimized libraries such as FlashMLA while
+diversity of attention algorithms presents significant chal-                    significantly reducing the amount of code required.
+lenges for unleashing hardware performance. State-of-the-                       CCS Concepts: • Computing methodologies → Parallel
+art variants like FlashAttention target a specific attention                    computing methodologies; • Computer systems orga-
+algorithm or hardware platform, which fail to generalize to                     nization → Parallel architectures.
+other algorithms and platforms.
+   We present MetaAttention, a framework that automat-                          Keywords: Attention mechanism, GPU acceleration, Kernel
+ically derives the optimal implementation of an attention                       optimization, Cross-platform, Large language models
+algorithm given a hardware platform. Our key insight is                         ACM Reference Format:
+that variants of attention can be abstracted into two oper-                     Feiyang Chen, Yu Cheng, Lei Wang, Yuqing Xia, Ziming Miao,
+ations: relevance scoring and aggregation, complemented                         Lingxiao Ma, Fan Yang, Jilong Xue, Zhi Yang, Mao Yang, Xingda Wei,
+by customizable functions and configurations like the input                     and Haibo Chen. 2026. MetaAttention: A Unified and Performant
+shape. Based on it, we systematically design a cross-backend                    Attention Framework across Hardware Backends. In Proceedings
+attention runtime around these operations that generalizes                      of the 31st ACM SIGPLAN Annual Symposium on Principles and
+to variants of attention with customizable operators. To                        Practice of Parallel Programming (PPoPP ’26), January 31 – February
+unleash the hardware performance, we further propose an                         4, 2026, Sydney, NSW, Australia. ACM, New York, NY, USA, 13 pages.
+IntermediateTensor-based search method to find the opti-                        https://doi.org/10.1145/3774934.3786444
+mal tiling strategy and the parallelism scheme according to
+the attention customization and hardware features. MetaAt-                      1    Introduction
+tention delivers up to a 10.4× speedup for configurations                       Attention [26] is a fundamental mechanism in modern
+                                                                                large language models (LLMs), enabling groundbreaking
+                                                                                advancements in natural language understanding and re-
+                                                                                lated domains. By dynamically weighting interactions across
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         input tokens, attention allows models to capture contextual
+tional License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                information between tokens, making it an indispensable
+© 2026 Copyright held by the owner/author(s).                                   component of modern deep learning systems.
+ACM ISBN 979-8-4007-2310-0/2026/01                                                 Attention mechanisms dominate the computational work-
+https://doi.org/10.1145/3774934.3786444                                         load in LLMs, and their proportion continuously increases
+
+
+
+                                                                          635
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                       Feiyang Chen et al.
+
+
+with the growing sequence length. This trend underscores                 into two fundamental operations: relevance scoring and ag-
+the critical importance of optimizing attention for end-to-              gregation. These operations capture the essence of attention
+end model training and inference. For instance, attention                mechanisms, ensuring a consistent yet flexible foundation
+accounts from 55% to 82% of all computation time in Llama-               for diverse designs.
+3.2-3B when the sequence length increases from 2048 to 8192                 Building on this abstraction, MetaAttention introduces
+(Table 1). Such a significant computational burden highlights            customizable attention templates that fix the core opera-
+the necessity of efficient attention mechanisms to ensure                tions of relevance scoring and aggregation while expos-
+optimal performance and scalability of LLMs across various               ing customizable functions for user-defined extensions.
+applications and hardware platforms.                                     These functions allow users to design their attention variants
+   However, attention optimization is nontrivial due to high             by applying transformations like masking, scaling, or row-
+computation and memory demands and often relies on hand-                 wise normalization, enabling seamless adaptation to task-
+crafted kernels. For example, FlashAttention [9] employs                 specific requirements. As shown in Table 3, state-of-the-
+online softmax, memory-efficient pipelining, and kernel                  art attention mechanisms—including Softmax Attention,
+fusion to improve canonical attention; while Mamba2 [10], a              Multi-Latent Attention, Sigmoid Attention, Sliding Window
+linear version of attention, utilizes Triton-based [25] kernels          Attention, Mamba2, and RetNet—can be represented within
+with chunk-based processing for performance improve-                     our framework. Moreover, recently-proposed mechanisms
+ment. These handcrafted optimizations are labor-intensive,               such as softpick attention [39] can also be expressed using
+hardware-specific, and constrained to fixed configurations,              MetaAttention, demonstrating its flexibility and future-proof
+thus limiting the adaptability to diverse attention designs              design.
+and configurations.                                                         One challenge is how to retain high-performance despite
+   Meanwhile, the diversity of attention variants continues              abstraction. State-of-the-art approaches (e.g., FlashAtten-
+to expand, driven by task-specific requirements and innova-              tion [8][21], FlashMLA [16], and Mamba [10]) typically
+tions, characterized by customized operators or intermediate             rely on handcrafted kernel implementations that hardcode
+tensor shapes. For instance, sigmoid attention [20] replaces             execution strategies—such as fusion, parallelism, and pipelin-
+softmax with sigmoid activation for improved efficiency,                 ing—for specific attention mechanisms on particular hard-
+and linear attention mechanisms, such as Mamba2 [10],                    ware. In contrast, MetaAttention unifies execution strategies
+reformulate computation with selective gating for enhanced               by mapping them to attributes of intermediate tensors. This
+efficiency. Sparse attention, such as Seer Attention [14],               enables automated optimization through a cross-backend
+applies masks to previous tokens to reduce computation.                  scheduling that dynamically adapts to input configurations
+Other variants, like DeepSeek MLA [11] and RetNet [23],                  and hardware constraints.
+deviate further by requiring non-standard tensor dimensions,                We have implemented MetaAttention with 7.3k lines of
+introducing additional computational challenges. Adapting                C++ and Python code and have open-sourced the system to
+to this growing diversity requires significant expert effort for         foster further innovations. Evaluation results demonstrate
+kernel customization. For example, implementing a highly-                that MetaAttention achieves performance comparable to
+optimized Multi-head Latent Attention in FlashMLA [16]                   handcrafted expert-optimized kernels, delivering up to 10.4×
+requires over 1,000 lines of CUDA code, involving a complex              speedup for configurations unsupported by existing imple-
+pipeline across hardware units and a carefully designed on-              mentations. Moreover, MetaAttention offers flexibility and
+chip data movement strategy.                                             simplicity in development by allowing users to define the
+   Furthermore, differences in hardware platforms, such as               attention template and customizable functions—eliminating
+NVIDIA A100, H100, and AMD MI300X GPUs, complicate                       the need to handle hardware-specific execution plans and
+the landscape. Hardware differences in tile sizes, memory                significantly reducing development effort compared to man-
+hierarchies, and pipelining strategies necessitate new imple-            ually optimized libraries.
+mentations, significantly increasing development overheads
+and limiting scalability. For example, FlashAttention v2
+reached 70% of the peak computation throughput on NVIDIA                 2     Attention in the Wild
+A100, but only achieved 30% on NVIDIA H100. Complex                      2.1   Attention Mechanisms
+techniques such as register-level pipelining and ping-pong               The attention mechanism enables LLMs to selectively fo-
+kernel design must be used to achieve peak performance on                cus on relevant parts of an input sequence by computing
+the NVIDIA H100 [21].                                                    pairwise attention scores between tokens. As shown in the
+   To address these challenges, we propose MetaAttention, a              left side of Fig. 1, it takes Queries (Q), Keys (K), and Values
+unified framework for designing, optimizing, and executing               (V)—projected from input tokens—and follows four stages:
+diverse attention mechanisms across hardware platforms.
+At its core, MetaAttention abstracts attention mechanisms                • Embedding: Tokens are mapped to Q, K, V tensors via
+                                                                           linear projections.
+
+
+
+                                                                   636
+MetaAttention                                                                      PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                                                                                                                     Algorithmic Innovations
+                                                                                                          Means higher dimension
+                                                                                                            Q Proj’     K Proj’   V Proj’
+                                                                                                                      RetNet, DeepSeek MLA
+
+
+
+                                                                                                            𝑆𝑜𝑓𝑡𝑚𝑎𝑥[𝑄𝐾 𝐾𝑇 𝑇 − 𝜆𝑆𝑜𝑓𝑡𝑚𝑎𝑥 𝑄2 𝐾𝑇𝑇 ]
+                                                                           Causal Attention                𝑆𝑜𝑓𝑡𝑚𝑎𝑥[𝑄1 1 1 1− 𝜆𝑆𝑜𝑓𝑡𝑚𝑎𝑥 𝑄2 𝐾2 2]
+
+                                                                                                                Differential Transformer
+                                                                                                                                     Efficiency Innovations
+
+
+
+
+                                                                                       𝐾
+                                                                       Linear Attention                                         Sparse Attention
+                                                                       Replace with Linear Attribute   Sliding Window Attention BlockSparse, Bitnet,
+                                                                                                                                   SeerAttention
+
+
+Fig. 1. The foundational attention mechanism and its variants: Attention mechanisms are divided into stages such as embedding, interaction,
+normalization, and composition(left). Attention variants make various changes to these stages(right). For example, Causal Attention modified
+the interaction stage to apply a mask, which makes the computation flow different. MetaAttention unifies the three stages—Interaction,
+Normalization, and Composition—and provides a unified framework for customizing attention mechanisms.
+
+
+• Interaction: Pairwise scores are computed via dot prod-                        Table 1. Attention proportion in Llama-3.2-3B inference
+  ucts of Q and K.
+• Normalization: Scores are normalized using functions                              Seqlen                       2K         4K        6K           8K
+  like softmax.
+• Composition: Outputs are generated by combining                                   Llama-3.2-3B                55%        70%       78%           82%
+  scores with V, integrating information from relevant
+  tokens into a single output for each token.
+  The standard attention [26] can be formulated as:
+                                                                           2.3     Performance Disparity of Attention Variants
+                                            𝑄𝐾 𝑇
+           𝐴𝑡𝑡𝑒𝑛𝑡𝑖𝑜𝑛(𝑄, 𝐾, 𝑉 ) = 𝑠𝑜 𝑓 𝑡𝑚𝑎𝑥 ( √ )𝑉              (1)         The attention mechanism dominates LLM computation. As
+                                              𝑑𝑘                           shown in Table 1, it accounts for a major portion of Llama-
+                                                                           3.2-3B inference.
+where 𝑑𝑘 is the last dimension of Q and K.
+                                                                           Handcrafted attention library. High-performance at-
+2.2   Diversity in Attention Mechanisms                                    tention mechanisms frequently rely on handcrafted kernel
+                                                                           implementations optimized for specific patterns. For exam-
+Building on the foundational design of attention mechanisms,               ple, FlashAttention [21] provides a highly optimized kernel
+researchers have introduced numerous variants aimed at im-                 for standard softmax attention by fusing softmax compu-
+proving performance, addressing task-specific requirements,                tation and using memory-efficient pipelining. Flash-Linear-
+and enhancing computational efficiency. As illustrated on the              Attention [33], a library of hand-written Triton kernel, offers
+right side of Fig. 1, these innovations fall into two categories.          kernels for a variety of linear attention variants.
+Algorithmic Innovations enhance accuracy or capa-                             However, such libraries are inflexible—minor deviations in
+bilities. Examples include DiffTransformer [34] (refined                   attention patterns (e.g., DeepSeek V2 and RetNet’s atypical
+interaction/normalization), DeepSeek-MLA [11]/RetNet [23]                  input dimensions) break their optimizations. Fig. 2 illustrates
+(higher-dimensional embeddings), and Causal attention [26]                 the performance disparity across different attention variants.
+(restricted interaction).                                                  For standard Softmax-Attention, the handcrafted library
+Efficiency Innovations reduce the computation/memory                       FlashAttention3 [21] significantly outperforms the native Py-
+of attention. Compact representations (e.g., Mamba [10],                   Torch implementation, achieving over 60% FLOPS utilization.
+RetNet-recurrent [23], Sliding Window Attention [4]) com-                  In contrast, for less common variants like Gated-RetNet and
+press past KV states with modified interaction and normaliza-              ReLU-Attention, these libraries exhibit poor performance or
+tion. Sparse methods (e.g., BigBird [36], SeerAttention [14])              provide no support at all.
+introduce sparsity in the interaction stage to reduce compu-                  Additionally, due to limited development resources, these
+tational and memory demands.                                               libraries predominantly target top-tier hardware, such as
+
+
+
+                                                                     637
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                          Feiyang Chen et al.
+
+
+                     100%                    PyTorch Inductor
+        Flops utilization                    Library (Flash-Attention, Gated-RetNet)
+                            80%
+                                     65.3%
+
+
+
+
+                                                                                    Not supported
+                            60%
+
+                            40%
+                                  14.1%
+                            20%                                              7.1%
+                                                        2.9%5.7%
+
+                            0%
+                             Softmax-Attention Gated-RetNet              ReLU-Attention
+
+       Fig. 2. Performance disparity of attention variants.
+
+NVIDIA’s H100 and A100 GPUs, and are not easily transfer-
+able to alternative platforms like AMD GPUs.
+Compiler optimization. To simplify kernel development,
+automated compilers, such as Torch Inductor [3], TVM [6],
+FlashTensor [38], Ansor-AF [17], Welder [22], Alcop [15],                                                 Fig. 3. MetaAttention overview: The framework begins with
+and TensorRT [1], have emerged. While these tools reduce de-                                              attention abstraction and uses the Programming Interface to define
+velopment effort and adopt techniques like operator fusion to                                             Attention Templates. It then generates an optimized scheduling
+improve efficiency, they struggle to match the performance                                                plan, which is forwarded to the attention runtime to produce
+of handcrafted kernels for attention variants. This limitation                                            executable code tailored for the target device.
+arises from their inability to fully understand the semantics
+of attention computation, as they often treat it as a sequence
+                                                                                                            interactions between input tokens. It is typically realized
+of discrete and opaque operations. Advanced optimizations,
+                                                                                                            through inner products or other similarity measures to
+such as transforming softmax into an online softmax [9], are
+                                                                                                            determine token relationships.
+beyond the scope of current compiler capabilities, resulting
+                                                                                                          • Aggregation: Using the relevance scores, this operation
+in suboptimal performance.
+                                                                                                            consolidates contextual information into a representation
+Approaches for productivity. To balance performance                                                         for each token.
+and development productivity, most-recent approaches (e.g.,                                                  Building on these two fundamental operations, we propose
+FlexAttention [12], FlashInfer [35]) predefines the majority                                              a unified template that encapsulates the diverse spectrum
+of the computation and expose a limited set of parameters for                                             of attention variants shown in Fig. 4. This template consists
+user code injection. Yet, such approaches only offer limited                                              of relevance scoring and aggregation with customizable
+flexibility and remain tied to specific computational patterns,                                           functions between them, striking a balance between broad
+which thus fail to generalize across attention variants such as                                           applicability and development flexibility.
+linear attention or attention with non-conventional shapes.
+   MetaAttention overcomes these limitations by providing a                                               3.2   MetaAttention Overview
+unified framework for designing and optimizing attention. It                                              Based on our attention abstraction, we introduce MetaAt-
+provides a programming interface designed for attention that                                              tention, a unified framework designed to streamline the
+supports both parallel and recurrent attention. It incorpo-                                               design, optimization, and execution of diverse attention
+rates a structured scheduling approach and targets multiple                                               mechanisms across hardware platforms. As shown in Fig. 3,
+backends, including NVIDIA and AMD GPUs, ensuring high                                                    MetaAttention begins with attention templates defined by
+performance and scalability.                                                                              the Programming Interface. These templates retain the core
+                                                                                                          abstractions of attention—relevance scoring and aggregation,
+3     Programming with MetaAttention                                                                      outlined in §3.1, while providing customizable functions that
+MetaAttention provides a unified framework for program-                                                   allow users to design their own attention variants.
+ming diverse attention mechanisms. We first propose a uni-                                                   Once customized, MetaAttention generates a scheduling
+fied attention abstraction. Then we define our programming                                                plan for the attention mechanisms based on the scheduling
+interface on this abstraction.                                                                            space defined by IntermediateTensor and DeviceConfig.
+                                                                                                          Within this space, MetaAttention applies a two-layer sched-
+3.1   Unifying Attention Abstraction                                                                      uling policy to determine the optimal execution plan, bal-
+By examining the native implementation of attention as                                                    ancing performance and resource utilization. The resulting
+relevance computing between tokens, we identify two fun-                                                  scheduling plan is then passed to the attention runtime,
+damental components common to all attention mechanisms:                                                   which instantiates and executes optimized kernels across
+• Relevance Scoring: This operation forms the core of at-                                                 hardware backends, ensuring efficiency and scalability for
+  tention mechanisms, capturing pairwise similarities or                                                  diverse configurations.
+
+
+
+                                                                                                    638
+MetaAttention                                                                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+   The following sections delve into the components of this                Table 2. Customizable functions and their functionalities
+framework, demonstrating how MetaAttention integrates
+abstraction, optimization, and execution to unify and extend               Type       Name                     Functionality
+the implementation of attention mechanisms.                                               Q_mod, K_mod,        Scale the input and output
+                                                                           Mod
+                                                                                        V_mod, output_mod      tensors
+                                                                                                               Apply scale or masking on
+                                                                           Mod        scores_mod
+                                                                                                               attention scores
+3.3   Programming Interface
+                                                                                         scores_rownorm,       Apply normalization on at-
+Defining an attention mechanism using our programming                      RowNorm
+                                                                                      scores_rownorm_online    tention scores
+interface involves three components: input tensor shapes,                                                      Scaling on compressed hid-
+                                                                           Mod        h_mod
+the attention pattern, and customizable functions.                                                             den state
+Attention template and patterns. As depicted in
+Fig. 4, the unified template takes Queries(𝑄), Keys(𝐾), and
+Values(𝑉 ) after projection as inputs, maintaining an interme-             To facilitate such transformations, MetaAttention intro-
+diate variable 𝑠𝑡𝑎𝑡𝑒 and retaining two fixed computations:              duces the customizable function, which is defined as a func-
+𝑟𝑒𝑙𝑒𝑣𝑎𝑛𝑐𝑒 = 𝑟𝑒𝑙𝑒𝑣𝑎𝑛𝑐𝑒_𝑠𝑐𝑜𝑟𝑖𝑛𝑔(𝑄 [𝑖], 𝐾, 𝑠𝑡𝑎𝑡𝑒) for relevance            tion applied to a tensor and composed of a set of arithmetic
+scoring and 𝑠𝑡𝑎𝑡𝑒 = 𝑎𝑔𝑔𝑟𝑒𝑔𝑎𝑡𝑒 (𝑟𝑒𝑙𝑒𝑣𝑎𝑛𝑐𝑒, 𝑉 , 𝑠𝑡𝑎𝑡𝑒) for ag-            operations. These operations include element-wise compu-
+gregation.                                                              tations and reductions over the last dimension of the tensor.
+   Depending on whether the contextual information from 𝐾                  As shown in Table 2, customizable functions can be applied
+and 𝑉 can be compressed into a fixed-size state, we identify            to designated intermediate tensors, enabling users to tailor
+two distinct computation patterns in attention: one that                attention variants to specific requirements. For instance, in
+computes relevance in parallel over the global 𝐾𝑉 context,              the parallel pattern, customizable functions can transform
+and another that recurrently updates a compressed state and             attention scores (to compute weights) and states (to produce
+computes relevance based on it.                                         final outputs). In the recurrent pattern, these weight and
+   Accordingly, this unified attention template is instantiated         state transformations are unified into a single customizable
+in two computational patterns—parallel and recurrent:                   function operating on the hidden state ℎ.
+• Parallel Pattern: Attention mechanism requires global                    Based on whether they include a reduction opera-
+   context information over the sequence. Thus, relevance               tion, customizable functions are divided into two types:
+   scoring and aggregation are implemented as parallel                  modification and row-wise normalization.
+   matrix multiplications over the context sequence, with                  The modification function (Mod) supports fine-grained
+   𝑠𝑐𝑜𝑟𝑒𝑠 = 𝑚𝑎𝑡𝑚𝑢𝑙 (𝑄𝑢𝑒𝑟𝑦, 𝐾𝑒𝑦)(where "matmul" denotes                  elementwise transformations, including scaling and  √ masking.
+   matrix multiplication) representing the relevance scoring            For example, scaling the query tensor by 1/ 𝑑 (where
+   and 𝑠𝑡𝑎𝑡𝑒 = 𝑚𝑎𝑡𝑚𝑢𝑙 (𝑠𝑐𝑜𝑟𝑒𝑠, 𝑉 𝑎𝑙𝑢𝑒) representing the ag-             d is the last dimension of the query tensor) in standard
+   gregation.                                                           softmax attention [26] can be achieved using this function.
+• Recurrent Pattern: Attention mechanism iteratively tra-               Masking operations, such as applying a sparse mask in
+   verses the sequence, storing the context information in              sparse attention [14][36][28], can also be implemented by
+   a fixed-sized hidden state. Thus, relevance scoring and              multiplying a bool tensor using this interface.
+   aggregation are sequentially computed over the hidden                   The row-wise normalization function (RowNorm) en-
+   state ℎ, with 𝑜𝑢𝑡𝑝𝑢𝑡 = 𝑚𝑎𝑡𝑚𝑢𝑙 (𝑄𝑢𝑒𝑟𝑦, ℎ) and ℎ = ℎ +                 ables global adjustments across tensor rows, accommodating
+   𝑚𝑎𝑡𝑚𝑢𝑙 (𝐾𝑒𝑦 [𝑖], 𝑉 𝑎𝑙𝑢𝑒 [𝑖]) together capturing the rele-            a combination of elementwise and row-reduce computations.
+   vance scoring and aggregation, iteratively maintaining               Examples include applying a row-wise softmax [26] for nor-
+   compressed states.                                                   malizing attention scores or implementing other numerical
+   By integrating the two instantiated patterns, this uni-              stabilization techniques[23].
+fied attention template empowers users to design high-                  Examples. Our interfaces support a wide range of attention
+level attention mechanisms while MetaAttention seamlessly               mechanisms shown in Table 3, demonstrating their flexibility
+handles low-level implementation and hardware-specific                  and generality.
+optimization, ensuring both efficiency and scalability.                    As shown in Fig. 5, taking attention in RetNet [23] as
+Customizable functions and flexibility. While atten-                    an example, we first select the Parallel pattern for global
+tion patterns define the structural aspects of attention                context information. Next, we define the input shapes of the
+mechanisms, numerical transformations of intermediate ten-              queries, keys, and values. Then, we define the customizable
+sors—such as masking operations [26], custom normalization              functions inserted in the parallel template: score modification
+schemes [23], or task-specific adaptations—are equally cru-             for scaling and row-wise score normalization.
+cial. These operations typically involve either elementwise             RowNorm online interface. To enhance performance,
+transformations or global tensor adjustments.                           the row-wise normalization function can be defined
+
+
+
+                                                                  639
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                          Feiyang Chen et al.
+
+
+                                                                                   a. Parallel Pattern               + Add                               Output
+                                                                                                                     × Inner
+                                                                                                                       Product                   ×
+                                                   Instantiation                                                          RowNorm/Mod                     V mod
+         Unified Attention Template
+                                                                                                                                 ×
+
+                                                                                                                         Q mod           K mod
+
+
+
+                                                                                                                      Query               Key              Value
+
+                                                                               b. Recurrent Pattern                                         Output
+                                                                                                                                     ×
+                                                                                                                                                 Hidden
+                                                                                                                      Q mod
+                                                                                                                                                 States
+
+                                                                                                                                                     +     H mod
+                                                                                                                                                     ×
+                                                                                                                                         K mod            V mod
+
+
+                                                                                                                      Query               Key             Value
+
+Fig. 4. Left: MetaAttention’s unified attention template. By instantiating this template, two distinct patterns are produced (Parallel
+Pattern and Recurrent Pattern). The dashed circle box highlights the operations corresponding to the core components of the attention
+mechanism in the unified attention template: relevance_scoring and aggregate. The customizable_function is user-defined. The
+customizable_function encompasses both modification function and row-wise normalization function.
+
+
+pattern : Parallel                                                                  class scores_RowNorm_Online:
+inputs : { Query : Tensor [ batch , head , seq_len , 256];
+                                                                                     def online_prologue():
+    Key : Tensor [ batch , head , seq_len_kv , 256];
+    Value : Tensor [ batch , head , seq_len_kv , 512]}                                  row_sum_wo_clamp = 0
+customizable_function :                                                                 row_sum = 0
+    def scores_Mod ( scores ):                                                          return row_sum_wo_clamp, row_sum
+         return scores * mask                                                        def online_forward(scores, row_sum_wo_clamp_prev,
+    def scores_RowNorm ( scores ):                                                                                  row_sum_prev):
+         t = scores . reduceAbssum ()
+         t = max (t , 1)                                                                row_sum_cur = scores.reduceAbssum()
+         return scores / t                                                              row_sum_wo_clamp = row_sum_wo_clamp_prev + row_sum_cur
+                                                                                        row_sum = max(r_wo_clamp, 1)
+                                                                                        scores = scores / row_sum
+Fig. 5. Example attention in RetNet [23]. It uses parallel pattern                      scale = row_sum_prev / row_sum
+with the customized Mod function on scores and RowNorm on                               return scores, row_sum_wo_clamp, row_sum, scale
+                                                                                     def online_epilogue(scores):
+scores.
+                                                                                        return scores
+
+                                    Iter 0     Iter 1
+    [S, L]                                                                         Fig. 7. Example of scores_rownorm in RetNet attention imple-
+                                    [S, L/N]   [S, L/N]                            mented by RowNorm online interface.
+
+  RowNorm                   Prol      Fwd        Fwd            Epi
+         rowscales     online                                      final
+                     rowscales      [S, L/N]   [S, L/N]          rowscales         on-chip memory, avoiding intermediate writes to global
+    [S, L]                        Score    [S, L]                                  memory [18].
+    Score                    Online          Online             Online
+                        Prol prologue   Fwd forward       Epi   epilogue              MetaAttention proposes the RowNorm online interface
+                                                                                   to support general online row-wise normalization, such as
+Fig. 6. Illustration of the RowNorm online interface. The left
+                                                                                   online softmax used in FlashAttention [9]. As shown in Fig. 6,
+panel shows the standard row-wise normalization function, while
+the right panel demonstrates how MetaAttention enables users to                    this interface includes three main components:
+implement the same functionality as an online function using the                       • online_prologue, which initializes the state variables
+RowNorm online interface.                                                                 before entering the online loop.
+                                                                                       • online_forward, which defines computations within
+                                                                                          each block of rows, updating state variables like row
+as an online function, where computations are processed                                   maxima or sums and the scale over the previous block.
+sequentially in blocks along the rows. The term “online”                               • online_epilogue, which finalizes the computation
+refers to performing row-wise normalization entirely within                               after the loop.
+
+
+
+                                                                             640
+MetaAttention                                                               PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+class IntermediateTensor{                                                 • Tensor location (mem): Intermediate tensors can be
+    TileShape tile;                                                          stored in various levels of memory, such as global
+    MemoryLocation mem;                                                      memory, shared memory, or registers. Each location
+    int pipelineStage;                                                       offers a trade-off between latency, bandwidth, and
+};
+                                                                             resource availability.
+                                                                          • Pipeline stage (pipelineStage): Operations involving
+           Fig. 8. IntermediateTensor component                              intermediate tensors are divided into multiple pipeline
+                                                                             stages, such as memory copy and computation. The
+class DeviceConfig{                                                          number of stages determines the buffer requirements
+    BaseTileShape basetile;                                                  and scheduling flexibility, enabling overlapping opera-
+    List<MemoryCapacity> memoryInfo;                                         tions to maximize throughput and minimize resource
+};                                                                           contention.
+                                                                      This component ensures that all elements of the attention
+                Fig. 9. DeviceConfig component                        mechanism, including inputs, outputs, and intermediate
+                                                                      results, are unified under a consistent scheduling strategy.
+                                                                         Take the Parallel Pattern in Fig. 4 as an example. Inter-
+   Users can leverage this online interface to define online          mediate Tensor includes Q, K, scores, V, state, output and
+functions like online softmax, broadening the scope of                the tensor created in customizable_function. The attributes
+attention mechanisms supported by MetaAttention. Fig. 7               of these intermediate tensors significantly impact the per-
+illustrates the retnet attention RowNorm implementation               formance, such as the tile size of Q, K and V influence the
+example employing the online interface.                               balance between the parallelism of computation and the
+                                                                      on-chip memory consumption.
+4     MetaAttention Runtime
+                                                                      DeviceConfig. The DeviceConfig component provides
+To retain high performance across various hardware back-              hardware-specific constraints that refine the scheduling
+ends and various attention defined using our interface,               space defined by intermediate tensors. It encapsulates at-
+MetaAttention employs a structured approach to optimize ex-           tributes such as:
+ecution performance. First, it utilizes IntermediateTensor                • Base tile shape (basetile): Specifies the optimal tile
+components with configurable attributes to model the sched-                  shape for computations on the target hardware, ensur-
+uling space. Concurrently, DeviceConfig components ab-                       ing alignment with hardware-specific constraints, such
+stract hardware configurations into a unified representation,                as alignment with matrix multiplication computing
+which constrains the scheduling space. The scheduling policy                 instruction and memory transaction.
+(Section 4.2) then selects a scheduling plan from this space,             • Memory hierarchy (memoryInfo): Provides details
+which is subsequently dispatched to the attention runtime                    about the available memory tiers (e.g., registers, shared
+for kernel execution.                                                        memory, global memory) and their respective capac-
+4.1   Scheduling Space                                                       ities, enabling efficient allocation and minimizing
+                                                                             contention.
+IntermediateTensor.               MetaAttention       defines            DeviceConfig determines the feasible tiling and memory
+IntermediateTensor to represent all transient tensors in              strategies during scheduling. For instance, the base tile shape
+device memory during attention computation.                           ensures hardware-aligned tiling configurations, while mem-
+   As attention mechanisms fuse multiple operators, they              ory capacity constraints prevent resource overcommitment.
+generate numerous intermediate tensors whose placement                Attention runtime. The attention runtime executes sched-
+critically impacts on-chip memory utilization and com-                uling plans efficiently across heterogeneous hardware back-
+putational latency. By focusing on intermediate tensors,              ends. Attention runtime takes the scheduling plans as input
+MetaAttention can systematically deduce the tiling, memory            and instantiate the plans into attention computation kernels
+allocation, and pipeline requirements for attention mecha-            tailored to hardware.
+nisms.                                                                   To ensure efficiency, attention runtime integrates uni-
+   Key attributes of IntermediateTensor include:                      versal optimization tailored to attention mechanisms. For
+     • Tensor tile shape (tile): By dividing tensors into             parallel patterns, the runtime implements online techniques
+       smaller tiles, we can perform operations tile-by-tile          for efficient row-wise normalization, drawing inspiration
+       and allocate buffers efficiently. Using the computa-           from FlashAttention’s approach [9]. For recurrent patterns,
+       tion graph, we propagate the tiling scheme across              it employs chunk parallelism techniques [32] to maximize
+       all operations to infer the tile shapes of 𝑄, 𝐾, 𝑉 and         hardware utilization and throughput.
+       other tensors, ensuring an optimal balance between
+       computation and memory.
+
+
+
+                                                                641
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                             Feiyang Chen et al.
+
+
+  Additionally, attention runtime supports multiple imple-
+mentations tailored to different backends, such as those
+implemented in TileLang [29] and CUTE [7]. Leveraging a                   1   Func TileConfigScheduling(g: Graph, D:DeviceConfig)
+unified scheduling for different backends, MetaAttention can              2      tiles = EnumerateTiles(g.output_shape, D.basetile)
+dynamically support all attention across different hardware
+and different configurations.                                             3      tensor_tile_graphs = PropagateTileGraphs(g, tiles)
+
+                                                                          4     plans = []
+4.2   Scheduling Policy                                                   5     for tile_graph in tensor_tile_graphs do
+The scheduling plan contains the attributes of Intermedi-                  6         plans += TileResourceScheduling(tile_graph,
+ateTensors, including tile size, memory location, and pipeline                        D);
+stages. The scheduling policy generates the execution plan                 7    for plan in plans do
+by determining the attributes of all intermediate tensors in               8         if Profile(plan) < best_latency
+attention.                                                                 9             best_latency = Profile(plan);
+   To find an optimized execution plan within the sched-                  10             best_plan = plan;
+uling space, multiple constraints must be considered. First,              11    return best_plan;
+the combination of fixed computations and customizable                    12 Func TileResourceScheduling(g: TileGraph,
+functions in attention forms a tile computation graph, which                  D:DeviceConfig)
+requires adjacent IntermediateTensor instances to share the               13    tensor_list = GetIntermediateTensors(g);
+same tile size. Additionally, different attention patterns and
+                                                                          14    SetTile(tensor_list, g.tiles);
+input tensor shapes demand distinct memory placement
+                                                                          15    SetMem(tensor_list, "L0");
+strategies and pipeline stages to balance latency and on-chip
+resource utilization.                                                     16    tensor_list_sorted = tensor_list.sort(key=lambda t
+   As illustrated in Fig. 10, MetaAttention employs a two-                       :(len(g[t].use_list), size(t.tile)));
+layer scheduling policy to generate the optimal scheduling                17    for tensor_i in tensor_list_sorted do
+plans represented by IntermediateTensors. This policy op-                 18         plans =
+erates at two levels: tile config scheduling and tile                                 EnumerateUnsetAttributes(tensor_list);
+resource scheduling. The outer layer, tile config schedul-                19         for plan in plans do
+ing, explores tile size attributes of intermediate tensors. The           20             if not MeetMemoryConstraint(plan,
+inner layer, tile resource scheduling, determines the mem-                                D.memoryInfo)
+ory location and pipeline stage attributes for intermediate               21                  plans.remove(plan);
+tensors.                                                                  22         if not plans.isEmpty()
+Tile config scheduling. This layer takes as input                         23             return plans;
+the attention computation graph (Graph) composed of                       24         LowerMemLocation(tensor_i.mem)
+IntermediateTensor objects and hardware configuration                     25    return EmptySet();
+details (DeviceConfig). It enumerates all possible tile sizes
+for the output tensor and propagates these tile sizes through             Fig. 10. Scheduling algorithm. We employ a two-layer scheduling
+all intermediate tensors, thereby generating a set of tile                strategy to generate the execution plan. The first layer, tile configu-
+graphs (lines 2–3).                                                       ration scheduling, explores the tile size attributes of intermediate
+   For each tile configuration (line 5 - 6), the policy generates         tensors. The second layer, tile resource scheduling, determines the
+a set of execution plans using the tile resource scheduling               memory allocation and pipeline stage assignments for intermediate
+                                                                          tensors.
+layer and evaluates their performance through profiling (line
+7 -8).
+Tile resource scheduling. This layer optimizes the mem-
+ory location and pipeline stage attributes of intermediate                5    Implementation
+tensors for a given tile configuration. The process begins by             In this section, we detail the implementation of the MetaAt-
+initializing all intermediate tensors to the highest available            tention frontend and backend, focusing on the end-to-end
+memory tier (e.g., registers) to minimize memory I/O over-                lowering process that transforms user-defined attention
+head (line 15). The policy then generates candidate plans                 variants into optimized hardware-specific kernels.
+by enumerating unconfigured attributes—such as pipeline                   Lowering customizable functions. To lower user-defined
+stages—and checks their feasibility against hardware con-                 customizable functions into executable code, MetaAttention
+straints (lines 18–20). If no valid plan is found, the policy             first traces the computation into a directed acyclic graph
+iteratively demotes tensors to lower memory tiers and                     (DAG) of tensors. Each node in the DAG represents a specific
+reattempts plan generation (line 24).                                     computing primitive, which is categorized as either an
+
+
+
+                                                                    642
+MetaAttention                                                                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+elementwise operation (e.g., add, tanh) or a row-reduce                Table 3. The set of attention mechanisms in our microbenchmark.
+operations (e.g., reduceSum, reduceMax). These nodes en-               Operators with configuration "seqlen=1" mean the query sequence
+capsulate metadata such as tensor shapes and dependencies,             length is 1, which is often used in LLM inference.
+and include a grad field to facilitate automatic differenti-
+ation. During the lowering process, MetaAttention maps                  Operator             Configuration                    Model
+
+these nodes to optimized hardware-specific implementations:             Softmax Attention    head=32, dimqk=128, dimv=128     LLAMA-3.1-8B [13]
+
+elementwise operations are executed in a SIMT style with                Softmax Attention    head=16, dimqk=192, dimv=128     DeepSeek-V2-lite [11]
+
+register-level or on-chip memory fusion to minimize data                Softmax Attention    head=12, dimqk=128, dimv=256
+                                                                                                                              DiffTransformer-
+                                                                                                                              3B [34]
+movement overhead, while row-reduce operations utilize
+                                                                                             seqlen=1, head=16, dimqk=192,
+intra-warp parallel reduction to maximize locality and reduce           Softmax Attention
+                                                                                             dimv=128
+                                                                                                                              DeepSeek-V2-lite [11]
+synchronization costs.                                                                                                        LLAMA-3.1-8B with
+Implementing attention runtime. The attention runtime                   Sigmoid Attention    head=32, dimqk=128, dimv=128     Sigmoid Attention
+                                                                                                                              [20]
+acts as the orchestration layer that translates an optimized
+                                                                                                                              ViT-s/16 with Relu At-
+scheduling plan into a complete kernel. We implement a suite            Relu Attention       head=6, dimqk=64, dimv=64
+                                                                                                                              tention [31]
+of kernel templates for both parallel and recurrent patterns.           Retention Parallel   head=32, dimqk=256, dimv=512     RetNet-6.7B [23]
+These templates include operations for moving intermediate              Mamba2 SSM           headv=80, dimqk=128, dimv=64     Mamba2-2.7B [10]
+tensors between different memory hierarchies—such as                    Retention
+from global memory to shared memory, global memory to                                        head=32, dimqk=256, dimv=512     RetNet-6.7B [23]
+                                                                        Recurrent
+registers, and shared memory to registers—as well as matrix             Gated Retention      head=40, dimqk=256, dimv=256     YOCO-13B [24]
+multiplication with inputs residing in shared memory or                 Gated Retention      head=16, dimqk=64, dimv=64       RFA-Big [19]
+registers. Based on the scheduling plan, the attention runtime          Multi-head Latent    seqlen=1, head=128, head_kv=1,
+                                                                                                                              DeepSeek-V3 [16]
+selects the appropriate template and performs code inlining,            Attention            dimqk=576, dimv=512
+where the hardware-mapped customizable functions (traced                Sparse GQA
+                                                                                             seqlen=1, head=32, head_kv=8,    LLAMA-3.1-8B with
+                                                                                             dimqk=128, dimv=128              SeerAttention [14]
+in the previous stage) are directly fused into the high-
+performance attention execution loop. This ensures that
+custom logic incurs zero additional kernel launch overhead             and sequence lengths of 2k, 4k, and 8k. Details are listed in
+and benefits from the same memory-efficient pipelining                 Table 3.
+and hardware-native optimizations as the core attention
+                                                                       Baselines. We compare MetaAttention with manually
+mechanism.
+                                                                       implemented attention libraries, such as FlashAttention2
+Mapping to hardware backend. We map our kernel                         v2.7.4 [8] and FlashAttention3 [21] for Softmax attention,
+templates to diverse hardware backends by leveraging spe-              FlashSigmoid [20] for Sigmoid attention, FLashMLA [16]
+cialized architectural features to ensure peak performance.            with blockSize=64 for Multi-head Latent Attention, Mamba2
+   On NVIDIA GPUs, MetaAttention utilizes the Tensor                   chunk kernel [10] for Mamba2 SSM and Flash-Linear-
+Memory Accelerator (TMA) for asynchronous data load-                   Attention Triton library v0.2.0 [33] for gated retention.
+ing and Tensor Cores for accelerated matrix-multiply-                  We also compare with state-of-the-art template-based ap-
+accumulate (MMA) operations. These are implemented us-                 proaches, such as FlexAttention [12] and FlashInfer [35] for
+ing two distinct backend frameworks: TileLang [29] and                 parallel attention. We use PyTorch [2] as a default baseline for
+CUTE [7].                                                              attention that does not have a manually-implemented library,
+   For AMD GPUs, MetaAttention targets modern high-                    such as Retention Parallel [23] and ReLUAttention [31].
+performance accelerators including the MI250 and MI300X.
+We utilize AMD Matrix Cores for matrix operations and                  6.2   Attention Performance on NVIDIA H100
+leverage asynchronous copy units to optimize memory
+                                                                       Fig. 11 shows normalized latency relative to MetaAttention
+transfers. This support is implemented using the TileLang
+                                                                       across various attention configurations.
+backend.
+                                                                       Softmax attention. Fig. 11 (a)(b)(d) shows the per-
+                                                                       formance of MetaAttention and other baselines on Soft-
+6     Evaluation                                                       max attention from Deepseek-V2-Lite, LLAMA-3.1-8B, and
+6.1   Experimental Setup                                               Diff-Transformer-3B. Compared with highly optimized li-
+                                                                       braries FlashAttention-3, MetaAttention achieves an average
+Hardware platforms. We evaluate MetaAttention on                       speedup of 1.61× on Diff-Transformers-3B forward and
+NVIDIA H100 SXM5 (CUDA 12.4, Triton 2.3.1) and AMD                     achieves comparable performance on LLAMA-3.1-8B and
+Instinct MI250 (ROCm 6.2.4, Triton 3.1.0) GPUs.                        DeepSeek-V2-Lite forward and backward. This improvement
+Attention workload. We evaluate ten attention mecha-                   stems from MetaAttention’s flexible scheduling and attention
+nisms under realistic configurations: batch sizes of 1 and 8,          runtime to support different headdim_qk and headdim_v,
+
+
+
+                                                                 643
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                                                                                    Feiyang Chen et al.
+
+
+       MetaAttention(ours)                                           FlashAttention-2                                     FlashAttention-3                              FlexAttention                                 FlashInfer                             PyTorch Inductor
+
+                                                                                                              (a) Softmax Attention (DeepSeek-V2-Lite)
+                                       10
+                                        5
+                                        3
+                                           2
+                                           1
+                                           0
+                                                  BS1       BS1       BS1         BS8       BS8       BS8                   BS1S1       BS1S1      BS1S1        BS8S1      BS8S1       BS8S1                BS1       BS1         BS1       BS8                    BS8                  BS8
+                                                 S2048     S4096     S8192       S2048     S4096     S8192                 KV2048      KV4096     KV8192       KV2048     KV4096      KV8192               S2048     S4096       S8192     S2048                  S4096                S8192
+
+                                                                                                       FWD                                                                                                                         BWD
+                                                                 (b) Softmax Attention (LLAMA-3.1-8B)                                                                                                    (c) ReLU Attention (ViT-s/16-style)
+                                       12                                                                                                                                       8
+                                        8                                                                                                                                       7
+                                        4                                                                                                                                       6
+                                        2
+                                                                                                                                                                                5
+                                                                                                                                                                                4
+                                           1                                                                                                                                    3
+                                                                                                                                                                                2
+                                                                                                                                                                                1
+                                           0                                                                                                                                    0
+        Normalized latency Vs. MetaAttention
+
+
+
+
+                                                BS1   BS1   BS1   BS8   BS8   BS8   BS1   BS1   BS1   BS8   BS8   BS8                                                                 BS32 BS32 BS32 BS64 BS64 BS64 BS32 BS32 BS32 BS64 BS64 BS64
+                                               S2048 S4096 S8192 S2048 S4096 S8192 S2048 S4096 S8192 S2048 S4096 S8192                                                                S512 S1024 S2048 S512 S1024 S2048 S512 S1024 S2048 S512 S1024 S2048
+
+                                                                           FWD                                                                 BWD                                                                  FWD                                                   BWD
+                                                                   (d) Softmax Attention (Diff-Transformer-3B)                                                                                                 (e) Retention Parallel (RetNet-6.7B)
+                                       10                                                                                                                                                                  2
+
+                                           5
+                                           4
+                                           3                                                                                                                                                               1
+                  (lower is better)
+
+
+
+
+                                           2
+                                           1
+                                           0                                                                                                                                                               0
+                                                BS1       BS1       BS1       BS8         BS8       BS8                   BS1        BS1         BS1        BS8          BS8         BS8                         BS1   BS1   BS8   BS8   BS1   BS1   BS8   BS8
+                                               S2048     S4096     S8192     S2048       S4096     S8192                 S2048      S4096       S8192      S2048        S4096       S8192                       S2048 S4096 S2048 S4096 S2048 S4096 S2048 S4096
+
+                                                                               FWD                                                                             BWD                                                               FWD                                                   BWD
+                                                                           (f) Sigmoid Attention (LLAMA-3.1-8B)                                                                                           10
+                                                                                                                                                                                                                    (h) Gated Retention (RFA-Big)
+                                       10
+                                                                                                                                                                                FlashSigmoid                                                                        Flash-Linear-Attention
+                                                                                                      PyTorch Inductor
+
+
+
+
+                                                                                                                                                                                      PyTorch Inductor
+                                           5                                                                                                                                                               5
+                                                                                                                                                                                                           2
+                                                                                                           Failed
+
+
+
+
+                                                                                                                                                                                           Failed
+                                           3
+
+
+
+
+                                                                                                                                                                                                                                                     FLA Failed
+
+
+
+
+                                                                                                                                                                                                                                                                          FLA Failed
+
+
+
+
+                                                                                                                                                                                                                                                                                               FLA Failed
+                                           2                                                                                                                                                               1
+                                           1
+                                           0                                                                                                                                                               0
+                                                 BS1      BS1       BS1       BS8         BS8       BS8                   BS1         BS1        BS1        BS8       BS8            BS8                           BS64      BS64        BS64      BS64                   BS64                 BS64
+                                                S2048    S4096     S8192     S2048       S4096     S8192                 S2048       S4096      S8192      S2048     S4096          S8192                          S1024     S2048       S4096     S1024                  S2048                S4096
+
+                                                                               FWD                                                                             BWD                                                               FWD                                                   BWD
+                                                                             (g) Mamba2 SSM (Mamba2-2.7B)                                                                                                          (i) Gated Retention (YOCO-13B)
+                                       16
+                                       12                                                                                                                                       Mamba2 SSM                 4                                                        Flash-Linear-Attention
+                                        8
+                                        4                                                                                                                                                                  3
+                                        3
+                                                                                                                                                                                                           2
+                                        2
+                                        1                                                                                                                                                                  1
+                                        0                                                                                                                                                                  0
+                                                 BS1      BS1       BS1       BS8         BS8       BS8                   BS1         BS1        BS1        BS8          BS8         BS8                            BS8       BS8         BS8       BS8                    BS8                  BS8
+                                                S2048    S4096     S8192     S2048       S4096     S8192                 S2048       S4096      S8192      S2048        S4096       S8192                          S1024     S2048       S4096     S1024                  S2048                S4096
+
+                                                                               FWD                                                                             BWD                                                               FWD                                                   BWD
+                                                          (j) RetNet Recurrent (RetNet-6.7B)                                                                            (k) DeepSeek MLA                                    (l) Sparse Group Query Attention
+                                           4                                                                                                               8                                                                 4
+                                                                                                                                 Flash-Linear-Attention    6                        FlashMLA                   MLA Triton            SeerAttention
+                                                                                                                                                           4
+                                           3                                                                                                               3                                                                 3
+                                           2                                                                                                               2                                                                 2
+                                           1                                                                                                               1                                                                 1
+                                           0                                                                                                               0                                                                 0
+                                                BS1       BS1        BS8          BS8         BS1               BS1                BS8         BS8                  BS8S1              BS8S1                     BS8S1            BS8S1                       BS8S1                             BS8S1
+                                               S2048     S4096      S2048        S4096       S2048             S4096              S2048       S4096                KV2048             KV4096                    KV8192           KV2048                      KV4096                            KV8192
+
+                                                                    FWD                                                          BWD                                                  FWD                                                                         FWD
+
+Fig. 11. Performance of attention operators on H100 GPUs. We evaluate across different batch sizes (BS), sequence lengths
+(S), and key-value cache sequence lengths (KV). "FWD" denotes forward pass, while "BWD" denotes backward pass. Empty
+columns indicate that the baseline is either unsupported or encountered errors.
+
+instead of padding them to the same dimension. MetaAt-                                                                                                  retention parallel. In addition, compared with programming-
+tention also outperforms other programming-model-based                                                                                                  model-based approaches, MetaAttention can support all
+approaches such as FlexAttention and FlashInfer, due to our                                                                                             three customized attention mechanisms, which demonstrates
+scheduling over different shapes.                                                                                                                       MetaAttention’s expressive ability and scalability.
+Customized parallel attention. Fig. 11 (c)(e)(f) shows                                                                                                  Recurrent pattern attention. Fig. 11 (g)(h)(i)(j) represents
+the performance of MetaAttention and other baselines on                                                                                                 the recurrent attention operation of Mamba2, RetNet-6.7B,
+customized parallel attention. Current expert-optimized li-                                                                                             YOCO-13B and RFA-Big. MetaAttention achieves average
+braries lack support for them. For example, no fused attention                                                                                          speedups of 1.66× and 1.78× for forward and backward
+kernel is implemented for ReLU attention, and the fused Sig-                                                                                            respectively compared with Flash-Linear-Attention [33],
+moid attention kernel is not optimized for the latest hardware                                                                                          which is an expert-optimized linear attention library.
+like NVIDIA H100. MetaAttention can obtain significant                                                                                                  Multi-head latent attention. Fig. 11 (k) shows the per-
+speedup on these operations, achieving 3.6× (1.1× ∼ 10.4×)                                                                                              formance of MLA. MetaAttention achieves performance
+over FlashSigmoid, PyTorch ReLU attention, and PyTorch                                                                                                  comparable to the manually optimized FlashMLA library
+                                                                                                                                                        and a 4.6× speedup over Triton.
+
+
+
+                                                                                                                                             644
+MetaAttention                                                                                                                                       PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+Table 4. Compilation time on NVIDIA H100 GPU and AMD MI250                                                                                                                               End-to-end Training Performance
+GPU with batch=1 and seqlen=2048.
+
+
+
+
+                                                                                                                                             Normalized Latency vs. PyTorch
+                                                                                                                                                                              2.25
+                                                                                                                                                                                                PyTorch+MetaAttention         PyTorch
+                                                                                                                                                                              2.00
+
+
+
+
+                                                                                                                                                   (Lower is Better)
+   Operator                                               Configuration                  Device          Scheduling Time                                                                                           1.72x
+                                                                                                                                                                              1.75
+                                                          head=32, dimqk=128,
+   Softmax Attention                                                                     H100                      46 seconds                                                 1.50
+                                                          dimv=128
+                                                                                                                                                                              1.25              1.16x                              1.17x
+                                                          headv=80, dimqk=128,
+   Mamba2 SSM                                                                            H100                      82 seconds                                                           1.00x              1.00x           1.00x
+                                                          dimv=64
+                                                                                                                                                                              1.00
+                                                          head=32, dimqk=128,
+   Softmax Attention                                                                     MI250                     64 seconds                                                 0.75
+                                                          dimv=128
+                                                          headv=80, dimqk=128,                                                                                                0.50
+   Mamba2 SSM                                                                            MI250                     89 seconds                                                        Deepseek-V2-Lite    ViT-s/16-style    YOCO-160M
+                                                          dimv=64
+                                                                                                                                            Fig. 13. End-to-end training performance on H100.
+
+                                  Table 5. Lines of code of attention mechanism.
+
+      Operator                                                        MetaAttention               Handcrafted Library
+      Softmax Attention                                                              87 LoC      2.7k lines of CUDA [21]              in Transformers [30] with their attention operators re-
+      Sigmoid Attention                                                              54 LoC      1.9k lines of CUDA [20]              placed by MetaAttention. We test two parallel-pattern mod-
+      Mamba2 SSM                                                                     27 LoC        3k lines of Triton [10]
+      Retention Recurrent                                                            25 LoC      0.4k lines of Triton [33]
+                                                                                                                                      els (Deepseek-V2-Lite and Diff-Transformer-3B) and two
+      Gated Retention                                                                22 LoC      0.4k lines of Triton [33]            recurrent-pattern models (Mamba2-2.7B and YOCO-160M)
+      Multi-head Latent Attention                                                    90 LoC      1.7k lines of CUDA [16]              with 16k input length.
+                                                                                                                                         As shown in Fig. 12, MetaAttention achieves an average
+                                                          End-to-end Inference Performance                                            FP16 speedup of 1.4×, attributed to more efficient atten-
+        Normalized Latency vs. PyTorch
+
+
+
+
+                                         2.25
+                                                                  PyTorch+MetaAttention                  PyTorch
+                                                                                                                                      tion computation. For instance, in Deepseek-V2-Lite, where
+                                         2.00                                1.84x                                                    attention consumes 85% of inference time, our optimized
+              (Lower is Better)
+
+
+
+
+                                         1.75                                                                                         operator reaches 2.2× faster speed, leading to an end-to-end
+                                         1.50                                                                                         improvement of 1.85×.
+                                                                                                                     1.30x
+                                                          1.23x
+                                         1.25                                                    1.15x
+                                                  1.00x              1.00x               1.00x               1.00x
+                                         1.00
+
+                                         0.75
+                                                                                                                                      6.6       End-to-end Training on NVIDIA H100
+                                         0.50                                                                                         We evaluate MetaAttention in end-to-end training with a
+                                                Deepseek-V2-Lite Diff-Transformer-3B    Mamba2-2.7B          YOCO-160M
+                                                                                                                                      sequence length of 8k using TRL [27] on Diff-Transformer-
+      Fig. 12. End-to-end inference performance on H100.
+                                                                                                                                      3B, YOCO-160M, and ViT-S/16 with ReLU attention.
+                                                                                                                                        Fig. 13 shows an average training speedup of 1.4×. Notably,
+Sparse group query attention. Fig. 11 (l) represents the                                                                              ViT-S/16 with ReLU attention gains a 1.7× speedup due to
+sparse group query attention of SeerAttention [14]. We com-                                                                           the lack of optimized libraries for this attention variant.
+pare MetaAttention with the manually implemented Triton
+kernel in SeerAttention. The result shows that MetaAttention
+achieves an average speedup of 1.71×.                                                                                                 6.7       Evaluation on AMD ROCm GPUs
+                                                                                                                                      We benchmark a subset of operators on the AMD MI250 GPU,
+6.3         Evaluation on the Compilation Time                                                                                        including Softmax Attention, ReLU Attention, Mamba2, and
+As shown in Table 4, benefiting from our efficient scheduling                                                                         RetNet Recurrent.
+policy, the compilation time of our framework is limited to                                                                              As shown in Fig. 14, MetaAttention achieves average
+the minute level, which is significantly shorter than that of                                                                         speedups of 3.3× (forward) and 2.0× (backward) over base-
+traditional deep learning compilers such as Ansor [37].                                                                               lines, demonstrating its capability for multi-backend support.
+
+6.4         Evaluation on Development Effort                                                                                          7     Conclusion
+As shown in Table 5, users can efficiently implement various                                                                          This paper presented MetaAttention, which addressed the
+attention mechanisms using MetaAttention with signifi-                                                                                programmability and performance of attention variants by
+cantly reduced development effort compared to handcrafted                                                                             abstracting attention into two core operations, i.e., relevance
+libraries.                                                                                                                            scoring and aggregation, and introducing customizable tem-
+                                                                                                                                      plates that combine flexibility with efficiency. With a cross-
+6.5         End-to-end Inference on NVIDIA H100                                                                                       backend scheduling framework, MetaAttention automated
+We evaluate the inference latency of large language models                                                                            kernel optimizations, achieving up to 10.4× speedups for
+using one NVIDIA H100 GPU. Models are implemented                                                                                     unsupported configurations.
+
+
+
+                                                                                                                                645
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                                           Feiyang Chen et al.
+
+
+                                       MetaAttention(ours)                 Torch Inductor                                      MLA Triton                              for Computing Machinery, New York, NY, USA, 929–947. https:
+                                       FlashAttention-2                    FlashLinearAttention                                PyTorch Inductor                        //doi.org/10.1145/3620665.3640366
+                                                    (a) Softmax Attention (DeepSeek-V2-Lite)                                                                       [4] Iz Beltagy, Matthew E. Peters, and Arman Cohan. 2020. Longformer:
+                                       4
+                                                                                                                                                                       The Long-Document Transformer. arXiv:2004.05150 [cs.CL] https:
+
+
+
+
+                                                                                                        fa2 Failed
+
+
+
+
+                                                                                                                                 fa2 Failed
+
+
+
+
+                                                                                                                                               fa2 Failed
+                                       2                                                                                                                               //arxiv.org/abs/2004.05150
+                                       0                                                                                                                           [5] Feiyang Chen. 2025. Artifact for: MetaAttention: A Unified and
+                                             BS1   BS1   BS1   BS8   BS8   BS8   BS1   BS1   BS1   BS8   BS8   BS8
+                                            S2048 S4096 S8192 S2048 S4096 S8192 S2048 S4096 S8192 S2048 S4096 S8192                                                    Performant Attention Framework Across Hardware Backends. https:
+                                                           FWD                                                       BWD
+                                                                                                                                                                       //doi.org/10.5281/zenodo.17701680
+Normalized latency Vs. MetaAttention
+
+
+
+
+                                                          (b) Relu Attention (ViT-s/16-style)
+                                                                                                                                                                   [6] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie
+                                       5
+                                                                                                                                                                       Yan, Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis
+                                                                                                                                                                       Ceze, Carlos Guestrin, and Arvind Krishnamurthy. 2018. TVM: An
+                                       0                                                                                                                               Automated End-to-End Optimizing Compiler for Deep Learning. In
+                                            BS32   BS32   BS32   BS64   BS64   BS64   BS32   BS32   BS32               BS64    BS64           BS64
+                                             512   1024   2048    512   1024   2048    512   1024   2048                512    1024           2048
+          (lower is better)
+
+
+
+
+                                                           FWD                                                       BWD
+                                                                                                                                                                       13th USENIX Symposium on Operating Systems Design and Imple-
+                                                           (g) Mamba2 SSM (Mamba2-2.7B)                                                                                mentation (OSDI 18). USENIX Association, Carlsbad, CA, 578–594.
+                                       2                                                                                                                               https://www.usenix.org/conference/osdi18/presentation/chen
+                                       1
+                                                                                                                                                                   [7] NVIDIA Corporation. 2024. CUTLASS: CUDA Templates for Linear
+                                                                                                                                                                       Algebra Subroutines. https://github.com/NVIDIA/cutlass.
+                                       0
+                                             BS1   BS1   BS1   BS8   BS8   BS8   BS1   BS1   BS1   BS8   BS8   BS8
+                                            S2048 S4096 S8192 S2048 S4096 S8192 S2048 S4096 S8192 S2048 S4096 S8192
+                                                                                                                                                                   [8] Tri Dao. 2023. Flashattention-2: Faster attention with better parallelism
+                                                           FWD                                                       BWD                                               and work partitioning. arXiv preprint arXiv:2307.08691 (2023).
+                                           (j) RetNet Recurrent (RetNet-6.7B)                       (k) DeepSeek MLA                                               [9] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré.
+                                                                                                150
+                                       2
+                                                                                                100                                                                    2022. Flashattention: Fast and memory-efficient exact attention with
+                                                                                                 10
+                                       1                                                                                                                               io-awareness. Advances in Neural Information Processing Systems 35
+                                       0                                                            0                                                                  (2022), 16344–16359.
+                                            BS1   BS1   BS8   BS8   BS1   BS1   BS8   BS8                BS8S1                 BS8S1           BS8S1
+                                           S2048 S4096 S2048 S4096 S2048 S4096 S2048 S4096              KV2048                KV4096          KV8192              [10] Tri Dao and Albert Gu. 2024. Transformers are SSMs: Generalized
+                                                    FWD                         BWD                                           FWD
+                                                                                                                                                                       models and efficient algorithms through structured state space duality.
+                                                                                                                                                                       arXiv preprint arXiv:2405.21060 (2024).
+Fig. 14. Attention operator performance on MI250 GPUs. We                                                                                                         [11] DeepSeek-AI, Aixin Liu, Bei Feng, Bin Wang, Bingxuan Wang, Bo Liu,
+evaluate across different BS(batch size), S(sequence length)                                                                                                           Chenggang Zhao, Chengqi Dengr, Chong Ruan, Damai Dai, Daya Guo,
+                                                                                                                                                                       Dejian Yang, Deli Chen, Dongjie Ji, Erhang Li, Fangyun Lin, Fuli Luo,
+and KV(kv cache sequence length). FWD means forward,                                                                                                                   Guangbo Hao, Guanting Chen, Guowei Li, et al. 2024. DeepSeek-V2: A
+BWD means backward.                                                                                                                                                    Strong, Economical, and Efficient Mixture-of-Experts Language Model.
+                                                                                                                                                                       arXiv:2405.04434 [cs.CL] https://arxiv.org/abs/2405.04434
+                                                                                                                                                                  [12] Juechu Dong, Boyuan Feng, Driss Guessous, Yanbo Liang, and Horace
+Acknowledgements                                                                                                                                                       He. 2024. Flex Attention: A Programming Model for Generating
+                                                                                                                                                                       Optimized Attention Kernels.         arXiv:2412.05496 [cs.LG] https:
+We sincerely thank the anonymous reviewers of PPoPP’26                                                                                                                 //arxiv.org/abs/2412.05496
+for their constructive comments and insightful suggestions.                                                                                                       [13] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Ka-
+This work is supported in part by the Fundamental and Inter-                                                                                                           dian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten,
+                                                                                                                                                                       Amy Yang, Angela Fan, et al. 2024. The llama 3 herd of models. arXiv
+disciplinary Disciplines Breakthrough Plan of the Ministry
+                                                                                                                                                                       preprint arXiv:2407.21783 (2024).
+of Education of China (JYB2025XDXM113) and the National                                                                                                           [14] Yizhao Gao, Zhichen Zeng, Dayou Du, Shijie Cao, Hayden Kwok-Hay
+Natural Science Foundation of China (No. 62132014). Haibo                                                                                                              So, Ting Cao, Fan Yang, and Mao Yang. 2024. SeerAttention: Learning
+Chen (haibochen@sjtu.edu.cn) is the corresponding author.                                                                                                              Intrinsic Sparse Attention in Your LLMs. arXiv:2410.13276 [cs.CL]
+                                                                                                                                                                       https://arxiv.org/abs/2410.13276
+                                                                                                                                                                  [15] Guyue Huang, Yang Bai, Liu Liu, Yuke Wang, Bei Yu, Yufei Ding, and
+A                                  Artifact Appendix                                                                                                                   Yuan Xie. 2023. Alcop: Automatic load-compute pipelining in deep
+MetaAttention is publicly available in https://github.com/                                                                                                             learning compiler for ai-gpus. Proceedings of Machine Learning and
+SJTU-IPADS/MetaAttention. Our framework is also avail-                                                                                                                 Systems 5 (2023), 680–694.
+                                                                                                                                                                  [16] Shengyu Liu Jiashi Li. 2025. FlashMLA: Efficient MLA decoding kernels.
+able as a Zenodo archive[5]: https://doi.org/10.5281/zenodo.
+                                                                                                                                                                       https://github.com/deepseek-ai/FlashMLA.
+17701680. Detailed instructions are available within the                                                                                                          [17] Chendi Li, Yufan Xu, Sina Mahdipour Saravani, and Ponnuswamy
+README in the repository.                                                                                                                                              Sadayappan. 2024. Accelerated auto-tuning of gpu kernels for tensor
+                                                                                                                                                                       computations. In Proceedings of the 38th ACM International Conference
+References                                                                                                                                                             on Supercomputing. 549–561.
+                                                                                                                                                                  [18] Maxim Milakov and Natalia Gimelshein. 2018. Online normalizer
+   [1] [n. d.]. NVIDIA TensorRT. https://developer.nvidia.com/tensorrt.                                                                                                calculation for softmax. arXiv:1805.02867 [cs.PF] https://arxiv.org/
+   [2] [n. d.]. PyTorch. https://pytorch.org/.                                                                                                                         abs/1805.02867
+   [3] Jason Ansel, Edward Yang, Horace He, Natalia Gimelshein, Animesh                                                                                           [19] Hao Peng, Nikolaos Pappas, Dani Yogatama, Roy Schwartz, Noah A.
+       Jain, Michael Voznesensky, Bin Bao, Peter Bell, David Berard, Evgeni                                                                                            Smith, and Lingpeng Kong. 2021. Random Feature Attention.
+       Burovski, Geeta Chauhan, Anjali Chourdia, Will Constable, Alban                                                                                                 arXiv:2103.02143 [cs.CL] https://arxiv.org/abs/2103.02143
+       Desmaison, DeVito, et al. 2024. PyTorch 2: Faster Machine Learn-                                                                                           [20] Jason Ramapuram, Federico Danieli, Eeshan Dhekane, Floris Weers,
+       ing Through Dynamic Python Bytecode Transformation and Graph                                                                                                    Dan Busbridge, Pierre Ablin, Tatiana Likhomanenko, Jagrit Digani,
+       Compilation. In Proceedings of the 29th ACM International Conference                                                                                            Zijin Gu, Amitis Shidani, and Russ Webb. 2024. Theory, Analysis, and
+       on Architectural Support for Programming Languages and Operating                                                                                                Best Practices for Sigmoid Self-Attention. arXiv:2409.04431 [cs.LG]
+       Systems, Volume 2 (La Jolla, CA, USA) (ASPLOS ’24). Association
+
+
+
+
+                                                                                                                                                            646
+MetaAttention                                                                               PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+     https://arxiv.org/abs/2409.04431                                                     .
+[21] Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep                  [31] Mitchell Wortsman, Jaehoon Lee, Justin Gilmer, and Simon Korn-
+     Ramani, and Tri Dao. 2024. Flashattention-3: Fast and accurate                       blith. 2023. Replacing softmax with ReLU in Vision Transformers.
+     attention with asynchrony and low-precision. Advances in Neural                      arXiv:2309.08586 [cs.CV] https://arxiv.org/abs/2309.08586
+     Information Processing Systems 37 (2024), 68658–68685.                          [32] Songlin Yang, Bailin Wang, Yikang Shen, Rameswar Panda, and Yoon
+[22] Yining Shi, Zhi Yang, Jilong Xue, Lingxiao Ma, Yuqing Xia, Ziming                    Kim. 2024. Gated Linear Attention Transformers with Hardware-
+     Miao, Yuxiao Guo, Fan Yang, and Lidong Zhou. 2023. Welder: Sched-                    Efficient Training. arXiv:2312.06635 [cs.LG] https://arxiv.org/abs/
+     uling deep learning memory access via tile-graph. In 17th USENIX                     2312.06635
+     Symposium on Operating Systems Design and Implementation (OSDI                  [33] Songlin Yang and Yu Zhang. 2024. FLA: A Triton-Based Library for
+     23). 701–718.                                                                        Hardware-Efficient Implementations of Linear Attention Mechanism.
+[23] Yutao Sun, Li Dong, Shaohan Huang, Shuming Ma, Yuqing Xia, Jilong                    https://github.com/fla-org/flash-linear-attention
+     Xue, Jianyong Wang, and Furu Wei. 2023. Retentive network: A                    [34] Tianzhu Ye, Li Dong, Yuqing Xia, Yutao Sun, Yi Zhu, Gao Huang, and
+     successor to transformer for large language models. arXiv preprint                   Furu Wei. 2024. Differential Transformer. arXiv:2410.05258v2 [cs.CL]
+     arXiv:2307.08621 (2023).                                                             http://arxiv.org/abs/2410.05258v2
+[24] Yutao Sun, Li Dong, Yi Zhu, Shaohan Huang, Wenhui Wang, Shuming                 [35] Zihao Ye, Lequn Chen, Ruihang Lai, Wuwei Lin, Yineng Zhang,
+     Ma, Quanlu Zhang, Jianyong Wang, and Furu Wei. 2024. You only cache                  Stephanie Wang, Tianqi Chen, Baris Kasikci, Vinod Grover, Arvind
+     once: Decoder-decoder architectures for language models. Advances                    Krishnamurthy, and Luis Ceze. 2025.             FlashInfer: Efficient
+     in Neural Information Processing Systems 37 (2024), 7339–7361.                       and Customizable Attention Engine for LLM Inference Serving.
+[25] Philippe Tillet, H. T. Kung, and David Cox. 2019. Triton: An Interme-                arXiv:2501.01005v2 [cs.DC] http://arxiv.org/abs/2501.01005v2
+     diate Language and Compiler for Tiled Neural Network Computations.              [36] Manzil Zaheer, Guru Guruganesh, Avinava Dubey, Joshua Ainslie,
+     Association for Computing Machinery, New York, NY, USA, 10–19.                       Chris Alberti, Santiago Ontanon, Philip Pham, Anirudh Ravula, Qifan
+     https://doi.org/10.1145/3315508.3329973                                              Wang, Li Yang, and Amr Ahmed. 2021. Big Bird: Transformers for
+[26] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion                    Longer Sequences. arXiv:2007.14062 [cs.LG] https://arxiv.org/abs/
+     Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017.                     2007.14062
+     Attention is all you need. Advances in neural information processing            [37] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody Hao Yu,
+     systems 30 (2017).                                                                   Ameer Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen,
+[27] Leandro von Werra, Younes Belkada, Lewis Tunstall, Edward Beeching,                  Joseph E. Gonzalez, and Ion Stoica. 2020. Ansor: Generating High-
+     Tristan Thrush, Nathan Lambert, Shengyi Huang, Kashif Rasul, and                     Performance Tensor Programs for Deep Learning. In 14th USENIX
+     Quentin Gallouédec. 2020. TRL: Transformer Reinforcement Learning.                   Symposium on Operating Systems Design and Implementation (OSDI 20).
+     https://github.com/huggingface/trl.                                                  USENIX Association, 863–879. https://www.usenix.org/conference/
+[28] Hongyu Wang, Shuming Ma, Li Dong, Shaohan Huang, Huaijie                             osdi20/presentation/zheng
+     Wang, Lingxiao Ma, Fan Yang, Ruiping Wang, Yi Wu, and Furu Wei.                 [38] Runxin Zhong, Yuyang Jin, Chen Zhang, Kinman Lei, Shuangyu Li,
+     2023. BitNet: Scaling 1-bit Transformers for Large Language Models.                  and Jidong Zhai. 2025. FlashTensor: Optimizing Tensor Programs by
+     arXiv:2310.11453 [cs.CL] https://arxiv.org/abs/2310.11453                            Leveraging Fine-grained Tensor Property. In Proceedings of the 30th
+[29] Lei Wang, Yu Cheng, Yining Shi, Zhengju Tang, Zhiwen Mo, Wenhao                      ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel
+     Xie, Lingxiao Ma, Yuqing Xia, Jilong Xue, Fan Yang, and Zhi Yang. 2025.              Programming. 183–196.
+     TileLang: A Composable Tiled Programming Model for AI Systems.                  [39] Zayd M. K. Zuhri, Erland Hilman Fuadi, and Alham Fikri Aji. 2025.
+     arXiv:2504.17577 [cs.LG] https://arxiv.org/abs/2504.17577                            Softpick: No Attention Sink, No Massive Activations with Rectified
+[30] Thomas Wolf, Lysandre Debut, Victor Sanh, et al. 2020. Transformers:                 Softmax. arXiv:2504.20966 [cs.LG] https://arxiv.org/abs/2504.20966
+     State-of-the-Art Natural Language Processing. In Proceedings of the
+     2020 Conference on Empirical Methods in Natural Language Processing:            Received 2025-09-01; accepted 2025-11-10
+     System Demonstrations. Association for Computational Linguistics,
+     Online, 38–45. https://www.aclweb.org/anthology/2020.emnlp-demos.
+     6
+
+
+
+
+                                                                               647
+

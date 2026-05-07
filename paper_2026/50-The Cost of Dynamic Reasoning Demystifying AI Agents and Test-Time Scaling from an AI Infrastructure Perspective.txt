@@ -1,0 +1,1527 @@
+                                                                                                                                                                     The Cost of Dynamic Reasoning: Demystifying AI Agents and
+                                                                                                                                                                        Test-Time Scaling from an AI Infrastructure Perspective
+                                                                                                                                                                                   Jiin Kim                         Byeongjun Shin                             Jinha Chung                         Minsoo Rhu
+                                                                                                                                                                                     KAIST                             KAIST                                      KAIST                             KAIST
+                                                                                                                                                                             jiin.kim@kaist.ac.kr             byeongjun.shin@kaist.ac.kr                 jinha.chung@kaist.ac.kr                mrhu@kaist.ac.kr
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408569
+
+
+
+
+                                                                                                                                                                        Abstract—Large-language-model (LLM)–based AI agents have
+                                                                                                                                                                     recently showcased impressive versatility by employing dynamic
+                                                                                                                                                                     reasoning, an adaptive, multi-step process that coordinates with
+                                                                                                                                                                     external tools. This shift from static, single-turn inference to
+                                                                                                                                                                     agentic, multi-turn workflows broadens task generalization and
+                                                                                                                                                                     behavioral flexibility, but it also introduces serious concerns
+                                                                                                                                                                     about system-level cost, efficiency, and sustainability. This paper                                                                                     ①
+                                                                                                                                                                                                                                                                                           ③
+                                                                                                                                                                     presents the first comprehensive system-level analysis of AI
+                                                                                                                                                                                                                                                                         ②                  ①                                 ②
+                                                                                                                                                                     agents, quantifying their resource usage, latency behavior, energy
+                                                                                                                                                                                                                                                                                                            ⋮
+                                                                                                                                                                     consumption, and datacenter-wide power consumption demands                                                                                                  ③
+                                                                                                                                                                     across diverse agent designs and test-time scaling strategies.
+                                                                                                                                                                     We further characterize how AI agent design choices, such as
+                                                                                                                                                                     few-shot prompting, reflection depth, and parallel reasoning,                Fig. 1.     Overview of reasoning strategies in LLM-based systems. (a)
+                                                                                                                                                                     impact accuracy-cost tradeoffs. Our findings reveal that while               Conventional LLMs map inputs directly to outputs in a single forward
+                                                                                                                                                                     agents improve accuracy with increased compute, they suffer                  pass, with no explicit intermediate reasoning. (b) Reasoning-enhanced LLMs
+                                                                                                                                                                                                                                                  internally create intermediate steps (e.g., sampling alternative responses or
+                                                                                                                                                                     from rapidly diminishing returns, widening latency variance, and             extending token sequences) to deepen or diversify their thought process. (c) AI
+                                                                                                                                                                     unsustainable infrastructure costs. Through detailed evaluation              agents augment this reasoning by 1 planning and invoking external tools, 2
+                                                                                                                                                                     of representative agents, we highlight the profound computational            observing the outcomes and adapting their internal reasoning, and iteratively
+                                                                                                                                                                     demands introduced by AI agent workflows, uncovering a loom-                 refining their decision-making until they 3 generate the final answer.
+                                                                                                                                                                     ing sustainability crisis. These results call for a paradigm shift
+                                                                                                                                                                     in agent design toward compute-efficient reasoning, balancing
+                                                                                                                                                                     performance with deployability under real-world constraints.                 As a result, hyperscalers are investing at an unprecedented
+                                                                                                                                                                        Index Terms—AI agents, test-time scaling, energy consump-
+                                                                                                                                                                     tion, infrastructure sustainability.
+                                                                                                                                                                                                                                                  scale. Meta has already committed over $10 billion to AI
+                                                                                                                                                                                                                                                  infrastructure [66], and Microsoft operates custom AI super-
+                                                                                                                                                                                                                                                  computers that draw tens to hundreds of megawatts. As an
+                                                                                                                                                                                             I. I NTRODUCTION                                     example, xAI’s Colossus AI supercomputer alone employs
+                                                                                                                                                                        Recent progress in large language models (LLMs) has                       approximately 100,000 Nvidia H100 GPUs, consuming 150
+                                                                                                                                                                     shifted from scaling model size or pretraining data to improv-               megawatts in total, with the GPUs alone accounting for around
+                                                                                                                                                                     ing inference-time behavior, a direction known as test-time                  70 megawatts [88]. For perspective, traditional hyperscale data
+                                                                                                                                                                     scaling [48], [75]. Test-time scaling is designed to enhance                 centers typically draw between 10 and 100 megawatts [27],
+                                                                                                                                                                     model performance by allocating additional computation dur-                  while advanced semiconductor fabs, such as those operated
+                                                                                                                                                                     ing inference without modifying the model’s parameters. This                 by Samsung and TSMC, consume several hundred megawatts
+                                                                                                                                                                     includes techniques such as Chain-of-Thought [84], Tree-of-                  each [28], [80]. Analysts forecast that total AI infrastructure
+                                                                                                                                                                     Thought [95], and others [7], [63], [79], [83], [104]. These                 spending will surpass $1 trillion within this decade [14],
+                                                                                                                                                                     approaches promote more deliberate and interpretable reason-                 raising serious concerns about power grid sustainability and
+                                                                                                                                                                     ing within the LLM, enabling it not only to recognize patterns               the economic viability of large-scale LLM deployment.
+                                                                                                                                                                     but also to derive conclusions, generate explanations, and solve                Given this landscape, the emergence of AI agents powered
+                                                                                                                                                                     tasks that require step-by-step logic.                                       by LLMs with dynamic reasoning threatens to exacerbate
+                                                                                                                                                                        Deploying these reasoning-enhanced LLMs, however,                         these already formidable infrastructure pressures dramatically.
+                                                                                                                                                                     comes at an immense computational cost. Even in current                      Unlike static reasoning models, dynamic reasoning represents
+                                                                                                                                                                     static reasoning models which follow fixed input-output map-                 an advanced form of test-time scaling that significantly boosts
+                                                                                                                                                                     pings without external tool interaction (Figure 1(a,b)), LLMs                capabilities through active interaction with external environ-
+                                                                                                                                                                     run on thousands of GPUs, whose power, cooling, and capital                  ments (Figure 1(c)). Specifically, AI agents continuously plan,
+                                                                                                                                                                     costs drive monthly expenses into the tens of millions of                    invoke external tools, observe outcomes, and iteratively refine
+                                                                                                                                                                     dollars [69]. A single ChatGPT query is estimated to consume                 their reasoning, often performing dozens of inference calls to
+                                                                                                                                                                     about ten times the electricity of a typical web search [12]                 satisfy a single user request [72], [96], [102]. Without sub-
+                                                                                                                                                                     and requires a substantial amount of cooling water [62].                     stantial system-level innovations, per-request computational
+
+
+
+
+                                                                                                                                                                             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+costs could increase by orders of magnitude, making large-
+scale deployment of agents economically and environmentally
+prohibitive. Industry leaders are already responding to these
+challenges: OpenAI’s planned Stargate project [55] and Meta’s
+next generation AI data center Hyperion [74] are each pro-
+jected to require multiple “gigawatts” of power capacity, with
+costs reaching hundreds of billions of dollars. Yet, despite
+these developments, the computer architecture community has
+largely focused on static LLMs, leaving the infrastructure
+implications of dynamic reasoning workloads underexplored.
+   To address this critical gap, this paper presents a rigorous,
+quantitative evaluation of the computational and infrastructural
+                                                                                             Fig. 2. Overview of AI agent structure.
+costs of dynamic reasoning. We systematically characterize
+resource utilization, latency implications, and energy demands
+inherent in the iterative execution patterns of AI agents.                   adaptivity enhances the ability to handle complex and open-
+While the serving characteristics of static reasoning LLMs                   ended problems, it also leads to variability in the LLM calls,
+are well understood within the research community, our work                  tool usage patterns, and overall computational cost.
+presents the first comprehensive, system-level characteriza-
+                                                                             B. Core Components and Workflows of AI Agents
+tion of agent serving costs across diverse configurations and
+workloads. Each component of our analysis—including the                         As illustrated in Figure 2, AI agents generally consist of
+characterization of agent workflows themselves, serving per-                 four core components (agent core, memory, plan, and tools),
+formance, and the impact of test-time scaling—quantifies a                   and AI agent workflows interconnect these core components
+distinct dimension of this cost structure, collectively building             through iterative interactions. These workflows orchestrate
+a unified understanding of its infrastructure-level implications.            how the components dynamically collaborate, enabling the
+Our analysis highlights the critical system-level challenges                 agent’s adaptive behaviors.
+faced when deploying AI agents and identifies opportunities                     The 1 agent core is the central component responsible
+for optimization through architectural improvements, enhanced                for advanced reasoning, powered by one or more LLMs
+inference algorithms, and intelligent resource allocation strate-            configured in specific “roles”. These roles typically include
+gies. To the best of our knowledge, this work is the first to                an actor, which determines the agent’s next action; a plan-
+provide a system-level characterization of dynamic reasoning                 ner, which decomposes high-level goals into subtasks; and a
+in AI agents, grounded in quantitative analysis of end-to-end                reflection module, which evaluates prior reasoning steps and
+infrastructure behavior across diverse agentic workflows1 . A                tool interaction trajectories to guide future decisions.
+key contribution and objective of our study is to quantita-                     This core reasoning capability of the AI agent is further sup-
+tively assess the AI infrastructure cost of dynamic reasoning                ported by memory, plan, and tools. 2 Memory plays a critical
+deployments, and to inform and caution the research com-                     role in enabling the agent to maintain continuity across rea-
+munity about the urgent need for sustainable, efficient design               soning steps by storing short-term interaction traces as well as
+principles to bridge the gap between advanced algorithmic ca-                long-term knowledge, including user preferences or experience
+pabilities and practical, scalable, and sustainable deployment.              from past interactions. 3 Plan organizes the agent’s objective
+                                                                             into a sequence of subtasks or a directed acyclic graph (DAG)
+             II. BACKGROUND AND M OTIVATION                                  of interdependent actions. By maintaining an explicit plan, the
+                                                                             agent can prioritize actions, track progress, and make forward-
+A. Definition of AI Agents                                                   looking decisions that align with the overall task structure. 4
+   AI agents are inference-time frameworks that extend the                   Tools extend the agent’s capabilities beyond text generation by
+capabilities of LLMs by enabling multi-step reasoning, adap-                 enabling interaction with external environments. At each step,
+tive decision-making, and interaction with the external envi-                the agent analyzes its current context, generates a structured
+ronment. Unlike conventional LLM applications that produce                   command specifying the desired tool and input, executes the
+a single output from a static prompt, AI agents operate                      tool call, and incorporates the resulting output into its context.
+through iterative internal reasoning and external actions at                 This output is then used to guide the next stage of reasoning.
+inference time. At each iteration, the agent may generate an                    Finally, 5 AI agent workflow defines how an agent lever-
+intermediate reasoning result, call an external tool (e.g., search           ages interactions among the four core components iteratively
+engine, calculator, or code interpreter), and incorporate the                to carry out reasoning and coordinate actions. AI agents im-
+output into its subsequent decisions. This process allows the                plement their own distinct workflows, reflecting different co-
+agent to retrieve missing information and refine its strategy                ordination patterns among components. These workflows can
+dynamically in response to evolving task demands. While this                 be broadly decomposed into two phases: (1) LLM inference
+                                                                             phase, where the agent performs internal reasoning tasks such
+  1 Open-sourced at https://github.com/VIA-Research/AgentBench.              as action generation, planning, or reflection; and (2) tool use
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+phase, where the agent interacts with external environments                                                  TABLE I
+using tools. These two phases alternate iteratively, forming                                        C OMPARISON OF AI AGENTS .
+the backbone of AI agentic systems.                                                                               Tool                    Tree    Structured
+                                                                                     Agent          Reasoning               Reflection
+                                                                                                                  Use                    Search    Planning
+C. Test-Time Scaling in AI Agents                                                   CoT [84]            O          X            X          X          X
+                                                                                   ReAct [96]           O          O            X          X          X
+   Test-time scaling refers to methods that improve the reason-                   Reflexion [72]        O          O            O          X          X
+ing performance of pretrained LLMs at inference time by in-                        LATS [102]           O          O            O          O          X
+                                                                                LLMCompiler [31]        O          O            O          X          O
+creasing the amount of computation used for inference without
+modifying model parameters [75], [83], [84], [95], [104]. Rep-
+resentative techniques include Chain-of-Thought [84], which
+                                                                                                                (a) CoT
+guides the model to produce intermediate reasoning steps
+through carefully crafted prompts, and Tree-of-Thought [95],
+which expands the reasoning space by exploring multiple
+                                                                                                                (b) ReAct
+reasoning paths. These approaches guide the model to per-
+form step-by-step reasoning, effectively leveraging its internal
+reasoning capabilities while keeping its parameters fixed.                                                    (c) Reflexion
+   AI agents build upon this paradigm by implementing test-
+time reasoning not through prompt design alone, but through
+multi-step decision-making that integrates tool use and main-
+                                                                                                                (d) LATS
+tenance of intermediate reasoning state. Unlike conventional
+prompt-based methods that operate within a static input-
+output mapping, agents dynamically coordinate multiple model
+invocations and tool interactions, adapting their behavior based
+                                                                                                            (e) LLMCompiler
+on intermediate outcomes. This form of dynamic reasoning
+enables agents to respond to new information, revise prior                                   Fig. 3. Execution timeline of each AI agent.
+decisions, and handle real-time tasks involving external en-
+vironments. As such, AI agents redefine test-time scaling                   the system-level implications of dynamic reasoning, the com-
+by moving beyond conventional inference approaches that                     munity risks building infrastructure optimized for yesterday’s
+rely solely on the model’s internal reasoning abilities. This               workloads. A systems-oriented perspective is therefore critical
+paradigm shift introduces new challenges in efficiency, latency,            to guide the design of sustainable, efficient, and scalable serv-
+and resource management, highlighting the need for a system-                ing infrastructures. Our study takes this first step by analyzing
+level analysis of the behavior of AI agents.                                the computational and infrastructural costs of deploying AI
+                                                                            agents in practice, providing actionable insights for future
+D. Motivation                                                               architecture and systems co-design.
+   Unlike conventional single-turn LLM inference where com-
+putation is bounded to a single forward pass, agentic exe-                                           III. M ETHODOLOGY
+cution involves dynamically evolving control flows, multiple
+rounds of LLM inference, and external tool interactions. These                Our analysis considers a representative set of AI agents and
+behaviors introduce profound challenges at the systems and                  benchmarking workloads, covering diverse agent workflows
+infrastructure level, incurring significant compute overhead,               and agentic task characteristics.
+amplifying memory pressure, and introducing unpredictable                     AI agent workflows. We investigate five representative
+latency and resource utilization patterns.                                  agents: Chain-of-Thought (CoT) [84], ReAct [96], Reflex-
+   Despite these operational complexities, prior research on                ion [72], Language Agent Tree Search (LATS) [102], and
+AI agents has largely focused on improving task success                     LLMCompiler [31]. These agents were selected to cover
+rates and qualitative reasoning behavior [72], [96], [102],                 a wide range of reasoning strategies, tool integrations, and
+with little attention paid to its deployment costs. Questions               planning mechanisms. Table I summarizes the presence or
+central to the deployment and scaling of such agents remain                 absence of five key capabilities across each agent.
+largely unexamined. Consequently, existing architecture and                 • Reasoning. All agents considered in this study employ a
+systems optimizations for LLMs, which target static, single-                  reasoning mechanism. Among them, CoT operates purely
+pass workloads, may fall short in capturing or addressing the                 through internal reasoning without the use of any external
+dynamic and iterative characteristics unique to AI agents.                    tool (Figure 3(a)). As a baseline for comparison, CoT-
+   This paper is motivated by the urgent need to fill this gap.               style static reasoning approaches are considered within the
+To the best of our knowledge, this work is the first to present a             broader definition of AI agents, despite their lack of external
+rigorous, system-level characterization of AI agents, grounded                interactions with tools.
+in quantitative measurement across diverse agent designs and                • Tool use. Tool use differentiates purely language-based
+tasks. We argue that without a principled understanding of                    agents from those capable of interacting with the external
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+                             TABLE II                                         APIs [85] as tools to solve these questions. WebShop [94] is
+                   D ESCRIPTION OF BENCHMARKS .                               a web-shopping benchmark where agents find the best-fit item
+    Benchmark      Property                    Description                    that meets the given conditions. The agent is given web navi-
+                     Task              Multi-hop question answering           gation tools to browse WebShop. MATH [25] is a benchmark
+  HotpotQA [92]      Tool       Wikipedia APIs (search, lookup keywords)
+                     Agent     CoT, ReAct, Reflexion, LATS, LLMCompiler
+                                                                              suite of mathematics problems across various domains. Agents
+                     Task                     Online shopping                 are equipped with access to the Wolfram Alpha API [86] for
+   WebShop [94]      Tool        Interactive web navigation (search, click)   solving complex equations, as well as a Python-based calcula-
+                     Agent        ReAct, Reflexion, LATS, LLMCompiler
+                     Task                  Math problem solving               tor for simple numerical computations. HumanEval [10] evalu-
+    MATH [25]        Tool      Wolfram Alpha API, Python-based calculator     ates the programming capability of agents. In our setup, agents
+                     Agent             CoT, ReAct, Reflexion, LATS
+                     Task                      Programming                    are equipped with a Python execution tool that allows them
+  HumanEval [10]     Tool            Executing self-generated test code       to validate the generated solutions by executing self-written
+                     Agent             CoT, ReAct, Reflexion, LATS
+                                                                              test code. In addition to these agentic benchmarks, we utilize
+                                                                              a non-agentic dataset, which is the ShareGPT dataset [70],
+                                                                              to model conventional chatbot-like LLMs, characterized by
+  environment. This functionality enables agents to access
+                                                                              single-turn LLM inference without iterative interactions with
+  real-time data or perform non-linguistic operations.
+                                                                              the external environments. ShareGPT contains a collection of
+• Reflection. Reflection allows agents to evaluate past de-
+                                                                              real conversations between users and ChatGPT [53], capturing
+  cisions and revise strategies accordingly. Reflective agents
+                                                                              standard interactive dialogue scenarios.
+  effectively manage long-term memory by abstracting past
+                                                                                 It is worth pointing out that some “AI agent vs. benchmark”
+  trajectories into reflections. While ReAct agents simply
+                                                                              pairs are omitted if the agent is not suitable for solving the
+  repeat reasoning and tool usage (Figure 3(b)), Reflexion,
+                                                                              target task. For example, CoT is excluded from WebShop
+  the most fundamental reflective agent, enhances adaptability
+                                                                              since it cannot interact with the shopping webpage. Similarly,
+  by periodically incorporating self-evaluation and refinement
+                                                                              LLMCompiler is omitted from MATH and HumanEval, as
+  through reflection (Figure 3(c)).
+                                                                              its DAG-style planning is not well-suited for problems that
+• Tree search. LATS (Figure 3(d)) leverages Monte Carlo
+                                                                              require sequential, step-by-step reasoning and tool usage.
+  Tree Search [11] to simulate multiple branches of reasoning
+                                                                                 LLM backend. We employed the OpenAI-compatible
+  and action, allowing the agent to evaluate different candidate
+                                                                              vLLM (version 0.6.6) server as the LLM serving infrastruc-
+  paths before making a decision. By simulating multiple
+                                                                              ture, integrated with PyTorch 2.6 and CUDA 12.8. We enabled
+  possible future paths, the agent can make more informed
+                                                                              prefix caching [32], which reduces redundant computation
+  decisions and select optimal action sequences.
+                                                                              by reusing previously computed attention states (i.e., Key-
+• Structured planning. LLMCompiler incorporates a struc-
+                                                                              Value cache (KV cache)) for shared input prefixes across LLM
+  tured multi-step planning and streaming for asynchronous
+                                                                              requests. Unless explicitly stated otherwise, all experimental
+  task execution to minimize latency. During the planning
+                                                                              results are obtained with prefix caching enabled. We use
+  phase, LLMCompiler analyzes task dependencies and con-
+                                                                              Llama-3.1-8B-Instruct [45] as the default backend LLM. How-
+  structs a DAG that organizes future tool calls into an
+                                                                              ever, to discuss the impact of model size on cost and accuracy,
+  execution plan. This enables multiple dependent tool calls to
+                                                                              we also use Llama-3.1-70B-Instruct [44] in Section V.
+  be generated within a single LLM invocation. As the plan
+                                                                                 Hardware. Experiments were conducted on Google
+  is constructed, intermediate tool calls are streamed to the
+                                                                              Cloud Platform (GCP). For the 8B model, we used the
+  execution stage, allowing the scheduler to overlap planning
+                                                                              a2-highgpu-1g instance type with 12 vCPUs (6 physical
+  and tool calls via asynchronous execution. Together, these
+                                                                              cores), 85GB memory, and a single NVIDIA A100 40GB
+  features can help reduce repeated reasoning and lower end-
+                                                                              GPU2 . For the 70B model, we used the a2-highgpu-8g
+  to-end latency (Figure 3(e)).
+                                                                              instance type with 96 vCPUs (48 physical cores), 680GB
+   In general, we utilized the official open-source imple-                    memory, and 8 NVIDIA A100 40GB GPUs.
+mentations provided by the original authors of these agent
+workflows [30], [71], [97], [103]. Each AI agent is adapted to                                 IV. D EMYSTIFYING AI AGENTS
+support our evaluation framework and benchmarks. For LATS,
+                                                                                Section IV-A first examines an agent’s single-request ex-
+we further optimized its implementation to support concur-
+                                                                              ecution, followed by a detailed exploration of the LLM
+rent LLM inference and parallel tool invocation because the
+original version [103] executes these operations sequentially,                   2 In this work, we use GPU-based serving systems for our analysis because
+aggravating end-to-end latency.                                               they are the de facto standard for large-scale LLM serving. Our charac-
+   Benchmarks. We select four popular benchmarks repre-                       terization methodology and findings are architecture-agnostic and directly
+                                                                              transferable to other accelerator platforms like Google TPUs. As detailed in
+sentative of various downstream agentic tasks, whose de-                      the rest of this paper, key insights such as the impact of agentic control-flow
+scriptions are summarized in Table II. HotpotQA [92] is                       serialization, long-context KV cache pressure, and idle-period underutilization
+a question-answering benchmark that assesses the agent’s                      are inherent to the workload characteristics of dynamic reasoning, not to any
+                                                                              GPU/TPU-specific microarchitecture. Thus, the system-level implications we
+ability to accurately retrieve relevant evidence to answer multi-             identify remain equally relevant to other AI inference accelerators, providing
+hop knowledge-intensive questions. We provide the Wikipedia                   a foundation for future cross-architecture analyses.
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+Invocation/request     80                                                            200                                                              36                                        8                                                                                                          Prefill                           Decoding                                  Idle                       GPU utilization
+                                   LLM
+
+
+
+
+                                                                                                                                                                                                                                                                  Latency breakdown
+                                                                                                                                                                                                                                                                                      100%                                                                                                                                                                100%
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                 GPU utilization
+                       60          Tool                                              150                                                              27                                        6
+                       40                                                            100                                                              18                                        4                                                                                     50%                                                                                                                                                                 50%
+                       20                                                             50                                                               9                                        2                                                                                      0%                                                                                                                                                                 0%
+
+
+
+
+                                                                                                                                                                                                                                                                                                                               LLMCompiler
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                         LLMCompiler
+                                                                                                                                                                                                                                                                                                            Reflexion
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                      Reflexion
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                      Reflexion
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                       Reflexion
+                                                                                                                                                                                                                                                                                             CoT
+                                                                                                                                                                                                                                                                                                   ReAct
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                             ReAct
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                       CoT
+                                                                                                                                                                                                                                                                                                                                                                                              ReAct
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                         CoT
+                                                                                                                                                                                                                                                                                                                                                                                                                               ReAct
+                                                                                                                                                                                                                                                                                                                        LATS
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                  LATS
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                  LATS
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                   LATS
+                        0                                                              0                                                               0                                        0
+
+
+                                                                      LLMCompiler
+                             CoT
+
+
+                                            Reflexion
+                                    ReAct
+
+
+                                                        LATS
+
+
+
+
+                                                                                                                                        LLMCompiler
+                                                                                                                   Reflexion
+
+
+
+
+                                                                                                                                                                  ReAct
+                                                                                                                                                               Reflexion
+                                                                                                       ReAct
+
+
+
+
+                                                                                                                                                                     CoT
+                                                                                                                                LATS
+
+
+
+
+                                                                                                                                                                    LATS
+
+
+
+
+                                                                                                                                                                                                                           Reflexion
+                                                                                                                                                                                                          CoT
+                                                                                                                                                                                                                   ReAct
+
+
+                                                                                                                                                                                                                                       LATS
+                                                                                                                                                                                                                                                                                                   HotpotQA                                          WebShop                                  MATH                         HumanEval
+                                   (HotpotQA)                                                               (WebShop)                                                    (MATH)                                  (HumanEval)
+                                                                                                                                                                                                                                                                  Fig. 6. Breakdown of GPU runtime by usage (left axis, bar graph) and
+                        Fig. 4.             Average number of LLM and tool invocations per request.
+                                                                                                                                                                                                                                                                  the resulting average GPU utilization (right axis, diamond marker). GPU
+                                                                                                                                                                                                                                                                  utilization is measured as the fraction of actively used GPU cores, using
+                                               LLM                                  LLM+Tool (overlap)                                                Tool                Others               Latency                                                            NVIDIA’s DCGM [51].
+
+
+
+
+                                                                                                                                                                                                                                         End-to-end latency (s)
+   Latency breakdown
+
+
+
+
+                       100%                                                                                                                                                                                                  100
+                        50%                                                                                                                                                                                                  50
+                            0%                                                                                                                                                                                               0                                    along with the required arguments. Conversely, the next LLM
+                                                          Reflexion
+
+
+                                                                                      LLMCompiler
+
+
+                                                                                                               Reflexion
+
+
+                                                                                                                                       LLMCompiler
+
+
+
+
+                                                                                                                                                                    Reflexion
+
+
+
+
+                                                                                                                                                                                                     Reflexion
+                                    CoT
+
+
+
+
+                                                                                                                                                      CoT
+
+
+
+
+                                                                                                                                                                                       CoT
+                                              ReAct
+
+
+                                                                             LATS
+
+
+                                                                                                    ReAct
+
+
+                                                                                                                               LATS
+
+
+
+
+                                                                                                                                                            ReAct
+
+
+                                                                                                                                                                                LATS
+
+
+                                                                                                                                                                                             ReAct
+
+
+                                                                                                                                                                                                                  LATS
+                                                                                                                                                                                                                                                                  invocation typically relies on the observation returned by
+                                                                                                                                                                                                                                                                  the tool. Although LLMCompiler attempts to mitigate this
+                                                                                                                                                                                                                                                                  dependency by streaming intermediate plans to the scheduler
+                                               HotpotQA                                                     WebShop                                         MATH                         HumanEval                                                                for asynchronous execution of tool calls (thus concurrently
+                                                                                                                                                                                                                                                                  executing it with planning), the observed overlap accounts for
+Fig. 5. Latency breakdown of agents (left axis, bar graph) and their end-to-
+end latency for processing a single request (right axis, diamond marker). The                                                                                                                                                                                     only 18.2% of total latency.
+pink bars represent phases where LLM and tool execution latencies overlap,                                                                                                                                                                                           Agentic workflow’s effect on GPU compute utility. Fig-
+as observed in LLMCompiler, which asynchronously executes tools during
+plan generation.                                                                                                                                                                                                                                                  ure 6 breaks down the GPU runtime by usage and reports
+                                                                                                                                                                                                                                                                  the resulting average GPU utilization when handling a single
+inference and tool-calling characteristics of agents in Sec-                                                                                                                                                                                                      request. Although this setup assumes the processing of a single
+tion IV-B. Lastly, Section IV-C shifts the focus to the serving                                                                                                                                                                                                   agent task, concurrent LLM calls can be opportunistically
+environment of agentic systems where multiple requests are                                                                                                                                                                                                        batched to improve GPU utilization, whenever possible, to
+handled concurrently, identifying system-level bottlenecks and                                                                                                                                                                                                    more efficiently execute agents such as LATS. Unlike CoT,
+scalability issues that emerge in agent deployment.                                                                                                                                                                                                               which performs a single LLM inference without external
+                                                                                                                                                                                                                                                                  interaction, it is possible for agents to experience longer GPU
+A. Overall Workflow of AI Agents                                                                                                                                                                                                                                  idle periods due to tool execution. The duration of these idle
+   Effect of LLM and tool calls on latency. Figure 4 shows                                                                                                                                                                                                        periods depends on the tool’s latency and whether it leverages
+the average number of LLM and tool invocations per request                                                                                                                                                                                                        the GPU. In WebShop, the tool interacts with locally hosted
+across benchmarks. While CoT performs only a single LLM                                                                                                                                                                                                           synthetic web pages, resulting in very short tool latencies
+inference per request, tool-augmented agentic systems require                                                                                                                                                                                                     (Figure 5), so agents do not experience notably higher GPU
+significantly more LLM calls, averaging 9.2 times more than                                                                                                                                                                                                       idle time (i.e., lower GPU utilization). HumanEval exhibits
+CoT. Among these, LATS exhibits the highest LLM invocation                                                                                                                                                                                                        longer tool execution times (Figure 5), but the proportion of
+count, with an average of 71.0 LLM calls per request. This is                                                                                                                                                                                                     GPU idle time remains minimal because the tool it calls (which
+primarily due to its use of tree search, which explores multiple                                                                                                                                                                                                  is the test generation tool) utilizes the GPU for LLM execution.
+reasoning branches (i.e., child nodes) by issuing separate LLM                                                                                                                                                                                                    In contrast, HotpotQA and MATH employ tools that operate
+inferences for each one when expanding a tree node.                                                                                                                                                                                                               on local CPUs or external systems, leading to substantial GPU
+   Figure 5 presents the end-to-end latency and the latency                                                                                                                                                                                                       idle periods that account for up to 54.5% of total execution
+breakdown of each agent’s execution. While most agents                                                                                                                                                                                                            time, resulting in significantly lower GPU utilization compared
+exhibit a similar number of LLM and tool calls per request                                                                                                                                                                                                        to CoT. When the GPU is executing the LLM, its activity can
+(Figure 4), the latency contribution from tool calls varies                                                                                                                                                                                                       be further divided into the prefill and decode stages, which
+significantly depending on the workload. This discrepancy is                                                                                                                                                                                                      account for 4.7% and 74.1% of the GPU’s execution time,
+primarily due to differences in the underlying tool execution                                                                                                                                                                                                     respectively. As noted in [2], [4], [8], [34], the decode stage is
+latencies. For example, WebShop uses lightweight tools that                                                                                                                                                                                                       known to be memory-bound. Consequently, the large fraction
+interact with locally hosted webpages, resulting in tool laten-                                                                                                                                                                                                   of time spent in the decode stage further contributes to the
+cies as low as 20 ms per call. In contrast, HotpotQA relies on                                                                                                                                                                                                    underutilization of GPU resources.
+the Wikipedia API, where individual calls take an average of                                                                                                                                                                                                         Because the sequential dependency between LLM inference
+1.2 seconds. As a result, tool execution dominates the overall                                                                                                                                                                                                    and tool calls limits parallel execution opportunities within
+latency breakdown in this case.                                                                                                                                                                                                                                   a single request (i.e., intra-request parallelism), improving
+   On average, LLM inference and tool execution account for                                                                                                                                                                                                       overall resource utilization requires leveraging inter-request
+69.4% and 30.2% of total latency, respectively. Both stages                                                                                                                                                                                                       parallelism. We explore this direction in Section IV-C, where
+contribute significantly to overall latency, but they are difficult                                                                                                                                                                                               we discuss the implications of serving AI agents over multiple
+to overlap due to their sequential dependency. Specifically,                                                                                                                                                                                                      queries with LLM request batching [32], [82], [98].
+the LLM output is needed to determine which tool to invoke                                                                                                                                                                                                           End-to-end latency distribution of AI agents. Figure 7
+
+
+
+
+                                   Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+                             ShareGPT (Chatbot)                   HotpotQA (ReAct)                 WebShop (ReAct)                                          Decoding (w/o prefix caching)                                                          Decoding (w/ prefix caching)
+            0.2                                                                                                                                             Prefill (w/o prefix caching)                                                           Prefill (w/ prefix caching)
+                                    ShareGPT              HotpotQA                               WebShop
+                                                                                                                                                                          1.8                                                               7.5                    4.5
+Frequency
+
+                                    (Chatbot)             (ReAct)                                  (ReAct)                                3
+
+
+
+
+                                                                                                                            Latency (s)
+                                    95%-ile = 9.7s        95%-ile = 20.7s                   95%-ile = 50.8s                                                                                  1.2                                             5                                      3
+            0.1                                                                                                                           2
+                                                                                                                                          1                                                  0.6                                            2.5                                    1.5
+                 0                                                                                                                        0                                                   0                                              0                                      0
+
+
+
+
+                                                                                                                                                                                                                              LLMCompiler
+                                                                                                                                                                                                           Reflexion
+
+
+
+
+                                                                                                                                                                                                                                                                Reflexion
+
+
+
+
+                                                                                                                                                                                                                                                                                                       Reflexion
+                                                                                                                                                                                                   ReAct
+
+
+
+
+                                                                                                                                                                                                                                                  CoT
+                                                                                                                                                                                                                       LATS
+
+
+
+
+                                                                                                                                                                                                                                                        ReAct
+
+
+
+
+                                                                                                                                                                                                                                                                                         CoT
+                                                                                                                                                                                                                                                                            LATS
+
+
+
+
+                                                                                                                                                                                                                                                                                               ReAct
+
+
+                                                                                                                                                                                                                                                                                                                   LATS
+                     0            10                 20             30                 40                50           60
+
+
+
+
+                                                                                                                                                                               LLMCompiler
+                                                                                                                                                            Reflexion
+                                                                                                                                              CoT
+                                                                                                                                                    ReAct
+
+
+                                                                                                                                                                        LATS
+                                                               Latency (s)
+
+Fig. 7. End-to-end latency distribution of a non-agentic ShareGPT workload
+and ReAct-based agents with HotpotQA and WebShop workloads. Latency is                                                                                                                                     (WebShop)                                    (MATH)                             (HumanEval)
+                                                                                                                                                    (HotpotQA)
+measured while processing one request at a time, with prefix caching enabled.
+                                                                                                                                          Fig. 9.           Inference latency with(out) prefix caching and its breakdown.
+                            Instruction     Few-shot            User         LLM history       Tool history     Output
+                2700                      6000                              3000                    1800                    such as agent role-aligned instructions (e.g., LLMCompiler
+  Token count
+
+
+
+
+                1800                      4000                              2000                    1200                    requires instructions to generate a structured plan) and the
+                900                       2000                              1000                      600                   accumulated context of previous LLM and tool interactions.
+                     0                         0                               0                         0                  For output tokens, each LLM call in agent workflows often
+                         LLMCompiler
+                            Reflexion
+                                  CoT
+                               ReAct
+
+                                 LATS
+
+
+
+
+                                                                                         CoT
+
+
+
+
+                                                                                                                    CoT
+                                                      LLMCompiler
+                                                         Reflexion
+
+
+
+
+                                                                                   Reflexion
+
+
+
+
+                                                                                                              Reflexion
+                                                            ReAct
+
+
+
+
+                                                                                      ReAct
+
+
+
+
+                                                                                                                 ReAct
+                                                              LATS
+
+
+
+
+                                                                                        LATS
+
+
+
+
+                                                                                                                   LATS
+                                                                                                                            generates fewer tokens than CoT, except for LATS. This is
+                                                                                                                            because agents typically decompose a single task into multiple
+                                                                                                                            steps, distributing the overall output across several LLM calls.
+                          (HotpotQA)                      (WebShop)                  (MATH)                   (HumanEval)
+                                                                                                                            In contrast, LATS often generates much longer outputs than
+Fig. 8. Breakdown of input and output tokens in LLM inference. Instruction                                                  CoT due to its workflow, where a single LLM call produces
+and Few-shot (light and dark gray) represent input tokens that are statically                                               multiple candidate samples to expand the tree node.
+fixed as part of the initial prompt to the LLM. User (black) denotes input
+tokens provided by the user as part of the query. LLM history (green) and Tool                                                 Token usage patterns also vary depending on the task
+history (yellow) represent tokens accumulated from previous LLM outputs and                                                 workload. In knowledge-intensive tasks such as HotpotQA and
+tool responses, respectively, which are then included as input tokens during                                                decision-making tasks like WebShop, tool calls often return
+the next LLM call. Output (red) refers to tokens generated by each LLM call.
+                                                                                                                            large responses (e.g., the full content of a webpage) resulting
+compares the end-to-end latency distributions of a conven-                                                                  in longer tool history tokens. In contrast, tasks that rely more
+tional, non-agentic LLM service using ShareGPT and a ReAct-                                                                 heavily on internal reasoning, such as MATH and HumanEval,
+based agent system using HotpotQA and WebShop. The                                                                          tend to produce longer LLM-generated outputs, leading to
+ShareGPT dataset represents a typical chatbot workload, where                                                               larger LLM history tokens.
+each response is generated by a single LLM inference. As                                                                       Although the ratio of LLM and tool history tokens varies
+shown, this results in a relatively low and consistent latency                                                              across workloads, most benchmarks exhibit substantial growth
+distribution, with most responses completing within 9.7 sec-                                                                in input history over multiple iterations. An exception is LATS,
+onds. In contrast, the ReAct-based agent exhibits a much                                                                    which includes only the path from the root to the current node,
+broader latency distribution with a heavier tail, due to its multi-                                                         rather than concatenating all prior interaction histories. In the
+step reasoning and reliance on external tools. Because the                                                                  case of HotpotQA, for instance, initial inputs are typically
+number of reasoning steps and tool calls varies across requests                                                             around 1,000 tokens, but the input size increases to 3–4×
+in agents, the associated computational demands also fluctuate.                                                             as prior LLM outputs and tool responses are appended to
+Consequently, there is significant variance in latency across                                                               the input context of subsequent LLM calls. Because histories
+queries targeting agents.                                                                                                   accumulate sequentially, consecutive LLM calls share common
+                                                                                                                            prefixes in their input contexts. These long input contexts
+B. LLM Inference and Tool-Calling Characteristics                                                                           result in high KV cache usage per request and considerable
+   This section further analyzes the behavior of agentic sys-                                                               prefix overlap across iterations. This behavior presents an
+tems by characterizing the properties of LLM inference and                                                                  opportunity to improve GPU compute and memory efficiency
+tool calls within the AI agent in greater detail.                                                                           through prefix caching [32], as detailed below.
+   Breakdown of input and output tokens in LLM infer-                                                                          Effect of prefix caching on AI agent’s compute efficiency.
+ence. Figure 8 presents the token count distribution across                                                                 Building on the token-level analysis above, we now turn
+different AI agents. Instruction tokens define the agent’s role                                                             to system-level characteristics, starting with GPU compute
+and objective within the task, while Few-shot tokens provide                                                                efficiency. AI agent workloads involve multiple iterative LLM
+in-context examples that guide the agent’s behavior. User                                                                   calls, where a large portion of the input context is reused
+tokens represent user queries. LLM history and Tool history                                                                 at each step. Prefix caching leverages this shared prefix to
+tokens consist of accumulated outputs from previous LLM                                                                     skip redundant computation during the prefill phase by reusing
+inferences and tool responses across iterations. Output tokens                                                              previously cached key-value (KV) pairs.
+are generated at each LLM inference step, while the remaining                                                                  Figure 9 shows LLM inference latency and its proportion of
+tokens collectively make up the input prompt.                                                                               prefill and decoding latency, with and without prefix caching.
+   Compared to CoT, AI agents generally have longer input                                                                   For CoT, LLM inference occurs only once per request, and
+tokens. This is because their inputs include additional elements                                                            the shared prefix across inferences is minimal. Moreover, CoT
+
+
+
+
+                         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+typically generates a relatively large number of output tokens,                                                                    LLM backend (vLLM)
+                                                                                                          LLM agent worker
+making decoding the dominant contributor to latency. In con-                                                                     Scheduler       LLM engine
+                                                                                            Server        LLM agent worker
+trast, AI agents operate iteratively and accumulate long input                            entrypoint
+                                                                                                                                             Tools
+
+
+
+
+                                                                                                                 …
+contexts due to interaction histories. As a result, prefix caching              User    Invoke worker                                 Wikipedia API,
+                                                                                           process        LLM agent worker      Python code interpreter, etc.
+reduces prefill latency by an average of 60.1%, demonstrating
+                                                                                                                    LLM agent server system
+its effectiveness in improving compute efficiency by avoiding
+redundant computations through prefix reuse. Beyond the pre-                       Fig. 10.   High-level overview of our AI agent serving system.
+fill phase, prefix caching can also indirectly improve decoding
+efficiency. In systems that execute multiple parallel LLM calls,
+decoding may be stalled by ongoing prefill operations. By                    of AI agent serving environments, analyzing scenarios where
+reducing prefill latency, prefix caching shortens this blocking              multiple requests are routed to the server and can be processed
+period, thereby enabling faster decoding and explaining the                  concurrently for high serving throughput. Unlike static reason-
+larger speedup observed in LATS.                                             ing models that process a user request with a single LLM
+                                                                             inference step, AI agents perform multiple reasoning steps
+    Overall, the impact of prefix caching on end-to-end LLM in-
+                                                                             iteratively, introducing new challenges for efficient serving.
+ference latency varies by workload type. While CoT workloads
+benefit less due to their decoding-dominant property, agentic                   To examine the characteristics of AI agent serving, we
+workloads experience an average 15.7% reduction in end-to-                   implement an agent serving system, as illustrated in Figure 10.
+end latency due to the accumulation of long input contexts over              When a user sends a request to the agent server’s entry point,
+iterative steps. While this per-request improvement may seem                 each worker processes the request according to the agent’s
+modest, the reduction in prefill time can significantly alleviate            workflow. Depending on the current step of the task, a worker
+system-level bottlenecks. In token-level schedulers like vLLM,               either sends a request to the LLM inference server or executes
+long prefill phases can delay the scheduling of concurrent re-               a tool. Tool execution may occur locally (e.g., code inter-
+quests. By shortening these phases, prefix caching can improve               preters, custom functions) or involve external resources (e.g.,
+scheduling efficiency and increase overall system throughput.                web search, API calls). Each worker operates asynchronously,
+This effect is examined further in Section IV-C (Figure 11).                 and LLM inference requests from multiple workers can be
+    Effect of prefix caching on AI agent’s memory efficiency.                batched at the LLM backend (e.g., vLLM) for high-throughput
+We now discuss the effect of prefix caching on GPU memory                    processing using continuous batching [32], [98]. We adopt
+requirements by measuring the average GPU memory required                    vLLM’s default first-come-first-served (FCFS) scheduler in
+to store the KV cache. On average, tool-augmented AI agents                  the LLM inference backend. To simulate realistic traffic, input
+consume 3.0× more memory per request than CoT, and up                        queries to the agent server are randomly sampled and issued
+to 5.4× more in the worst case. This overhead arises from                    to the server following a Poisson arrival distribution [47].
+the iterative nature of agent workflows, where each LLM call                    Importance of concurrent request scheduling. Before
+appends intermediate reasoning steps and tool responses to the               comparing the AI agent serving against the conventional
+context, resulting in a longer input for each LLM inference.                 chatbot (ShareGPT) serving, we first highlight the importance
+    These results highlight the need for memory optimization                 of concurrently servicing AI agent requests. When ReAct
+in AI agent workloads, with prefix caching serving as a key                  agents are executed sequentially, the average latency is 9.6
+technique for reducing GPU memory usage. In LATS, multiple                   seconds for HotpotQA and 5.3 seconds for WebShop, limiting
+LLM inferences are issued in parallel to evaluate several                    throughput to 0.10 and 0.19 queries per second (QPS), re-
+child nodes simultaneously during tree expansion. Without                    spectively. With concurrent execution, throughput improves to
+prefix caching, each of these parallel calls creates its own                 2.6 and 1.2 QPS for HotpotQA and WebShop (Figure 11),
+KV cache, resulting in significant memory overhead due to                    respectively, achieving 25× and 6.2× gains at the cost of
+redundancy. With prefix caching, the shared prefix across these              a 2.1× increase in average latency. The greater throughput
+parallel calls can be reused, reducing memory requirements                   gain in HotpotQA comes from its longer tool latency, which
+by an average of 64.8% in LATS. For other agents, where                      causes the GPU to remain idle for extended periods. These idle
+all LLM calls are invoked sequentially, prefix caching does                  intervals can be effectively utilized by servicing other requests,
+not reduce memory usage within a single request, since the                   enabling higher concurrency and throughput.
+KV cache cannot be shared across LLM calls. However, in                         Comparison with conventional static reasoning LLM
+serving scenarios with concurrent requests, prefix caching can               services. We now compare an AI agent serving with a con-
+significantly improve memory efficiency by reusing the KV                    ventional LLM serving scenario, represented by the chatbot
+cache across requests. We further explore this serving-level                 (ShareGPT) workload. ShareGPT, a typical single-turn LLM
+memory efficiency in Section IV-C (Figure 12).                               service, processes user queries in a single inference pass.
+                                                                             Figure 11 shows the changes in end-to-end tail latencies for
+C. AI Agent Serving Characteristics                                          chatbot (ShareGPT) and ReAct-based AI agent (HotpotQA
+   So far, our characterization has focused on the behavior of               and WebShop) workloads as input QPS to the server increases.
+AI agents when servicing a single query for a specific task. In              The peak throughput is measured as the maximum sustainable
+this section, we shift our attention to system-level properties              QPS at the knee of the tail latency curve. As depicted, the
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+                                          ShareGPT (w/o prefix caching)                         ShareGPT (w/ prefix caching)                                            ReAct               Reflexion                LATS          LLMCompiler
+                                          HotpotQA (w/o prefix caching)                         HotpotQA (w/ prefix caching)
+                                          WebShop (w/o prefix caching)                          WebShop (w/ prefix caching)                     100%                            100%                 100%               100%
+                          80                                                                                                                     75%                             75%                  75%                75%
+95%-ile latency (s)
+
+
+
+
+                                                                                                                                   Accuracy
+                          60                                                                                                                     50%                             50%                  50%                50%
+                          40                                                                                                                     25%                             25%                  25%                25%
+                                                                                                                                                  0%                              0%                   0%                 0%
+                          20
+                                                                                                                                                             1       10 100            1    10 100        1    10 100        1    10 100
+                              0                                                                                                                                   Latency (s)            Latency (s)        Latency (s)        Latency (s)
+                                  0                 2                 4                                   6                    8                                 (HotpotQA)             (WebShop)            (MATH)           (HumanEval)
+                                                                     QPS
+                                                                                                                                                                                                  (a) Accuracy
+Fig. 11. 95th percentile latency for chatbot (ShareGPT) and ReAct-based                                                                                  1                         1                         1                        1
+
+
+
+
+                                                                                                                                   Accuracy/latency
+AI agents (HotpotQA and WebShop) as QPS rates increase, with (solid line)                                                                             0.75                      0.75                      0.75                     0.75
+and without (dashed line) prefix caching enabled.
+
+
+
+
+                                                                                                                                       (norm.)
+                                                                                                                                                       0.5                       0.5                       0.5                      0.5
+                                                                                                                                                      0.25                      0.25                      0.25                     0.25
+                              0.8
+                                                                      KV cache size (GB)
+                                                                                            4                                                            0                         0                         0                        0
+         KV cache size (GB)
+
+
+
+
+                                                                                                                                                             1      10 100             1       10 100            1      10 100            1       10 100
+                              0.4                                                           2                                                                     Latency (s)               Latency (s)              Latency (s)               Latency (s)
+                                  0                                                         0                                                                    (HotpotQA)                (WebShop)                  (MATH)                  (HumanEval)
+                                       W/o    W/    W/o     W/                                   W/o     W/     W/o    W/                                                       (b) Accuracy per (end-to-end) latency
+                                        HotpotQA     WebShop                                      HotpotQA       WebShop
+                                                                                                                                   Fig. 13. Accuracy and cost-efficiency of AI agent design points. (a) Accuracy
+                              (a) Average memory usage                                     (b) Maximum memory usage                vs. latency and (b) Accuracy per latency, illustrating how efficiently each
+Fig. 12. (a) Average and (b) maximum memory used for KV caches, with                                                               configuration translates cost into task performance.
+and without prefix caching. Evaluation is conducted at 0.2 QPS (HotpotQA)
+and 0.1 QPS (WebShop) data points using ReAct.
+                                                                                                                                   significant contributors to memory usage in LLM inference.
+                                                                                                                                   Figure 12 shows the GPU memory consumption for KV cache
+peak throughput of ReAct is significantly lower than that
+                                                                                                                                   allocation, with and without prefix caching enabled, under
+of ShareGPT. While ShareGPT can sustain up to 6.4 QPS,
+                                                                                                                                   identical QPS conditions. With prefix caching enabled, the
+ReAct supports only 2.6 QPS on HotpotQA and 1.2 QPS on
+                                                                                                                                   average and maximum KV cache memory usage decrease by
+WebShop, even with prefix caching enabled. This limitation
+                                                                                                                                   51.7% and 63.5%, respectively, indicating improved memory
+stems from ReAct’s multi-step reasoning, where each request
+                                                                                                                                   efficiency. This reduction arises from the ability of prefix
+involves multiple LLM calls and tool interactions, significantly
+                                                                                                                                   caching to reuse key-value pairs of shared prefix tokens across
+increasing latency.
+                                                                                                                                   multiple LLM invocations across AI agent requests. Thus,
+   Effect of prefix caching on AI agent serving throughput.
+                                                                                                                                   prefix caching not only improves compute efficiency by elim-
+Prefix caching is an important system-level optimization that
+                                                                                                                                   inating redundant prefill operations but also reduces the KV
+reduces redundant computation during the prefill phase of
+                                                                                                                                   cache memory footprint, enabling more efficient utilization of
+LLM inference by reusing previously computed key-value
+                                                                                                                                   GPU memory during AI agent serving.
+(KV) caches. While its impact on the latency of individual
+LLM calls is modest (Figure 9), it can substantially improve                                                                                  V. D EMYSTIFYING T EST-T IME S CALING IN AI AGENTS
+throughput and serving efficiency for AI agents.                                                                                      We now explore the diverse design space of AI agents and
+   Figure 11 compares the effect of prefix caching on chatbot                                                                      examine their test-time scaling behavior to understand the
+(ShareGPT) and agentic (ReAct) workloads. ShareGPT shows                                                                           trade-offs between model accuracy and cost. We evaluated
+only a modest 1.03× throughput improvement, as it performs                                                                         accuracy following the official evaluation protocol of each
+a single LLM call per request with minimal repetition. In                                                                          benchmark. For HotpotQA and MATH, we report exact match
+contrast, ReAct benefits significantly, achieving an average                                                                       accuracy, allowing minor formatting variations (e.g., equiva-
+5.62× increase in throughput. This is because agent workloads                                                                      lent mathematical expressions) in MATH. For WebShop, we
+involve multiple LLM calls per request, amplifying the benefits                                                                    use the task-specific score defined in the benchmark. For
+of avoiding redundant prefill operations.                                                                                          HumanEval, accuracy denotes the proportion of tasks that
+   The performance gap is further explained by token-level                                                                         successfully pass all unit tests. To assess each design point,
+batching systems such as vLLM. Without prefix caching, long                                                                        we used a benchmark of 50 sample questions and measured
+prefill stages occupy the GPU and block decoding for other                                                                         the average accuracy and the computation cost for each.
+requests, leading to system-wide queuing delays. This bottle-
+neck is particularly problematic for AI agents, where repeated                                                                     A. Analyzing Cost-Efficiency Across AI Agent Design Spaces
+LLM calls per request exacerbate inter-request contention. As                                                                         Deploying AI agents in practical settings requires careful
+a result, prefix caching plays a critical role in mitigating these                                                                 configuration of agentic system parameters. These design
+interference effects and improving overall serving efficiency,                                                                     choices significantly affect not only the agent’s task success
+especially for agentic workloads.                                                                                                  rate but also the overall cost of operating such systems. In this
+   Effect of prefix caching on AI agent’s memory usage.                                                                            section, we quantify how different parameter configurations in
+We now investigate the impact of prefix caching on GPU                                                                             AI agents influence both accuracy and cost-efficiency.
+memory efficiency in AI agent serving, focusing specifically                                                                          Pareto analysis of accuracy and cost across AI agent
+on its effect on key-value (KV) cache size, one of the most                                                                        designs. Figure 13 presents the trade-off between accuracy
+
+
+
+
+                                      Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+                          Avg. latency                            95%-ile latency                                                       Avg. latency     Accuracy                  Accuracy/latency (norm.)
+                          Accuracy                                Accuracy/latency (norm.)
+                                                                                                                            24                           100%                 12                              100%
+
+
+
+
+                                                                                                              Latency (s)
+
+
+
+
+                                                                                                                                                                Latency (s)
+              60                            100%                 24                                                         18                           75%                   9                              75%
+
+
+
+
+                                                                                                                                                                  Percent
+
+
+
+
+                                                                                                                                                                                                                     Percent
+                                                                                             100%
+Latency (s)
+
+
+
+
+                                                   Latency (s)
+
+
+
+
+                                                                                                    Percent
+                                                    Percent
+              45                            75%                  18                          75%                            12                           50%                   6                              50%
+              30                            50%                  12                          50%                             6                           25%                   3                              25%
+              15                            25%                   6                          25%                             0                           0%                    0                              0%
+               0                            0%                    0                          0%                                  0     1 2 3 4 5                                     0     1 2 3 4 5
+                   3    4 5 10 15 20 25                               5 10 15 20 25 30                                               Few-shot examples                                   Few-shot examples
+                        Iteration budget                                Iteration budget                                               (HotpotQA)                                           (WebShop)
+                           (HotpotQA)                                      (WebShop)
+                                                                                                              Fig. 15.    End-to-end latency and accuracy trends with varying numbers
+Fig. 14.     End-to-end latency and accuracy trends under iteration budget                                    of few-shot examples in ReAct. Markers indicate the configuration with the
+constraints in ReAct. Markers indicate the points of maximum accuracy (red                                    highest accuracy (red diamond) and the peak cost-efficiency (blue diamond),
+diamond) and peak cost-efficiency (blue diamond), as measured by accuracy-                                    based on normalized accuracy-to-latency ratio.
+to-latency ratio.
+
+
+and cost across various AI agent configurations. Each point                                                   tially improves accuracy. However, both accuracy and average
+corresponds to a specific design variant, such as changes to                                                  latency eventually saturate, while the 95th percentile latency
+the number of few-shot examples or maximum iteration limits.                                                  continues to increase linearly. This rising tail latency is driven
+   Figure 13(a) shows the trade-off between accuracy and                                                      by a small set of outlier tasks that consume the full iteration
+latency. ReAct demonstrates strong compute efficiency across                                                  budget. These outliers degrade cost-efficiency by contributing
+all benchmarks, achieving moderate accuracy with consistently                                                 disproportionately to total compute usage without yielding
+low latency. Reflexion builds on ReAct by introducing re-                                                     substantial accuracy gains. The widening latency distribution
+flection steps guided by internal or external rewards. This                                                   also reduces predictability, which is especially problematic
+approach yields modest accuracy improvements but signifi-                                                     for latency-sensitive deployments. Therefore, iteration limits
+cantly increases latency. LATS extends Reflexion with a tree-                                                 should be tuned not only for performance but also for latency
+based reasoning approach that explores multiple candidate                                                     consistency and operational stability.
+branches at each step. While this leads to higher accuracy,                                                      Figure 15 shows how varying the number of few-shot
+it also introduces substantial computational overhead due to                                                  examples in the prompt affects latency and accuracy. Initially,
+the expansion of reasoning paths. LLMCompiler, with its                                                       adding examples substantially improves accuracy, as agents
+planning-based architecture, outperforms ReAct on tasks like                                                  gain better task understanding. However, beyond a certain
+HotpotQA in both accuracy and cost-efficiency, thanks to its                                                  point, the benefit diminishes—and in some cases, accuracy
+ability to generate and execute structured plans in parallel.                                                 declines due to prompt length exceeding the model’s optimal
+However, in tasks such as WebShop—where tool usage in-                                                        processing range. Interestingly, average latency decreases as
+volves high interdependencies (e.g., searching or clicking on                                                 more examples are added. This counterintuitive result arises
+a webpage)—its DAG-style planning results in unnecessary                                                      because good examples help agents solve tasks in fewer steps,
+tool invocations, leading to lower efficiency than ReAct.                                                     offsetting the cost of longer prompts. Thus, while longer
+   Figure 13(b) illustrates the cost-efficiency of various agent                                              prompts marginally increase per-token processing time, the
+configurations. We define cost-efficiency as the ratio of accu-                                               reduction in overall reasoning steps often leads to net latency
+racy to cost, where cost is measured as end-to-end latency. This                                              savings. In summary, a small number of carefully chosen
+metric reflects how effectively each configuration translates                                                 examples can improve both accuracy and efficiency, while
+compute resources into task accuracy3 . Across all agents and                                                 excessive prompting may lead to diminishing returns.
+workloads, we observe a consistent pattern: as computation                                                       To identify optimal configurations, we highlight the point at
+cost increases, accuracy improves, but with diminishing re-                                                   which the accuracy-to-latency ratio is maximized (denoted by
+turns. This underscores the importance of designing AI agent                                                  blue markers in Figure 14 and Figure 15). This point represents
+serving systems that find configurations on (or near) the                                                     the most cost-effective trade-off between model accuracy and
+Pareto frontier, optimally balancing model accuracy against                                                   response time. Such metrics provide a practical guideline for
+deployment cost rather than optimizing solely for accuracy.                                                   setting iteration budgets and few-shot prompting under latency
+   Tuning Iteration and Prompting for Cost-Efficient Agent                                                    or compute constraints.
+Behavior. To better understand the accuracy–cost trade-offs                                                   B. Test-Time Scaling of AI Agents
+in AI agent design, we analyze how two key parameters in
+AI agent designs affect model performance: the maximum                                                           AI agents can dynamically scale their reasoning at test
+iteration budget and the number of few-shot examples.                                                         time by adjusting the number of reasoning steps based on
+   Figure 14 shows how varying the iteration budget impacts                                                   task difficulty. This flexibility helps improve performance on
+average latency, 95th percentile latency, and accuracy. The                                                   complex problems, but it also introduces significant variation
+iteration budget controls how many reasoning steps and tool                                                   in computation cost. Designing systems that are both accurate
+invocations the agent is allowed per query. As this budget                                                    and efficient requires a deeper understanding of how inference
+increases, agents can perform deeper reasoning, which ini-                                                    behavior evolves as compute usage increases.
+                                                                                                                 Sequential vs. parallel reasoning at test time. We in-
+  3 Using FLOPs as a proxy for cost (“accuracy per FLOP”) yielded similar                                     vestigate the effect of two key forms of test-time scaling
+qualitative conclusions, so we omit those results for brevity.                                                for AI agents: sequential and parallel. In sequential scaling,
+
+
+
+
+                       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+                       2    4   8   16   32
+                                                       4       8     16    32
+                                                                                        1    2   4   8   16                   100%                                     100%                                 100%
+                                                       64      128   256   512
+
+
+
+
+                                                                                                                (Reflexion)
+           100%                               100%                             100%                                            75%                                      75%                                  75%
+
+
+
+
+                                                                                                                 Accuracy
+
+
+
+
+                                                                                                                                                            Accuracy
+
+
+
+
+                                                                                                                                                                                                 Accuracy
+Accuracy
+
+            75%                                75%                              75%                                            50%                                      50%                                  50%
+            50%                                50%                              50%                                            25%                                      25%                                  25%             Llama 8B
+            25%                                25%                              25%                                                                                                                                          Llama 70B
+             0%                                 0%                               0%                                             0%                                       0%                                   0%
+                                                                                    0           500     1,000                        0       500      1,000                   0k     1,000k 2,000k                     0      200     400
+                  0           800        1,600     0            500        1,000                                                          Latency (s)                                                                      Energy (Wh)
+                           Latency (s)                                                      Latency (s)                                                                            Total tokens
+                                                            Latency (s)
+    (a) Reflexion (sequential)                  (b) LATS (sequential)             (c) LATS (parallel)                         100%                                     100%                                     100%
+                                                                                                                               75%                                      75%                                      75%
+
+
+
+
+                                                                                                                                                                                                     Accuracy
+                                                                                                                Accuracy
+
+
+
+
+                                                                                                                                                              Accuracy
+                                                                                                                 (LATS)
+Fig. 16. Accuracy-latency trade-offs with sequential, parallel scaling on                                                      50%                                      50%                                      50%
+                                                                                                                               25%                                      25%                                      25%         Llama 8B
+HotpotQA. Legends denote the scaling level: maximum reflection steps in (a,                                                                                                                                                  Llama 70B
+b), and number of child nodes per expansion in (c).                                                                             0%                                       0%                                       0%
+                                                                                                                                     0       300      600                     0k     1,000k 2,000k                     0      150    300
+                                                                                                                                          Latency (s)                              Total tokens                            Energy (Wh)
+
+the agent gradually increases its reasoning steps over time,                                                                                  (a)                                    (b)                                     (c)
+allowing for deeper introspection. This is typical of agents
+                                                                                                                Fig. 17.      Accuracy–cost trade-offs under test-time scaling across two
+like Reflexion and LATS, where the number of reflection                                                         model sizes (Llama-3.1-Instruct 8B and 70B) on HotpotQA. (a)–(c) compare
+steps can be adjusted dynamically. In contrast, parallel scaling                                                Reflexion (top row) and LATS (bottom row) across latency, token usage,
+issues multiple reasoning branches simultaneously, commonly                                                     and energy consumption. While 70B achieves higher accuracy with fewer
+                                                                                                                steps, the 8B model when paired with parallel scaling can approach 70B
+through parallel LLM calls, to explore diverse solution paths.                                                  performance with lower energy cost. Each point denotes a different level of
+LATS uses this approach by spawning multiple child nodes                                                        test-time reasoning.
+during each tree expansion step.
+   Figure 16(a) and (b) show the accuracy–latency trade-                                                        consumes significantly more tokens at high-accuracy settings,
+offs for Reflexion and LATS under sequential scaling. Both                                                      indicating that it needs more reasoning iterations to match the
+methods improve in accuracy with more reflection steps, but                                                     70B model’s performance. However, as shown in Figure 17(c),
+with diminishing returns. For example, in Reflexion, increas-                                                   the 8B model is substantially more energy-efficient. While the
+ing latency from 16.9s to 25.6s yields a 4% accuracy gain.                                                      70B model relies on 8 A100 GPUs, the 8B model runs on just
+However, achieving the same model accuracy improvement                                                          one, resulting in lower total energy consumption per request,
+from a later point (56.0s) requires a much larger increase in                                                   even when requiring more reasoning steps to be involved.
+latency (269.5s), a 31× higher cost for the same marginal gain.                                                   Interestingly, the performance gap between models can be
+   On the other hand, parallel scaling exhibits a different trade-                                              partially closed with effective scaling strategies. Reflexion
+off. Figure 16(c) highlights the behavior under parallel scaling                                                (which uses sequential scaling) shows limited accuracy on the
+in LATS. Increasing the number of child nodes from 1 to 16                                                      8B model. But with LATS and parallel scaling, the 8B model
+improves accuracy by 14.4 percentage points while simultane-                                                    achieves near-70B performance by exploring multiple paths
+ously reducing latency by 196.3s on average. This is because                                                    and selecting the best one. This shows that a test-time strategy
+evaluating multiple reasoning paths in parallel helps the agent                                                 can play a compensatory role in low-resource settings.
+converge on high-quality answers more quickly. However, this
+comes at the cost of issuing more concurrent LLM requests,                                                                               VI. AI I NFRASTRUCTURE I MPLICATIONS
+which increases memory pressure and may limit scalability in                                                       In this section, we analyze the system-level impact of
+multi-tenant or resource-constrained environments.                                                              agentic test-time scaling by quantifying the GPU energy
+   These results suggest that AI agent configurations should                                                    consumption and datacenter-wide power demands of AI agents
+align with system constraints such as latency budgets and                                                       relative to conventional single-turn LLM inference. Following
+available compute resources. Parallel scaling is effective for                                                  the methodology in Section V-B, this section utilizes Reflexion
+latency-sensitive workloads, as it allows the agent to explore                                                  and LATS as representative AI agents that employ sequential
+multiple reasoning paths at once and reach better answers                                                       and parallel scaling, respectively. Reflexion and LATS design
+faster. However, it increases resource usage due to the large                                                   points were selected based on the highest-accuracy configura-
+number of concurrent LLM calls. In contrast, sequential scal-                                                   tions in Figure 17. Llama-3.1-Instruct 8B and 70B models are
+ing is better suited for resource-constrained environments. This                                                used as backend LLMs and ShareGPT serves as the baseline
+approach avoids concurrent LLM calls, lowering peak resource                                                    for conventional single-turn inference.
+demand, but incurs higher latency from step-by-step reasoning.                                                     GPU energy consumption. Reflexion consumes 41.53 Wh
+   Model size effects on test-time scaling. We further analyze                                                  and 348.41 Wh per query when using Llama-3.1-Instruct 8B
+how model size affects the accuracy–cost trade-offs under                                                       and 70B as backend LLMs, whereas LATS consumes 22.76
+different test-time scaling strategies.                                                                         Wh and 158.48 Wh (Table III). By contrast, a conventional
+   Figure 17(a) shows that both the 8B and 70B Llama-                                                           single-turn LLM inference (ShareGPT) requires only 0.32 Wh
+3.1-Instruct [44], [45] models eventually reach saturation in                                                   (8B) and 2.55 Wh (70B) per query. These figures correspond
+accuracy, but they differ in how quickly they reach this point.                                                 to a 62.1×–136.5× increase in GPU energy per query under
+The 70B model achieves high accuracy with relatively low                                                        agent-based test-time scaling (vs. single-turn LLM inference).
+latency, whereas the 8B model requires much longer inference                                                       Based on recent estimates, ChatGPT serves roughly 500
+times to reach similar performance. This trend is echoed in                                                     million to 1.27 billion weekly active users (WAU) [15], [58],
+Figure 17(b), which plots total token usage. The 8B model                                                       [60], [73], which corresponds to approximately 71.4 million to
+
+
+
+
+                      Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+                           TABLE III                                         vative ChatGPT DAU estimate and one agentic query per user)
+    ACCURACY, LATENCY, AND GPU ENERGY CONSUMPTION WHEN                       and tomorrow’s (Google search’s 13.7 billion queries per day)
+  SERVICING A SINGLE AGENT REQUEST ON H OTPOT QA. N UMBERS IN
+PARENTHESES INDICATE THE RELATIVE INCREASE OVER S HARE GPT ( THE             AI traffic. Table IV translates the per-query GPU energy con-
+             CONVENTIONAL SINGLE - TURN INFERENCE ).                         sumption numbers into datacenter-level power requirements,
+                                                                             computed by P = (Wh/query) × ((Queries/Day)/(24 hours)).
+                      Accuracy          Latency             Energy
+                        (%)            (seconds)          (Wh/query)         Under today’s 71.4 million DAU load, single-turn ShareGPT
+        ShareGPT          –            4.23 (1×)           0.32 (1×)         (70B) requires roughly 7.6 MW, well within the tens-of-
+  8B    Reflexion        38         649.34 (153.7×)     41.53 (130.9×)       megawatts envelope typical of modern datacenters [27], [88].
+          LATS           80          380.90 (90.1×)      22.76 (71.7×)       However, assuming similar traffic levels for AI agents, even the
+        ShareGPT          –            6.40 (1×)           2.55 (1×)
+ 70B    Reflexion        67         720.00 (112.6×)    348.41 (136.5×)       lighter 8B-based agents demand 67.7–123.6 MW, comparable
+          LATS           82          305.67 (47.8×)     158.48 (62.1×)       to the power draw of a mid-sized U.S. city, while 70B-based
+                                                                             agents approach 1 GW, nearly three orders of magnitude
+                                                                             higher than the single-turn LLM baseline. Strikingly, this
+                            TABLE IV
+  DATACENTER - WIDE POWER DEMAND UNDER CURRENT AND FUTURE                    gigawatt-scale power requirement aligns with the announced
+ TRAFFIC SCENARIOS (71.4 M ILLION AND 13.7 B ILLION Q UERIES / DAY ),        budget for OpenAI’s multi-gigawatt Stargate facility [55],
+             ASSUMING THE H OTPOT QA BENCHMARK .
+                                                                             which is intended to support future AI model deployments.
+                       Power @ 71.4 Million      Power @ 13.7 Billion        Yet, our analysis suggests that such infrastructure may already
+                        Queries/day (Watts)       Queries/day (Watts)        be necessary to support agentic systems under today’s traffic
+        ShareGPT               1.0 M                   182.7 M               levels. Overall, our estimates indicate that even modest user
+  8B    Reflexion            123.6 M                    23.7 G               traffic (on the order of tens of millions of queries per day)
+          LATS                67.7 M                    13.0 G
+        ShareGPT               7.6 M                     1.5 G               becomes gigawatt-scale once per-query energy exceeds ∼100
+ 70B    Reflexion              1.0 G                   198.9 G               Wh, a threshold representative of current agentic workloads.
+          LATS               471.5 M                    90.5 G
+                                                                                If we were to scale the same per-query figures to Google’s
+                                                                             13.7 billion daily searches, the power numbers would raise
+                                                                             single-turn ShareGPT (70B) to 1.5 GW and Reflexion (70B)
+181.4 million daily active users (DAU). Assuming the conser-
+                                                                             to nearly 200 GW, far beyond any announced datacenter
+vative estimate of 71.4 million DAU and that each user submits
+                                                                             project (e.g., Meta’s recently announced 5 GW AI datacenter
+just a “single” agentic query per day, Reflexion’s daily GPU
+                                                                             Hyperion is scheduled for deployment in 2030 [74]) and
+energy consumption would be approximately 2.97 GWh for
+                                                                             exceeding the power budgets of many national grids. To
+the 8B model and 24.89 GWh for the 70B model. Although our
+                                                                             put this number into perspective, a 200 GW is almost half
+analysis does not account for LLM request batching [32], [98],
+                                                                             of the entire U.S. grid’s average load (which amounts to
+which can amortize execution overheads, the estimate remains
+                                                                             4,178×103 GWh/(365×24 hours)= 476.9 GW [81]), a scale
+conservative for three reasons: (1) it represents a lower-bound
+                                                                             usually discussed only for nation-wide decarbonization plans,
+based on the conservative DAU estimate of 71.4 million and
+                                                                             not for a single industry or technology, one that fundamentally
+assumes just one query per user, despite accelerating adoption
+                                                                             reshapes generation, transmission, and sustainability planning.
+and increasing user demand, (2) it includes only GPU energy,
+omitting overheads from CPU, memory, networking, storage,                       Sustainability challenges of agentic test-time scaling.
+and cooling, and (3) even the larger 70B model considered in                 Collectively, our findings show that AI agent performance
+our study is orders of magnitude smaller than today’s large-                 does not scale proportionally with the associated compute,
+scale LLMs, which now reach hundreds of billions to trillions                energy, and power costs. Once accuracy saturates, additional
+of parameters [3], [13], [18], [46].                                         test-time scaling yields diminishing returns while imposing
+   Even under these modest assumptions, the projected demand                 substantial system-level burdens. This cost inefficiency is not
+rivals the daily electricity consumption of Seattle and its                  merely theoretical; it poses concrete constraints on real-world
+surrounding area (24.8 GWh) [68]. As AI agents become                        deployments. For instance, OpenAI’s Deep Research [57],
+increasingly embedded in everyday applications, their query                  designed for complex multi-step reasoning, can take up to
+volume could approach, or exceed, that of traditional search                 30 minutes per request [56]. To keep infrastructure costs
+engines. For instance, Google Search processes over 13.7                     manageable, OpenAI limits usage to 25 runs every 30 days for
+billion queries per day [50], roughly 192× the 71.4 million                  ChatGPT Plus users [56]. These limits highlight the financial
+agentic queries assumed above. If this growth in user base                   and computational challenges of sustaining AI systems that
+and usage persists, AI infrastructure demand could rise dra-                 rely heavily on intensive test-time computation.
+matically, potentially exceeding sustainable limits and under-                  Based on these findings, we argue that building scalable
+scoring the significant challenges posed by test-time scaling.               and sustainable AI agents requires moving away from un-
+   Datacenter-wide power demands. We now move on to                          constrained test-time scaling. Instead, AI agents should be
+estimating the datacenter-wide power requirements to sustain                 designed with compute-aware agentic workflows that deliver
+the aforementioned AI service demands, assuming today’s                      strong performance through efficient inference, rather than
+(ChatGPT’s 71.4 million queries per day, assuming the conser-                single-handedly relying on extended reasoning depth.
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+                        VII. D ISCUSSION                                    behavioral flexibility, their system-level implications remain
+   Future directions for sustainable AI agent serving.                      underexplored. This work provides the first comprehensive
+While the primary objective of our work is to raise aware-                  analysis of representative AI agents, offering insights into the
+ness within the community about the broader system-level                    efficiency and scalability of agentic systems.
+implications of deploying agents—particularly the immense                      AI agent interfaces for tool-augmented reasoning. In
+infrastructural costs associated with them—we also highlight                parallel with behavioral advancements in AI agents, recent
+several promising directions that we believe will be critical               efforts have focused on standardizing AI agent APIs and
+for sustainably serving agentic systems. First, conventional                protocols to facilitate broader integration and deployment.
+model-level optimizations such as quantization [19], [38], [89],            OpenAI’s function-calling interface [54] defines a structured
+distillation [24], [26], [49], [77], sparse architectures [17],             mechanism for API invocation, enabling agents to interact with
+[37], [99], and adaptive model routing [16], [59] will remain               tools in a verifiable and consistent manner. Anthropic’s Model-
+essential for reducing computational and memory demands.                    Context-Protocol (MCP) [5] further formalizes how agents
+For example, constructing multi-agent systems that combine a                manage context and interact with tools. Google’s Agent-to-
+heterogeneous mix of small and large language models (SLMs                  Agent (A2A) protocol [21] complements these efforts by spec-
+and LLMs), and dynamically selecting the appropriate model                  ifying a standard for multi-agent communication. Although
+depending on the agent’s role and task significance (e.g.,                  these contributions primarily standardize the interfaces and
+planning vs. acting), can substantially reduce both operational             protocols for agent interaction, our work takes an orthogonal
+cost and latency—an approach also advocated by [6]. Second,                 system-level perspective, uncovering the AI infrastructural
+for AI agents that are not strictly latency-sensitive, carbon-              challenges posed by agentic workloads under test-time scaling.
+aware computing [22], [35], [65] that migrates parts of the                    System-level optimization of AI agents. LLMCom-
+execution to compute instances incurring lower carbon inten-                piler [31], Alto [67], and Ayo [78] reduce inference latency
+sity or electricity costs can provide both environmental and                by enabling pipelined and parallel execution across reasoning
+economic benefits. Finally, adaptive scaling strategies [64],               steps. Autellix [43] optimizes latency through queue-aware
+[76], [91] that dynamically adjust compute resources based                  scheduling, while AI Metropolis [90] and Murakkab [9] im-
+on task difficulty and importance enable agents to allocate                 prove multi-agent coordination and resource isolation. While
+GPU resources more efficiently, avoiding over-provisioning                  these works focus on optimizing specific components such as
+while maintaining quality of service. Together, these directions            scheduling or execution flow, our study provides a broader
+highlight exciting opportunities for improving the efficiency,              characterization of infrastructural behaviors and efficiency
+sustainability, and scalability of serving AI agent workloads.              trade-offs across diverse AI agents at scale.
+   Agent serving under SLA constraints. The industry has                       LLM inference optimization techniques. The AI commu-
+only recently begun exploring agentic systems, so there are                 nity has only recently begun exploring agents, making it both
+currently no well-established or widely accepted SLA stan-                  unclear and highly challenging to determine the most effective
+dards. Consequently, we did not (and realistically could not)               methodology for applying various LLM-focused optimization
+conduct our analysis with respect to a specific SLA target. The             techniques to agentic systems. To maintain clarity and gener-
+goal of this work is to characterize energy–efficiency trade-offs           ality in our analysis, this paper focuses on fundamental and
+across diverse agent configurations, rather than to optimize for            widely adopted LLM inference optimizations that are readily
+a fixed latency constraint. Considering the current direction of            available in existing AI serving frameworks [32], [100]. A
+agentic system development, agents are generally allowed to                 comprehensive exploration of all the latest LLM optimizations
+spend additional computation time to achieve higher reasoning               in the literature for agentic systems is beyond the scope of
+quality. Our analysis intentionally examines this behavior to               this paper, so we provide a summary of recent LLM inference
+highlight the inefficiency of unrestricted test-time scaling and            optimizations and discuss their applicability to agents below.
+to motivate more energy-aware SLA design in future agent                       In terms of KV cache management, hierarchical
+deployments. A detailed exploration of efficient agent serving              caching [20], [29], [33] and non-prefix KV cache reuse [93]
+under SLA constraints is left as future work.                               approaches extend the naive prefix caching, enabling more
+                                                                            efficient KV cache reuse. Token pruning [1], [23], [42] or
+                    VIII. R ELATED W ORK                                    KV cache compression [40], [41], or model architectural
+   AI agent workflows. Recent advances in LLM-based                         improvement like grouped-query attention [4] and multi-head
+AI agents have introduced diverse workflows that combine                    attention [39] reduces the memory footprint of the KV cache,
+language-based reasoning with external tool use. Single-agent               which will be especially helpful for agent workloads with
+frameworks (e.g., ReAct [96], Reflexion [72], LATS [102],                   long contexts. Regarding decoding, Speculative decoding [34]
+LLMCompiler [31]) enhance decision-making through itera-                    predicts multiple candidate tokens and validates in parallel
+tive reasoning, tool execution, and reflection. Multi-agent sys-            to reduce decoding latency. In agents, speculative decoding
+tems, such as CAMEL [36] and AutoGen [87], further extend                   can potentially become effective as their reasoning often
+these capabilities by structuring task execution, communica-                generates predictable schema patterns (e.g., JSON structures
+tion, and coordinated behaviors among multiple agents. While                or function arguments), which will increase the acceptance
+these workflows substantially improve their capabilities and                rate of speculative branches and improve overall decoding
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+throughput. Prefill-decode disaggregation [52], [61], [101]                       [5] Anthropic, “Model Context Protocol (MCP),” 2024. [Online].
+allows flexible and efficient resource allocation by decoupling                       Available: https://docs.anthropic.com/en/docs/agents-and-tools/mcp/
+                                                                                  [6] P. Belcak, G. Heinrich, S. Diao, Y. Fu, X. Dong, S. Muralidharan,
+the compute-intensive prefill phase from the memory-bound                             Y. C. Lin, and P. Molchanov, “Small language models are the future
+decode phase. For agents with long-context that incur                                 of agentic ai,” arXiv preprint arXiv:2506.02153, 2025.
+substantial prefill computation load, disaggregation mitigates                    [7] M. Besta, N. Blach, A. Kubicek, R. Gerstenberger, M. Podstawski,
+interference between prefill and decoding workloads, leading                          L. Gianinazzi, J. Gajda, T. Lehmann, H. Niewiadomski, P. Nyczyk,
+                                                                                      and T. Hoefler, “Graph of thoughts: solving elaborate problems with
+to more stable performance and improved overall efficiency.                           large language models,” in Proceedings of the AAAI Conference on
+                                                                                      Artificial Intelligence, 2024.
+                          IX. C ONCLUSION                                         [8] T. Cai, Y. Li, Z. Geng, H. Peng, J. D. Lee, D. Chen, and T. Dao,
+                                                                                      “Medusa: Simple llm inference acceleration framework with multiple
+   This paper provides the first system-level characterization of                     decoding heads,” in Proceedings of the 41st International Conference
+AI agents from an AI infrastructure perspective. While these                          on Machine Learning, ser. ICML’24, 2024.
+LLM-based agents demonstrate powerful reasoning capabil-                          [9] G. I. Chaudhry, E. Choukse, Íñigo Goiri, R. Fonseca, A. Belay, and
+                                                                                      R. Bianchini, “Towards Resource-Efficient Compound AI Systems,” in
+ities, they also introduce substantial energy overheads that                          arxiv.org, 2025.
+are orders of magnitude higher than conventional single-turn                     [10] M. Chen, J. Tworek, H. Jun, Q. Yuan, H. P. de Oliveira Pinto, J. Kaplan,
+LLM inference. Our analysis shows that common agent design                            H. Edwards, Y. Burda, N. Joseph, G. Brockman, A. Ray, R. Puri,
+                                                                                      G. Krueger, M. Petrov, H. Khlaaf, G. Sastry, P. Mishkin, B. Chan,
+patterns incur heavy latency penalties and infrastructure costs,                      S. Gray, N. Ryder, M. Pavlov, A. Power, L. Kaiser, M. Bavarian,
+especially when deployed at scale. Moreover, test-time scaling                        C. Winter, P. Tillet, F. P. Such, D. Cummings, M. Plappert, F. Chantzis,
+yields sharply diminishing returns in accuracy, challenging the                       E. Barnes, A. Herbert-Voss, W. H. Guss, A. Nichol, A. Paino, N. Tezak,
+                                                                                      J. Tang, I. Babuschkin, S. Balaji, S. Jain, W. Saunders, C. Hesse,
+cost-effectiveness of current agent implementations.                                  A. N. Carr, J. Leike, J. Achiam, V. Misra, E. Morikawa, A. Rad-
+   These findings underscore an urgent need to rethink agent                          ford, M. Knight, M. Brundage, M. Murati, K. Mayer, P. Welinder,
+architecture and workflow design. Rather than relying on                              B. McGrew, D. Amodei, S. McCandlish, I. Sutskever, and W. Zaremba,
+                                                                                      “Evaluating Large Language Models Trained on Code,” in arxiv.org,
+brute-force test-time scaling, future agents should adopt                             2021.
+compute-aware reasoning strategies that optimize accuracy                        [11] R. Coulom, “Efficient selectivity and backup operators in monte-carlo
+per unit cost. This includes smarter scheduling, caching,                             tree search,” in International conference on computers and games.
+                                                                                      Springer, 2006.
+prompt engineering, and hybrid scaling approaches that adapt
+                                                                                 [12] A. de Vries, “The growing energy footprint of artificial intelligence,”
+to deployment constraints. By exposing the hidden costs of                            Joule, 2023. [Online]. Available: https://www.sciencedirect.com/
+agentic reasoning and offering actionable insights into their                         science/article/pii/S2542435123003653
+infrastructure impact, we hope this work informs future system                   [13] DeepSeek-AI, D. Guo, D. Yang, H. Zhang, J. Song, R. Zhang, R. Xu,
+                                                                                      Q. Zhu, S. Ma, P. Wang, X. Bi, X. Zhang, X. Yu, Y. Wu, Z. F. Wu,
+and algorithm co-design for scalable and sustainable AI agents.                       Z. Gou, Z. Shao, Z. Li, Z. Gao, A. Liu, B. Xue, B. Wang, B. Wu,
+                                                                                      B. Feng, C. Lu, C. Zhao, C. Deng, C. Zhang, C. Ruan, D. Dai,
+                         ACKNOWLEDGMENT                                               D. Chen, D. Ji, E. Li, F. Lin, F. Dai, F. Luo, G. Hao, G. Chen,
+                                                                                      G. Li, H. Zhang, H. Bao, H. Xu, H. Wang, H. Ding, H. Xin, H. Gao,
+   This work was partly supported by Institute of Information                         H. Qu, H. Li, J. Guo, J. Li, J. Wang, J. Chen, J. Yuan, J. Qiu,
+& Communications Technology Planning & Evaluation(IITP)                               J. Li, J. L. Cai, J. Ni, J. Liang, J. Chen, K. Dong, K. Hu, K. Gao,
+                                                                                      K. Guan, K. Huang, K. Yu, L. Wang, L. Zhang, L. Zhao, L. Wang,
+grant funded by the Korea government(MSIT) (No.RS-2024-                               L. Zhang, L. Xu, L. Xia, M. Zhang, M. Zhang, M. Tang, M. Li,
+00438851, (SW Starlab) High-performance Privacy-preserving                            M. Wang, M. Li, N. Tian, P. Huang, P. Zhang, Q. Wang, Q. Chen,
+Machine Learning System and System Software), (No.RS-                                 Q. Du, R. Ge, R. Zhang, R. Pan, R. Wang, R. J. Chen, R. L. Jin,
+                                                                                      R. Chen, S. Lu, S. Zhou, S. Chen, S. Ye, S. Wang, S. Yu, S. Zhou,
+2024-00395134, DPU-Centric Datacenter Architecture for                                S. Pan, S. S. Li, S. Zhou, S. Wu, S. Ye, T. Yun, T. Pei, T. Sun,
+Next-Generation AI Devices), (No.RS-2025-02264029, Im-                                T. Wang, W. Zeng, W. Zhao, W. Liu, W. Liang, W. Gao, W. Yu,
+plementation and Validation of an AI Semiconductor-Based                              W. Zhang, W. L. Xiao, W. An, X. Liu, X. Wang, X. Chen, X. Nie,
+                                                                                      X. Cheng, X. Liu, X. Xie, X. Liu, X. Yang, X. Li, X. Su, X. Lin,
+Data Center Composable Cluster Infrastructure, 30%), and by                           X. Q. Li, X. Jin, X. Shen, X. Chen, X. Sun, X. Wang, X. Song,
+Samsung Research Funding Center of Samsung Electronics                                X. Zhou, X. Wang, X. Shan, Y. K. Li, Y. Q. Wang, Y. X. Wei,
+(SRFC-IT2402-03). Minsoo Rhu is the corresponding author.                             Y. Zhang, Y. Xu, Y. Li, Y. Zhao, Y. Sun, Y. Wang, Y. Yu, Y. Zhang,
+                                                                                      Y. Shi, Y. Xiong, Y. He, Y. Piao, Y. Wang, Y. Tan, Y. Ma, Y. Liu,
+                                                                                      Y. Guo, Y. Ou, Y. Wang, Y. Gong, Y. Zou, Y. He, Y. Xiong, Y. Luo,
+                              R EFERENCES                                             Y. You, Y. Liu, Y. Zhou, Y. X. Zhu, Y. Xu, Y. Huang, Y. Li,
+  [1] M. Adnan, A. Arunkumar, G. Jain, P. J. Nair, I. Soloveychik, and                Y. Zheng, Y. Zhu, Y. Ma, Y. Tang, Y. Zha, Y. Yan, Z. Z. Ren,
+      P. Kamath, “Keyformer: Kv cache reduction through key tokens                    Z. Ren, Z. Sha, Z. Fu, Z. Xu, Z. Xie, Z. Zhang, Z. Hao, Z. Ma,
+      selection for efficient generative inference,” in Proceedings of Machine        Z. Yan, Z. Wu, Z. Gu, Z. Zhu, Z. Liu, Z. Li, Z. Xie, Z. Song,
+      Learning and Systems, 2024.                                                     Z. Pan, Z. Huang, Z. Xu, Z. Zhang, and Z. Zhang, “Deepseek-r1:
+  [2] A. Agrawal, N. Kedia, A. Panwar, J. Mohan, N. Kwatra, B. Gulavani,              Incentivizing reasoning capability in llms via reinforcement learning,”
+      A. Tumanov, and R. Ramjee, “Taming Throughput-Latency tradeoff                  2025. [Online]. Available: https://arxiv.org/abs/2501.12948
+      in LLM inference with Sarathi-Serve,” in Proceedings of the USENIX         [14] Dell’Oro Group, “Data Center Capex to Surpass $1 Trillion by 2029,
+      Symposium on Operating Systems Design and Implementation (OSDI),                According to Dell’Oro Group,” 2025. [Online]. Available: https://www.
+      2024.                                                                           delloro.com/news/data-center-capex-to-surpass-1-trillion-by-2029/
+  [3] M. AI, “Kimi k2: Open agentic intelligence,” https://moonshotai.github.    [15] DemandSage, “Chatgpt statistics and facts (2024-2025),” 2025.
+      io/Kimi-K2/, 2025.                                                              [Online]. Available: https://www.demandsage.com/chatgpt-statistics/
+  [4] J. Ainslie, J. Lee-Thorp, M. de Jong, Y. Zemlyanskiy, F. Lebron, and       [16] D. Ding, A. Mallick, S. Zhang, C. Wang, D. Madrigal, M. D. C. H.
+      S. Sanghai, “GQA: Training generalized multi-query transformer mod-             Garcia, M. Xia, L. V. Lakshmanan, Q. Wu, and V. Rühle, “Best-route:
+      els from multi-head checkpoints,” in Proceedings of the Conference on           Adaptive llm routing with test-time optimal compute,” arXiv preprint
+      Empirical Methods in Natural Language Processing (EMNLP), 2023.                 arXiv:2506.22716, 2025.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+[17] W. Fedus, B. Zoph, and N. Shazeer, “Switch transformers: Scaling to         [37] W. Liang, L. Yu, L. Luo, S. Iyer, N. Dong, C. Zhou, G. Ghosh,
+     trillion parameter models with simple and efficient sparsity,” Journal           M. Lewis, W.-t. Yih, L. Zettlemoyer et al., “Mixture-of-transformers:
+     of Machine Learning Research, vol. 23, no. 120, pp. 1–39, 2022.                  A sparse and scalable architecture for multi-modal foundation models,”
+[18] Fello AI, “Gemini 1.5 pro: All you need to know                                  arXiv preprint arXiv:2411.04996, 2024.
+     about this near-perfect ai model,” 2024. [Online]. Avail-                   [38] J. Lin, J. Tang, H. Tang, S. Yang, W.-M. Chen, W.-C. Wang, G. Xiao,
+     able: https://felloai.com/2024/09/google-gemini-pro-1-5-all-you-need-            X. Dang, C. Gan, and S. Han, “Awq: Activation-aware weight quan-
+     to-know-about-this-near-perfect-ai-model/                                        tization for on-device llm compression and acceleration,” Proceedings
+[19] E. Frantar, S. Ashkboos, T. Hoefler, and D. Alistarh, “Gptq: Accu-               of machine learning and systems, vol. 6, pp. 87–100, 2024.
+     rate post-training quantization for generative pre-trained transformers,”   [39] A. Liu, B. Feng, B. Wang, B. Wang, B. Liu, C. Zhao, C. Dengr,
+     arXiv preprint arXiv:2210.17323, 2022.                                           C. Ruan, D. Dai, D. Guo et al., “Deepseek-v2: A strong, economi-
+[20] B. Gao, Z. He, P. Sharma, Q. Kang, D. Jevdjic, J. Deng, X. Yang,                 cal, and efficient mixture-of-experts language model,” arXiv preprint
+     Z. Yu, and P. Zuo, “Cost-Efficient large language model serving                  arXiv:2405.04434, 2024.
+     for multi-turn conversations with CachedAttention,” in 2024 USENIX          [40] A. Liu, J. Liu, Z. Pan, Y. He, G. Haffari, and B. Zhuang, “Minicache:
+     Annual Technical Conference (USENIX ATC 24). Santa Clara, CA:                    Kv cache compression in depth dimension for large language models,”
+     USENIX Association, Jul. 2024, pp. 111–126. [Online]. Available:                 in Advances in Neural Information Processing Systems.             Curran
+     https://www.usenix.org/conference/atc24/presentation/gao-bin-cost                Associates, Inc., 2024.
+[21] Google, “Announcing the Agent2Agent Protocol (A2A),” 2025.                  [41] Y. Liu, H. Li, Y. Cheng, S. Ray, Y. Huang, Q. Zhang, K. Du, J. Yao,
+     [Online]. Available: https://developers.googleblog.com/en/a2a-a-new-             S. Lu, G. Ananthanarayanan, M. Maire, H. Hoffmann, A. Holtzman,
+     era-of-agent-interoperability/                                                   and J. Jiang, “Cachegen: Kv cache compression and streaming for fast
+[22] V. U. Gsteiger, P. H. Long, Y. Sun, P. Javanrood, and M. Shahrad,                large language model serving,” in Proceedings of the ACM SIGCOMM
+     “Caribou: Fine-grained geospatial shifting of serverless applications for        2024 Conference, ser. ACM SIGCOMM ’24, 2024.
+     sustainability,” in Proceedings of the ACM SIGOPS 30th Symposium            [42] Z. Liu, J. Wang, T. Dao, T. Zhou, B. Yuan, Z. Song, A. Shrivastava,
+     on Operating Systems Principles, 2024, pp. 403–420.                              C. Zhang, Y. Tian, C. Ré, and B. Chen, “Deja vu: contextual sparsity
+[23] X. Gu, T. Pang, C. Du, Q. Liu, F. Zhang, C. Du, Y. Wang, and M. Lin,             for efficient llms at inference time,” in Proceedings of the 40th
+     “When attention sink emerges in language models: An empirical view,”             International Conference on Machine Learning, ser. ICML’23, 2023.
+     arXiv preprint arXiv:2410.10781, 2024.                                      [43] M. Luo, X. Shi, C. Cai, T. Zhang, J. Wong, Y. Wang, C. Wang,
+[24] D. Guo, D. Yang, H. Zhang, J. Song, R. Zhang, R. Xu, Q. Zhu, S. Ma,              Y. Huang, Z. Chen, J. E. Gonzalez, and I. Stoica, “Autellix: An efficient
+     P. Wang, X. Bi et al., “Deepseek-r1: Incentivizing reasoning capability          serving engine for llm agents as general programs,” 2025.
+     in llms via reinforcement learning,” arXiv preprint arXiv:2501.12948,       [44] Meta, “Llama-3.1-70B-Instruct,” 2025. [Online]. Available: https:
+     2025.                                                                            //huggingface.co/meta-llama/Llama-3.1-70B-Instruct
+[25] D. Hendrycks, C. Burns, S. Kadavath, A. Arora, S. Basart, E. Tang,          [45] ——, “Llama-3.1-8B-Instruct,” 2025. [Online]. Available: https:
+     D. Song, and J. Steinhardt, “Measuring Mathematical Problem Solving              //huggingface.co/meta-llama/Llama-3.1-8B-Instruct
+     With the MATH Dataset,” in Proceedings of the International Confer-         [46] Meta AI, “Llama 4: Advancing multimodal intelligence at scale,” https:
+     ence on Neural Information Processing Systems (NeurIPS), 2021.                   //ai.meta.com/blog/llama-4-multimodal-intelligence/, 2025.
+[26] G. Hinton, O. Vinyals, and J. Dean, “Distilling the knowledge in a          [47] MLPerf, “MLPerf Inference: Datacenter.” [Online]. Available: https:
+     neural network,” arXiv preprint arXiv:1503.02531, 2015.                          //mlcommons.org/benchmarks/inference-datacenter/
+[27] IBM, “What is a hyperscale data center?” 2024. [Online]. Available:         [48] N. Muennighoff, Z. Yang, W. Shi, X. L. Li, L. Fei-Fei,
+     https://www.ibm.com/think/topics/hyperscale-data-center                          H. Hajishirzi, L. Zettlemoyer, P. Liang, E. Candès, and T. Hashimoto,
+[28] Industry Week, “The Success of US Chip Manufacturing                             “s1: Simple test-time scaling,” 2025. [Online]. Available: https:
+     Hinges       on       Our     Electric    Grid,”      2024.     [Online].        //arxiv.org/abs/2501.19393
+     Available:               https://www.industryweek.com/technology-and-
+                                                                                 [49] S. Muralidharan, S. Turuvekere Sreenivas, R. Joshi, M. Chochowski,
+     iiot/energy/article/21284413/the-success-of-us-chip-manufacturing-
+                                                                                      M. Patwary, M. Shoeybi, B. Catanzaro, J. Kautz, and P. Molchanov,
+     hinges-on-our-electric-grid
+                                                                                      “Compact language models via pruning and knowledge distillation,”
+[29] J. Jeong and J. Ahn, “Accelerating llm serving for multi-turn dialogues
+                                                                                      Advances in Neural Information Processing Systems, vol. 37, pp.
+     with efficient resource management,” in Proceedings of the 30th ACM
+                                                                                      41 076–41 102, 2024.
+     International Conference on Architectural Support for Programming
+                                                                                 [50] Naveen Kumar, “How Many Google Searches Per Day [2025
+     Languages and Operating Systems, Volume 2, 2025.
+                                                                                      Data],” 2025. [Online]. Available: https://www.demandsage.com/
+[30] S. Kim, S. Moon, R. Tabrizi, N. Lee, M. Mahoney, K. Keutzer, and
+                                                                                      google-search-statistics/
+     A. Gholami, “LLMCompiler: An LLM Compiler for Parallel Function
+                                                                                 [51] NVIDIA, “NVIDIA DCGM Documentation.” [Online]. Available:
+     Calling,” 2023. [Online]. Available: https://github.com/SqueezeAILab/
+                                                                                      https://docs.nvidia.com/datacenter/dcgm/latest/index.html
+     LLMCompiler
+[31] S. Kim, S. Moon, R. Tabrizi, N. Lee, M. W. Mahoney, K. Keutzer,             [52] ——, “NVIDIA Dynamo Platform.” [Online]. Available: https:
+     and A. Gholami, “An LLM Compiler for Parallel Function Calling,”                 //developer.nvidia.com/dynamo
+     in Proceedings of the International Conference on Machine Learning          [53] OpenAI, “Introducing ChatGPT,” 2022. [Online]. Available: https:
+     (ICML), 2024.                                                                    //openai.com/index/chatgpt/
+[32] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. Gonzalez,       [54] OpenAI, “OpenAI Function Calling,” 2023. [Online]. Available: https:
+     H. Zhang, and I. Stoica, “Efficient Memory Management for Large                  //platform.openai.com/docs/guides/function-calling?api-mode=chat
+     Language Model Serving with PagedAttention,” in Proceedings of the          [55] ——, “Announcing The Stargate Project,” 2025. [Online]. Available:
+     ACM Symposium on Operating System Principles (SOSP), 2023.                       https://openai.com/index/announcing-the-stargate-project/
+[33] W. Lee, J. Lee, J. Seo, and J. Sim, “InfiniGen: Efficient generative        [56] ——, “Deep Research FAQ,” 2025. [Online]. Available: https:
+     inference of large language models with dynamic KV cache manage-                 //help.openai.com/en/articles/10500283
+     ment,” in 18th USENIX Symposium on Operating Systems Design and             [57] ——, “Introducing Deep Research,” 2025. [Online]. Available:
+     Implementation (OSDI 24), 2024.                                                  https://openai.com/index/introducing-deep-research/
+[34] Y. Leviathan, M. Kalman, and Y. Matias, “Fast inference from                [58] OpenAI, “New funding to build towards AGI,” 2025. [Online].
+     transformers via speculative decoding,” in Proceedings of the 40th               Available: https://openai.com/index/march-funding-updates/
+     International Conference on Machine Learning, 2023.                         [59] P. Panda, R. Magazine, C. Devaguptapu, S. Takemori, and V. Sharma,
+[35] B. Li, S. Samsi, V. Gadepally, and D. Tiwari, “Clover: Toward                    “Adaptive llm routing under budget constraints,” arXiv preprint
+     sustainable ai with carbon-aware machine learning inference service,”            arXiv:2508.21141, 2025.
+     in Proceedings of the International Conference for High Performance         [60] M. Paris, “Chatgpt hits 1 billion users, openai ceo
+     Computing, Networking, Storage and Analysis, 2023, pp. 1–15.                     says, doubled in weeks,” April 2025. [Online]. Avail-
+[36] G. Li, H. A. A. K. Hammoud, H. Itani, D. Khizbullin, and B. Ghanem,              able: https://www.forbes.com/sites/martineparis/2025/04/12/chatgpt-
+     “CAMEL: Communicative agents for ”mind” exploration of large lan-                hits-1-billion-users-openai-ceo-says-doubled-in-weeks/
+     guage model society,” in Proceedings of the International Conference        [61] P. Patel, E. Choukse, C. Zhang, A. Shah, Í. Goiri, S. Maleki, and
+     on Neural Information Processing Systems (NeurIPS), 2023.                        R. Bianchini, “Splitwise: Efficient generative llm inference using phase
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+     splitting,” in Proceedings of the International Symposium on Computer         [80] B. Tran and P. Attorney, “Semiconductor Manufacturing Energy
+     Architecture (ISCA), 2024.                                                         Consumption: How Green Is the Chip Industry?” 2025. [Online]. Avail-
+[62] Pranshu Verma and Shelly Tan, “A bottle of water per email:                        able: https://patentpc.com/blog/semiconductor-manufacturing-energy-
+     the hidden environmental costs of using AI chatbots,” 2024.                        consumption-how-green-is-the-chip-industry-latest-stats
+     [Online]. Available: https://www.washingtonpost.com/technology/               [81] U.S. Energy Information Administration (EIA), “Electricity explained -
+     2024/09/18/energy-ai-use-electricity-water-data-centers/                           Electricity generation, capacity, and sales in the United States,” 2024.
+[63] O. Press, M. Zhang, S. Min, L. Schmidt, N. A. Smith, and M. Lewis,                 [Online]. Available: https://www.eia.gov/energyexplained/electricity/
+     “Measuring and narrowing the compositionality gap in language                      electricity-in-the-us-generation-capacity-and-sales.php
+     models,” in The 2023 Conference on Empirical Methods in Natural               [82] vLLM, “vLLM Documentation.” [Online]. Available: https://docs.
+     Language Processing, 2023.                                                         vllm.ai/en/stable/
+[64] Y. Qu, M. Y. Yang, A. Setlur, L. Tunstall, E. E. Beeching, R. Salakhut-       [83] X. Wang, J. Wei, D. Schuurmans, Q. Le, E. Chi, S. Narang, A. Chowd-
+     dinov, and A. Kumar, “Optimizing test-time compute via meta rein-                  hery, and D. Zhou, “Self-Consistency Improves Chain of Thought
+     forcement fine-tuning,” arXiv preprint arXiv:2503.07572, 2025.                     Reasoning in Language Models,” in Proceedings of the International
+[65] A. Radovanović, R. Koningstein, I. Schneider, B. Chen, A. Duarte,                 Conference on Learning Representations (ICLR), 2023.
+     B. Roy, D. Xiao, M. Haridasan, P. Hung, N. Care et al., “Carbon-aware         [84] J. Wei, X. Wang, D. Schuurmans, M. Bosma, B. Ichter, F. Xia,
+     computing for datacenters,” IEEE Transactions on Power Systems,                    E. H. Chi, Q. V. Le, and D. Zhou, “Chain-of-thought prompting
+     vol. 38, no. 2, pp. 1270–1280, 2022.                                               elicits reasoning in large language models,” in Proceedings of the 36th
+[66] Reuters, “Meta to invest $10 billion for Louisiana data center,” 2024.             International Conference on Neural Information Processing Systems,
+     [Online]. Available: https://www.reuters.com/technology/meta-invest-               ser. NIPS ’22. Red Hook, NY, USA: Curran Associates Inc., 2022.
+     10-billion-louisiana-data-center-2024-12-04/                                  [85] Wikipedia contributors, “Wikipedia api,” 2025. [Online]. Available:
+[67] K. Santhanam, D. Raghavan, M. S. Rahman, T. Venkatesh, N. Kunjal,                  https://www.mediawiki.org/wiki/API:Main page
+     P. Thaker, P. Levis, and M. Zaharia, “ALTO: An Efficient Network              [86] Wolfram Alpha LLC, “Wolfram alpha apis,” 2025. [Online]. Available:
+     Orchestrator for Compound AI Systems,” in Proceedings of the 4th                   https://products.wolframalpha.com/api/
+     Workshop on Machine Learning and Systems, 2024.                               [87] Q. Wu, G. Bansal, J. Zhang, Y. Wu, B. Li, E. Zhu, L. Jiang, X. Zhang,
+[68] Seattle City Light, “Fingertip Facts,” 2024. [Online]. Available: https://         S. Zhang, J. Liu, A. H. Awadallah, R. W. White, D. Burger, and
+     www.seattle.gov/documents/Departments/CityLight/FingertipFacts.pdf                 C. Wang, “Autogen: Enabling next-gen LLM applications via multi-
+[69] SemiAnalysis, “The Inference Cost Of Search Disruption – Large                     agent conversations,” in First Conference on Language Modeling
+     Language Model Cost Analysis,” 2023. [Online]. Available: https://                 (CoLM), 2024.
+     semianalysis.com/2023/02/09/the-inference-cost-of-search-disruption/          [88] xAI Colossus, “Colossus — xAI,” 2025. [Online]. Available:
+[70] ShareGPT Team, “Sharegpt,” 2023. [Online]. Available: https:                       https://x.ai/colossus
+     //sharegpt.com                                                                [89] G. Xiao, J. Lin, M. Seznec, H. Wu, J. Demouth, and S. Han,
+[71] N. Shinn, F. Cassano, E. Berman, A. Gopinath, K. Narasimhan,                       “Smoothquant: Accurate and efficient post-training quantization for
+     and S. Yao, “Reflexion: Language Agents with Verbal Reinforcement                  large language models,” in International conference on machine learn-
+     Learning,” 2023. [Online]. Available: https://github.com/noahshinn/                ing. PMLR, 2023, pp. 38 087–38 099.
+     reflexion                                                                     [90] Z. Xie, H. Kang, Y. Sheng, T. Krishna, K. Fatahalian, and C. Kozyrakis,
+[72] N. Shinn, F. Cassano, A. Gopinath, K. Narasimhan, and S. Yao,                      “AI Metropolis: Scaling Large Language Model-Based Multi-Agent
+     “Reflexion: Language Agents with Verbal Reinforcement Learning,”                   Simulation with Out-of-Order Execution,” in arxiv.org, 2024.
+     in Proceedings of the International Conference on Neural Information          [91] W. Yang, S. Ma, Y. Lin, and F. Wei, “Towards thinking-optimal
+     Processing Systems (NeurIPS), 2023.                                                scaling of test-time compute for llm reasoning,” arXiv preprint
+[73] Similarweb,        “Chatgpt.com         website     performance          -         arXiv:2502.18080, 2025.
+     june        2025,”      2025.       [Online].      Available:      https:     [92] Z. Yang, P. Qi, S. Zhang, Y. Bengio, W. W. Cohen, R. Salakhutdinov,
+     //pro.similarweb.com/#/digitalsuite/websiteanalysis/overview/website-              and C. D. Manning, “HotpotQA: A Dataset for Diverse, Explainable
+     performance/*/999/1m?webSource=Total&key=chatgpt.com                               Multi-hop Question Answering,” in Proceedings of the Conference on
+[74] J. Singh and A. Soni, “Meta’s Zuckerberg pledges hundreds of                       Empirical Methods in Natural Language Processing (EMNLP), 2018.
+     billions for AI data centers in superintelligence push,” 2025. [On-           [93] J. Yao, H. Li, Y. Liu, S. Ray, Y. Cheng, Q. Zhang, K. Du, S. Lu, and
+     line]. Available: https://www.reuters.com/business/zuckerberg-says-                J. Jiang, “Cacheblend: Fast large language model serving for rag with
+     meta-will-invest-hundreds-billions-superintelligence-2025-07-14/                   cached knowledge fusion,” in Proceedings of the Twentieth European
+[75] C. Snell, J. Lee, K. Xu, and A. Kumar, “Scaling llm test-time compute              Conference on Computer Systems, ser. EuroSys ’25, 2025.
+     optimally can be more effective than scaling model parameters,” 2024.         [94] S. Yao, H. Chen, J. Yang, and K. Narasimhan, “WebShop: To-
+     [Online]. Available: https://arxiv.org/abs/2408.03314                              wards Scalable Real-World Web Interaction with Grounded Language
+[76] ——, “Scaling llm test-time compute optimally can be more effective                 Agents,” in Proceedings of the International Conference on Neural
+     than scaling model parameters,” arXiv preprint arXiv:2408.03314,                   Information Processing Systems (NeurIPS), 2022.
+     2024.                                                                         [95] S. Yao, D. Yu, J. Zhao, I. Shafran, T. Griffiths, Y. Cao, and
+[77] S. T. Sreenivas, S. Muralidharan, R. Joshi, M. Chochowski, A. S.                   K. Narasimhan, “Tree of Thoughts: Deliberate Problem Solving with
+     Mahabaleshwarkar, G. Shen, J. Zeng, Z. Chen, Y. Suhara, S. Diao et al.,            Large Language Models,” in Proceedings of the International Confer-
+     “Llm pruning and distillation in practice: The minitron approach,”                 ence on Neural Information Processing Systems (NeurIPS), 2023.
+     arXiv preprint arXiv:2408.11796, 2024.                                        [96] S. Yao, J. Zhao, D. Yu, N. Du, I. Shafran, K. Narasimhan, and Y. Cao,
+[78] X. Tan, Y. Jiang, Y. Yang, and H. Xu, “Towards end-to-end optimization             “React: Synergizing Reasoning and Acting in Language Models,” in
+     of llm-based applications with ayo,” in Proceedings of the International           Proceedings of the International Conference on Learning Representa-
+     Conference on Architectural Support for Programming Languages and                  tions (ICLR), 2023.
+     Operating Systems (ASPLOS), 2025.                                             [97] ——, “ReAct: Synergizing Reasoning and Acting in Language
+[79] H. Touvron, L. Martin, K. Stone, P. Albert, A. Almahairi, Y. Babaei,               Models,” 2023. [Online]. Available: https://github.com/ysymyth/ReAct
+     N. Bashlykov, S. Batra, P. Bhargava, S. Bhosale, D. Bikel, L. Blecher,        [98] G.-I. Yu, J. S. Jeong, G.-W. Kim, S. Kim, and B.-G. Chun, “Orca: A
+     C. C. Ferrer, M. Chen, G. Cucurull, D. Esiobu, J. Fernandes, J. Fu,                Distributed Serving System for Transformer-Based Generative Mod-
+     W. Fu, B. Fuller, C. Gao, V. Goswami, N. Goyal, A. Hartshorn,                      els,” in Proceedings of the USENIX Symposium on Operating Systems
+     S. Hosseini, R. Hou, H. Inan, M. Kardas, V. Kerkez, M. Khabsa,                     Design and Implementation (OSDI), 2022.
+     I. Kloumann, A. Korenev, P. S. Koura, M.-A. Lachaux, T. Lavril, J. Lee,       [99] J. Yuan, H. Gao, D. Dai, J. Luo, L. Zhao, Z. Zhang, Z. Xie, Y. Wei,
+     D. Liskovich, Y. Lu, Y. Mao, X. Martinet, T. Mihaylov, P. Mishra,                  L. Wang, Z. Xiao et al., “Native sparse attention: Hardware-aligned and
+     I. Molybog, Y. Nie, A. Poulton, J. Reizenstein, R. Rungta, K. Saladi,              natively trainable sparse attention,” arXiv preprint arXiv:2502.11089,
+     A. Schelten, R. Silva, E. M. Smith, R. Subramanian, X. E. Tan,                     2025.
+     B. Tang, R. Taylor, A. Williams, J. X. Kuan, P. Xu, Z. Yan, I. Zarov,        [100] L. Zheng, L. Yin, Z. Xie, C. L. Sun, J. Huang, C. H. Yu, S. Cao,
+     Y. Zhang, A. Fan, M. Kambadur, S. Narang, A. Rodriguez, R. Stojnic,                C. Kozyrakis, I. Stoica, J. E. Gonzalez et al., “Sglang: Efficient
+     S. Edunov, and T. Scialom, “Llama 2: Open foundation and fine-tuned                execution of structured language model programs,” Advances in neural
+     chat models,” in arxiv.org, 2023.                                                  information processing systems, vol. 37, pp. 62 557–62 583, 2024.
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+[101] Y. Zhong, S. Liu, J. Chen, J. Hu, Y. Zhu, X. Liu, X. Jin, and H. Zhang,
+      “DistServe: Disaggregating prefill and decoding for goodput-optimized
+      large language model serving,” in Proceedings of the USENIX Sympo-
+      sium on Operating Systems Design and Implementation (OSDI), 2024.
+[102] A. Zhou, K. Yan, M. Shlapentokh-Rothman, H. Wang, and Y.-X. Wang,
+      “Language Agent Tree Search Unifies Reasoning, Acting, and Planning
+      in Language Models,” in Proceedings of the International Conference
+      on Machine Learning (ICML), 2024.
+[103] ——, “Official Repo of Language Agent Tree Search
+      (LATS),” 2024. [Online]. Available: https://github.com/lapisrocks/
+      LanguageAgentTreeSearch
+[104] D. Zhou, N. Schärli, L. Hou, J. Wei, N. Scales, X. Wang, D. Schu-
+      urmans, C. Cui, O. Bousquet, Q. Le, and E. Chi, “Least-to-Most
+      Prompting Enables Complex Reasoning in Large Language Models,”
+      in Proceedings of the International Conference on Learning Represen-
+      tations (ICLR), 2023.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:30:34 UTC from IEEE Xplore. Restrictions apply.
+

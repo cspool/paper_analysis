@@ -1,0 +1,1069 @@
+                                                                                                                                                                                      2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+
+                                                                                                                                                                       LRM-GPU: Alleviating Synchronization Overhead
+                                                                                                                                                                            for Multi-Chiplet GPU Architecture
+                                                                                                                                                                                     Baiqing Zhong† , Zhirong Ye† , Xiaojie Li† , Peilin Wang† , Haiqiu Huang† , Zhaolin Li‡ ,
+                                                                                                                                                                                                               Zhiyi Yu† , and Mingyu Wang†,∗
+                                                                                                                                                                                             †
+                                                                                                                                                                                              School of Microelectronics Science and Technology, Sun Yat-Sen University, China
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408473
+
+
+
+
+                                                                                                                                                                                               ‡
+                                                                                                                                                                                                 Department of Computer Science and Technology, Tsinghua University, China
+                                                                                                                                                                                              Email(s): {wangmingyu, yuzhiyi}@mail.sysu.edu.cn, lzl73@mail.tsinghua.edu.cn,
+                                                                                                                                                                                                    {zhongbq, yezhr6, lixj263, wangplin, huanghq73}@mail2.sysu.edu.cn
+
+
+                                                                                                                                                                        Abstract—With the slowdown of process scaling and the                     has slowed down and manufacture constraints the maximum
+                                                                                                                                                                     advancement of packaging technologies, multi-chiplet GPUs have               die size, the scalability of GPU performance has become
+                                                                                                                                                                     emerged as a highly promising architecture to improve the                    increasingly constrained [22, 23, 39]. These challenges have
+                                                                                                                                                                     scalability of GPU performance further. Moreover, requiring
+                                                                                                                                                                     adherence to atomicity and memory consistency models for                     motivated researchers to explore alternative approaches to
+                                                                                                                                                                     shared data efﬁcient synchronization is crucial to leverage the              enhance the performance scalability of GPUs. Recent research
+                                                                                                                                                                     performance advantages of the multi-chiplet GPU architecture.                has explored the composition of multiple smaller chips into
+                                                                                                                                                                     However, the memory systems of multi-chiplet GPUs introduce                  a single large-scale, aggregated system, an approach com-
+                                                                                                                                                                     deeper cache hierarchies and increased non-uniformity, both of               monly referred to as a Multi-Chip Module (MCM) or chiplet
+                                                                                                                                                                     which signiﬁcantly exacerbate the overhead of synchronization.
+                                                                                                                                                                     Speciﬁcally, acquire/release synchronization operations should               [2, 3, 15, 45]. The multi-chiplet GPU architecture distributes
+                                                                                                                                                                     invalidate/ﬂush caches, an overhead that is signiﬁcantly increased           computational workloads across multiple GPU chiplets to
+                                                                                                                                                                     by the presence of additional cache level, and atomic operations             enable scalable and efﬁcient GPU design.
+                                                                                                                                                                     for synchronization performed across chiplets are further im-
+                                                                                                                                                                     pacted by the limited bandwidth of inter-chiplet links.                      bottleneck1˖Theadditionalcache                                MultiChipletGPU
+                                                                                                                                                                                                                                                  hierarchiesresultinmoreexpensive
+                                                                                                                                                                        To address these challenges, this paper proposes LRM-GPU                  synchronizationoverhead.                          Chiplet                                 Chiplet
+                                                                                                                                                                     to provide efﬁcient synchronization support for multi-chiplet                bottleneck2˖Synchronizationoperation
+                                                                                                                                                                                                                                                                                            SM                     SM                  SM                  SM
+                                                                                                                                                                                                                                                  acrosschipletsufferfromthelimited
+                                                                                                                                                                     GPUs. In order to reduce the overhead caused by the additional               bandwidthofinter­chipletlinks
+                                                                                                                                                                     cache level, LRM-GPU leverages lazy release consistency in                               MonolithicGPU                L1$               L1$                L1$                L1$
+                                                                                                                                                                     multi-chiplet GPUs, whereby the additional level of cache only                  Streaming             Streaming
+                                                                                                                                                                                                                                                                                            (cta)              (cta)               (cta)               (cta)
+
+                                                                                                                                                                     performs coherence actions when the ownership of synchroniza-                  Mutiprocessor          Mutiprocessor
+
+                                                                                                                                                                     tion variables changes between different chiplets. LRM-GPU                       L1cache                L1cache
+                                                                                                                                                                                                                                                                                                    L1.5cache/
+                                                                                                                                                                                                                                                                                                     L2cache
+                                                                                                                                                                                                                                                                                                                                            L1.5cache/
+                                                                                                                                                                                                                                                                                                                                             L2cache
+                                                                                                                                                                     also implements a directory in the last-level cache to track the                (ctascope)             (ctascope)                                   Chiplet
+                                                                                                                                                                                                                                                                                                                        Interconnect
+                                                                                                                                                                     synchronization variables. To mitigate the overhead of atomic                                                          Interconnectnetwork                       Interconnectnetwork
+
+                                                                                                                                                                     operations for inter-chiplet synchronization under limited inter-                       Interconnectnetwork
+
+
+                                                                                                                                                                     chiplet bandwidth, LRM-GPU proposes an in-network synchro-                                LLC(GPUscope)
+                                                                                                                                                                                                                                                                                                      LLCslice
+                                                                                                                                                                                                                                                                                                    (GPUscope)
+                                                                                                                                                                                                                                                                                                                                              LLCslice
+                                                                                                                                                                                                                                                                                                                                            (GPUscope)
+                                                                                                                                                                     nization atomic merging unit to merge atomic requests across
+                                                                                                                                                                     chiplets, thereby reducing the inter-chiplet synchronization trafﬁc                            DRAM                              DRAM                                    DRAM
+
+                                                                                                                                                                     of atomic operations. Experimental evaluation demonstrates that,                                (a)                                                    (b)
+                                                                                                                                                                     compared with the MCM-GPU, LRM-GPU achieves an average                       Fig. 1. Current GPU Architecture:(a)Monolithic GPU; (b)Multi-Chiplet GPU
+                                                                                                                                                                     speedup of 1.33×. Moreover, compared with the state-of-the-art
+                                                                                                                                                                     work HMG, it also achieves the speedup of 1.22×, reduces 52%                    However, as GPUs become increasingly general-purpose,
+                                                                                                                                                                     of inter-chiplet trafﬁc, and reduces 32% of energy consumption               they are also used for applications that require efﬁcient
+                                                                                                                                                                     on average.
+                                                                                                                                                                                                                                                  support for more data sharing. Therefore, the critical aspect
+                                                                                                                                                                                             I. I NTRODUCTION                                     of showcasing multi-chiplet GPU advantages hinges on the
+                                                                                                                                                                        Modern graphics processing units (GPUs) leverage the                      strict adherence of all threads to efﬁcient synchronization
+                                                                                                                                                                     Single-Instruction-Multiple-Threads (SIMT) architecture to ef-               mechanisms [9, 27]. These mechanisms demand that shared
+                                                                                                                                                                     ﬁciently execute multiple concurrent threads, proving in-                    data updates adhere to consistent access sequences and update
+                                                                                                                                                                     strumental in diverse computational domains such as high-                    protocols (i.e., ensuring consistency), while effectively man-
+                                                                                                                                                                     performance computing (HPC) and machine learning [6, 26,                     aging conﬂicting accesses to uphold the deterministic nature
+                                                                                                                                                                     35, 46, 50]. As the computational demands continue to in-                    of multi-threaded program execution (i.e., ensuring atomicity)
+                                                                                                                                                                     crease, GPUs have leveraged shrinking process features to dra-               [7, 17, 20]. Thus, the development of efﬁcient synchronization
+                                                                                                                                                                     matically increase transistor density, while also manufacturing              mechanisms that uphold memory consistency and atomicity
+                                                                                                                                                                     ever-larger dies to meet the strong scaling requirements of                  serves as an essential pillar for constructing high-performance
+                                                                                                                                                                     applications [30, 34, 36, 37]. However, as transistor scaling                multi-chiplet GPU architectures.
+                                                                                                                                                                                                                                                     GPUs were originally designed under the assumption that
+                                                                                                                                                                       ∗ Corresponding author: Mingyu Wang.                                       inter-thread synchronization would be coarse-grained and in-
+
+
+
+
+                                                                                                                                                                             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+frequent. As a result, they usually adopted a simple, software-             sent to each chiplet, but it focuses on implicit synchroniza-
+driven coherence protocol[16, 18, 25, 38, 41, 47, 49]. As                   tion to exploit inter-kernel data reuse, rather than optimizing
+shown in Fig. 1 (a), in traditional GPUs, where L1 cache                    explicit synchronization in GPUs.
+is private to Streaming Multiprocessors (SMs) and last level
+cache (LLC) is shared by all SMs which maintains a consistent
+view of data. These protocols typically invalidate all valid data
+from the local cache (L1 cache) at acquire operations and
+ﬂush all dirty data from the local cache at release operations.
+And to ensure the atomicity and consistency of shared data,
+synchronization operations (usually atomic operations) were
+executed at the LLC (i.e., bypassing L1 caches).
+   However, the changes in multi-chiplet GPU architectures
+have exacerbated the overhead of such synchronization mecha-
+nisms. One of the most notable characteristics of Multi-chiplet
+GPUs is the Non-Uniform Memory Access (NUMA) problem
+caused by the bandwidth mismatch between inter-chiplet and                  Fig. 2. Performance loss in MCM-GPU[2] versus equivalent monolithic GPU
+intra-chiplet. To mitigate the NUMA problem, multi-chiplet                  due to synchronization overhead from additional cache level and remote access
+                                                                            (experiments are introduced in detail in section IV).
+GPUs [2, 8, 29, 52] often incorporate an additional cache
+level within each chiplet to leverage intra-chiplet data locality              To address these challenges, this paper proposes LRM-GPU
+and reduce remote accesses. However, this approach results                  to alleviate the synchronization overhead introduced by the
+in the globally shared ordering point being located at a lower              additional cache hierarchy and the limited bandwidth of inter-
+level, necessitating the invalidation/ﬂushing of the additional             chiplet links. The main insight of LRM-GPU is to leverage
+cache level during global synchronization. Meanwhile, since                 the locality among synchronization. Firstly, the locality of
+synchronization operations are typically executed in the LLC                synchronization behavior, when a synchronization operation
+(bypassing other caches), the limited bandwidth of inter-                   is performed within a chiplet, it is likely that a subsequent
+chiplet links still signiﬁcantly impedes the execution of cross-            synchronization operation will also occur on the same chiplet.
+chiplet synchronization operations. Therefore, as illustrated               Therefore, compared to conservatively invalidating or ﬂushing
+in Fig. 1(b), the two critical bottlenecks for synchronization              caches on every synchronization operation, a more positive
+are the additional synchronization overhead introduced by the               strategy can be adopted to selectively perform cache invali-
+deeper cache hierarchy and the bandwidth limitation of inter-               dation and ﬂushing at appropriate times, thereby improving
+chiplet links for cross-chiplet synchronization operations.                 reuse and reducing synchronization overhead. Secondly, the
+   To evaluate the impacts of the additional cache level and the            locality of synchronization data, although atomic operations
+limited inter-chiplet link bandwidth, we compared the work-                 for synchronization in GPUs are typically bypassed directly
+load performance of a 4-chiplet GPU system (as described in                 to the LLC for execution, cross-chiplet atomic operations
+the section IV) with that of an equivalent but non-fabricable               issued by different SMs may simultaneously access the same
+monolithic GPU. As illustrated in Fig. 2, these workloads                   address. Therefore, we can attempt to merge these atomic
+involving global synchronization exhibit a signiﬁcant per-                  operations when these operations are sent to the network,
+formance degradation, with an average performance loss of                   thereby reducing inter-chiplet trafﬁc and alleviating the band-
+22.5% due to additional cache-level invalidations and 23.5%                 width pressure between chiplets. In this paper, we make the
+due to remote atomic accesses. Overall, the performance of                  following contributions:
+the MCM-GPU decreases by an average of 50.5% compared                          1) To mitigate the synchronization overhead caused by
+to the monolithic GPU. These results indicate that efﬁcient                 the additional cache level, LRM-GPU proposes an efﬁcient
+data synchronization represents a critical challenge in chiplet-            synchronization support by leveraging lazy release consistency
+based GPU systems.                                                          in multi-chiplet GPUs. LRM-GPU ensures that coherence
+   Previous research [2, 52, 53] on multi-chiplet GPUs has                  actions of the additional cache level are only performed
+primarily explored mitigating the NUMA problem arising                      when ownership of synchronization variables is transferred
+from bandwidth mismatches between inter-chiplet and intra-                  between different chiplets, thereby leveraging the locality of
+chiplet communication for regular data accesses, yet few have               intra-chiplet synchronization and reducing redundant cache
+addressed the challenges of data synchronization in multi-                  invalidations and ﬂushes. And to track the ownership of
+chiplet GPUs. HMG [43] extends the coherence protocol                       synchronization variables, LRM-GPU implements a directory
+to multi-chiplet and multi-GPU systems by hierarchically                    in the LLC.
+tracking sharers, conﬁning cache invalidation and ﬂushing to                   2) To mitigate the overhead of inter-chiplet bandwidth
+the L1 cache level due to the maintenance of the coherence                  limitation encountered when synchronization operations are
+protocol. However, we observe that the complexity of HMG is                 executed across different chiplets, LRM-GPU proposes in-
+unnecessary and can sometimes impair performance. CPElide                   network atomic merge for synchronization. It embeds a syn-
+[8] leverages the common processor to track data structures                 chronization atomic merging unit within the network. It identi-
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+ﬁes atomic operations that are being transmitted across chiplets                            to the appropriate LLC and memory partition according to
+and performs merging processing. By merging these atomic                                    the address mapping policy. The results of MCM-GPU also
+operations at the network, it effectively reduces the trafﬁc of                             indicate that the L1.5 cache can achieve good performance.
+synchronization operations that need to be transmitted across                               CPELide [8] uses an L2 cache as the shared cache level within
+chiplets and alleviates the bandwidth pressure among chiplets.                              a chiplet to exploit the locality of data within chiplets, and the
+   3) To evaluate the proposed LRM-GPU, we faithfully                                       L3 cache (also the LLC) is the global shared cache across all
+extended GPGPU-SIM for the multi-chiplet GPU system,                                        chiplets. Some studies [43, 52] did not add a new cache level,
+including composable network construction and heterogeneous                                 but used LLC (also the L2 cache) on the SM-side, where each
+router/crossbar microarchitectures. We have demonstrated the                                chiplet’s LLC caches data from all DRAM partitions globally.
+effectiveness of LRM-GPU through a set of detailed exper-                                      Prior research has mainly focused on mitigating the band-
+iments conducted on programs with global synchronization.                                   width constraints between different chiplets due to the limited
+The evaluation results indicate that, compared to MCM-GPU,                                  bandwidth of inter-chiplet links in multi-chiplet GPUs for reg-
+LRM-GPU achieves an average speedup of 1.33×. Moreover,                                     ular data accesses. As mentioned above, adding an additional
+compared to the state-of-the-art work HMG, LRM-GPU also                                     cache level or employing SM-side LLCs aims to exploit intra-
+achieves an average speedup of 1.22×.                                                       chiplet data locality to reduce remote accesses. MCM-GPU [2]
+                                                                                            also proposes the ﬁrst-touch-page and distributed cooperative
+                   II. BACKGROUND AND MOTIVATION
+                                                                                            thread arrays (CTA) scheduling strategies to increase and
+A. Multi-Chiplet GPU Architecture                                                           leverage data locality within a chiplet. AdCoalescer [53] in-
+                                                                                            troduces an adaptive coalescer that uses program counter (PC)
+ pakeage
+
+
+
+
+                          SMs+L1$                                  SMs+L1$
+                                                                                            values to identify memory requests with high data locality and
+                                                                                            ﬁlter redundant remote reads. Nearfetch [55] targets many-
+                                                                                            chiplet GPU architectures and proposes fetching data from
+                                                       Chiplet1
+                                          Chiplet0
+
+
+
+
+                          L1.5$/L2$                                L1.5$/L2$
+                                                                                            nearby chiplets to reduce long-distance data transfers.
+                                                                                               While these approaches alleviate the general NUMA issues
+                                                                                     DRAM
+           DRAM
+
+
+
+                   LLC
+
+
+
+
+                                                                               LLC
+
+
+
+
+                             XBAR                                  XBAR
+                                                                                            of regular data accesses, they overlook memory access caused
+                                                                                            by atomic operations for synchronization and the additional
+                                                                                            overhead brought by synchronization behavior.
+                                                                                     DRAM
+       DRAM
+
+
+
+                   LLC
+
+
+
+
+                                                                               LLC
+
+
+
+
+                             XBAR                                  XBAR
+                                                                                            B. Synchronization Challenges in Multi-Chiplet GPUs
+                                                      Chiplet3
+                                          Chiplet2
+
+
+
+
+                                                                                               GPUs were originally designed under the assumption that
+                          L1.5$/L2$                                L1.5$/L2$
+                                                                                            inter-thread synchronization would be coarse-grained and in-
+                                                                                            frequent. As a result, GPUs often adopt simple, coarse-
+                          SMs+L1$                                  SMs+L1$
+                                                                                            grained, software-managed coherence protocols. These proto-
+                                                                                            cols typically require that private caches be invalidated/ﬂushed
+Fig. 3. Multi-Chiplet GPU architecture. Multiple GPU chiplets are used to                   upon acquire/release operations, while atomic operations for
+build a larger logical single GPU.
+                                                                                            synchronization are usually performed directly in the LLC.
+   Fig. 3 illustrates the architecture of a 4-chiplet GPU. Each                                However, in order to alleviate the NUMA problem in multi-
+GPU chiplet contains multiple SMs along with their private L1                               chiplet GPUs, multi-chiplet GPU architecture often adds an
+cache, as well as a memory-side LLC and a memory partition.                                 additional cache level or uses SM-side LLC to utilize the
+All memory partitions offer a globally shared memory address                                data locality within the chiplet and reduce remote memory
+space across all GPU chiplets. The network route memory                                     access. These changes in multi-chiplet GPU architectures
+accesses to the appropriate destination (either the local LLC                               have exacerbated the synchronization overhead. In particular,
+or the remote LLC) based on the address. The LLC, which is                                  whether using an additional cache level or the SM-side LLC,
+shared by all SMs across the chiplets, exclusively caches data                              they will all cause the lower global shared ordering point and
+from its local DRAM partition. Consequently, each cache line                                require maintaining data consistency across multiple levels of
+has only one location, and cache coherence across LLC banks                                 the cache hierarchy, leading to more expensive synchronization
+is not required.                                                                            overhead. For example, when a SM issues an acquire syn-
+   Unlike conventional monolithic GPUs, multi-chiplet GPUs                                  chronization request, since the L1 and L1.5 caches are private
+often introduce an additional cache level shared within each                                caches within the SM and the chiplet respectively, they may
+chiplet to alleviate the NUMA problem caused by bandwidth                                   cache stale data. Therefore, it is necessary to invalidate the
+mismatch between intra-chiplet and inter-chiplet. MCM-GPU                                   data in both the L1 and L1.5 cache to ensure that subsequent
+[2] uses an L1.5 cache to only cache data from remote chipsets                              memory accesses can obtain the latest data from the globally
+in order to better utilize the data locality within chiplets. In this                       shared LLC. Compared to the monolithic GPU, the multi-
+design, when an L1 miss occurs and data needs to be fetched                                 chiplet GPU requires the additional invalidation of the L1.5
+from the remote chiplet, the request ﬁrst accesses the L1.5                                 cache. Given that the capacity of the L1.5 cache is typically
+cache. If the L1.5 cache also misses, the request is routed                                 larger than that of the L1 cache private to a single SM, and
+
+
+
+
+                  Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+that the L1.5 cache is shared by all SMs within the chiplet,                aged the scopes of modern GPU memory models and the non-
+invalidating the L1.5 cache incurs greater overhead compared                multiple-copy-atomicity characteristic to avoid the overhead
+to invalidating only the L1 cache and also affects memory                   of invalidation acknowledgments and transient states, thereby
+accesses from other SMs.                                                    achieving relatively favorable results. CPElide[8] proposed a
+   In addition, to ensure atomicity and consistency, atomic                 new command processor (CP) design, which, by leveraging the
+operations for synchronization on GPUs are typically executed               global view of the GPU’s CP, could selectively decide when to
+in the globally shared LLC, and synchronization data is not                 perform implicit inter-kernel synchronization operations. This
+cached in the L1 and L1.5 caches. This renders the additional               ensured data was invalidated or ﬂushed before being used,
+cache level ineffective in reducing cross-chiplet atomic oper-              improving data reuse and reducing the overhead of implicit
+ations for synchronization. When it comes to global atomic                  synchronization. However, CPElide lacks efﬁcient support for
+operations that cross different chiplets, the limitation imposed            explicit intra-kernel synchronization.
+by inter-chiplet bandwidth becomes a pronounced bottleneck.
+                                                                                                 III. PROPOSED METHODOLOGY
+The need to frequently communicate and synchronize data
+across chiplets via a potentially constrained bandwidth link                A. Overview
+can signiﬁcantly hinder performance, especially in scenar-                     To mitigate the synchronization overhead caused by the ad-
+ios involving frequent atomic operations for synchronization.               ditional cache level and the limited bandwidth of inter-chiplet
+Therefore, for global atomic operations for synchronization,                interconnects, this paper proposes LRM-GPU, which provides
+the limitation of inter-chiplet bandwidth remains a signiﬁcant              efﬁcient synchronization support for multi-chiplet GPUs. Fig.
+challenge.                                                                  4 presents an architectural overview of the proposed LRM-
+                                                                            GPU design.
+C. To Alleviate the Synchronization Overhead
+   To improve synchronization performance, prior work has                                                                 LRM­GPU
+                                                                                         Chiplet0
+actively explored GPU synchronization mechanisms.                                                                                      ķMergeatomicoperationtoreduce
+                                                                                                                                        Inter­chipletsynchronizationtraffic
+   DeNovo [47] introduced the DeNovo consistency protocol                        StreamingMultiprocessor
+                                                                                                                            AtomicA(SMn1)     Synchronization AtomicA*
+into GPUs, achieving synchronization by acquiring ownership                        SP                 SP                                      Atomicmergingunit
+
+of the written data. Furthermore, it enhanced DeNovo by                            Reg                Reg
+
+                                                                                         Load/StoreUnit
+adding a selective invalidation mechanism, which can avoid                                                                      ĸRecordtheownerofsynchronizationvariables
+                                                                                           L1Cache
+invalidating read-only data regions during synchronization,                                                                        toreduceredundantinvalid/flushcache
+                                                                                                                                      Valid             Owner       sync.variables
+thereby further optimizing performance. hLRC [1] introduced                                L1.5Cache                                  1               chiplet1           A0
+                                                                                                                                                       
+a mechanism similar to DeNovo to track the ownership of
+                                                                                    InterconnectionNetwork                             1              chiplet3           A2
+synchronization variables and only performed coherence op-                           Request
+                                                                                                   Sync.Atom
+erations when synchronization variables resided in different                             Reply
+                                                                                                   mergingunit
+
+L1 caches. However, each time a synchronization operation                                                                                           Chiplet1
+for the same variable was performed in a different SM, they                              LLC
+                                                                                                              Sync­val
+                                                                                                              directory
+ﬁrst needed to invalidate or ﬂush the copies cached in remote
+L1 caches, to guarantee atomicity and consistency of the
+                                                                                          Chiplet2                                                 Chiplet3
+synchronization variables. This incurred signiﬁcant overhead
+in maintaining atomicity and consistency of synchronization
+                                                                                                 Fig. 4. Overview of LRM-GPU Architecture
+variables across different cache levels. In multi-chiplet GPUs,
+due to deeper cache hierarchies, this overhead is greatly                      LRM-GPU leverages lazy release consistency to mitigate
+ampliﬁed and can severely degrade performance. Moreover,                    the expensive global synchronization overhead introduced by
+LAB [10] proposes utilizing a portion of the L1 cache as an                 the additional cache level in multi-chiplet GPU architectures.
+atomic buffer to cache atomic data, thereby reducing atomic                 LRM-GPU associates each synchronization variable with the
+synchronization trafﬁc sent over the network. Atomic Cache                  chiplet that last accessed it. Coherence actions (invalidate/ﬂush
+[54] suggests implementing the atomic operations through in-                cache) are only triggered when the owner of the synchroniza-
+cache computing, thus mitigating synchronization overhead.                  tion variable is transferred between different chiplets, as this
+ARC[11] recommends leveraging the warp-level locality of                    indicates the possibility of synchronization between different
+atomic operations to merge atomic operations in a warp,                     chiplets. By adopting this approach, LRM-GPU achieves lazy
+aiming to alleviate the pressure on the load-store unit and the             release, thereby leveraging the locality of intra-chiplet syn-
+LLC. However, all of these approaches overlook the inter-SM                 chronization and reducing redundant cache invalidations and
+locality inherent in atomic operations for synchronization.                 ﬂushes. In order to track the ownership of synchronization
+   For multi-chiplet GPUs, HMG[43] extended the cache co-                   variables across chiplets, as shown in Fig. 4, LRM-GPU
+herence protocol to multi-chiplet GPUs and multi-GPUs, using                implements a directory at the LLC. Since the directory only
+a mechanism similar to the VI protocol to track coherence                   monitors synchronization variables rather than all data, its
+states. By employing an optimized hierarchical sharer-tracking              capacity requirements remain modest. LRM-GPU is similar
+scheme, it alleviated synchronization overhead. HMG lever-                  to traditional monolithic GPU designs that recommend all
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+synchronization operations be bypassed to the LLC. This                        When an acquire operation accesses a synchronization vari-
+design ensures that synchronization variables are never cached              able, it may encounter four scenarios:
+in the local cache, thereby eliminating the presence of incon-                 (1) Invalid: There is no record of the current synchroniza-
+sistent replicas and avoiding the costly coherence maintenance              tion variable in the directory, and there are free entries. The
+for atomicity and consistency across the multi-chiplet cache                directory allocates an entry for this synchronization variable to
+hierarchy.                                                                  track its owner. Meanwhile, the acquire operation reads data
+   The performance of atomic operations for synchronization                 from the LLC. Finally, it invalidates the local L1.5 cache to
+is inherently limited by the inter-chiplet communication band-              ensure that subsequent memory access can read the globally
+width since they bypass local caches and are directly routed                latest data.
+to the LLC via the network. To alleviate this bottleneck,                      (2) Local chiplet: The directory has a record of the current
+LRM-GPU introduces in-network atomic merge mechanism                        synchronization variable, and the recorded owner is the chiplet
+and embeds a synchronization atomic merging unit (AMU)                      that issued the synchronization operation request. The acquire
+within the network, as shown in Fig. 4. AMU identiﬁes                       operation directly reads data from the LLC without performing
+and merges atomic requests that traverse chiplet boundaries,                any coherence actions. This is because it indicates that there is
+thereby reducing inter-chiplet trafﬁc. For example, in lock-                no inter-chiplet synchronization, and the latest data is cached
+based synchronization implemented via atomicCAS, multiple                   in the local L1.5 cache.
+SMs may issue atomicCAS targeting the same data to acquire                     (3) Remote chiplet: The directory has a record of the
+the lock. Since only one of these requests can successfully ac-             current synchronization variable, but the recorded owner is not
+quire the lock while the others fail and spin, these requests can           the chiplet that issued the synchronization operation request.
+be merged into a single transmission across chiplets. Similarly,            If the L1.5 cache adopts a write-back policy, the remote L1.5
+in programs using atomicAdd to synchronize updates of shared                cache is ﬁrst ﬂushed to write the dirty data back to the LLC.
+variables, such as two atomicAdd(x, 1) can be merged into                   Then, the directory updates the owner to the local chiplet.
+a single atomicAdd(x, 2). By merging such synchronization                   Simultaneously, the acquire operation reads data from the
+atomic operations, AMU signiﬁcantly alleviates inter-chiplet                LLC. Finally, it invalidates the local L1.5 cache to ensure that
+bandwidth pressure.                                                         subsequent memory access operations can read the globally
+                                                                            latest data.
+B. Lazy Release Consistency on Multi-Chiplet GPU                               (4) Evicted: There is no record of the current synchroniza-
+                               TABLE I
+                                                                            tion variable in the directory, and no free entry. The directory
+                   C OHERENCE ACTIONS OF LRM-GPU                            evicts an entry according to a policy such as Least Recently
+                                                                            Used (LRU). It is necessary to ﬂush the L1.5 cache of the
+                        status                      action                  chiplet that owns the evicted entry to ensure that subsequent
+                                             LD data from LLC               memory access operations do not read old data (if write-back
+                       invalid
+                                               invalidate L1.5$
+     acquire                                                                policy). At the same time, the directory allocates an entry for
+                     local chiplet    set owner & LD data from LLC
+ synchronization                     ﬂush remote L1.5$ (if write-back)      the current synchronization operation and records its current
+                       remote                                               owner. Then, the acquire operation reads data from the LLC.
+                                      set owner & LD data from LLC
+                       chiplet
+                                               invalidate L1.5$             Finally, it invalidates the local L1.5 cache.
+                                     ﬂush owner’s L1.5$ (if write-back)
+                        evicte        set owner & LD data from LLC
+                                                                                                                   &KLSOHW                                       &KLSOHW
+                                              invalidate L1.5$)
+                                               ST data to LLC                                               60                60                       60                    60
+                       invalid                                               2UGHU60ė60ė60
+                                               invalidate L1.5$
+                                                                             ZKLOH GRQH ^
+     release         local chiplet      set owner & ST data to LLC           LI &$6 ;   ^                               E
+                                                                                                                                  E                    E
+ synchronization                     ﬂush remote L1.5$ (if write-back)
+                                                                             /'B$&4;
+                                                                                   D                        /                /                           /    F          /
+                       remote                                                                                E                       F
+                                        set owner & ST data to LLC                 E $ $                      F   D
+                       chiplet                                                        
+                                                                                                     D                                       D
+                                               invalidate L1.5$
+                                                                                  F 67B5(/;           $  F       $  F                    $  F              /
+                                     ﬂush owner’s L1.5$ (if write-back)      `                                                                L
+                                                                                                                                        I
+                        evicte          set owner & ST data to LLC           `                          L
+
+                                               invalidate L1.5$                  L ,QYDOLGDWHFDFKH          ,QWHUFRQQHFWQHWZRUN                        ,QWHUFRQQHFWQHWZRUN
+                                                                                 I )OXVKFDFKH
+
+   LRM-GPU leverages lazy release consistency to achieve                                                        ;LQYDO LQLWD
+                                                                                            6\QFYDO        ;FKLSOHW FDF            $  LQLW $  I          //&
+efﬁcient synchronization. It tracks the owner of synchroniza-                                 GLU             ;FKLSOHW DF
+tion variables through a directory and performs corresponding
+                                                                                        Fig. 5. Example of LRM-GPU synchronization behavior.
+coherence actions only when the owner changes occur between
+different chiplets. Table I speciﬁcally illustrates how LRM-                   The release operation is similar to the acquire operation:
+GPU implements synchronization operations. We focus on the                  (1) Invalid: The directory allocates an entry track for its
+coherence actions related to synchronization in the additional              owner. Simultaneously, the release operation writes the data
+cache level of multi-chiplet GPUs (L1.5 cache), while disre-                into the LLC. Finally, it invalidates the local L1.5 cache to
+garding the coherence actions of the L1 cache, as it remains                ensure that any subsequent acquire operations can achieve
+consistent with that of traditional GPUs.                                   correct synchronization. (2) Local chiplet: The release op-
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+      SM0&1             L1.5$            LLC          L1.5$            SM2                              SM0&1           L1.5$               LLC             L1.5$               SM2
+
+
+
+lock0acq                                                                  lockacq                  lock0acq                                                                        lockacq
+                   invalidatepunishment                                                                             invalidatepunishment
+                                                      lockfailX                                                                                              lockfailx
+
+   ld/st                                                                                               ld/st
+                                                                           lockacq                                                                                                   lockacq
+                     flushpunishment                                                                lock0rel
+                                                      lockfailX                                                                                              lockfailx
+ lock0rel
+                                                                                                     lock1acq
+
+                                                                                                                                                                                      lockacq
+                                                                                                       ld/st
+lock1acq                                                                  lockacq                                                                            lockfailx
+                   invalidatepunishment                                                             lock1rel
+                                                       lockfailx
+
+   ld/st                                                                                                                                     flushremotecachepunishment           lock2acq
+
+                                                                           lockacq
+                     flushpunishment
+ lock1rel                                            lockfailX                                    lockacq                                            invalidatepunishment
+
+                                                                                                                          lockfailX                                                     ld/st
+ lockacq                                                                  lock2acq
+                                                 invalidatepunishment                                                                                                                lock2rel
+                         lockfailx
+                                                                               ld/st
+
+
+
+                                                                                       Savingtime
+                                                                                                                                                                                      lock2acq
+ lockacq
+                                                                                                     lockacq
+                                                   flushpunishment
+                        lockfailx                                                                                                                                                       ld/st
+                                                                           lock2rel                                       lockfailX
+
+
+
+                  SM0request                             SM1request                                               SM2request                                lockfailrequest
+
+                 SM0response              (a)           SM1response                                               SM2response                (b)            lockfailresponse
+
+
+                 Fig. 6. Comparison of execution ﬂow and implementation between MCM-GPU and LRM-GPU:(a) MCM-GPU; (b) LRM-GPU
+
+eration merely writes the data into the LLC, as coherence                                            latest data i0 . Additionally, the owner of X in the directory
+actions are delayed until a subsequent change in the owner                                           is set to chiplet0. Subsequently, SM0 performs load/store
+of the synchronization variable to leverage the locality of                                          operations on data A b0 . At this point, the L1.5 cache of
+intra-chiplet synchronization. (3) Remote chiplet: the remote                                        chiplet0 holds the latest data for A, with A=1, while the LLC
+chiplet’s L1.5 cache is ﬁrst ﬂushed (if write-back policy).                                          contains the stale data, A=0. Finally, SM0 executes the release
+Subsequently, the directory updates the owner. Meanwhile,                                            operation, directly writing the data of X into the LLC c0 .
+the release operation writes the data into the LLC. Finally, it                                      Since there is a record of X in the directory and its owner
+invalidates the local L1.5 cache. (4) Evicted: it needs to ﬂush                                      is chiplet0, no coherence actions are required. Coherence
+the L1.5 cache of the chiplet that owns the evicted entry (if                                        actions will be delayed until the owner of the synchronization
+write-back policy). At the same time, the directory allocates                                        variable X changes. Next, SM1 acquires the lock and issues
+an entry for the current synchronization variable and records                                        an acquire synchronization request a1 . Since the owner of X
+its current owner. And the release operation write data to the                                       is chiplet0, it indicates that the latest data resides in chiplet0,
+LLC. Finally, it invalidates the local L1.5 cache.                                                   and there is no need to invalidate the L1.5 cache. SM1 then
+   For better understanding, Fig. 5 presents an example of the                                       performs load/store operations on data A b1 , with chiplet0
+synchronization execution ﬂow in a lock-based synchroniza-                                           holding the latest data, A=2. Finally, SM1 executes a release
+tion program. In this example, threads from three SMs are                                            operation c0 , again without performing any coherence actions.
+competing for lock synchronization, where SM0 and SM1 are                                            Subsequently, SM2 on chiplet1 acquires the lock and issues an
+on chiplet0, and SM2 is on chiplet1. Their execution order is                                        acquire synchronization request a2 . Since the recorded owner
+SM0 → SM1 → SM2. Here, we also ignore discussions on L1                                              of the synchronization variable X in the directory is chiplet0
+cache coherence actions and focus on L1.5 cache coherence                                            at this time, the L1.5 cache of chiplet0 needs to be ﬂushed to
+actions, assuming that the L1.5 cache employs a write-back                                           write back the dirty data f2 , enabling chiplet1 to obtain the
+policy since it is more complex than the write-through policy.                                       latest data, A=2, from the LLC. The directory then changes the
+   Initially, SM0 successfully acquires the lock (where the                                          owner of synchronization variable X to chiplet1 and invalidates
+atomicCAS operation is directly executed in the LLC). It then                                        the L1.5 cache of chiplet1 to ensure that it can read the latest
+issues an acquire synchronization to read the synchronization                                        data from the LLC i2 . SM2 performs load/store operations
+variable X from the LLC a0 . Since there is no record of                                             on data A b3 , obtaining the latest data, A=3. Finally, SM2
+synchronization variable X in the directory, the L1.5 cache                                          executes a release operation without performing any coherence
+needs to be invalidated to ensure that SM0 can read the                                              actions c2 .
+
+
+
+
+             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+   Fig. 6 provides a detailed illustration of the synchronization                                  performs the correct merging of synchronous atomic requests
+execution of the aforementioned program in LRM-GPU, along                                          based on the decoding results. The multicast unit, during reply
+with a comparison of the synchronization execution ﬂows                                            transmission, broadcasts responses to the corresponding SMs
+and implementations between the MCM-GPU and LRM-GPU.                                               according to the SM IDs recorded in the merge table entries.
+As shown in Fig. 6 (a), in the MCM-GPU, each acquire                                                  To meet the high-concurrency requirements of GPUs, the
+and release synchronization operation necessitates invalidat-                                      AMU is designed with multiple input, output, and computa-
+ing or ﬂushing the local L1.5 cache, thereby resulting in                                          tional channels. Additionally, the merge table is also devised
+substantial performance degradation. In contrast, as shown in                                      with a multi-bank structure to enable parallel access. To
+Fig. 6 (b), LRM-GPU leverages lazy release consistency by                                          facilitate rapid querying, we propose separating the storage of
+tracking the owners of synchronization variables to exploit                                        the search key (i.e., status, opcode, address) and the data (i.e.,
+locality between synchronization operations. It only performs                                      SM list, data). Speciﬁcally, a Content-Addressable Memory
+invalidatation/ﬂushing of the L1.5 cache when the owner of                                         (CAM) is employed for the storage and querying of the search
+a synchronization variable changes across different chiplets,                                      key. The CAM can determine whether there is a matching
+thereby reducing redundant synchronization overhead.                                               entry within the CAM and obtain the positional index in
+                                                                                                   a clock cycle. Meanwhile, the data is stored using SRAM.
+C. In-Network Atomic Merging for Synchronization                                                   Furthermore, to support simultaneous read and write requests
+   The Synchronization Atomic Merge Unit (AMU) is de-                                              on the merge table, both the CAM and the SRAM adopt a
+signed to merge atomic requests targeting the same address                                         dual-port design.
+across chiplets in the network, thereby reducing the inter-                                           Next, we discuss the workﬂow of AMU. It is ﬁrst checked
+chiplet synchronization trafﬁc, and each chiplet contains an                                       whether the request is a cross-chiplet request when an atomic
+AMU. Fig. 7 illustrates the detailed structure of AMU. AMU                                         request generated by an SM is sent into the network. If it
+is embedded into the network and primarily comprises four                                          is, the atomic request is forwarded to AMU. Otherwise, the
+components: the merge table, the instruction decoder, the ALU                                      request is sent directly. After entering AMU, the request is
+(Arithmetic Logic Unit), and the multicast unit.                                                   initially sent to the merge table. If a corresponding valid entry
+                                                                                                   is found, the atomic request is processed and merged with the
+          Mergetable                                InputBuffer               Arbitrater
+  s op address SMlist   data
+                                                                                                   data in the table. Conversely, if no entry matches the atomic
+                                          Input
+                                                          ...                                      request’s address or there is a match but the status is ”reserve”,
+                                                                                Crossbar
+                                  Reqout                                                          and if there is an available entry, AMU will allocate a new
+               ...
+
+
+
+
+                                                                    ...
+                                                                                                   entry for it. Otherwise, the atomic request is sent out directly
+                                                                                             ...
+                                                                          ...                      without being recorded in the table. When allocating a new
+                                                    Synchronization
+     Instructiondecoder                          AtomicMergingUnit     ...                      entry, AMU controller also assigns a countdown timer for
+                                                                                             ...   it. During this countdown period, the entry can continue to
+                                                                    ...
+               ALU
+                                                                                                   receive and merge new atomic requests. Once the countdown
+                                                          ...                                      expires, the request in the entry is sent out, and the status is
+                                          Input
+         Multicastunit
+                                Rspout                                                            changed from ”valid” to ”reserve,” preventing further request
+                                                     InputBuffer                                  merging. Alternatively, if the merged requests have reached
+       Fig. 7. Synchronization Atomic Merge Unit microarchitecture.
+                                                                                                   the maximum number (the SM list is full), the request in the
+                                                                                                   entry is also sent out, and the status is changed to ”reserve”.
+   The merge table contains multiple entries, with each entry                                      Upon receiving the response, AMU queries the merge table. If
+consisting of ﬁve ﬁelds: (1) Status: determining whether                                           a matching entry is found, AMU broadcasts the response of the
+the entry is currently valid. There are three states: ”valid,”                                     atomic operation to these SMs via the multicast unit according
+indicating that the entry is valid and new atomic requests can                                     to the SM list, and simultaneously resets the entry to make it
+be merged; ”reserve,” indicating that the entry is valid but new                                   available for future requests. Conversely, if no entry reﬂects
+atomic requests cannot be merged because the recorded re-                                          the response address, AMU directly forwards the response to
+quest has been sent and is awaiting for response; and ”invalid,”                                   the designated SM.
+indicating that the entry is invalid. (2) Opcode: representing                                        Fig. 8 presents an example of AMU’s workﬂow. Initially,
+the atomic operation and corresponding operation masks and                                         the merge table contains an entry for the atomicadd(addr0, 1)
+auxiliary identiﬁcation information. (3) Address: identifying                                      request issued by SM1 1 . Subsequently, SM0 and SM1 issue
+the address that requires access. (4) SM list: recording the IDs                                   cross-chiplet atomicadd(addr0, 1) 2 and atomicadd(addr1,
+of SM that have issued atomic requests to the same address.                                        1) 3 requests, respectively. These requests are input into
+(5) Data: recording the data used for the atomic operation                                         AMU and ﬁrst query the merge table when they arrive at
+to be performed. For instance, an atomic operation issued by                                       the network. The atomicadd(addr0, 1) request issued by SM0
+SM0 to add 1 at address 0xA0AC can be represented as the                                           ﬁnds a matching entry, enabling their merging into atomi-
+tuple (valid, atomadd, 0xA0AC, 0, 1). The instruction decoder                                      cadd(addr0, 2), with SM0’s ID being recorded. In contrast,
+is responsible for identifying atomic operations to enable                                         the atomicadd(addr1, 1) request issued by SM1 does not ﬁnd
+proper merging of synchronous atomic requests. The ALU                                             a matching entry, prompting the merge table to allocate a new
+
+
+
+
+           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                           TABLE II
+entry to record it. After a certain period, SM0 and SM1 issue                                                       E VALUATED B ENCHMARKS
+cross-chiplet atomicadd(addr1, 2) 4 and atomicadd(addr0,
+3) 6 requests again, respectively. At this point, the request                                   Operation        Description
+previously recorded as atomicadd(addr0, 2) in the merge                                         atomicand        combined by request1’s val & request2’s val.
+table has already been dispatched from AMU 5 , and its                                          atomicor         combined by request1’s val  request2’s val.
+status has been updated to ”reserve,” indicating that it is                                     atomicxor        combined by request1’s val ⊕ request2’s val.
+awaiting a response. Consequently, the atomicadd(addr0, 3)                                      atomicadd        combined by request1’s val + request2’s val.
+request issued by SM1 cannot be merged with this entry and                                      atomicsub        combined by request1’s val − request2’s val.
+must either be allocated a new entry or be sent out directly.                                   atomicmax        compares request1’s val and request2’s val, updating
+Meanwhile, the atomicadd(addr1, 2) request issued by SM0                                                         with the maximum value
+ﬁnds a matching entry, allowing it to be merged with the data                                   atomicmin        compares request1’s val and request2’s val, updating
+in the entry to produce atomicadd(addr1, 3). The responses                                                       with the maximum value
+also enter AMU and query the merge table when the responses                                     atomiccas        only when the comparison data is same can they be
+to these requests are received. If a matching entry exists, AMU                                                  combined, and at most one can be successfully swaps
+                                                                                                                 while the others fail
+broadcasts the reply to the SMs within the chiplet based on
+the IDs recorded in the SM list of the entry.
+                                                                                               using an operation-mask–based approach that merges multiple
+ Timestep0                                                                                   atomic operations into a single transaction.
+                                            Mergetable                        Atomic
+                                                                        1
+                         status     opcode      addr   SMlist   data        add(addr0,1)
+                                                                                                             IV. EXPERIMENTAL SETUP
+                          valid    Atom.add    addr0     {1}      1
+     Streaming                                                               Streaming
+   Multiprocessor0      invalid      ...        ...      ...     ...       Multiprocessor1   A. System Setup
+                                                                                                  In the evaluation, we faithfully extended GPGPU-Sim [24]
+ Timestep1
+                                            Mergetable
+                                                                                               to simulate the multi-chiplet GPU system and integrated the
+                         status    opcode       addr   SMlist   data
+                                                                                               proposed LRM-GPU into the simulator. In particular, we have
+     Streaming           valid    Atom.add    addr0    {0,1}     2
+                                                                              Streaming
+                                                                                               developed a chiplet interconnection platform based on Book-
+   Multiprocessor0       valid    Atom.add    addr1     {1}      1         Multiprocessor1   Sim 2.0 [19], which encompasses features such as composable
+                                                                                               network construction and heterogeneous router/crossbar mi-
+ Timestep2
+                                                                                               croarchitecture. In this platform, the network within a chiplet
+                                            Mergetable                       ×                is independently designed and conﬁgured according to its orig-
+                         status    opcode       addr   SMlist   data
+                                                                                               inal NoC architectures. During the chiplet integration phase,
+                         reserve   Atom.add    addr0    {0,1}     2
+     Streaming                                                               Streaming
+   Multiprocessor0       valid    Atom.add    addr1    {0,1}     3         Multiprocessor1
+                                                                                               the platform takes these pre-designed intra-chiplet networks as
+                                                                             5 Sent            inputs and constructs a composable inter-chiplet interconnect
+                                                                                               through a process involving network integration, modular
+                      Fig. 8. Example of AMU’s workﬂow.
+                                                                                               routing, and chiplet interface incorporation. This platform
+   Although the aforementioned discussion has focused solely                                   has been integrated into the GPGPU-Sim simulator, enabling
+on examples of the atomicadd operation, the principles and                                     GPGPU-Sim to accurately model and uniformly evaluate the
+methodologies apply similarly to other atomic operations. Ta-                                  entire multi-chiplet system.
+ble II lists the atomic operations supported by the AMU. When                                     As shown in Table III, the evaluated multi-chiplet GPU
+the AMU detects these free atoms (commutative/unordered                                        system comprises 4 chiplets, with each chiplet containing 64
+atomics), it can attempt to combine multiple atomic requests                                   SMs, resulting in a total of 256 SMs. Each SM is equipped
+targeting the same address into a single aggregated request                                    with a private L1 cache with a capacity of 128 KB, employing
+by performing the corresponding computations. Among them,                                      a write-through policy. Simultaneously, each chiplet features
+atomicas is a special case: for operations on the same address,                                an intra-chiplet shared L1.5 cache that exclusively caches
+it additionally requires that the comparison data of the two                                   remote data, also utilizing a write-through policy. The LLC
+requests be identical. When the comparison data are the same,                                  is globally shared across all chiplets and adopts a write-back
+one of the requests is selected as the combined request and                                    policy. The total capacity of the L1.5 and LLC caches is 16
+sent to the LLC to attempt the data exchange, while the                                        MB. All NoCs examined in this paper employ concentrated
+other requests are guaranteed to fail and will wait for the                                    hierarchical crossbar topologies, with the inter-chiplet network
+response of the combined request before being returned to                                      directly connecting each GPU chiplet to every other GPU
+their corresponding SMs.                                                                       chiplet, as shown in Fig. 4. The total inter-chiplet bandwidth
+   Moreover, in reality, memory accesses and data transfers                                    is 768 GB/s, and each hop in the inter-chiplet network incurs
+in practice often operate at coarser address granularity, such                                 a latency of 32 cycles. We assume the presence of 4 memory
+as cache line granularity. Accordingly, atomic requests falling                                partitions, culminating in a total of 64 memory channels
+within the same coarse-grained address region can be merged                                    and a memory bandwidth of 3 TB/s. We adopt a ﬁrst-touch
+to improve bandwidth utilization. For requests targeting differ-                               page allocation policy [2], which maps pages to the memory
+ent offsets within the same region, the merging is performed                                   partition of the GPU chiplet that ﬁrst accesses data within the
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+page. Furthermore, we consider distributed CTA scheduling                    tion variable must be written back. Until this write-back is
+[2], which partitions the set of CTAs by assigning each                      completed, no other thread can access this synchronization
+chiplet a contiguous group of CTAs to maximize data locality                 variable. For relaxed atomic operations, the traditional GPU
+among CTAs within the same chiplet. These conﬁgurations are                  approach is still adopted.
+consistent with previous works [2, 52, 53]. For LRM-GPU,                        HMG (NHCC)[43]: HMG is a state-of-the-art chiplet-based,
+the synchronization variable directory comprises a total of 64               multi-GPU coherence protocol. Although primarily designed
+entries. And each chiplet is equipped with an AMU, which                     for multi-GPU systems, we focused on its application in
+features 16 channels. Its merge table contains 2K entries,                   multi-chiplet GPUs and implemented it in GPGPU-Sim. HMG
+organized into 16 banks, and each entry maintains the SM                     utilizes an SM-side LLC instead of an L1.5 cache. The LLC
+list that can accommodate up to 8 SM IDs.                                    uses the write-through policy, which writes all data to the home
+                                                                             node of the LLC and memory partition. Therefore, the home
+                              TABLE III
+            M ULTI -C HIPLET GPU S YSTEM C ONFIGURATIONS                     node always contains the latest data. Consequently, HMG
+                                                                             employs an LLC coherence directory to track all data and
+ Number of chiplets               4                                          maintain the LLC coherence, with each GPU chiplet having
+ Total number of SMs.             256                                        12K entries, each entry covering four cache lines.
+ Max number of warps              64 warps/SM, 32 threads/warp                                               TABLE IV
+ L1 data cache                    128 KB/SM, 128B lines, 4 ways, write                                E VALUATED B ENCHMARKS
+                                  through
+                                                                                                Microbenchmarks [48] (inputs: 8 512 2)
+ L1.5 cache                       2 MB/chiplet, 128B lines, 16 ways,
+                                  write through                                atomicTreeBarr      lfTreeBarr       spinMutex          sleepMutex
+                                                                               (ATB)               (LTB)            (SPM)              (SLM)
+ LLC                              8 MB, 128B lines, 16 ways, write back        faMutex             spinSem2         spinSem10          spinSem120
+ Total capacity of L1.5 cache     16 MB                                        (FAM)               (SPS2)           (SPS10)            (SPS120)
+ and LLC cache                                                                                       with global synchronization
+ Inter-chiplet interconnect       768GB/s, 32 cycles/hop                       benchmarks          inputs           benchmarks         inputs
+ Total DRAM bandwidth             64 channels, 3 TB/s                          reduce(R)[9]        8192 32          scan(S)[9]         16384
+                                                                               histogram(H)[28] 262144 256          pagerank(P)[4]     coAuthorsDBLP
+ Page size/allocation             4KB, ﬁrst-touch
+                                                                                                                                       .graph
+ CTA allocation                   Distributed CTA scheduling                   barnes–hut          262144 4 0       hash-table         65536 2048
+ Sync. variable directory         64 entries, 16 entries/chiplet               (BH)[31]                             (HT)[51]
+                                                                               minimum spanning tree(MST)[31]               USA-road-d.NY.gr
+ AMU                              16 channels; 2k entries, 16 banks; SM
+                                  list: 8; data: 32B                                                without global synchronization
+                                                                               benchmarks          inputs           benchmarks         inputs
+                                                                               b+tree(BT)[5]       command.txt      backprop(BP)[5]    65536
+B. Conﬁgurations
+                                                                               bfs[5]              graph65536.txt   dwt2d[5]           192.bmp
+   To determine the effectivenes of LRM-GPU, we evaluated                      nn[5]               ﬁlelist 32       lavaMD[5]          10×10×10
+the following conﬁgurations:                                                   vgg16 fw(vgg)[33]–                   gpt2 fw(gpt)[32] –
+   MCM-GPU [2]: MCM-GPU employs techniques such as                             hotspot(HS)[5]      temp 512, power 512
+L1.5 cache, ﬁrst-touch page allocation, and distributed CTA
+scheduling to enhance the performance of multi-chiplet GPUs.
+Its synchronization mechanism is similar to that of traditional              C. Workloads
+GPUs. During an acquire operation, the L1 and L1.5 caches                       We focus on applications that necessitate global synchro-
+are invalidated. It is necessary to ensure that dirty data is                nization. Moreover, to evaluate whether the proposed design
+ﬂushed back to the LLC when a release operation occurs.                      would have any adverse impact on other applications, we also
+Since both the L1 and L1.5 caches adopt a write-through                      assessed applications that do not involve global synchroniza-
+policy, stale data is guaranteed not to exist in the LLC, thus               tion. Table IV provides a summary of these workloads, which
+eliminating the need to ﬂush the L1 and L1.5 caches. This                    have also been widely used in other studies[12, 13, 54] to
+principle also applies to other conﬁgurations.                               investigate GPU synchronization issues. For these applications,
+   hLRC [1]: It was originally designed for monolithic GPUs,                 we conﬁgured their input sizes to ensure reasonable occupancy
+we implemented it in GPGPU-Sim and extended its described                    on the multi-chiplet GPU. Additionally, to thoroughly test
+mechanisms to multi-chiplet GPUs. hLRC tracks the registra-                  our proposed scheme, we made minor modiﬁcations to the
+tion locations of synchronization variables to exploit synchro-              workloads to incorporate synchronization semantics such as
+nization locality among SMs. It also caches synchronization                  acquire and release. The multi-chiplet GPU architecture pre-
+variables in caches at all levels and employs a write-back                   serves the monolithic GPU abstraction, all chiplets present a
+policy for them. To ensure the consistency and atomicity of                  uniﬁed global memory space and a single logical device to the
+synchronization variables, whenever the location of a synchro-               programming model. Consequently, the workloads’ kernels,
+nization variable changes, the remotely cached synchroniza-                  data structures, and launch conﬁgurations do not need to be
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+                                      Fig. 9. Speedup on MCM-GPU, hLRC, HMG, AMU only and LRM-GPU.
+
+modiﬁed; the only differences lie in how the hardware and                    signiﬁcantly degrade its performance. HMG achieves good
+runtime partition data and schedule threads across chiplets,                 performance on some benchmarks, even attaining the highest
+which is completely transparent to the programmer.These                      speedup in HT. However, it also performs poorly on some
+workloads were compiled using the O3 optimization level                      benchmarks, such as MST and PG, because these benchmarks
+under CUDA 11.1. In the evaluation, we focus on the kernels                  contain a large number of atomic operations, which trigger
+that need to be global synchronized for these workloads.                     numerous write-invalidations in HMG, leading to degraded
+                                                                             performance.
+              V. EXPERIMENTAL RESULTS
+A. Performance Evaluation
+   In order to quantify the performance advantages of LRM-
+GPU, we evaluated multiple workloads with global synchro-
+nization, as well as microbenchmarks with different synchro-
+nization schemes, using MCM-GPU, hLRC, HMG, AMU only
+and LRM-GPU. The speedups are illustrated in Fig. 9, with
+all speedups normalized to MCM-GPU as the baseline. The
+simulation results show that for microbenchmarks with var-
+ious synchronization schemes (including barriers, lock-based
+synchronization, and semaphores) LRM-GPU achieves good
+speedup, with an average performance improvement of 1.19×,
+demonstrating its effectiveness and adaptability. For most
+benchmarks requiring global synchronization, LRM-GPU also
+                                                                              Fig. 10. Invalidate cache number on MCM-GPU, hLRC, and LRM-GPU.
+achieves the highest speedup, indicating that it effectively
+mitigates synchronization overhead in multi-chiplet GPUs.                       Fig. 10 illustrates a comparison of the number of invalidat-
+Speciﬁcally, compared to MCM-GPU, LRM-GPU attains an                         ing L1.5 cache among MCM-GPU, hLRC, and LRM-GPU,
+average speedup of 1.33×, with the AMU contributing an av-                   with all values normalized to MCM-GPU as the baseline.
+erage speedup of 1.16×. Compared to the state-of-the-art work                Since HMG employs a cache coherence protocol to maintain
+HMG, which extends cache coherence in multi-chiplet GPUs,                    data coherence in the SM-side LLC, it does not require cache
+LRM-GPU achieves an average speedup of 1.22×. hLRC per-                      invalidations or ﬂushes beyond the L1 cache; hence, it is
+forms poorly in most benchmarks because it caches synchro-                   excluded from this comparison. Compared with MCM-GPU,
+nization variables in multiple levels of caches. Although this               LRM-GPU reduces the number of L1.5 cache invalidations by
+approach better exploits the locality among synchronization                  an average of 30%, while hLRC achieves a 56% reduction.
+variables, each time a synchronization variable is accessed by               For hLRC, since it caches synchronization variables in both
+different SMs, it initially misses in the local caches at all                L1 cache and L1.5 cache, local synchronization requests
+levels and necessitates ﬂushing the synchronization variable                 can access these variables more rapidly and are more easily
+cached in the remote L1 cache back to the LLC. During this                   able to acquire the registration for them compared to remote
+period, all other threads are unable to obtain its registration and          synchronization requests, thereby better leveraging locality.
+access it. Consequently, when contention for synchronization                 Consequently, in most scenarios, hLRC experiences fewer oc-
+variables is intense, the frequent cache misses across multiple              currences of invalid cache accesses than LRM-GPU. However,
+cache levels and the waiting for synchronization variable ﬂush               as previously mentioned, when synchronization requests are
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+issued by different SMs, synchronization variables cached re-                of cache invalidations, thereby achieving a notable speedup.
+motely need to be written back. During the write-back period,
+other synchronization requests attempting to access the same
+variable will fail, signiﬁcantly increasing synchronization la-
+tency. This undermines the advantage of reducing the number
+of invalid cache accesses, preventing it from being effectively
+exploited. Regarding the histogram and pagerank benchmarks,
+which primarily utilize atomic operations for synchronous
+updates of shared data, invalidating the cache occurs only upon
+kernel completion. Therefore, there is virtually no reduction
+in the number of invalid cache accesses for both hLRC and
+LRM-GPU in these scenarios.
+                                                                             Fig. 12. Performance of benchmarks without global synchronization on
+                                                                             MCM-GPU and LRM-GPU.
+                                                                                To assess the impact of the LRM-GPU modiﬁcations for
+                                                                             multi-chiplet GPUs on the execution of other programs,
+                                                                             we tested a set of benchmarks that do not involve global
+                                                                             synchronization, including ML inference programs such as
+                                                                             VGG16 and GPT-2. The results are shown in Fig. 12, with all
+                                                                             performance normalized to MCM-GPU as the baseline. The
+                                                                             results indicate that the modiﬁcations implemented in LRM-
+                                                                             GPU have minimal impact on the execution of other programs,
+                                                                             with an average performance difference of only 2% compared
+                                                                             to MCM-GPU.
+
+                                                                             B. Energy and Area Evaluation
+Fig. 11. Inter-chiplet trafﬁc on MCM-GPU, hLRC, HMG, AMU only and
+LRM-GPU.
+
+   Fig.11 presents a comparison of inter-chiplet trafﬁc among
+MCM-GPU, hLRC, HMG, AMU only and LRM-GPU. All
+trafﬁc values normalized to MCM-GPU as the baseline, and
+the trafﬁc here includes all memory accesses and coherence
+messages. Compared with MCM-GPU, LRM-GPU reduces
+inter-chiplet trafﬁc by 28%, with the AMU contributing a
+12% reduction in trafﬁc. Moreover, compared with the state-
+of-the-art HMG design, it achieves an average reduction of
+52%. For hLRC, since synchronization variables are cached
+across various cache levels, each time a synchronization
+variable is accessed by different SMs, a write-back request
+must be sent to the remote cache holding the synchronization
+variable. And, other threads cannot successfully register the
+                                                                             Fig. 13. Energy consumption on MCM-GPU, hLRC, HMG, and LRM-GPU.
+synchronization variable until the write-back operation is
+completed. To prevent blocking memory accesses, each failed                     To evaluate the energy consumption of LRM-GPU system,
+synchronization access triggers a return and resending of the                we analyzed runtime activities to calculate dynamic power. We
+request. Consequently, when contention for synchronization                   leveraged AccelWattch [21] of GPGPU-Sim and inter-chiplet
+variables is intense, inter-chiplet trafﬁc signiﬁcantly increases.           transmission energy data (0.54 pJ/bit) provided in the paper
+This explains the reason that hLRC still suffers performance                 [2, 40] to evaluate the energy consumption of the cache system
+degradation despite fewer cache invalidations. HMG employs                   and Network under different benchmarks. Fig. 13 presents a
+the cache coherence protocol, necessitating the transmission                 comparison of energy consumption among MCM-GPU, hLRC,
+of an invalidation request to sharers of written data. As a                  HMG, and LRM-GPU, with all energy consumption values
+result, in most scenarios, HMG exhibits increased inter-chiplet              normalized to MCM-GPU as the baseline. The results indicate
+trafﬁc. However, since HMG does not require invalidation of                  that, compared to MCM-GPU, LRM-GPU achieves an average
+caches beyond the L1 level and does not need to receive                      energy reduction of 18%. Moreover, compared to HMG, LRM-
+an invalidation reply, it still achieves a positive performance              GPU achieves an average energy reduction of 32%. hLRC
+impact overall. In contrast, LRM-GPU effectively reduces                     and HMG exhibit increased energy consumption due to the
+inter-chiplet trafﬁc in most cases and decreases the number                  increased inter-chiplet transmission trafﬁc.
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+   Fig. 14 presents the energy breakdown of MCM-GPU and                     the tag address is 48 bits, and an additional 1 bit is needed to
+LRM-GPU, where the inter-chiplet and intra-chiplet networks                 indicate whether an entry is valid. Consequently, each entry
+account for the majority of the energy consumption. Since                   in the directory needs 51 bits. There are 64 entries in the
+LRM-GPU reduces inter-chiplet trafﬁc, the energy share of                   directory, so the total capacity of the directory is 0.4 KB,
+its inter-chiplet network is slightly lower compared to MCM-                which accounts for only 0.3% of the capacity of a L1 cache.
+GPU, and the newly added AMU consumes only 0.13%.
+                                                                            C. Sensitivity analyses
+                                                                               We conducted a sensitivity study and analysis of LRM-GPU
+                                                                            under different chiplet scales and inter-chiplet transmission
+                                                                            latencies.
+                                                                               Chiplet scale: We increased the number of chiplets from
+                                                                            4 to 6 and then to 8, while keeping the resources on each
+                                                                            chiplet unchanged, as shown in Fig. 15 (a). As the number
+                                                                            of chiplets increases, the performance gain of LRM-GPU
+                                                                            gradually diminishes, dropping from a 1.33× improvement
+                                                                            with 4 chiplets to a 1.21× improvement with 8 chiplets. This
+   Fig. 14. Energy breakdown of (a) MCM-GPU and (b) LRM-GPU.                is expected, since increasing the number of chiplets reduces
+                                                                            the locality of synchronization variables across chiplets, which
+   To evaluate the proposed AMU that has been embedded                      in turn leads to decreased performance.
+into the network, we employed Cadence Virtuoso to customize                    Inter-chiplet transmission latency: We tested latencies
+and implement the merge table within AMU, while the other                   ranging from 8 cycles to 48 cycles, as shown in Fig. 15
+components of AMU were realized using Verilog RTL. For                      (b). The performance of LRM-GPU remains nearly unchanged
+the merge table, a corresponding netlist was generated under                between 8 and 32 cycles, with only a slight drop at 48 cycles.
+the TSMC 40nm process. This netlist was subsequently inte-                  Due to the high parallelism of GPUs and warp switching that
+grated into the Cadence Spectre simulation environment and                  hides latency, GPU performance is relatively insensitive to
+simulated under the TT process corner, at a temperature of 25               latency but sensitive to bandwidth.
+◦
+  C, a frequency of 1 GHz, and a voltage of 1.1V to measure its
+power consumption. We then evaluate the area of the merge
+table based on the layout of the customized circuit and the
+40nm standard cell library. For the remaining components of
+AMU, we utilized Synopsys Design Compiler to synthesize the
+logic circuits under the TSMC 40nm process. The breakdown
+of AMU’s energy consumption and area utilization is detailed
+in Table V.
+   In particular, the total power consumption of AMU is                     Fig. 15. Sensitivity analyses for LRM-GPU. (a) Chiplet scale; (b) Inter-chiplet
+301mW at 40nm process. To better contextualize this cost,                   transmission latency.
+we referred to NVIDIA GPU V100, which comprises 80
+SMs, a number comparable to the 64 SMs in a chiplet of                                             VI. RELATED WORK
+our system, is fabricated using a 12nm process with a total                    Multi-chiplet GPUs. Existing work on multi-chiplet GPUs
+power consumption of 300W [37]. Despite the V100 being                      mainly focuses on NUMA effects and bandwidth mismatch.
+fabricated in a more advanced process, the power consumption                MCM-GPU[2] reduces remote accesses via remote data
+of AMU is only 0.1% of V100. And the total area of AMU                      caching, distributed CTA scheduling, and ﬁrst-touch page
+is 1.84mm2 at 40nm process. For reference, the area of V100                 placement. Memory-centric MCM-GPU[44] builds a bridge
+is 815mm2 at 12nm process, while the AMU, evaluated in an                   network on the interposer to dynamically allocate the GPU’s
+older technology node, is only 0.2% of the V100’s area.                     off-chip bandwidth and better match application demands.
+                           TABLE V                                          AdCoalescer[53] and NearFetch[55] reduce cross-chiplet traf-
+             E NERGY AND AREA BREAKDOWN OF AMU                              ﬁc and remote bandwidth usage by coalescing memory re-
+                                                                            quests across SMs and forwarding shared data to nearby
+  Components            Power(mW)               Area(mm2)                   requesters along the path, respectively. SAC[52] further adapts
+  merge table           185.51                  1.52                        to different sharing patterns by dynamically reconﬁguring the
+  others                115.93                  0.32                        LLC organization between memory-side and SM-side modes
+  total                 301.44                  1.84                        according to cross-chiplet sharing characteristics, thereby im-
+                                                                            proving effective bandwidth. In addition, MGvm[42] proposes
+   In addition, we employ a directory to track the owner of                 an MCM-aware virtual memory design to mitigate the impact
+synchronization variables. For the system with 4 chiplets, a 2-             of non-uniformity on TLB hit rates and page table walks,
+bit vector is required to represent the owner. We assume that               while Barre Chord[14] exploits the structural property of
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+physically isomorphic pages across chiplets to merge multiple               emerging multi-chiplet GPU architectures to facilitate efﬁcient
+translations, reducing both local/remote page table walks and               synchronization.
+IOMMU access overhead.
+   GPU synchronization. hLRC[1] introduced a mechanism                                             ACKNOWLEDGMENT
+similar to DeNovo to track the ownership of synchronization                    This work was supported in part by the National Natural
+variables and only performed coherence op-erations when                     Science Foundation of China (NSFC) under Grant 92373103,
+synchronization variables resided in different L1 caches. How-              62204271, 62334014, and in part by the Opening Project
+ever, in the multi-chiplet GPU, frequent ownership migration                of Key Laboratory of Automotive Chip Testing and Evalua-
+across chiplets incurs substantial coherence overhead under                 tion, State Administration for Market Regulation under Grant
+limited inter-chiplet bandwidth and deeper cache hierarchies.               QCXP202501.
+ARC[11], LAB[10], and DAB[7] merge atomic operations
+within an SM via warp-level reduction and on-SM atomic                                                     R EFERENCES
+buffers, but do not exploit locality across SMs. Atomic                      [1] J. Alsop, M. S. Orr, B. M. Beckmann, and D. A. Wood, “Lazy Release
+Cache[54] implements the atomic operations through in-                           Consistency for GPUs,” in 2016 49th Annual IEEE/ACM International
+cache computing, thus mitigating synchronization overhead.                       Symposium on Microarchitecture (MICRO). IEEE, 2016, pp. 1–14.
+                                                                             [2] A. Arunkumar, E. Bolotin, B. Cho, U. Milic, E. Ebrahimi, O. Villa,
+HMG[43] extends cache coherence to multi-GPU systems                             A. Jaleel, C.-J. Wu, and D. Nellans, “MCM-GPU: Multi-Chip-Module
+using a VI-like protocol and a hierarchical sharer-tracking                      GPUs for Continued Performance Scalability,” ACM SIGARCH Com-
+scheme to reduce synchronization overhead. CPElide[8] lever-                     puter Architecture News, vol. 45, no. 2, pp. 320–332, 2017.
+                                                                             [3] A. Arunkumar, E. Bolotin, D. Nellans, and C.-J. Wu, “Understanding
+ages the CP’s global information to optimize implicit syn-                       the Future of Energy Efﬁciency in Multi-Module GPUs,” in 2019 IEEE
+chronization, but is ineffective for explicit synchronization                    International Symposium on High Performance Computer Architecture
+because runtime contention is hard to predict. In contrast,                      (HPCA). IEEE, 2019, pp. 519–532.
+                                                                             [4] S. Che, B. M. Beckmann, S. K. Reinhardt, and K. Skadron, “Pannotia:
+LRM-GPU focuses on explicit synchronization in multi-chiplet                     Understanding Irregular GPGPU Graph Applications,” in 2013 IEEE In-
+GPUs, it maintains a lightweight directory of synchronization                    ternational Symposium on Workload Characterization (IISWC). IEEE,
+variables at the LLC and only triggers coherence actions                         2013, pp. 185–195.
+                                                                             [5] S. Che, M. Boyer, J. Meng, D. Tarjan, J. W. Sheaffer, S.-H. Lee,
+when ownership moves across chiplets; at the same time,                          and K. Skadron, “Rodinia: A Benchmark Suite for Heterogeneous
+AMU embedded in the interconnect network exploit chiplet-                        Computing,” in 2009 IEEE International Symposium on Workload
+level locality to merge cross-chiplet atomic requests, thereby                   Characterization (IISWC), 2009.
+                                                                             [6] S. Chetlur, C. Woolley, P. Vandermersch, J. Cohen, J. Tran, B. Catanzaro,
+alleviating the limited inter-chiplet bandwidth bottleneck.                      and E. Shelhamer, “cudnn: Efﬁcient Primitives for Deep Learning,”
+                                                                                 arXiv preprint arXiv:1410.0759, 2014.
+                                                                             [7] Y. H. Chou, C. Ng, S. Cattell, J. Intan, M. D. Sinclair, J. Devietti, T. G.
+                     VII. CONCLUSION                                             Rogers, and T. M. Aamodt, “Deterministic Atomic Buffering,” in 2020
+                                                                                 53rd Annual IEEE/ACM International Symposium on Microarchitecture
+   To alleviate the synchronization overhead in multi-chiplet                    (MICRO). IEEE, 2020, pp. 981–995.
+GPUs caused by additional cache levels and limited inter-                    [8] P. Dalmia, R. S. Kumar, and M. D. Sinclair, “CPElide: Efﬁcient
+                                                                                 Multi-Chiplet GPU Implicit Synchronization,” in 2024 57th IEEE/ACM
+chiplet link bandwidth, this paper proposes LRM-GPU to                           International Symposium on Microarchitecture (MICRO). IEEE, 2024,
+provide efﬁcient synchronization support. LRM-GPU lever-                         pp. 700–717.
+ages lazy release consistency to mitigate the more expensive                 [9] P. Dalmia, R. Mahapatra, J. Intan, D. Negrut, and M. D. Sinclair,
+                                                                                 “Improving the Scalability of GPU Synchronization Primitives,” IEEE
+global synchronization overhead stemming from the extra                          Transactions on Parallel and Distributed Systems, vol. 34, no. 1, pp.
+cache hierarchy. It associates each synchronization variable                     275–290, 2022.
+with the chiplet where it was last accessed, and only performs              [10] P. Dalmia, R. Mahapatra, and M. D. Sinclair, “Only buffer When You
+                                                                                 Need to: Reducing on-Chip GPU Trafﬁc with Reconﬁgurable Local
+coherence actions such as invalidation and ﬂushing when the                      Atomic Buffers,” in 2022 IEEE International Symposium on High-
+owner of the synchronization variable changes across differ-                     Performance Computer Architecture (HPCA). IEEE, 2022, pp. 676–
+ent chiplets, thereby reducing redundant cache invalidations                     691.
+                                                                            [11] S. Durvasula, A. Zhao, F. Chen, R. Liang, P. K. Sanjaya, Y. Guan,
+and ﬂushes. To address the issue of limited inter-chiplet                        C. Giannoula, and N. Vijaykumar, “ARC: Warp-level Adaptive Atomic
+bandwidth affecting atomic operations for synchronization                        Reduction in GPUs to Accelerate Differentiable Rendering,” in Proceed-
+executed across different chiplets, LRM-GPU introduces a                         ings of the 30th ACM International Conference on Architectural Support
+                                                                                 for Programming Languages and Operating Systems, Volume 1, 2025,
+synchronization atomic merge unit within the network. This                       pp. 64–83.
+unit detects atomic operations transmitted across chiplets and              [12] A. ElTantawy and T. M. Aamodt, “Mimd synchronization on simt
+merges them to reduce inter-chiplet trafﬁc. The evaluations                      architectures,” in 2016 49th Annual IEEE/ACM International Symposium
+                                                                                 on Microarchitecture (MICRO). IEEE, 2016, pp. 1–14.
+demonstrate that, compared to the MCM-GPU, LRM-GPU                          [13] A. ElTantawy and T. M. Aamodt, “Warp scheduling for ﬁne-grained
+achieves a speedup of 1.33×. Moreover, compared to the                           synchronization,” in 2018 IEEE International Symposium on High
+state-of-the-art HMG, LRM-GPU also achieves the speedup                          Performance Computer Architecture (HPCA). IEEE, 2018, pp. 375–
+                                                                                 388.
+of 1.22×, reduces 52% of inter-chiplet trafﬁc, and reduces                  [14] Y. Feng, S. Na, H. Kim, and H. Jeon, “Barre Chord: Efﬁcient Virtual
+32% of energy consumption on average. Additionally, LRM-                         Memory Translation for Multi-Chip-Module GPUs,” in 2024 ACM/IEEE
+GPU achieves signiﬁcant advantages while generating minimal                      51st Annual International Symposium on Computer Architecture (ISCA).
+                                                                                 IEEE, 2024, pp. 834–847.
+additional overhead. These advantages indicate the signiﬁcant               [15] Y. Fu, E. Bolotin, N. Chatterjee, D. Nellans, and S. W. Keckler, “GPU
+potential of LRM-GPU, and this solution can be integrated into                   Domain Specialization via Composable on-Package Architecture,” ACM
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+     Transactions on Architecture and Code Optimization (TACO), vol. 19,              D. A. Wood, “Synchronization using Remote-Scope Promotion,” ACM
+     no. 1, pp. 1–23, 2021.                                                           SIGARCH Computer Architecture News, vol. 43, no. 1, pp. 73–86, 2015.
+[16] B. A. Hechtman, S. Che, D. R. Hower, Y. Tian, B. M. Beckmann, M. D.         [39] S. Pal, D. Petrisko, M. Tomei, P. Gupta, S. S. Iyer, and R. Kumar,
+     Hill, S. K. Reinhardt, and D. A. Wood, “QuickRelease: A Throughput-              “Architecting Waferscale Processors-a GPU Case Study,” in 2019 IEEE
+     Oriented Approach to Release Consistency on GPUs,” in 2014 IEEE                  International Symposium on High Performance Computer Architecture
+     20th International Symposium on High Performance Computer Archi-                 (HPCA). IEEE, 2019, pp. 250–263.
+     tecture (HPCA). IEEE, 2014, pp. 189–200.                                    [40] J. W. Poulton, W. J. Dally, X. Chen, J. G. Eyles, T. H. Greer, S. G. Tell,
+[17] B. A. Hechtman and D. J. Sorin, “Exploring Memory Consistency for                J. M. Wilson, and C. T. Gray, “A 0.54 pJ/b 20 Gb/s Ground-Referenced
+     Massively-Threaded Throughput-Oriented Processors,” in Proceedings               Single-Ended Short-Reach Serial Link in 28 nm CMOS for Advanced
+     of the 40th Annual International Symposium on Computer Architecture,             Packaging Applications,” IEEE Journal of Solid-State Circuits, vol. 48,
+     2013, pp. 201–212.                                                               no. 12, pp. 3206–3218, 2013.
+[18] D. R. Hower, B. A. Hechtman, B. M. Beckmann, B. R. Gaster, M. D.            [41] J. Power, A. Basu, J. Gu, S. Puthoor, B. M. Beckmann, M. D. Hill,
+     Hill, S. K. Reinhardt, and D. A. Wood, “Heterogeneous-Race-Free                  S. K. Reinhardt, and D. A. Wood, “Heterogeneous System Coherence
+     Memory Models,” in Proceedings of the 19th international conference              for Integrated CPU-GPU Systems,” in Proceedings of the 46th Annual
+     on Architectural support for programming languages and operating                 IEEE/ACM International Symposium on Microarchitecture, 2013, pp.
+     systems, 2014, pp. 427–440.                                                      457–467.
+[19] N. Jiang, D. U. Becker, G. Michelogiannakis, J. Balfour, B. Towles, D. E.   [42] B. Pratheek, N. Jawalkar, and A. Basu, “Designing Virtual Memory Sys-
+     Shaw, J. Kim, and W. J. Dally, “A Detailed and Flexible Cycle-Accurate           tem of MCM GPUs,” in 2022 55th IEEE/ACM International Symposium
+     Network-on-Chip Simulator,” in 2013 IEEE international symposium on              on Microarchitecture (MICRO). IEEE, 2022, pp. 404–422.
+     performance analysis of systems and software (ISPASS). IEEE, 2013,          [43] X. Ren, D. Lustig, E. Bolotin, A. Jaleel, O. Villa, and D. Nellans, “Hmg:
+     pp. 86–96.                                                                       Extending Cache Coherence Protocols Across Modern Hierarchical
+[20] H. Jooybar, W. W. Fung, M. O’Connor, J. Devietti, and T. M. Aamodt,              Multi-GPU Systems,” in 2020 IEEE International Symposium on High
+     “GPUDet: A Deterministic GPU Architecture,” in Proceedings of the                Performance Computer Architecture (HPCA). IEEE, 2020, pp. 582–
+     eighteenth international conference on Architectural support for pro-            595.
+     gramming languages and operating systems, 2013, pp. 1–12.                   [44] H. SeyyedAghaei, M. Naderan-Tahan, M. Jahre, and L. Eeckhout,
+[21] V. Kandiah, S. Peverelle, M. Khairy, J. Pan, A. Manjunath, T. G. Rogers,         “Memory-Centric MCM-GPU Architecture,” IEEE Computer Architec-
+     T. M. Aamodt, and N. Hardavellas, “AccelWattch: A Power Modeling                 ture Letters, vol. 24, no. 1, pp. 101–104, 2025.
+     Framework for Modern GPUs,” in MICRO-54: 54th Annual IEEE/ACM               [45] Y. S. Shao, J. Clemons, R. Venkatesan, B. Zimmer, M. Fojtik, N. Jiang,
+     International Symposium on Microarchitecture, 2021, pp. 738–753.                 B. Keller, A. Klinefelter, N. Pinckney, P. Raina et al., “Simba: Scaling
+[22] A. Kannan, N. E. Jerger, and G. H. Loh, “Exploiting Interposer                   Deep-Learning Inference with Multi-Chip-Module-Based Architecture,”
+     Technologies to Disintegrate and Reintegrate Multicore Processors,” Ieee         in Proceedings of the 52nd annual IEEE/ACM international symposium
+     Micro, vol. 36, no. 3, pp. 84–93, 2016.                                          on microarchitecture, 2019, pp. 14–27.
+[23] S. Keckler, “Life After Dennard and How I Learned to Love the               [46] K. Simonyan and A. Zisserman, “Very Deep Convolutional Networks
+     Picojoule,” Keynote at MICRO, 2011.                                              for Large-Scale Image Recognition,” arXiv preprint arXiv:1409.1556,
+[24] M. Khairy, Z. Shen, T. M. Aamodt, and T. G. Rogers, “Accel-sim:                  2014.
+     An Extensible Simulation Framework for Validated GPU Modeling,” in          [47] M. D. Sinclair, J. Alsop, and S. V. Adve, “Efﬁcient GPU Synchroniza-
+     2020 ACM/IEEE 47th Annual International Symposium on Computer                    tion Without Scopes: Saying No to Complex Consistency Models,” in
+     Architecture (ISCA). IEEE, 2020, pp. 473–486.                                    Proceedings of the 48th International Symposium on Microarchitecture,
+[25] K. Koukos, A. Ros, E. Hagersten, and S. Kaxiras, “Building Heteroge-             2015, pp. 647–659.
+     neous Uniﬁed Virtual Memories (UVMs) Without the Overhead,” ACM             [48] M. D. Sinclair, J. Alsop, and S. V. Adve, “HeteroSync: A Benchmark
+     Transactions on Architecture and Code Optimization (TACO), vol. 13,              Suite for Fine-Grained Synchronization on Tightly Coupled GPUs,”
+     no. 1, pp. 1–22, 2016.                                                           in 2017 ieee international symposium on workload characterization
+[26] A. Lavin and S. Gray, “Fast Algorithms for Convolutional Neural                  (IISWC). IEEE, 2017, pp. 239–249.
+     Networks,” in Proceedings of the IEEE conference on computer vision         [49] I. Singh, A. Shriraman, W. W. Fung, M. O’Connor, and T. M. Aamodt,
+     and pattern recognition, 2016, pp. 4013–4021.                                    “Cache Coherence for GPU Architectures,” in 2013 IEEE 19th Interna-
+[27] J. M. Mellor-Crummey and M. L. Scott, “Algorithms for Scalable Syn-              tional Symposium on High Performance Computer Architecture (HPCA).
+     chronization on Shared-Memory Multiprocessors,” ACM Transactions                 IEEE, 2013, pp. 578–590.
+     on Computer Systems (TOCS), vol. 9, no. 1, pp. 21–65, 1991.                 [50] A. Snell and L. Segervall, “HPC Application Support for GPU Com-
+[28] D. Merrill, “NVIDIA CUB Library,” https:// nvlabs.github.io/ cub/, 2020.         puting,” Intersect365 Research, 2017.
+[29] U. Milic, O. Villa, E. Bolotin, A. Arunkumar, E. Ebrahimi, A. Jaleel,       [51] K. Wang, D. Fussell, and C. Lin, “Fast ﬁne-grained global synchro-
+     A. Ramirez, and D. Nellans, “Beyond the socket: NUMA-aware GPUs,”                nization on gpus,” in Proceedings of the Twenty-Fourth International
+     in Proceedings of the 50th Annual IEEE/ACM International Symposium               Conference on Architectural Support for Programming Languages and
+     on Microarchitecture, 2017, pp. 123–135.                                         Operating Systems, 2019, pp. 793–806.
+[30] G. E. Moore, “Cramming More Components onto Integrated Circuits,”           [52] S. Zhang, M. Naderan-Tahan, M. Jahre, and L. Eeckhout, “SAC:
+     Proceedings of the IEEE, vol. 86, no. 1, pp. 82–85, 1998.                        Sharing-aware Caching in Multi-Chip GPUs,” in Proceedings of the 50th
+[31] M. A. O’Neil and M. Burtscher, “Microarchitectural Performance Char-             Annual International Symposium on Computer Architecture, 2023, pp.
+     acterization of Irregular GPU Kernels,” in 2014 IEEE International               1–13.
+     Symposium on Workload Characterization (IISWC). IEEE, 2014, pp.             [53] X. Zhang, G. Zhang, L. Wang, S. Zhang, and X. Zhao, “AdCoalescer:
+     130–139.                                                                         An Adaptive Coalescer to Reduce the Inter-Module Trafﬁc in MCM-
+[32] [Online], “llm.c,” https://https://github.com/karpathy/llm.c.                    GPUs,” in Proceedings of the 53rd International Conference on Parallel
+[33] [Online], “Simple-vgg16-cu,” https://github.com/ rezaisajjad /simple-            Processing, 2024, pp. 1001–1011.
+     vgg16-cu.                                                                   [54] Y. Zhang, M. Wang, W. Wang, Y. Mai, H. Huang, and Z. Yu, “Atomic
+[34] [Online], “Nvidias Next Generation CUDA Compute-Architecture: Ke-                Cache: Enabling Efﬁcient Fine-Grained Synchronization with Relaxed
+     pler gk110,” https:// www.nvidia.com/ content/ dam/ en-zz/ Solutions/            Memory Consistency on GPGPUs Through In-Cache Atomic Opera-
+     Data-Center/ tesla-product-literature/ NVIDIA-Kepler-GK110-GK210-                tions,” in 2024 57th IEEE/ACM International Symposium on Microar-
+     Architecture-Whitepaper.pdf, 2012.                                               chitecture (MICRO). IEEE, 2024, pp. 671–685.
+[35] [Online], “TOP500 Shows Growing Momentum for Accelera-                      [55] X. Zhao, G. Zhang, L. Wang, S. Zhang, and H. Dai, “NearFetch: Saving
+     tors.” https://insidehpc.com/2015/11/top500-shows-growing-momentum-              Inter-Module Bandwidth in Many-Chip-Module GPUs,” in 2025 IEEE
+     for-accelerators/, 2015.                                                         International Symposium on High Performance Computer Architecture
+[36] [Online], “NVIDIA Tesla P100 Architecture,” https://images.nvidia.com            (HPCA). IEEE, 2025, pp. 1693–1706.
+     /content/pdf/tesla/whitepaper/pascal-architecture-whitepaper.pdf, 2016.
+[37] [Online], “NVIDIA Tesla V100 Architecture,” https://images.nvidia.com
+     /content/volta-architecture/pdf/volta-architecture-whitepaper.pdf, 2017.
+[38] M. S. Orr, S. Che, A. Yilmazer, B. M. Beckmann, M. D. Hill, and
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:42:51 UTC from IEEE Xplore. Restrictions apply.
+

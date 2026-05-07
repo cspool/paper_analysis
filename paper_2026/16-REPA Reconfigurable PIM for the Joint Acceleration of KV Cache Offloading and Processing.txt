@@ -1,0 +1,1405 @@
+ REPA: Reconfigurable PIM for the Joint Acceleration
+       of KV Cache Offloading and Processing
+                             Yang Hong                                                                Junlong Yang
+                       yang-hong@sjtu.edu.cn                                                     klearlove@sjtu.edu.cn
+                    Shanghai Jiao Tong University                                             Shanghai Jiao Tong University
+                          Shanghai, China                                                           Shanghai, China
+
+                               Bo Peng∗                                                               Jianguo Yao∗
+                    pengbo_michael@sjtu.edu.cn                                                  jianguo.yao@sjtu.edu.cn
+                    Shanghai Jiao Tong University                                             Shanghai Jiao Tong University
+                          Shanghai, China                                                           Shanghai, China
+
+Abstract                                                                         Keywords: Processing-in-Memory; Large Language Models;
+The use of KV cache in LLM inference leads to large mem-                         KV Cache; ReRAM
+ory footprint and sub-optimal decoding performance. Prior                        ACM Reference Format:
+studies typically address one of these two limitations by                        Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao. 2026. REPA:
+either offloading or stage-split inference. In this paper, we                    Reconfigurable PIM for the Joint Acceleration of KV Cache Of-
+explore and reveal the possibility of a joint solution, and                      floading and Processing. In Proceedings of the 30th ACM Interna-
+propose REPA, a GPU-PIM hybrid system to prototype this                          tional Conference on Architectural Support for Programming Lan-
+                                                                                 guages and Operating Systems, Volume 2 (ASPLOS ’26), March 22–26,
+idea. We leverage reconfigurable ReRAM PIM to achieve
+                                                                                 2026, Pittsburgh, PA, USA. ACM, New York, NY, USA, 18 pages.
+fast KV cache persistence, and balance the requirement of
+                                                                                 https://doi.org/10.1145/3779212.3790212
+processing speed and memory capacity. To fully unleash the
+parallelization potential of REPA, we propose optimizations                      1   Introduction
+in (1) architecture, (2) data mapping and (3) pipelining: (1)
+We propose bulk-wise memory instructions and multi-level                         Transformer-based large language models (LLMs) emerge
+controllers to enable finer-grained parallelism in the PIM de-                   as powerful tools for natural language processing [5, 9, 10,
+vice. (2) We propose locality-aware data mapping to make the                     12, 71]. As fundamental building blocks, they empower com-
+best of the aforementioned architectural optimization, and                       plex AI applications such as conversational systems, image
+reduce long-range data transfer on chip. (3) We adopt sub-                       generation, and embodied intelligence [6, 37, 42, 45, 52, 60].
+batch pipelining to reduce idleness in batches, and propose                      The key to the extraordinary performance of LLMs is multi-
+transfer overlapping to shadow the KV cache transfer by com-                     head attention [66], a structure predicting output tokens by
+putation. Experimental results show that REPA exhibits high                      key-value based context matching and retrieval. Collectively
+inference speed, energy efficiency and integratability. It is                    termed the “KV cache”, the keys (K) and values (V) are pre-
+1.5–6.5× faster, and 8–10× more efficient than NVIDIA A100.                      served and reused throughout the entire inference process
+It also outperforms state-of-the-art DRAM PIM systems by                         [48, 57]. This space-for-time trade-off eliminates repetitive
+up to 1.4× for long context inference. When integrated into                      computation, which is the very reason making transformer
+existing offloading systems, REPA achieves 1.4–2.0× offload-                     a practical LLM solution. Yet on the other hand, the use of
+ing speed, and 1.2–1.4× end-to-end speedup, showcasing its                       KV cache issues two problems in GPU-based systems:
+high potential for fast KV cache offloading and processing.                         Problem #1: memory footprint and offloading overhead.
+                                                                                 KV cache accounts for 30%–80% of the overall GPU memory
+CCS Concepts: • Computer systems organization → Het-                             usage in LLM inference [72, 74, 78]. Scaled with the sequence
+erogeneous (hybrid) systems.                                                     length, it becomes one of the major causes of the gap between
+                                                                                 memory requirement and provisioning. Offloading is now a
+∗ Corresponding author.
+                                                                                 de-facto solution to overcome this challenge [34, 51, 59, 61].
+                                                                                 However, it incurs significant overhead, especially when the
+                                                                                 KV cache needs to be persisted to support advanced features
+                                                                                 like long conversation preservation and fault tolerance [31,
+This work is licensed under a Creative Commons Attribution 4.0 Interna-          49, 67]. In our early-stage evaluation, we observe a 0.3–2.0×
+tional License.
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+                                                                                 slowdown when 1–4 evictions are triggered in an SSD-based
+© 2026 Copyright held by the owner/author(s).
+                                                                                 offloading system (see Section 2).
+ACM ISBN 979-8-4007-2359-9/2026/03                                                  Problem #2: sub-optimal performance in decoding. In the
+https://doi.org/10.1145/3779212.3790212                                          decoding stage of inference, output tokens are generated
+
+
+
+                                                                          1622
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                            Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+
+auto-regressively. GPUs are typically not maximally used in                                     Prefill Stage          Decoding Stage
+this stage, as KV cache processing has very low arithmetic                      QKV
+                                                                             Generation         User Prompt      Input Token      Input Token
+intensity [15, 19, 53, 55, 79]. Considering the size of the KV                Q K               “Today is a”     “wonderful”         “day”
+cache, GPUs have to frequently move its slices into and out                   Logit
+of streaming multiprocessors, resulting in significant data                                     Embedding        Embedding        Embedding
+transfer overhead. Moreover, the KV cache cannot be shared                   Softmax
+across different requests, which means we cannot simply                      Scoring             Decoder 0        Decoder 0        Decoder 0
+improve the utilization of GPU by batching [53].                                  S        V
+   Existing studies address the above problems separately.                      Context
+                                                                                                 Decoder 1        Decoder 1        Decoder 1
+Offloading systems approach problem #1 by finding better
+                                                                              Projection
+
+
+
+
+                                                                                                     ...
+
+
+
+
+                                                                                                                      ...
+
+
+
+
+                                                                                                                                        ...
+eviction and reloading timings [13, 14, 51, 59, 61]. However,
+for most of these systems, the offloaded KV cache will not                        +              Decoder N        Decoder N        Decoder N
+be processed until the task is rescheduled. Stage-split infer-                   FFN
+ence systems approach problem #2 by executing prefill and                         +             “wonderful”       “day”           “.”
+decoding on GPUs with different computation capabilities                                       Output Token 0 Output Token 1 Output Token 2
+[20, 21, 27, 55]. Although this design improves the utilization
+                                                                          Figure 1. LLM model structure and inference procedure.
+of high-performance GPUs, the performance pit in decoding
+is basically unsolved, but just left to wimpy GPUs.
+   We observe possibilities of addressing these problems                 We also propose multi-level controllers. By placing controllers
+jointly by PIM techniques. From the perspective of hardware              deeper into the PIM hierarchy, REPA is open for more flexible
+characteristics, PIM is both the data storage and acceleration           and finer-grained parallelization control.
+hardware. From the perspective of task features, we notice                  (2) Data mapping (Section 6). Locality is the key to fully
+that all non-batchable operations in decoding are included               leverage the optimization in micro-architecture. We propose
+in KV cache processing. Offloading KV cache to PIM, as a                 the locality-aware mapping strategy slicing KV matrices into
+result, leads to both the acceleration of these non-batchable            larger chunks, and mapping them to nearby cell arrays. This
+operations, and the possibility of higher GPU utilization. In            design maximally uses the bulk-wise instructions, and re-
+this paper, we propose REPA, a GPU-PIM hybrid system to                  duces the long-range data transfer in our system.
+prototype this idea. In order to achieve non-volatility, and                (3) Pipelining (Section 7). We improve hardware utilization
+balance performance and capacity, we choose resistive mem-               by the pipelining of GPU and REPA-PIM. We use sub-batch
+ory (ReRAM) and reconfigurable computing [2, 4, 23, 32, 68]              pipelining to interleave GPU and PIM operations, and reduce
+for our PIM device, REPA-PIM. To justify this decision, we               the idleness inside a batch. We also propose transfer overlap-
+include a detailed feature and applicability analysis, compar-           ping to further shadow the KV transfer by computation.
+ing the chosen technique with other popular PIM techniques                  REPA is the first leveraging reconfigurable PIM for the
+in Section 3. We also perform comprehensive tests against                acceleration of KV cache offloading and processing. It is
+these solutions in Section 8 to further justify our decision             1.5–6.5× faster and 8–10× more efficient than the GPU-only
+from the perspective of empirical results.                               (NVIDIA A100) system. REPA is at the same time highly inte-
+   Parallelism is both an opportunity and challenge to our               gratable. It boosts the offloading in FlexGen by 0.4–1.0×, and
+system. On one hand, our PIM technique naturally supports                leads to 1.2–1.4× and 0.3–0.5× improvement in end-to-end
+higher parallelism: First, ReRAM cell arrays allow parallel              latency and throughput, respectively. This result suggests
+operations on multiple wordlines; second, reconfigurable                 that our work can be used as a patch to enhance existing sys-
+PIM performs most computation within cell arrays, elimi-                 tems, which may also envision a large-scale disaggregated
+nating the dependence on per-bank CMOS logic. While on                   system with high-performance interconnect like CXL.
+the other hand, these features are not fully explored for KV
+cache processing, which calls for the development of more                2     Background and Motivation
+targeted optimizations, especially in micro-architecture and             As illustrated in Figure 1, LLM inference comprises two
+data mapping. Moreover, parallelization is also a must for               stages. The first is prefill summarizing user prompt and gen-
+REPA, as we need to maximally leverage parallelism to over-              erating the first output token. The second is decoding, during
+come the relatively slower per-operation speed of reconfig-              which output tokens are generated auto-regressively.
+urable PIM. In this paper, we propose optimizations in (1)                  Multi-head attention is the core of LLM. It functions by
+micro-architecture, (2) data mapping and (3) pipelining to               query-based context matching and retrieval. The model firstly
+better parallelize REPA:                                                 encodes the user prompt into the query matrix Q, and matches
+   (1) Micro-architecture (Section 5). We propose bulk-wise              it with the key matrix K by logit (Q×KT ) and softmax. Termed
+memory setting instructions to support wordline parallelism,             as “scoring”, this process generates a score matrix S. Each
+and reduce the number of instructions issued in computing.               of its row, s𝑖 , represents a probabilistic mixture of context
+
+
+
+                                                                  1623
+     REPA: Reconfigurable PIM for the Joint Acceleration of KV Cache Offloading and Processing                                                                  ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+
+
+      ϰ Ϭ Ϭ                       Ž Ƶ Ŷ ƚ                            ϭ ͘ Ϭ Ϭ    &                                                          batch sizes. The utilization increases by 5.8% and 5.6% respec-
+                                                      W ƌ Ž ŵ Ɖ ƚ
+      ϯ Ϭ Ϭ                                           K Ƶ ƚ Ɖ Ƶ ƚ    Ϭ ͘ ϳ ϱ                           D Ğ Ě ŝ Ă Ŷ ͗   Ϭ ͘ ϲ ϴ             tively when we increase the batch size to 16. In comparison,
+                                                                                                         ǀ Ğ ƌ Ă Ő Ğ ͗  Ϭ ͘ ϲ ϳ             we observe a 33% increase for projection. This difference is
+      Ϯ Ϭ Ϭ                                                           Ϭ ͘ ϱ Ϭ
+      ϭ Ϭ Ϭ                                                           Ϭ ͘ Ϯ ϱ                                                                 due to the fact that scoring and context are non-batchable,
+          Ϭ                                              > Ğ Ŷ Ő ƚ Ś                                       < s  ^ ŝ ǌ Ğ  ; ' ŝ  Ϳ          which is also inevitable when they are processed by the GPU.
+                                                                      Ϭ ͘ Ϭ Ϭ
+                            Ϭ           Ϯ ϱ Ϭ Ϭ  ϱ Ϭ Ϭ Ϭ  ϳ ϱ Ϭ Ϭ              Ϭ      ϭ                 Ϯ             ϯ            ϰ
+                                                                                                                                              3       PIM Technique Decision
+    (a) Sequence length distribution. (b) CDF of per-request KV size.
+                                                                                                                                              We choose reconfigurable ReRAM PIM as the PIM technique
+     Figure 2. The sequence length and per-request KV cache                                                                                   for REPA. In this section, we introduce how it works (Section
+     size of Azure23 dataset. We use Llama2-7B for this test.                                                                                 3.1), and justify this design decision by a comparison against
+                                                                                                                                              three widely-adopted PIM solutions (Section 3.2).
+      η  ǀ ŝ Đ ƚ ŝ Ž Ŷ Ɛ           ϭ  Ϯ  ϯ  ϰ   Ă ƚ Đ Ś  ^ ŝ ǌ Ğ  ϭ  Ϯ  ϰ  ϴ  ϭ ϲ
+           Ϯ ͘ ϱ                                                     ϭ Ϭ Ϭ                                                                    3.1 Reconfigurable PIM with ReRAM
+                        W ϱ Ϭ ͗  Ϭ ͘ ϯ  Ϭ ͘ ϴ п                                            ϰ ϲ й
+                                                                       h ƚ ŝ ů ŝ ǌ Ă ƚ ŝ Ž Ŷ  ; й Ϳ
+ ^ ů Ž ǁ Ě Ž ǁ Ŷ  ; п Ϳ
+
+
+
+
+           Ϯ ͘ Ϭ  W ϳ Ϭ ͗  Ϭ ͘ ϯ  Ϭ ͘ ϵ п                             ϴ Ϭ                                                                    ReRAM is one of the fastest non-volatile memory mediums
+           ϭ ͘ ϱ  W ϵ Ϭ ͗  Ϭ ͘ ϰ  ϭ ͘ Ϯ п                             ϲ Ϭ                                                                    [63], which is reported to be 100–1000× faster than flash [46].
+           ϭ ͘ Ϭ  W ϵ ϵ ͗  Ϭ ͘ ϱ  Ϯ ͘ Ϭ п                             ϰ Ϭ                                          ϯ ϯ й
+                                                                                                                                              ReRAM is fast in reading, which is comparable to DRAM
+           Ϭ ͘ ϱ                                                       Ϯ Ϭ                  ϱ ͘ ϴ й  ϱ ͘ ϲ й
+                                                                                                                                              [8, 69]. Its write performance is relatively lower (∼ 5× slower
+           Ϭ ͘ Ϭ                                                         Ϭ
+                       W ϱ Ϭ  W ϳ Ϭ  W ϵ Ϭ  W ϵ ϵ                              W ƌ Ğ Ĩ  ^ Đ Ž ƌ   ƚ ǆ ƚ  W ƌ Ž ũ                             than DRAM with no optimization), but has been successfully
+                          ^ Ğ Ƌ  > Ğ Ŷ Ő ƚ Ś  W Ğ ƌ Đ Ğ Ŷ ƚ ŝ ů Ğ         / Ŷ Ĩ Ğ ƌ Ğ Ŷ Đ Ğ  ^ ƚ Ă Ő Ğ ͬ K Ɖ Ğ ƌ Ă ƚ ŝ Ž Ŷ                 improved to 91%–94% of the DRAM performance in recent
+                                                                                                                                              research [69]. Density is another highlight of ReRAM. It
+    (a) Inference slowdown due to (b) GPU utilization of inference
+    SSD-based KV cache offloading. stages under different batch size.                                                                         supports the 4F2 density (F is the technode), which enables a
+                                                                                                                                              denser layout and a potentially higher capacity than DRAM.
+  Figure 3. Overhead of KV cache offloading and processing.
+  “Pref” denotes prefill. “Scor”, “Ctxt” and “Proj” denotes the scor-                                                                                     in0                            Logical 1: Low Resistance
+  ing, context and projection operation in decoding, respectively.                                                                                                                       Logical 0: High Resistance
+                                                                                                                                                  V              out
+                                                                                                                                                                                   out        out      out      out
+                                                                                                                                                                           RH
+    information matching input token q𝑖 . Then, the model uses                                                                                                             RL
+    this score matrix to retrieve and blend the context from the                                                                                          in1                   1 NOR 1 1 NOR 0 0 NOR 1 0 NOR 0
+    the value matrix V for each input token. This process is
+    performed by S × V, and we call it “context”. Once a new                                                                                           Figure 4. NOR gate built from ReRAM cells.
+    output token is generated, we append a new row to Q, K
+    and V, respectively. When the previous K and V matrices                                                                                      As illustrated in Figure 4, ReRAM cells use the high and
+    are preserved, we only need to use the new query token q                                                                                  low resistance state to represent logical 0 and 1, respectively.
+    to perform scoring and context, which prevents repeated                                                                                   State flip requires a strong enough voltage to initiate. When
+    computation. Here, the K and V matrices function as a cache,                                                                              the positive pole (the left side of 𝑖𝑛 0 and 𝑖𝑛 1 ) has higher
+    and thus we collectively call them the “KV cache”.                                                                                        electric potential, the resistance decreases. Similarly, the
+       KV cache is characterized by high memory footprint and                                                                                 resistance increases when the potential at the negative pole
+    low arithmetic intensity. As shown in Figure 2, real-world                                                                                is higher. Prior work uses this feature to build logic gates
+    inference requests have long sequences, and consequently,                                                                                 out of ReRAM cells [2, 4, 23, 32, 68]. Figure 4 illustrates the
+    large KV cache. In the Azure23 dataset [55], the average KV                                                                               implementation of the NOR gate and its truth table.
+    cache size is 670MiB for a 7B model. To quantitatively study                                                                                 As shown in Figure 5a and 5b, we can layout such logic
+    how KV cache offloading affects the inference performance,                                                                                gates in the cell array, and construct our desired computa-
+    we test the incurred inference slowdown with respect to                                                                                   tional logic. Figure 5c shows the 1-bit addition using ReRAM
+    the sequence length and number of evictions. As shown in                                                                                  NOR gates. More complex logic, such as multiplication and
+    Figure 3a, we observe 0.3–0.8× and 0.5–2.0× slowdown for                                                                                  floating-point computation has also been explored by prior
+    median-length and P99-percentile requests respectively. This                                                                              work [24, 77]. Reconfigurable PIM enables massive paral-
+    suggests that the inference serving system suffers about 30%                                                                              lelizations in memory, which can be used to accelerate ten-
+    performance loss offloading KV cache to the SSD.                                                                                          sor operations such as general matrix-vector multiplications
+       In addition, the scoring and context operation in decod-                                                                               (GEMVs). Figure 6 illustrates the computation of GEMV by
+    ing has low arithmetic intensity, which causes low GPU                                                                                    reconfigurable PIM. Here, the matrix is stored in its trans-
+    utilization. To quantitatively illustrate this, we test the GPU                                                                           posed form in memory (see Figure 6b and 6c). Since ReRAM
+    utilization of different inference stages and operations under                                                                            does not need pre-charging, we can activate multiple word-
+    various batch size settings. As shown in Figure 3b, GPU can-                                                                              lines simultaneously. To perform V × W, we parallel v1 × w1 ,
+    not be fully utilized for scoring and context, even under large                                                                           v1 × w2 and v1 × w3 on each wordline, and store the partial
+
+
+
+                                                                                                                                       1624
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                                                                                                              Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+  (a)                                                                                                                            (b)                                                                                                       ϴ ͘ Ϭ
+                                                                                         in0         in1          out                                                                                1.8
+
+
+
+
+                                                          Decoders and Volt. Control
+          ...                           ...                                                                                                                                                                                                                                         ϲ ͘ ϲ ϴ
+                                                                                                                                                        ϭ ͘ ϴ ϴ                                      1.4                                   ϲ ͘ ϰ
+
+
+
+
+                                                                                                                                                                                                             Ă Ɖ Ă Đ ŝ ƚ Ǉ  ; ' ŝ  Ϳ
+                                                ...
+                                                ...
+        ...
+
+                ...
+                      ...
+                            ...
+                                  ...
+                                                                                                    V            V
+                                                                                                                                                                                                     1.0                                   ϰ ͘ ϴ
+          ...                           ...                                                                                                                         Ϭ ͘ ϯ                            0.6
+                                                                                                                                                                           Ϭ ͘ ϭ ϱ  Ϭ ͘ Ϭ ϲ                                                                              ϯ ͘ ϯ Ϯ
+                                                                                               a    b      C      S           temp                                                                                                         ϯ ͘ Ϯ
+
+
+                                                ...
+                                                ...
+        ...
+
+                ...
+                      ...
+                            ...
+                                  ...
+                                                                                                                                                        Ϭ ͘ ϵ ϰ                              Ϭ ͘ Ϭ ϯ 0.2
+                                                                                                                           ...
+                                                                                                                                                                                                                                           ϭ ͘ ϲ  Ϭ ͘ ϲ ϲ  ϭ ͘ ϯ ϲ
+                                                                                                                                                                                               21 C
+          ...                           ...
+                                                                                                                                                                                            4 s/AD
+          ...                           ...                                              C=((a+b)’+(b+a)’)
+                                                                                                                                                                 Ϭ ͘ ϯ ϳ  Ϭ ͘ ϭ ϵ                                                          Ϭ ͘ Ϭ
+                                                                                         S=(((a’+b’)’+((a+b)’+C)’)’)’                              100 50                                8 y
+    Decoders and Volt. Control                                                                                                   (c)              Area Budget 20              10 16 Arra                                                           ϭ Ϭ           Ϯ Ϭ          ϱ Ϭ  ϭ Ϭ Ϭ
+                                                                                         C: Carry S: Sum
+                                                                                                                                                                     (mm²)                #                                                               ƌ Ğ Ă   Ƶ Ě Ő Ğ ƚ  ; ŵ ŵ ϸ Ϳ
+Figure 5. (a) ReRAM cell array. (b) NOR gate layout in the                                                                                        (a) Analog PIM capacity w.r.t. (b) Reconfigurable ReRAM PIM
+cell array. (c) In-situ 1-bit addition using NOR.                                                                                                 area budget and ADC density. capacity w.r.t. area budget.
+
+Vector V       Matrix W                        v1/v2/v3                                w1~3              w4~6           Products                  Figure 7. Capacity of analog vs. reconfigurable ReRAM PIM
+ v 1 v 2 v 3 × w 1 w2 w3                                                                                                                          within 10–100mm2 area constraints at the 14nm technode.
+               w4 w5 w6                           ...                                    ...               ...          ...          ...
+(a) GEMV w7 w8 w9                                 ...                                    ...               ...          ...          ...
+                                                  ...                                    ...               ...          ...          ...
+ v3 v2 v 1        w1 w 4 w 7                  v1w1~v1w3 v2w4~v2w6 v3w7~v3w9                                                   Sums
+ v3 v2 v 1        w2 w 5 w 8                                                                                                                         DRAM PIM [15, 18, 19, 53] is a widely-adopted PIM solu-
+ v3 v2 v 1        w3 w 6 w 9                      ...                                    ...               ...          ...          ...          tion based on the high-bandwidth memory architecture [29],
+                                                ...
+
+                                                          ...
+                                                                                       ...
+
+                                                                                                   ...
+                                                                                                         ...
+
+                                                                                                                     ...
+
+                                                                                                                                 ...
+
+
+
+(b) In-situ GEMV                          (c) In-situ GEMV in the ReRAM cell array                                                                using on-die CMOS logic to perform computations. Though
+                                                                                                                                                  faster than reconfigurable PIM in single operations, DRAM
+        Figure 6. Reconfigurable ReRAM PIM for GEMV.                                                                                              PIM has limited potential in massive parallelization, as its
+                                                                                                                                                  computational logic is typically shared across multiple cell
+                                                                                                                                                  arrays or banks [18, 53]. In section 8.3, we show that our
+products. Then, we repeat this process for v2 × w4 ∼ w6 , and                                                                                     solution outperforms state-of-the-art DRAM PIM systems.
+v3 × w7 ∼ w9 . After that, we accumulate the partial products                                                                                        Reconfigurable DRAM PIM [16, 41, 79] uses DRAM to build
+on each row in parallel and produce the output vector.                                                                                            logic gates. However, most existing solutions cannot fully
+   Reconfigurable PIM performs most computation inside                                                                                            unleash the parallelization potential of reconfigurable com-
+memory cell arrays. This offers two benefits echoing our re-                                                                                      puting, which is due to two reasons. First, DRAM cells are
+quirement for fast KV cache offloading and processing. First,                                                                                     volatile and need pre-charging before reading. This makes it
+it enables massive in-memory parallelization. Computation                                                                                         difficult to achieve wordline parallelism like ReRAM. Second,
+will no longer be bounded by the near-bank CMOS logic,                                                                                            many solutions are based on traditional DRAM architec-
+leading to a higher theoretical parallelization ability. Second,                                                                                  tures, where the per-channel memory controller can lower
+reconfigurable PIM supports higher memory capacity. The                                                                                           the parallelization degree of the system. In this paper, we
+minimized requirement for the peripheral logic significantly                                                                                      overcome these drawbacks by bulk-wise memory instruc-
+reduces the area overhead. Combined with the excellent den-                                                                                       tions and multi-level PIM controllers (Section 5.2).
+sity of ReRAM cells, it achieves very high capacity, meeting                                                                                         Analog ReRAM PIM [8, 26, 44, 64, 70] is an architecture
+the key requirement of a KV cache offloading system.                                                                                              with high speed but low memory capacity. It is highly spe-
+                                                                                                                                                  cialized for GEMV acceleration, where computations are
+Table 1. Design choices for REPA-PIM. The speed is measured                                                                                       performed by the integration of currents. Its bottleneck is
+by the time required for completing a single operation.                                                                                           the requirement of high-precision ADCs in result decoding.
+                                                                                                                                                  As reported by previous studies, ADCs account for more
+  Architecture              Speed              Scalibility                               Capacity                Non-volatile                     than 50% of the chip area [50, 70], which consequently re-
+   DRAM PIM                  High               Medium                                     High                       ✗                           duces the area for memory cell arrays. As illustrated by our
+ Reconf. DRAM                Low                  High                                     High                       ✗
+                                                                                                                                                  quantitative evaluation in Figure 7, analog PIM has 3.6–22×
+ Analog ReRAM                High                 High                                     Low                       ✓
+ Reconf. ReRAM              Medium                High                                     High                      ✓                            less memory capacity than the reconfigurable solution un-
+                                                                                                                                                  der the same area budget. This makes it inadequate for the
+                                                                                                                                                  offloading of the memory-hungry KV cache data.
+3.2 Comparison Against Other PIM Solutions
+To further justify our design choice, we compare it with                                                                                          4       System Overview
+three representative DRAM/ReRAM PIM architectures. We                                                                                             REPA is a GPU-PIM hybrid system. As illustrated in Figure
+summarize their characteristics in Table 1, and discuss their                                                                                     8a, the system has two types of devices: GPU and REPA-PIM.
+features in detail in the remainder of this section.                                                                                              GPU performs the entire prefill stage, and all batchable tasks
+
+
+
+                                                                                                                                           1625
+REPA: Reconfigurable PIM for the Joint Acceleration of KV Cache Offloading and Processing            ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+
+
+(a)          Pipelined           (b)           Tile    TSVs   Tile Group      (c)      Accumulator        PU    (e)                  dhead = 128
+ “Batchable”
+  Decoding   “Non-Batchable” PIM Die                                                                             Lseq               Per-head Kij
+     FFN         Decoding
+  Projection      Context                                                                                                            Temp Region       1024×256
+                                                                           Tile Controller (TC) Tile Buffer
+
+
+
+
+                                                                                                                  Row Driver
+   qkv Gen         Scoring
+                  KV cache                                                    (d) PU Controller (PUC)
+    Prefill      offloading                                                                                                    PIM Region          1024×1024
+      GPUs        REPA-PIMs
+                                                                                                                                Col. Driver         Col. Driver
+         Interconnect             Buffer Die Tile Group Controller (TGC)   Accumulator       Array Group
+
+Figure 8. (a) REPA System. (b) REPA-PIM architecture. (c)(d)(e) Layout of the tile, processing unit (PU) and cell array. 𝑑ℎ𝑒𝑎𝑑 and
+𝐿𝑠𝑒𝑞 in (e) denotes the per-head feature dimension and sequence length. K𝑖 𝑗 in (e) denotes the K matrix of the 𝑖-th head of decoder 𝑗.
+
+in decoding (including qkv generation, projection and feed-                   Table 2. #MemOps/cell of 16-bit fixed-/floating-point (FX/FP)
+forward). REPA-PIM performs all non-batchable tasks (i.e.,                    reconfigurable and DRAM PIM. We refer to FloatPIM [24] (re-
+scoring and context in decoding).                                             configurable) and TransPIM [79] (DRAM) for PIM procedures.
+   REPA-PIM has a heterogeneous 3D-stacked architecture,
+and supports fine-grained parallelization (Section 5). We                           Computation Type       Reconf. PIM            DRAM PIM          ×MemOps
+achieve high parallelism by bulk-wise memory setting in-                               FX addition             12                    3                4.0
+structions and the multi-level-controller design. The former                            FP addition            20                    3                 6.7
+                                                                                     FX multiplication         96                    3                32.0
+enables wordline parallelism inside a cell array, reducing the                       FP multiplication         23                    3                 7.7
+instructions to be processed. The latter enables more flexi-
+ble control of such a finer-grained parallelization, trading
+5.76mm2 per-die area overhead for 3.91× speedup.                              current affect [30], we implement the cell array by cascading
+   The fine-grained parallelization ability of REPA-PIM moti-                 two 1024×1280 sub-arrays. As shown in Figure 8e, bitlines
+vates the locality-aware data mapping (Section 6). We do not                  of these sub-arrays can be independently selected by their
+interleave per-head KV matrices into far apart “banks” or                     own column drivers. This design facilitates the addressing,
+“channels” like many studies. Instead, we partition them into                 and improves the parallelism of PIM computation. Each sub-
+larger slices, and place these slices onto nearby cell arrays to              array has a 1024×1024 PIM region for KV storage and PIM
+fully leverage the locality of reconfigurable computing. This                 computation, and a 1024×256 temp region for intermediate
+fulfills the parallelization potential of bulk-wise instructions,             data. The reason why we cascade two, rather than more
+and reduces the on-chip data traffic significantly.                           sub-arrays is that the 2048-column PIM region is perfectly
+   We also develop pipelining techniques to maximally utilize                 suitable for the storage of the per-head KV matrices within
+GPU and REPA-PIM (Section 7). Since parallelism in REPA is                    a decoder block. As illustrated in Figure 8e, such matrices
+fine-grained, we do not use the deep head- or decoder-level                   have an invariant column size, which is the per-head feature
+pipelines. Instead, we use sub-batch pipelining to ensure                     dimension, 𝑑ℎ𝑒𝑎𝑑 . We notice that 𝑑ℎ𝑒𝑎𝑑 = 128 for most LLMs.
+neither GPU nor REPA-PIM are idle inside a batch. We also                     This implies that the storage of a per-head k or v vector
+propose transfer overlapping, which shadows the transfer of                   needs 2048 memory cells under 16-bit data format, which is
+KV matrices and qkv vectors with GPU or PIM computation.                      precisely twice the bitline width of the PIM region.
+
+                                                                              5.2 PIM Control
+5     REPA-PIM Architecture
+                                                                              Since most computation in reconfigurable PIM can be per-
+5.1 Memory Layout                                                             formed by pure memory instructions, we extend the DRAM
+As illustrated in Figure 8b, REPA-PIM takes a 3D-stacked                      instruction interface for REPA-PIM. A major challenge here
+architecture design. The device comprises a buffer die and                    is the massive number of instructions required in compu-
+eight PIM dies connected by through-silicon vias (TSVs).                      tation. As illustrated in Table 2, reconfigurable PIM needs
+   Memories in REPA-PIM are hierarchically organized, which                   4–32× more operations per cell than DRAM PIM, which be-
+is similar to the HBM. REPA-PIM has 16 tiles on each PIM die.                 comes a potential source of performance loss. The key idea
+Analogous to the HBM channel, tiles are vertically organized                  to address this challenge is parallelism, which we achieve by
+into tile groups enabling full parallelization. The tile performs             a joint optimization on instructions and micro-architectures.
+PIM operations by 8 processing units (PUs). Analogous to                         Bulk-wise memory setting. We propose the bulk-wise
+the memory bank, a PU comprises 128 1024×2560 cell arrays                     memory setting instruction (BLK_SET) to parallelize NOR-
+divided into 4 array groups. In order to prevent the sneak                    based addition and multiplication on multiple wordlines. As
+
+
+
+                                                                       1626
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                             Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+
+discussed in previous research, reconfigurable PIM performs                Table 4. Speedup and per-die area overhead w.r.t. #con-
+addition and multiplication by a sequence of in-situ NORs                  trollers/PU. We test the logit (q × KT ) operation, with the
+[1, 24]. Recall Figure 4 in Section 3.1, such NORs are con-                area overhead estimated at the 14nm technode.
+ceptually memory settings activating two input cells, and
+setting the output cell with the current generated from the                     #Controllers/PU       1      2      4       8      16      32
+inputs. Therefore, to perform a specific bulk setting, we need                     ×Speedup            1    1.95   3.91   5.20    7.17    9.83
+to specify: (1) wordlines to be parallelized, (2) two bitlines                 Per-die Area (mm2 )   1.92   3.84   7.68   15.36   30.72   61.44
+                                                                                ΔSpeedup/ΔArea         -    0.49   0.51   0.16    0.13    0.09
+for input, and (3) the bitline for output.
+
+        Table 3. Format of the BLK_SET instruction.
+                                                                           analogous to the per-channel HBM controller. The differ-
+                       (a) Overview of BLK_SET.                            ence is that tile group controllers do not directly manipulate
+                                                                           ReRAM arrays. Instead, they dispatch PIM operations to des-
+       Field    Opcode        Block Addr.   Input1       Input2
+                                                                           ignated tile controllers, which parallelizes all their tiles. The
+       #Bits      8               24          16           16
+                                                                           tile controller (TC) parallelizes its PUs by forwarding the
+           (b) Format of the block address in BLK_SET.                     dispatched operations. It also controls the accumulation of
+                                                                           partial results produced by each PU. The PU controller (PUC)
+       Field    Rsv.     TG    Tile   PU    AG    Arr.    Block            is an extension of cell array drivers, which is responsible
+       #Bits     3        4     3      3     2     5        4
+                                                                           for the manipulation of ReRAM cells. We place four such
+                                                                           controllers in one PU, each parallelizing a specific group of
+   Since types of sub-NORs inside an addition or multiplica-
+                                                                           cell arrays. We do not arrange more controllers in PU, as the
+tion are fixed, REPA-PIM can infer the bitline of the output
+                                                                           four-controller setting is already sufficient for good paral-
+cell with the NOR type. Taking fixed-point multiplication as
+                                                                           lelism. A per-head K/V matrix requires 1MiB memory space
+an example, the computation contains 3 types of NORs for
+                                                                           under the maximum 4096 sequence length, which is the PIM
+partial product and 11 types of NORs for addition, each of
+                                                                           region capacity of four arrays. This means computation on
+which has fixed output offset relative to the input [1]. We
+                                                                           these arrays can be parallelized if we evenly distribute them
+also notice that for a specific multiplication or addition, the
+                                                                           to four array groups, and manage their computation by dedi-
+output cells of previous NORs/memsets are not reused as
+                                                                           cated controllers. As to inner-array parallelism, we leave it to
+the outputs of their successors. This means we can acquire
+                                                                           bulk-wise instructions and the independent column drivers
+the offset by the NOR type, and infer the output bitline by
+                                                                           of sub-arrays (see Figure 8e).
+offsetting from the beginning of the temp region. Through
+                                                                              Another notable fact is that the 4 controllers/PU setting is
+this design, the instruction length is constrained to 64 bits,
+                                                                           cost-effective. As illustrated in Table 4, the speedup of q × KT
+and we only need to specify three operands listed as follows:
+                                                                           scales with #controllers/PU when it is ≤ 4, and the trend
+   (1) Block address. BLK_SET specifies a group of 64 adjacent
+                                                                           significantly slows down when we attempt to arrange more
+wordlines for parallel memory settings. Named “memory
+                                                                           controllers. Compare to the 1 controller/PU setting, we trade
+block” in REPA-PIM, such a memory region is identified by
+                                                                           a 5.76mm2 per-die area overhead for a 3.91× speedup. In
+a 24-bit address illustrated in Table 3b. The higher 3 bits
+                                                                           comparison, increasing #controllers/PU to 32 only attributes
+are reserved bits, and the remaining bits help identify the
+                                                                           to another 2.51× speedup. This is because when we arrange
+block location through the tile group (TG), tile, PU, array
+                                                                           more than 4 controllers for a PU, per-head KV matrices are
+group (AG) and block hierarchy. A question is that why we
+                                                                           scattered across many array groups, which increases the data
+do not specify the memset range by specific wordlines. The
+                                                                           gathering overhead. Moreover, the per-die area overhead of
+reason for this design decision is two-fold. First, it eliminates
+                                                                           8, 16 and 32 controllers are too costly for our system, which
+variable-length parameters resulted from the per-wordline
+                                                                           prevents us from using these settings.
+range specification, which lowers the complexity of instruc-
+tion decoding. Second, by using memory block addresses,
+                                                                           6     Locality-aware Data Mapping
+our strategy simplifies the addressing mechanism, reducing
+both address storage and translation overhead.                             6.1 Mapping of New Requests
+   (2) Two input bitlines. The Input1 and Input2 operands                  The KV cache of a specific inference request is split into
+specify the input bitlines for an in-memory NOR. Each of                   groups by attention head, each of which contains the per-
+them have 16 bits, supporting up to 216 columns of a cell                  head KV matrices from all decoders. An example of such a
+array. REPA-PIM has 2560 columns per array, thus 13 out of                 KV cache group is shown in Figure 9a, in which we depict
+16 bits are used to address each input bitline.                            the per-head KV matrices of decoder 𝑗 and 𝑙. To map the KV
+   Multi-level controllers. As shown in Figure 8, we use                   cache groups, we sort them by head IDs and place them one
+tile group, tile and PU controllers to enable fine-grained par-            after another onto dedicated tile groups with the largest free
+allelism in REPA-PIM. The tile group controller (TGC) is                   space. When encountering insufficient resources, we perform
+
+
+
+                                                                    1627
+REPA: Reconfigurable PIM for the Joint Acceleration of KV Cache Offloading and Processing                                  ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+
+
+    (a) Head i               AG0 … AG3 in PU               (b) Kij (Lseq × dhead)                                     (c)       VTij      Lseq × 16 bits
+                                                                                                                                                                        v0,0        v1,0
+      Decoder l            Kil(0) Kil(1) Kil(2) Kil(3)           Kij(0)             k0                    k0          dhead      VTij(0) VTij(1) VTij(2) VTij(3)
+                                                                                    k1                    k1                                                            v0,1        v1,1
+       Kil Vil             Vil(0) Vil(1) Vil(2) Vil(3)           Kij(1)             k2                    k2                                                            v0,2        v1,2
+                                                                                    k3                    k3                                                            v0,3        v1,3
+      Decoder j            Kij(0) Kij(1) Kij(2) Kij(3)           Kij(2)
+
+
+
+
+                                                                                                                                                                                …
+                                                                                                          …
+                                                                                                                                  v0,0     v0,1
+       Kij      Vij                                              Kij(3)       K Slices                                dhead       v1,0     v1,1         V Slices        v0,16     v1,16
+                           Vij(0) Vij(1) Vij(2) Vij(3)                                                 k1024           2
+                            …
+
+                                   …
+
+                                          …
+
+                                                  …
+             …
+
+
+
+
+                                                            dhead × 16 bits                           Arrm(0)                  64 × 16 bits                                   Arrn(0)
+
+Figure 9. (a) Mapping of the per-head KV matrix group. (b)(c) Slicing and mapping of the per-head K and V matrices. “AG”
+                             (𝑔)
+denotes the array group. “Arr𝑚 ” denotes the cell array 𝑚 in array group 𝑔. k0, . . . ,k1024 are row vectors in K𝑖(0)
+                                                                                                                   𝑗 . v𝑟,𝑐 are slices of
+V𝑖T(0)
+   𝑗 , where 𝑟 and 𝑐 represents the row and column index, respectively. Each v𝑟,𝑐 has
+                                                                                      𝑑ℎ𝑒𝑎𝑑
+                                                                                        2 × 64 16-bit values.
+
+    (a)                        Element-wise Multiplication        Reduction                     (b)                                       Row-wise                 Element-wise
+                                               Kij(0) in Arrm(0)                                                                         Replication               Multiplication
+     q × KijT                 Replicated q                                Sij(0)                       Sij × Vij
+                                  …         ×            …            +                                                                                   s0:64        v0,0       v1,0
+                  Sij(0)                                         k0                             Sij(0) Sij(1) … Sij(3)       Sij(0)
+        ×                         …                      …                                                                                               s64:128       v0,1       v1,1
+                                                                 k1
+       Kij(0)                     …                      …       k2                                       ×
+                                  …                      …                                                                     64 64 …                               Vij(0) in Arrn(0)
+       Kij(1)                                                    k3 1024                        VTij(0) VTij(1)… VTij(3)                           64
+                                                                                                                                                                      v0,16 v1,16
+       …
+
+
+
+
+                                                                                                                                            dhead/2
+                                                                          …
+
+
+
+
+       Kij(3)                                                                                         +         +                                                   + Reduction
+                                  …                              …     k1024                                    …              v0,0 v0,1       …         Sliced
+      dhead                   q d … q1 q 0               K.0 K.1 … K.d Softmax                  Cij(0) Cij(1) … Cij(3)
+                                                                                                                               v1,0 v1,1                 VTij(0)           Cij(0)
+                                                                                         σ
+
+Figure 10. Reconfigurable PIM implementation of the partial (a) scoring and (b) context operation. q0 , ... ,q𝑑 are components of
+the q vector. s𝑢:𝑣 denotes replicated [𝑢, 𝑣) slices of S𝑖 𝑗 , each of which has 𝑑ℎ𝑒𝑎𝑑
+                                                                                  2   rows (replicas).
+
+scale-out, and leave the unused space for the decode-time                                       same array group . This is another design echoing the locality
+KV appending of those already-mapped heads. This strat-                                         of reconfigurable computing. We notice that the partial result
+egy maximally parallelizes all tile group controllers, which                                    of the q × K𝑖(0)              (0)
+                                                                                                              𝑗 is used by V𝑖 𝑗 . When placing these slices
+speeds up the persistence of KV cache. Moreover, splitting                                      nearby, we restrict the frequent partial result propagation
+the KV cache by attention head incurs very limited overhead.                                    inside the PU, which significantly reduces the data transfer
+This is because REPA-PIM only needs to gather 𝑁ℎ𝑒𝑎𝑑 vector                                      on external interconnects.
+slices (with the size 1 × 𝑑ℎ𝑒𝑎𝑑 ) at the end of each decoder                                       (3) Per-head KV slices from different decoders are placed
+block, and broadcast the concatenated 1 × (𝑑ℎ𝑒𝑎𝑑 · 𝑁ℎ𝑒𝑎𝑑 ) vec-                                 sequentially in the array group. This design eliminates the
+tor to all tile groups. The fragmentation overhead incurred                                     performance bottleneck in array groups. The array group
+by scale-out is also moderate, which we show in Section 8.6.                                    may become a bottleneck, as the 32 cell arrays in it are man-
+   For the per-head matrices in a specific KV cache group                                       aged by a single PU controller. By sequentially mapping KV
+(e.g., K𝑖 𝑗 , V𝑖 𝑗 , K𝑖𝑙 and V𝑖𝑙 in Figure 9a), the strategy prioritizes                        slices from different decoders to these arrays, we eliminate
+free PUs for their placement, enforcing three policies:                                         the need to parallelize the per-group arrays, because at any
+   (1) Each per-head matrix is split and placed onto four free                                  moment, there will be only one decoder being processed.
+cell arrays, each of which belongs to a dedicated array group.
+This is because any per-head matrix is 1MiB at most, which
+                                                                                                6.2 Mapping of the Per-head Matrix
+is precisely the data capacity of four cell arrays. This split-
+and-placement strategy offers significant benefits: First, it                                   Now, we detail how REPA-PIM slices a specific per-head
+quadruples the speed of logit and context operations by fully                                   K/V matrix, how it maps the slices to cell arrays, and how
+parallelizing all four array groups of the PU. Second, by fill-                                 computation is parallelized on these arrays.
+ing the cell array with data from the same per-head matrix,                                        Per-head K mapping. As illustrated in Figure 9b, we
+this strategy fully utilizes the bulk-wise instruction in the                                   split the per-head K matrix in rows into four slices, and map
+upcoming scoring and context computation. Third, it facil-                                      each slice to a free cell array. For a specific slice (e.g., K𝑖(0)
+                                                                                                                                                                𝑗
+itates the gathering of partial results by echoing the high                                     in Figure 9b), we further split it into row vectors, and map
+locality of reconfigurable PIM.                                                                 each of these vectors sequentially to a row of the cell array.
+   (2) The per-head K and V matrix slices of a specific decoder                                    To perform the q×K𝑖T𝑗 operation, we replicate the q vectors,
+block (e.g., K𝑖(0)        (0)        (1)  (1)
+                     𝑗 , V𝑖 𝑗 and K𝑖 𝑗 , V𝑖 𝑗 ) must be mapped to the
+                                                                                                and parallelize the dot-product on each row of the cell array.
+                                                                                                As illustrated in Figure 10a, the dot-product is performed by
+
+
+
+                                                                                         1628
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                                                    Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+
+    (a)
+                                                                                                                                                    Overlap with
+
+
+
+
+                                                                                               Output 1
+          Request       WQ     Q         softmax(Q×KT)                                                     WQ              Batched q
+ GPU                                                           S        S×V                                                                         q×KT on PIM
+                          WK   K                                                 C      …                  WK              Batched k
+                                             WV R×WV           V                                                                        WV                  Batched v
+                                   Transfer K                      Transfer V                                           Transfer q/k                  Transfer v
+                                   Persist K                       Persist V                                            Append k Preserve q    q×KT         Append v
+ PIM
+                                        Persist per decoder block                                                                                 Pipeline by AGs
+                                                                                                                Time
+    (b)   Decoder l            Vil(0)       Vil(1)    Vil(2)        Vil(3)     Persist V – Step l
+                                                                                                          (c)
+                                                                                                                                                q × K(2)T      Append
+           Kil Vil                                                                                                                 q × K(1)T
+                               Kil(0)       Kil(1)    Kil(2)        Kil(3)     Persist K – Step l                      q × K(0)T               Append
+          Decoder j            Vij(0)       Vij(1)    Vij(2)        Vij(3)     Persist V – Step j                                  Append                       q × K(3)T
+             Kij    Vij                                                                                                                         q × K(2)T
+                               Kij(0)       Kij(1)    Kij(2)        Kij(3)     Persist K – Step j                      Append      q × K(1)T
+                    …
+
+
+
+
+              Head i           AG0          AG1      AG2            AG3                                                 AG0            AG1       AG2             AG3
+
+Figure 11. (a) Overlapping of computation and KV transfer. (b) Persistence of prefill KV matrices. (c) Pipelining of v vector
+transfer and q × KT computation. Matrix R in (a) denotes the input requests.
+
+element-wise multiplications (i.e., q0 × 𝒌 .0, q1 × 𝒌 .1,...) and                            into two sub-batches. REPA executes them alternately on
+reductions. The result on row 𝑟 is the 𝑟 -th component of the                                GPU and REPA-PIM to keep both of them busy. The size of
+partial result. The final activation S𝑖 𝑗 can be computed by                                 sub-batches are adaptively decided by the computation ca-
+applying concatenation and softmax on the partial results                                    pability of the device, which we define by the per-workload
+(i.e., S𝑖(0)   (3)
+          𝑗 ∼ S𝑖 𝑗 ). In this procedure, most computation is per-
+                                                                                             performance within a recent time period. Given that most
+formed locally inside array groups, and only the construction                                operations in inference are matrix-vector or matrix-matrix
+of the final result needs inter-group data transfer.                                         multiplications, REPA uses the scale of such operations (i.e.,
+    Per-head V mapping. As illustrated in Figure 9c, we                                      number of scalar multiplication and addition) to estimate
+map the per-head V matrix by vertically partitioning its                                     the workload scale. We also incorporate the idea of iteration-
+transposed form. For a specific partition (e.g., V𝑖T(0)    in Figure                         level scheduling [76] to allow new and terminated requests
+                                                       𝑗
+9c), we firstly cut it into two by rows, and then split each of                              to be continuously appended into or removed from the batch.
+them vertically into slices with 𝑑ℎ𝑒𝑎𝑑 /2 × 64 elements. Since                                  Transfer Overlapping. The size of the KV cache makes
+the PIM region of each cell array has 2048 columns, we can                                   its transfer a performance concern. In this paper, we alleviate
+fit these slices into the array with the layout in Figure 9c.                                this overhead by taking the opportunity of overlapping.
+    As illustrated in Figure 10b, the S𝑖 𝑗 × V𝑖 𝑗 operation is                                  Transfer overlapping in prefill. As illustrated in Figure 11a,
+                                                                                             we overlap the transfer of KV matrices with GPU computa-
+decomposed into four parts. Taking the first part, S𝑖(0)           (0)
+                                                            𝑗 × V𝑖 𝑗                         tion. Specifically, we overlap the transfer of K matrices with
+as an example, it comprises dot-products between several S
+                                                                                             scoring and V generation. After V matrices are generated,
+and V slices. In specific, the S𝑖(0)
+                                   𝑗 vector is split into several 64-                        we overlap its transfer with the context operation. As shown
+element slices. Each slice is then replicated in rows, enabling                              in Figure 11b, the prefill KV matrices are transferred and per-
+the parallelism of the dot-products. For example, we can                                     sisted per decoder block. Matrices from different attention
+parallelize dot-products between slice 𝒔 0:64 , 𝒗 0,0 and 𝒔 0:64 ,                           heads are persisted in parallel by designated tile groups. Dur-
+𝒗 1,0 . The partial dot-products will be reduced to construct                                ing the transfer of per-decoder KV matrices, the computation
+the partial context C𝑖(0)  𝑗 . The final per-head context, C𝑖 𝑗 , can                        on other PUs and tiles will not be affected. This high paral-
+be constructed by reducing all partial context vectors.                                      lelism is attributed to the locality-aware mapping strategy—if
+                                                                                             we interleaved and mapped per-decoder KV matrices across
+7     Pipelining GPU and REPA-PIM                                                            multiple PUs and tiles, their transfer and persistence would
+The stage-split inference pattern of REPA has made device                                    impact the computation of many other requests.
+utilization a key concern. To maximally utilize GPU and                                         Transfer overlapping in decoding. We also overlap the trans-
+REPA-PIM, we pipeline them by two techniques.                                                fer of batched q, k and v vectors in decoding. As illustrated
+   Sub-batch Pipelining. Sub-batch Pipelining is an effec-                                   in Figure 11a, we overlap the transfer of batched q and k
+tive idea maximizing device utilization within a hybrid sys-                                 vectors with the generation of v vectors, and overlap the
+tem [19, 53]. In this paper, we interleave requests to GPU                                   transfer of v vectors with the q × KT operation on REPA-PIM.
+and REPA-PIM by their execution stage. Here, a batch is split
+
+
+
+                                                                                      1629
+REPA: Reconfigurable PIM for the Joint Acceleration of KV Cache Offloading and Processing     ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+
+
+As illustrated in Figure 11c, v vectors are appended to V ma-                 in controllers and the on-wire transfer latency. The time-to-
+trices in pipeline. The reason for this design is that v vectors              flight latency is ∼20ns. The on-wire latency for TGC→TC,
+must be transferred to the PU via the external interconnect.                  TC→PUC and PUC→DRV is set to 4ns, 2ns and 2ns, re-
+Pipelining v vector storage by array groups reduces chances                   spectively. The per-TG/Tile/PU bandwidth is set to 256GB/s,
+of conjunction. For a specific PU, there will be only one ar-                 32GB/s and 4GB/s, respectively.
+ray group performing v vector persisence, and the q × KT                         Experiment design. We use the 7B, 13B and 70B ver-
+computation of other array groups will not be blocked.                        sion of Llama2 [65] as our benchmark, and evaluate REPA
+                                                                              by five groups of tests. The first test group focuses on the
+8    Evaluation                                                               performance of REPA (Section 8.3): (1) We evaluate the to-
+                                                                              ken generation performance of REPA in different sequence
+8.1 Prototype Implementation
+                                                                              length settings to show its potential in inference accelera-
+We implement a prototype of REPA in 1.3K and 7.0K LoC                         tion. (2) We test how REPA-PIM works well with existing
+respectively in Python and C++.                                               offloading systems (FlexGen [61] in this paper) to show its
+   Device access and management. We extend PyTorch                            integrability and end-to-end offloading acceleration ability.
+[54], and provide a Python wrapper for inference tasks to                     The second test group focuses on the justification of key
+use REPA-PIM. We also build a runtime system for the man-                     design decisions we made (Section 8.4): (1) We evaluate our
+agement of task status and PIM memory. The PIM memory                         architectural design, and answer questions such as why we
+is addressed in bytes and allocated in 64×2560 blocks. As dis-                do not use pure PIM for inference and why the traditional
+cussed in Section 5, 2560 is the column size of the REPA-PIM                  prefill-decoding separation technique [20, 21, 27, 55, 59] is
+cell array, which includes 2048 cells for KV cache preserva-                  not used. (2) We evaluate the data mapping strategy, and
+tion and PIM computation, and 512 cells for the temporary                     show why locality is important for REPA-PIM. The third test
+storage of intermediate data. We let the number of rows                       group evaluates the efficiency of REPA-PIM, and shows its
+per allocation be 64, as it is a balanced option for efficiency               superior speed from the aspect of per-energy performance
+and memory space utilization. Considering the size of the                     (Section 8.5). The fourth test group evaluates the memory
+KV cache, the block size per allocation can be larger, which                  fragmentation during inference across models of different
+prevents frequent allocation, and reduces the size of the                     scales (Section 8.6). The fifth test group reports the power
+network-memory mapping structure. On the other hand,                          consumption and area overhead of REPA-PIM (Section 8.7).
+eschewing an over-sized memory block (e.g., 128×2560 or
+256×2560) helps improve memory utilization, as we have
+                                                                              8.3 REPA Performance
+more chances of waste when provisioning larger blocks.
+   Reconfigurable computation. We use FP16 as the data                        Token Generation Ability. We compare the token genera-
+format of REPA, and the solution proposed by FloatPIM [24]                    tion performance of REPA against five baselines:
+for reconfigurable addition and multiplication. For the maxi-
+                                                                                  • GPU, the hardware baseline using NVIDIA A100.
+mum operation in softmax, we use the fast in-situ maximum
+                                                                                  • AttAcc [53], a state-of-the-art DRAM PIM solution
+solution proposed by ReSQM [38]. REPA needs only 16 cy-
+                                                                                    using near-bank logic for attention acceleration.
+cles to retrieve the maximal from 𝑁 FP16 values when they
+                                                                                  • PAPI [18], a state-of-the-art DRAM PIM solution con-
+are stored in the same cell array. To calculate the 𝑒 𝑥 in soft-
+                                                                                    sidering the dynamic dispatching of compute- and
+max, we rewrite it by 2𝑥 log2 𝑒 , and decompose it to a 2𝑥 and
+                                                                                    memory-bound tasks to suitable devices.
+a multiplication. The multiplication is introduced earlier in
+                                                                                  • DRISA [41], a reconfigurable DRAM PIM solution
+this paragraph, and the 2𝑥 is performed by left-shifting.
+                                                                                    using DRAM cells for in-situ computing.
+                                                                                  • AiF [35], a state-of-the-art in-flash processing system
+8.2 Evaluation Setup
+                                                                                    for LLM inference acceleration.
+Experimental environment. We test REPA on an Ubuntu
+22.04 server with 40 CPU cores and 8 NVIDIA A100 GPUs.                           As shown in Figure 12, REPA exhibits superior perfor-
+We faithfully implement the design of REPA-PIM into an                        mance for long sequence, batched requests and larger mod-
+in-house simulator. The simulator is built over NeuroSim-3D                   els. It generates 1.8–4.8× and 2.1–6.5× more tokens than
+[56], the 3D-stacked version of the time-tested cycle accurate                GPU for the 2048 and 4096 sequence length, respectively.
+NeuroSim simulator [7]. REPA-PIM operates under 1GHz.                         In comparison, the improvement is 1.5–4.7× for the 1024
+It uses a 14nm bipolar resistive technology node, with its                    sequence length. Similar results can also be observed when
+parameters set following the VTEAM model [33]. To align                       we compare the performance of REPA with AttAcc. For the
+with existing work and practical devices [24, 32], we set the                 4096 sequence length, REPA generates 0.4–1.4× more tokens
+switching delay of ReRAM cells to 1ns, and the voltage pulse                  than AttAcc, while the improvement shrinks to -0.3–0.8×
+of SET and RESET to 1V and 2V, respectively. We estimate                      when the sequence length is 1024. The reason for this re-
+instruction dispatch latencies by the time-to-flight latency                  sult is that REPA has slower per-operation speed but higher
+
+
+
+                                                                       1630
+   ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                                                Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+                                            REPA         GPU              AttAcc                             PAPI        DRISA            AiF
+                             Lseq: 1024                                    Lseq: 2048                                                     Lseq: 4096
+                   Lin: 64                Lin: 960             Lin: 128                                   Lin: 1920            Lin: 256                Lin: 3840
+             60 1.5 2.0× GPU         1.6 2.1× GPU         1.8 2.5× GPU                              2.0 3.5× GPU           2.1 3.6× GPU           2.5 5.1× GPU
+Llama2-7B
+
+
+
+
+             45
+             30
+             15
+              0
+                1 16 32 64           1 16 32 64           1 8 16 32                                     1 8 16 32           1 4 8 16               1 4 8 16
+
+
+
+
+                                                                                                                                                                   Normalized #Tokens
+             60 1.7 1.9× GPU         2.0 2.3× GPU         2.6 3.5× GPU                              2.8 3.7× GPU           3.0 6.1× GPU           3.4 6.5× GPU
+Llama2-13B
+
+
+
+
+             45
+             30
+             15
+              0
+                1 16 32 64           1 16 32 64           1 8 16 32                                     1 8 16 32           1 4 8 16               1 4 8 16
+             12 2.8 3.4× GPU         3.4 4.7× GPU         3.5 4.6× GPU                              3.3 4.8× GPU           3.5 4.8× GPU           3.5 5.8× GPU
+Llama2-70B
+
+
+
+
+              9
+              6
+              3
+              0
+                1 8 16 32            1 8 16 32            1 4 8 16                                      1 4 8 16            1 2 4 8                1 2 4 8
+                  Batch Size          Batch Size           Batch Size                                    Batch Size          Batch Size             Batch Size
+   Figure 12. Token generation performance of REPA and its baselines. We conduct the test with three sequence length settings
+   (namely 1024, 2048 and 4096), each of which contains two sub-settings representing the short and long input, respectively. For each
+   setting, we collect the number of generated tokens under four batch sizes, and normalize the results per second and request.
+
+   parallelization ability. As mentioned in Section 3.2 and 5.2, re-                                                  REPA   Flex-REPA (FR)    FlexGen
+                                                                                                                  E2E          Throughput      Offload Speed
+   configurable PIM requires more cycles for a single operation                                         1.5 0.5 0.6× vs. FR 0.5 0.6× vs. FR  1.0× 0.3× 1.4×
+                                                                                                        1.2
+                                                                                Llama2-7B
+
+
+
+
+   and is thus slower when inadequately parallelized. Given
+                                                                                                        0.9                 1.0×
+   the high single-operation speed of the traditional DRAM                                              0.6 2.5×       2.4×             1.4×
+   PIM, it is not surprising that REPA has inferior performance                                         0.3
+   for one-shot inferences. Once we increase the batch size,
+                                                                                                        0.0
+                                                                                                        1.5 1.0 1.2× vs. FR 0.7 1.0× vs. FR  0.9× 0.4× 1.9×
+                                                                                Llama2-70B Llama2-13B
+
+
+
+
+   it regains its edge as the device is fully parallelized. REPA                                        1.2
+   has better performance than PAPI under larger batch sizes                                            0.9
+                                                                                                        0.6 2.6×       4.0× 1.6×        1.9×
+   and long sequences. It generates 0.5–1.2× more tokens for                                            0.3
+   the 4096 sequence length and the largest batch size settings.                                        0.0
+   However, the performance result varies under different in-                                           1.5 1.5 2.0× vs. FR 0.7 0.8× vs. FR  1.0× 0.4× 2.0×
+                                                                                                        1.2
+   put lengths. For PAPI, the number of generated tokens drops                                          0.9
+   when the sequence is dominant by the output (see results                                             0.6 4.8×       5.2× 1.8×        2.4×
+                                                                                                        0.3
+   when Lin = 64, 128 and 256). This is because PAPI uses                                               0.0
+   the Attn-PIM to process the GEMVs in scoring and context,                                               AVG P90 P95 P99 AVG P90 P95 P99 AVG P90 P95 P99
+                                                                                                               Percentile       Percentile       Percentile
+   where each processing unit is shared by two memory banks.
+   This works for short output sequences. However, when the                             Figure 13. Normalized end-to-end inference latency,
+   Lout , model size and batch size are all large, these processing                     throughput and offloading speed of REPA, vanilla FlexGen
+   units can be overwhelmed, leading to a performance loss.                             and REPA-PIM enhanced FlexGen.
+      REPA consistently outperforms DRISA (4.1–6.2×) and AiF
+   (0.5–2.6×) under all test settings. The result against DRISA
+   highlights the value of the bulk-wise memory setting in-                               End-to-end Offloading Ability. In this test, we evalu-
+   struction. Though slower than DRAM in single-cell update,                           ate how REPA works well with existing offloading systems.
+   ReRAM is open for multi-wordline activation, and is thus                            We use FlexGen [61] as the testbed, and show how REPA
+   faster when memory cells are bulk-wisely updated for in-situ                        improves its performance by offloading weights and the KV
+   NORs. The bulk-wise memory setting instruction makes the                            cache to REPA-PIM (Flex-REPA). We let the offloaded weights
+   best of this feature, which attributes to higher parallelism                        and KV cache be processed by REPA-PIM, and leave the of-
+   and superior token generation ability. The result against AiF                       floading strategy unchanged. Since 4-bit quantization is used
+   proves the potential of ReRAM PIM as a solution with both                           in FlexGen, we use this setting in REPA and Flex-REPA.
+   non-volatility and high token generation ability.                                      We test the end-to-end latency (E2E), throughput and of-
+                                                                                       floading speed of the three systems using traces from the
+
+
+
+                                                                           1631
+        REPA: Reconfigurable PIM for the Joint Acceleration of KV Cache Offloading and Processing                        ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+
+                                  REPA     SPL         NOP    NOL       Dual-PIM                                   REPA      Interleaved (IL)      RingBroadcast (RB)
+                                    E2E               TTFT           TBOT                                          TBOT         Long-range Transfer In-Tile Processing
+                        1.5
+
+
+
+
+                                                                                        Normalized Val.
+                        1.2      0.3× 1.6×         -0.1× 2.0×     1.2× 0.3× 1.6×                          1.2      3.3× 2.6×           1.6× 3.2×      92% 95% 97%
+Llama2-7B
+
+
+
+                        0.9                                                                               0.9
+                        0.6                                                                               0.6                                               3.6× 2.5×
+                        0.3                                                                               0.3
+                        0.0                                                                               0.0
+                        1.5                                                                                     7B 13B 70B          7B 13B 70B            7B 13B 70B
+                                 0.3×    2.6×      -0.1×    2.7×    1.6× 0.3× 2.6×                                Model Scale         Model Scale           Model Scale
+Llama2-70B Llama2-13B
+
+
+
+
+                        1.2
+                        0.9
+                        0.6                                                                 Figure 15. Normalized TBOT, long-range data transfer and
+                        0.3                                                                 percentage of in-tile processing of three mapping strategies.
+                        0.0
+                        1.5      0.2×    4.0×      -0.1×    3.8×    1.6× 0.2× 4.0×
+                                                                                            “Long-range data transfer” refers to that across different tiles.
+                        1.2
+                        0.9
+                        0.6                                                                                           REPA         GPU        AttAcc        DRISA
+                        0.3                                                                                         #Tokens/J                Energy/Scoring&Context (J)
+                        0.0                                                                  15                   2.1 4.3× vs. GPU         5 6.2 6.3× vs. GPU
+                              20 40 60 80        20 40 60 80       20 40 60 80               12                                            4 1.2 2.4× vs. AttAcc
+                               Lin Percentile     Lin Percentile    Lin Percentile                                0.4 0.5× vs. AttAcc
+                                                                                              9                   1.5 2.0× vs. DRISA       3 0.9 1.1× vs. DRISA
+                                                                                              6                                            2
+                                                                                              3                                            1
+        Figure 14. Normalized E2E, TTFT and TBOT of REPA and                                  0                                            0
+        its variants. The 𝐿𝑖𝑛 percentile denotes the proportion of the                                      7B       13B      70B              7B       13B       70B
+                                                                                                                  Model Scale                        Model Scale
+        input length relative to the overall 4096 sequence length.
+                                                                                             Figure 16. Energy efficiency on two metrics. The first is the
+       Azure23 dataset [55]. As shown in Figure 13, REPA and Flex-                           number of output tokens normalized per joule. The second is
+       REPA outperform the vanilla FlexGen systems on all metrics                            the energy normalized per scoring and context operation.
+       and model scales. We observe 2.4–5.2×, 1.0–2.4× and 0.9–
+       2.0× improvement on E2E, throughput and offloading speed,
+                                                                                             Given that the E2E latency is dominated by the decoding
+       respectively. Compared to the throughput performance, the
+                                                                                             performance, this minor overhead in prefill is negligible.
+       improvement on E2E is more significant, as FlexGen is spe-
+                                                                                                Evaluation on Data Mapping. The data mapping strat-
+       cialized for achieving good throughput, and incorporating
+                                                                                             egy we propose in REPA highlights locality to fully paral-
+       REPA-PIM helps it dealing with its weakness in latency.
+                                                                                             lelize the computation. To illustrate its performance, we com-
+       8.4 Design Decision Exploration                                                       pare it against two widely-adopted ideas in DRAM PIM. The
+                                                                                             first is interleaved mapping (IL). Data is delicately sliced and
+       Evaluation on Architectural Designs. We include four                                  scattered across channels, banks and even cell arrays to fully
+       REPA variants to test the efficacy of our architectural designs:                      leverage the near-bank computational logic. In this test, we
+           • REPA-SPL, a stage-split variant performing prefill by                           construct the IL mapping strategy by generalizing the idea
+             the GPU, and decoding by REPA-PIM.                                              in AttAcc [53]. The second baseline we take is RingBroadcast
+           • REPA-NOP, a variant that does not use sub-batch                                 (RB) generalized from TransPIM [79]. This strategy reduces
+             pipelining for inference.                                                       the data gathering overhead by propagating partial results
+           • REPA-NOL, a variant that does not overlap the trans-                            across memory banks. As illustrated in Figure 15, REPA has
+             fer of KV matrices and vectors with computation.                                superior performance on all metrics and model scales. Com-
+           • Dual-PIM, a variant using REPA-PIM for compute-                                 pared to the IL and RB strategy, it has 3.3× and 2.6× better
+             intensive operations.                                                           TBOT, and has 1.6× and 3.2× less long-range data transfer.
+          As illustrated in Figure 14, REPA outperforms all these                            Due to the REPA-PIM architecture, more than 92% of com-
+       variants on the E2E latency and time-between-output-tokens                            putation is conducted within a single tile, which is 3.6× and
+       (TBOT) metric. The 1.2–1.6× improvement over REPA-SPL                                 2.5× better than IL and RB respectively.
+       suggests the effectiveness of performing batched decoding-
+       time projection and FFN by GPU. The 0.5–0.8× improvement                              8.5 Energy Efficiency
+       over REPA-NOP suggests the necessity of performing sub-                               We test the energy efficiency of REPA and three baselines
+       batch pipelining. The 0.2–0.3× improvement over REPA-NOL                              on the 7B, 13B and 70B version of Llama2. As illustrated in
+       showcases the effectiveness of transfer overlapping. The                              Figure 16, REPA generates 2.1–4.3×, 0.4–0.5× and 1.5–2.0×
+       1.6–4.0× improvement over Dual-PIM justifies the hybrid                               more tokens per joule than GPU, AttAcc and DRISA, respec-
+       architecture taken by REPA. We also notice that REPA is 0.1×                          tively. For the efficiency of scoring and context operations,
+       slower than REPA-SPL on time-to-first-token (TTFT). This                              its improvement over GPU and AttAcc expands to 6.2–6.3×
+       is because REPA-SPL does not process the projection and                               and 1.2–2.4×, respectively. In contrast, its lead over DRISA
+       FFN in decoding, which leads to higher prefill performance.                           drops to 0.9–1.1×. This is because DRISA uses reconfigurable
+
+
+
+                                                                                     1632
+    ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                                 Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+                       Llama2-7B        Llama2-13B       Llama2-70B
+               2.4        0.7%-2.0% 3.5    0.5%-3.1% 4.8
+                                                                                     8.7 Overhead Evaluation
+Fragment (%)
+
+                                                            0.1%-4.3%
+               1.8        AVG: 1.2% 2.5    AVG: 1.2% 3.2    AVG: 1.5%                We summarize the area and power overhead of REPA-PIM
+               1.2                  1.5              1.6                             in Table 2. The device has a 73.3mm2 per-die area, in which
+               0.6                  0.5              0.0                             26.2mm2 is arranged for ReRAM cells. The area for the pe-
+                     0    100 200 0         100 200 0        100 200                 ripheral computational logic is minimized. It is 0.0001mm2
+                        Batch ID          Batch ID         Batch ID                  for each PU and tile, which accounts for less than 0.02% of
+    Figure 17. Memory fragmentation on Llama2-7B, 13B and                            the overall area overhead. The PU and tile controller also in-
+    70B. We use the Azure23 dataset, and set the batch size to 16.                   curs limited area overhead. It is 7.92mm2 for each die, which
+                                                                                     is 10.8% of the overall area overhead. As discussed in Section
+                                                                                     5.2, we trade this 10.8% additional area for 3.91× speedup.
+         Table 5. Area and power overhead by chip components.                        REPA-PIM requires 68.92W power to achieve full parallelism,
+                                                                                     which is significantly lower than server GPUs.
+               Comp.     Area (mm2 )    Power (mW)      Params.     Spec.
+                                       Array Overhead                                9    Discussion
+                Cells       0.0016           1.14        Size     1024×2560
+                 SA         0.0005           1.65          -          -              Endurance is a potential issue of ReRAM that has been rec-
+                DRV         0.0011           0.53          -          -              ognized and discussed for long [3, 28, 62]. REPA does not
+                Total       0.0037           3.32        Size      256KiB            suffer this pitfall when high-endurance ReRAMs are used. To
+                                        PU Overhead                                  prove this, we estimate the number of memsets performed on
+               Array        0.4136          51.12        Total      128              each ReRAM cell per year. Since REPA offloads the scoring
+                Acc.        0.0001           0.04          -         -               and context computations in attention, which are conceptu-
+               Buffer       0.0034          2.89           -         -
+                                                                                     ally GEMVs, we can than estimate using Equation (1). Here,
+                Bus         0.0009          2.70           -         -
+                Ctrl.       0.0600          4.80         Total       4               𝑁 memsets denotes the overall memsets on one ReRAM cell.
+               Total        0.4779          61.55        Size      32MiB             𝑁 memsets/GEMV and 𝑁 secs/year is the number of memsets per
+                                       Tile Overhead                                 GEMV, and the number of GEMVs per second, respectively.
+                PU          3.8232          492.41       Total        8              𝑁 secs/year is the seconds per year.
+                Acc.        0.0001            0.04         -          -
+               Buffer       0.0270           14.17         -          -                   𝑁 memsets = 𝑁 memsets/GEMV × 𝑁 GEMVs/sec × 𝑁 secs/year      (1)
+               HTree        0.6590           14.77         -          -
+                Ctrl.       0.0150           1.20          -          -
+                                                                                        Each K and V matrix participates in one GEMV in each
+               Total        4.5243          522.59       Size      256MiB            forward pass during decoding. For matrix K, it is the scoring
+                                     REPA-PIM Overhead
+                                                                                     computation. While for matrix V, it is the context compu-
+                Total      73.2631         68.92K      Size        32GiB             tation. In GEMV, each matrix element participates in one
+                                                                                     multiplication and one addition, respectively. According to
+                                                                                     Table 2, this is 43 memsets for 𝑁 memsets/GEMV . For the esti-
+                                                                                     mation of 𝑁 GEMVs/sec , we assume a continuous 20 tokens/s
+    computing throughout the entire inference process, which is                      decoding speed. According to these settings, the number of
+    slower and less efficient for batchable operations. While for                    memsets on each cell is less than 2.8 × 1010 per year. It is no-
+    non-batchable scoring and context, both REPA and DRISA                           ticeable that existing work has manufactured ReRAM with
+    use reconfigurable computing. REPA’s improvement in this                         an endurance >1012 [36]. This means REPA will not suffer
+    part is mainly attributed to the energy efficiency of ReRAM.                     the endurance issue when using high-endurance ReRAM.
+
+    8.6 Memory Fragmentation                                                         10     Related Work
+    We evaluate the dynamic memory fragmentation of REPA                             PIM for LLM acceleration. PIM on the DRAM and emerg-
+    using the real-world Azure23 dataset [55]. We use batch size                     ing ReRAM memories are both popular research topics. Most
+    16 for all tested models, and record the dynamic fragmenta-                      DRAM PIM research places CMOS logic near memory banks
+    tion in Figure 17. REPA incurs limited fragmentation rang-                       to reduce data transfer overhead [15, 17–19, 53, 79]. Some
+    ing from 0.1%–4.3%. This is attributed to the 64×2560 block                      of these solutions are GPU-free systems, which perform all
+    we use, which prevents over-provisioning of the resource.                        operations by PIM [15, 17, 79]. Others are xPU-hybrid solu-
+    We also notice that larger models (e.g., Llama2-70B) exhibit                     tions overcoming the drawback of PIM by leveraging xPUs
+    higher fragmentation ratio (up to 4.3%). This is because scale-                  for computation-intensive tasks [18, 19, 53]. We also notice
+    out occurs more frequently as new requests arrive. While                         systems using reconfigurable computing [16, 41]. These solu-
+    the unused memory will be gradually consumed during de-                          tions have minimized area overhead but lower performance,
+    coding, fragmentation may still persist, especially when the                     as wordlines within a DRAM cell array cannot be paral-
+    appended KV vectors cannot fully occupy the available space.                     lelized, which causes losses in parallelization. ReRAM PIM
+
+
+
+                                                                              1633
+REPA: Reconfigurable PIM for the Joint Acceleration of KV Cache Offloading and Processing        ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+
+
+research is mostly based on analog or reconfigurable com-                     References
+puting. Analog ReRAM PIM is fast, but constrained by power                    [1] Ameer Haj Ali, Rotem Ben Hur, Nimrod Wald, and Shahar Kvatinsky.
+and memory capacity. Existing studies use this paradigm for                       2018. Efficient Algorithms for In-Memory Fixed Point Multiplication
+the fast process of sparse attention [26, 39, 44, 70]. However,                   Using MAGIC. In IEEE International Symposium on Circuits and Systems,
+                                                                                  ISCAS 2018, 27-30 May 2018, Florence, Italy. IEEE, 1–5. doi:10.1109/
+their low capacity have prevented us from using them for
+                                                                                  ISCAS.2018.8351561
+KV cache offloading. Reconfigurable ReRAM PIM supports                        [2] Ankit Bende, Simranjeet Singh, Chandan Kumar Jha, Tim Kempen, Fe-
+high capacity, with good performance in memory-intensive                          lix Cüppers, Christopher Bengel, Andre Zambanini, Dennis Nielinger,
+operations [24, 40, 73, 77]. Their edge over DRAM recon-                          Sachin B. Patkar, Rolf Drechsler, Rainer Waser, Farhad Merchant, and
+figurable PIM is their compatibility to wordline parallelism,                     Vikas Rana. 2024. Experimental Validation of Memristor-Aided Logic
+                                                                                  Using 1T1R TaOx RRAM Crossbar Array. In 37th International Con-
+which exhibits a higher potential in parallelization.                             ference on VLSI Design and 23rd International Conference on Embedded
+   KV cache management and offloading. The gap be-                                Systems, VLSID 2024, Kolkata, India, January 6-10, 2024. IEEE, 565–570.
+tween the LLM size and GPU memory capacity has motivated                          doi:10.1109/VLSID60093.2024.00100
+research for the management and offloading of KV cache. Ex-                   [3] Mehrdad Biglari, Tobias Lieske, and Dietmar Fey. 2018. High-
+isting studies primarily focus on enhanced mechanisms and                         Endurance Bipolar ReRAM-Based Non-Volatile Flip-Flops with Run-
+                                                                                  Time Tunable Resistive States. In Proceedings of the 14th IEEE/ACM
+policies in this topic. From the perspective of mechanisms,                       International Symposium on Nanoscale Architectures, NANOARCH 2018,
+they answer questions such as how GPU memory should                               Athens, Greece, July 17-19, 2018. ACM, 19–24. doi:10.1145/3232195.
+be arranged [34, 58, 75], and how the offloading hierarchy                        3232217
+is structured [13, 14, 59]. From the perspective of policies,                 [4] Baishakhi Rani Biswas, Claire Yuan, Fangzhou Wang, and Sandeep
+existing studies endeavor to find better offloading timings                       Gupta. 2024. Systematic Generation of Memristor-Transistor Single-
+                                                                                  Phase Combinational Logic Cells. IEEE Trans. Comput. Aided Des. Integr.
+[14, 22, 61, 78], and explore possibilities of sharing the of-                    Circuits Syst. 43, 10 (2024), 2990–3003. doi:10.1109/TCAD.2024.3384012
+floaded KV cache in certain cases [13, 74]. KV cache com-                     [5] Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared
+pression and recomputation techniques are also discussed                          Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam,
+to further reduce the data size [11, 25, 43, 47, 72]. It is no-                   Girish Sastry, Amanda Askell, Sandhini Agarwal, Ariel Herbert-Voss,
+ticeable that our work is orthogonal to most of these studies.                    Gretchen Krueger, Tom Henighan, Rewon Child, Aditya Ramesh,
+                                                                                  Daniel M. Ziegler, Jeffrey Wu, Clemens Winter, Christopher Hesse,
+The REPA-PIM device can be integrated into the offloading                         Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess,
+system to provide offload-time KV cache processing, leaving                       Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya
+both the original mechanisms and policies unchanged.                              Sutskever, and Dario Amodei. 2020. Language Models are Few-
+                                                                                  Shot Learners. In Advances in Neural Information Processing Sys-
+11     Conclusion                                                                 tems 33: Annual Conference on Neural Information Processing Systems
+                                                                                  2020, NeurIPS 2020, December 6-12, 2020, virtual, Hugo Larochelle,
+In this paper, we propose REPA, a GPU-PIM hybrid system                           Marc’Aurelio Ranzato, Raia Hadsell, Maria-Florina Balcan, and Hsuan-
+for the joint acceleration of KV cache offloading and process-                    Tien Lin (Eds.). https://proceedings.neurips.cc/paper/2020/hash/
+ing. Our system is characterized by high parallelism, which                       1457c0d6bfcb4967418bfb8ac142f64a-Abstract.html
+is achieved by in-depth optimizations on micro-architecture,                  [6] Junting Chen, Checheng Yu, Xunzhe Zhou, Tianqi Xu, Yao Mu,
+                                                                                  Mengkang Hu, Wenqi Shao, Yikai Wang, Guohao Li, and Lin Shao. 2025.
+data mapping and GPU-PIM pipelining. We propose bulk-                             EMOS: Embodiment-aware Heterogeneous Multi-robot Operating Sys-
+wise memory instructions and multi-level controllers to en-                       tem with LLM Agents. In The Thirteenth International Conference on
+able fine-grained parallelism in the PIM device. To fully lever-                  Learning Representations, ICLR 2025, Singapore, April 24-28, 2025. Open-
+age this parallelization ability, we propose locality-aware                       Review.net. https://openreview.net/forum?id=Ey8KcabBpB
+data mapping, which significantly reduces the long-range                      [7] Pai-Yu Chen, Xiaochen Peng, and Shimeng Yu. 2018. NeuroSim: A
+                                                                                  Circuit-Level Macro Model for Benchmarking Neuro-Inspired Archi-
+data transfer overhead. At the system level, we adopt sub-                        tectures in Online Learning. IEEE Transactions on Computer-Aided
+batch pipelining to reduce the idleness inside a batch, and                       Design of Integrated Circuits and Systems 37, 12 (2018), 3067–3080.
+propose transfer overlapping to shadow the KV transfer                            doi:10.1109/TCAD.2018.2789723
+overhead by computation. REPA is fast, efficient and highly                   [8] Ping Chi, Shuangchen Li, Cong Xu, Tao Zhang, Jishen Zhao, Yongpan
+integratable. It is 1.5–6.5× faster, and 6.2–6.3× more effi-                      Liu, Yu Wang, and Yuan Xie. 2016. PRIME: A Novel Processing-in-
+                                                                                  Memory Architecture for Neural Network Computation in ReRAM-
+cient than NVIDIA A100. When integrated into FlexGen, it
+                                                                                  Based Main Memory. In 43rd ACM/IEEE Annual International Sympo-
+achieves 1.2–1.4× inference speedup.                                              sium on Computer Architecture, ISCA 2016, Seoul, South Korea, June
+                                                                                  18-22, 2016. IEEE Computer Society, 27–39. doi:10.1109/ISCA.2016.13
+Acknowledgments                                                               [9] DeepSeek-AI, Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song,
+                                                                                  Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi,
+We thank our shepherd Onur Mutlu, and the anonymous re-                           Xiaokang Zhang, Xingkai Yu, Yu Wu, Z. F. Wu, Zhibin Gou, Zhihong
+viewers for their valuable insights and constructive feedback.                    Shao, Zhuoshu Li, Ziyi Gao, Aixin Liu, Bing Xue, Bingxuan Wang,
+This research was supported by the National Key Research                          Bochao Wu, Bei Feng, Chengda Lu, Chenggang Zhao, Chengqi Deng,
+& Development Program of China (No. 2022YFB4500103),                              Chenyu Zhang, Chong Ruan, Damai Dai, Deli Chen, Dongjie Ji, Erhang
+NSFC (No. 62402317 and No. 62032008), and STCSM (No.                              Li, Fangyun Lin, Fucong Dai, Fuli Luo, Guangbo Hao, Guanting Chen,
+                                                                                  Guowei Li, H. Zhang, Han Bao, Hanwei Xu, Haocheng Wang, Honghui
+25LN3200900 and No. 24ZR1435500).
+                                                                                  Ding, Huajian Xin, Huazuo Gao, Hui Qu, Hui Li, Jianzhong Guo, Jiashi
+
+
+
+
+                                                                       1634
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                                            Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+
+     Li, Jiawei Wang, Jingchang Chen, Jingyang Yuan, Junjie Qiu, Junlong                  [13] Bin Gao, Zhuomin He, Puru Sharma, Qingxuan Kang, Djordje Jevdjic,
+     Li, J. L. Cai, Jiaqi Ni, Jian Liang, Jin Chen, Kai Dong, Kai Hu, Kaige Gao,               Junbo Deng, Xingkun Yang, Zhou Yu, and Pengfei Zuo. 2024. Cost-
+     Kang Guan, Kexin Huang, Kuai Yu, Lean Wang, Lecong Zhang, Liang                           Efficient Large Language Model Serving for Multi-turn Conversations
+     Zhao, Litong Wang, Liyue Zhang, Lei Xu, Leyi Xia, Mingchuan Zhang,                        with CachedAttention. In Proceedings of the 2024 USENIX Annual Tech-
+     Minghua Zhang, Minghui Tang, Meng Li, Miaojun Wang, Mingming                              nical Conference, USENIX ATC 2024, Santa Clara, CA, USA, July 10-12,
+     Li, Ning Tian, Panpan Huang, Peng Zhang, Qiancheng Wang, Qinyu                            2024, Saurabh Bagchi and Yiying Zhang (Eds.). USENIX Association,
+     Chen, Qiushi Du, Ruiqi Ge, Ruisong Zhang, Ruizhe Pan, Runji Wang,                         111–126. https://www.usenix.org/conference/atc24/presentation/gao-
+     R. J. Chen, R. L. Jin, Ruyi Chen, Shanghao Lu, Shangyan Zhou, Shan-                       bin-cost
+     huang Chen, Shengfeng Ye, Shiyu Wang, Shuiping Yu, Shunfeng Zhou,                    [14] Shiwei Gao, Youmin Chen, and Jiwu Shu. 2025. Fast State Restora-
+     Shuting Pan, and S. S. Li. 2025. DeepSeek-R1: Incentivizing Reasoning                     tion in LLM Serving with HCache. In Proceedings of the Twenti-
+     Capability in LLMs via Reinforcement Learning. CoRR abs/2501.12948                        eth European Conference on Computer Systems, EuroSys 2025, Rotter-
+     (2025). doi:10.48550/ARXIV.2501.12948 arXiv:2501.12948                                    dam, The Netherlands, 30 March 2025 - 3 April 2025. ACM, 128–143.
+[10] DeepSeek-AI, Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao                         doi:10.1145/3689031.3696072
+     Wu, Chengda Lu, Chenggang Zhao, Chengqi Deng, Chenyu Zhang,                          [15] Yufeng Gu, Alireza Khadem, Sumanth Umesh, Ning Liang, Xavier
+     Chong Ruan, Damai Dai, Daya Guo, Dejian Yang, Deli Chen, Dongjie Ji,                      Servot, Onur Mutlu, Ravi R. Iyer, and Reetuparna Das. 2025. PIM Is All
+     Erhang Li, Fangyun Lin, Fucong Dai, Fuli Luo, Guangbo Hao, Guanting                       You Need: A CXL-Enabled GPU-Free System for Large Language Model
+     Chen, Guowei Li, H. Zhang, Han Bao, Hanwei Xu, Haocheng Wang,                             Inference. In Proceedings of the 30th ACM International Conference
+     Haowei Zhang, Honghui Ding, Huajian Xin, Huazuo Gao, Hui Li, Hui                          on Architectural Support for Programming Languages and Operating
+     Qu, J. L. Cai, Jian Liang, Jianzhong Guo, Jiaqi Ni, Jiashi Li, Jiawei Wang,               Systems, Volume 2, ASPLOS 2025, Rotterdam, Netherlands, 30 March
+     Jin Chen, Jingchang Chen, Jingyang Yuan, Junjie Qiu, Junlong Li, Junx-                    2025 - 3 April 2025, Lieven Eeckhout, Georgios Smaragdakis, Katai
+     iao Song, Kai Dong, Kai Hu, Kaige Gao, Kang Guan, Kexin Huang, Kuai                       Liang, Adrian Sampson, Martha A. Kim, and Christopher J. Rossbach
+     Yu, Lean Wang, Lecong Zhang, Lei Xu, Leyi Xia, Liang Zhao, Litong                         (Eds.). ACM, 862–881. doi:10.1145/3676641.3716267
+     Wang, Liyue Zhang, Meng Li, Miaojun Wang, Mingchuan Zhang,                           [16] Nastaran Hajinazar, Geraldo F. Oliveira, Sven Gregorio, João Dinis Fer-
+     Minghua Zhang, Minghui Tang, Mingming Li, Ning Tian, Panpan                               reira, Nika Mansouri-Ghiasi, Minesh Patel, Mohammed Alser, Saugata
+     Huang, Peiyi Wang, Peng Zhang, Qiancheng Wang, Qihao Zhu, Qinyu                           Ghose, Juan Gómez-Luna, and Onur Mutlu. 2021. SIMDRAM: a frame-
+     Chen, Qiushi Du, R. J. Chen, R. L. Jin, Ruiqi Ge, Ruisong Zhang, Ruizhe                   work for bit-serial SIMD processing using DRAM. In ASPLOS ’21: 26th
+     Pan, Runji Wang, Runxin Xu, Ruoyu Zhang, Ruyi Chen, S. S. Li, Shang-                      ACM International Conference on Architectural Support for Program-
+     hao Lu, Shangyan Zhou, Shanhuang Chen, Shaoqing Wu, Shengfeng                             ming Languages and Operating Systems, Virtual Event, USA, April 19-23,
+     Ye, Shengfeng Ye, Shirong Ma, Shiyu Wang, Shuang Zhou, Shuiping                           2021, Tim Sherwood, Emery D. Berger, and Christos Kozyrakis (Eds.).
+     Yu, Shunfeng Zhou, Shuting Pan, T. Wang, Tao Yun, Tian Pei, Tianyu                        ACM, 329–345. doi:10.1145/3445814.3446749
+     Sun, W. L. Xiao, and Wangding Zeng. 2024. DeepSeek-V3 Technical                      [17] Mingxuan He, Choungki Song, Ilkon Kim, Chunseok Jeong, Seho Kim,
+     Report. CoRR abs/2412.19437 (2024). doi:10.48550/ARXIV.2412.19437                         Il Park, Mithuna Thottethodi, and T. N. Vijaykumar. 2020. Newton: A
+     arXiv:2412.19437                                                                          DRAM-maker’s Accelerator-in-Memory (AiM) Architecture for Ma-
+[11] Harry Dong, Xinyu Yang, Zhenyu Zhang, Zhangyang Wang, Yue-                                chine Learning. In 53rd Annual IEEE/ACM International Symposium
+     jie Chi, and Beidi Chen. 2024. Get More with LESS: Synthesiz-                             on Microarchitecture, MICRO 2020, Athens, Greece, October 17-21, 2020.
+     ing Recurrence with KV Cache Compression for Efficient LLM In-                            IEEE, 372–385. doi:10.1109/MICRO50266.2020.00040
+     ference. In Forty-first International Conference on Machine Learn-                   [18] Yintao He, Haiyu Mao, Christina Giannoula, Mohammad Sadrosadati,
+     ing, ICML 2024, Vienna, Austria, July 21-27, 2024. OpenReview.net.                        Juan Gómez-Luna, Huawei Li, Xiaowei Li, Ying Wang, and Onur Mutlu.
+     https://openreview.net/forum?id=uhHDhVKFMW                                                2025. PAPI: Exploiting Dynamic Parallelism in Large Language Model
+[12] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Ka-                             Decoding with a Processing-In-Memory-Enabled Computing System.
+     dian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schel-                            In Proceedings of the 30th ACM International Conference on Architectural
+     ten, Amy Yang, Angela Fan, Anirudh Goyal, Anthony Hartshorn,                              Support for Programming Languages and Operating Systems, Volume
+     Aobo Yang, Archi Mitra, Archie Sravankumar, Artem Korenev, Arthur                         2, ASPLOS 2025, Rotterdam, Netherlands, 30 March 2025 - 3 April 2025,
+     Hinsvark, Arun Rao, Aston Zhang, Aurélien Rodriguez, Austen                               Lieven Eeckhout, Georgios Smaragdakis, Katai Liang, Adrian Sampson,
+     Gregerson, Ava Spataru, Baptiste Rozière, Bethany Biron, Binh Tang,                       Martha A. Kim, and Christopher J. Rossbach (Eds.). ACM, 766–782.
+     Bobbie Chern, Charlotte Caucheteux, Chaya Nayak, Chloe Bi, Chris                          doi:10.1145/3676641.3716009
+     Marra, Chris McConnell, Christian Keller, Christophe Touret, Chun-                   [19] Guseul Heo, Sangyeop Lee, Jaehong Cho, Hyunmin Choi, Sanghyeon
+     yang Wu, Corinne Wong, Cristian Canton Ferrer, Cyrus Nikolaidis,                          Lee, Hyungkyu Ham, Gwangsun Kim, Divya Mahajan, and Jongse Park.
+     Damien Allonsius, Daniel Song, Danielle Pintz, Danny Livshits, David                      2024. NeuPIMs: NPU-PIM Heterogeneous Acceleration for Batched
+     Esiobu, Dhruv Choudhary, Dhruv Mahajan, Diego Garcia-Olano, Diego                         LLM Inferencing. In Proceedings of the 29th ACM International Confer-
+     Perino, Dieuwke Hupkes, Egor Lakomkin, Ehab AlBadawy, Elina                               ence on Architectural Support for Programming Languages and Operat-
+     Lobanova, Emily Dinan, Eric Michael Smith, Filip Radenovic, Frank                         ing Systems, Volume 3, ASPLOS 2024, La Jolla, CA, USA, 27 April 2024-
+     Zhang, Gabriel Synnaeve, Gabrielle Lee, Georgia Lewis Anderson,                           1 May 2024, Rajiv Gupta, Nael B. Abu-Ghazaleh, Madan Musuvathi,
+     Graeme Nail, Grégoire Mialon, Guan Pang, Guillem Cucurell, Hai-                           and Dan Tsafrir (Eds.). ACM, 722–737. doi:10.1145/3620666.3651380
+     ley Nguyen, Hannah Korevaar, Hu Xu, Hugo Touvron, Iliyan Zarov,                      [20] Cunchen Hu, Heyang Huang, Junhao Hu, Jiang Xu, Xusheng Chen,
+     Imanol Arrieta Ibarra, Isabel M. Kloumann, Ishan Misra, Ivan Evti-                        Tao Xie, Chenxi Wang, Sa Wang, Yungang Bao, Ninghui Sun, and
+     mov, Jade Copet, Jaewon Lee, Jan Geffert, Jana Vranes, Jason Park, Jay                    Yizhou Shan. 2024. MemServe: Context Caching for Disaggregated
+     Mahadeokar, Jeet Shah, Jelmer van der Linde, Jennifer Billock, Jenny                      LLM Serving with Elastic Memory Pool. CoRR abs/2406.17565 (2024).
+     Hong, Jenya Lee, Jeremy Fu, Jianfeng Chi, Jianyu Huang, Jiawen Liu, Jie                   doi:10.48550/ARXIV.2406.17565 arXiv:2406.17565
+     Wang, Jiecao Yu, Joanna Bitton, Joe Spisak, Jongsoo Park, Joseph Rocca,              [21] Cunchen Hu, Heyang Huang, Liangliang Xu, Xusheng Chen, Jiang
+     Joshua Johnstun, Joshua Saxe, Junteng Jia, Kalyan Vasuden Alwala,                         Xu, Shuang Chen, Hao Feng, Chenxi Wang, Sa Wang, Yungang Bao,
+     Kartikeya Upasani, Kate Plawiak, Ke Li, Kenneth Heafield, Kevin Stone,                    Ninghui Sun, and Yizhou Shan. 2024. Inference without Interfer-
+     and et al. 2024. The Llama 3 Herd of Models. CoRR abs/2407.21783                          ence: Disaggregate LLM Inference for Mixed Downstream Work-
+     (2024). doi:10.48550/ARXIV.2407.21783 arXiv:2407.21783                                    loads. CoRR abs/2401.11181 (2024). doi:10.48550/ARXIV.2401.11181
+                                                                                               arXiv:2401.11181
+
+
+
+
+                                                                                   1635
+REPA: Reconfigurable PIM for the Joint Acceleration of KV Cache Offloading and Processing                    ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+
+
+[22] Yitao Hu, Xiulong Liu, Guotao Yang, Linxuan Li, Kai Zeng, Zhixin Zhao,              [32] Shahar Kvatinsky, Dmitry Belousov, Slavik Liman, Guy Satat, Nimrod
+     Sheng Chen, Laiping Zhao, Wenxin Li, and Keqiu Li. 2025. TightLLM:                       Wald, Eby G. Friedman, Avinoam Kolodny, and Uri C. Weiser. 2014.
+     Maximizing Throughput for LLM Inference via Adaptive Offloading                          MAGIC - Memristor-Aided Logic. IEEE Trans. Circuits Syst. II Express
+     Policy. IEEE Trans. Computers 74, 7 (2025), 2195–2209. doi:10.1109/TC.                   Briefs 61-II, 11 (2014), 895–899. doi:10.1109/TCSII.2014.2357292
+     2025.3558009                                                                        [33] Shahar Kvatinsky, Misbah Ramadan, Eby G. Friedman, and Avinoam
+[23] Rotem Ben Hur, Nimrod Wald, Nishil Talati, and Shahar Kvatin-                            Kolodny. 2015. VTEAM: A General Model for Voltage-Controlled
+     sky. 2017. Simple magic: Synthesis and in-memory Mapping of                              Memristors. IEEE Transactions on Circuits and Systems II: Express Briefs
+     logic execution for memristor-aided logic. In 2017 IEEE/ACM Interna-                     62, 8 (2015), 786–790. doi:10.1109/TCSII.2015.2433536
+     tional Conference on Computer-Aided Design, ICCAD 2017, Irvine, CA,                 [34] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+     USA, November 13-16, 2017, Sri Parameswaran (Ed.). IEEE, 225–232.                        Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+     doi:10.1109/ICCAD.2017.8203782                                                           2023. Efficient Memory Management for Large Language Model Serv-
+[24] Mohsen Imani, Saransh Gupta, Yeseong Kim, and Tajana Rosing. 2019.                       ing with PagedAttention. In Proceedings of the 29th Symposium on Op-
+     FloatPIM: in-memory acceleration of deep neural network training                         erating Systems Principles, SOSP 2023, Koblenz, Germany, October 23-26,
+     with high precision. In Proceedings of the 46th International Symposium                  2023, Jason Flinn, Margo I. Seltzer, Peter Druschel, Antoine Kaufmann,
+     on Computer Architecture, ISCA 2019, Phoenix, AZ, USA, June 22-26,                       and Jonathan Mace (Eds.). ACM, 611–626. doi:10.1145/3600006.3613165
+     2019, Srilatha Bobbie Manne, Hillery C. Hunter, and Erik R. Altman                  [35] Jaeyong Lee, Hyeunjoo Kim, Sanghun Oh, Myoungjun Chun, Myung-
+     (Eds.). ACM, 802–815. doi:10.1145/3307650.3322237                                        suk Kim, and Jihong Kim. 2025. AiF: Accelerating On-Device LLM
+[25] Chaoyi Jiang, Lei Gao, Hossein Entezari Zarch, and Murali An-                            Inference Using In-Flash Processing. In Proceedings of the 52nd Annual
+     navaram. 2025. KVPR: Efficient LLM Inference with I/O-Aware                              International Symposium on Computer Architecture, ISCA 2025, Tokyo,
+     KV Cache Partial Recomputation. In Findings of the Association for                       Japan, June 21-25, 2025. ACM, 529–543. doi:10.1145/3695053.3731073
+     Computational Linguistics: ACL 2025, Wanxiang Che, Joyce Nabende,                   [36] Myoung-Jae Lee, Chang Bum Lee, Dongsoo Lee, Seung Ryul Lee, Man
+     Ekaterina Shutova, and Mohammad Taher Pilehvar (Eds.). Associ-                           Chang, Ji Hyun Hur, Young-Bae Kim, Chang-Jung Kim, David H. Seo,
+     ation for Computational Linguistics, Vienna, Austria, 19474–19488.                       Sunae Seo, U-In Chung, In-Kyeong Yoo, and Kinam Kim. 2011. A Fast,
+     doi:10.18653/v1/2025.findings-acl.997                                                    High-Endurance and Scalable Non-Volatile Memory Device Made from
+[26] Seungchul Jung, Hyungwoo Lee, Sungmeen Myung, Hyunsoo Kim,                               Asymmetric Ta2O5-x/TaO2-x Bilayer Structures. Nature Materials 10,
+     Seung Keun Yoon, Soon-Wan Kwon, Yongmin Ju, Minje Kim, Wooseok                           8 (Aug. 2011), 625–630. doi:10.1038/nmat3070
+     Yi, Shinhee Han, et al. 2022. A crossbar array of magnetoresistive                  [37] Jan Leusmann, Anna Belardinelli, Luke Haliburton, Stephan Hasler,
+     memory devices for in-memory computing. Nature 601, 7892 (2022),                         Albrecht Schmidt, Sven Mayer, Michael Gienger, and Chao Wang. 2025.
+     211–216. doi:10.1038/s41586-021-04196-6                                                  Investigating LLM-Driven Curiosity in Human-Robot Interaction. In
+[27] Aditya K. Kamath, Ramya Prabhu, Jayashree Mohan, Simon Peter,                            Proceedings of the 2025 CHI Conference on Human Factors in Computing
+     Ramachandran Ramjee, and Ashish Panwar. 2025. POD-Attention:                             Systems, CHI 2025, YokohamaJapan, 26 April 2025- 1 May 2025, Naomi
+     Unlocking Full Prefill-Decode Overlap for Faster LLM Inference. In                       Yamashita, Vanessa Evers, Koji Yatani, Sharon Xianghua Ding, Bong-
+     Proceedings of the 30th ACM International Conference on Architectural                    shin Lee, Marshini Chetty, and Phoebe O. Toups Dugas (Eds.). ACM,
+     Support for Programming Languages and Operating Systems, Volume                          599:1–599:16. doi:10.1145/3706598.3713923
+     2, ASPLOS 2025, Rotterdam, Netherlands, 30 March 2025 - 3 April 2025,               [38] Huize Li, Hai Jin, Long Zheng, and Xiaofei Liao. 2020. ReSQM: Acceler-
+     Lieven Eeckhout, Georgios Smaragdakis, Katai Liang, Adrian Sampson,                      ating Database Operations Using ReRAM-Based Content Addressable
+     Martha A. Kim, and Christopher J. Rossbach (Eds.). ACM, 897–912.                         Memory. IEEE Trans. Comput. Aided Des. Integr. Circuits Syst. 39, 11
+     doi:10.1145/3676641.3715996                                                              (2020), 4030–4041. doi:10.1109/TCAD.2020.3012860
+[28] Akifumi Kawahara, Ken Kawai, Yuuichirou Ikeda, Yoshikazu Katoh, Ry-                 [39] Huize Li, Hai Jin, Long Zheng, Xiaofei Liao, Yu Huang, Cong Liu, Jia-
+     otaro Azuma, Yuhei Yoshimoto, Kouhei Tanabe, Zhiqiang Wei, Takeki                        hong Xu, Zhuohui Duan, Dan Chen, and Chuangyi Gui. 2024. CPSAA:
+     Ninomiya, Koji Katayama, Ryutaro Yasuhara, Shunsaku Muraoka,                             Accelerating Sparse Attention Using Crossbar-Based Processing-In-
+     Atsushi Himeno, Naoki Yoshikawa, Hideaki Murase, Kazuhiko Shi-                           Memory Architecture. IEEE Trans. Comput. Aided Des. Integr. Circuits
+     makawa, Takeshi Takagi, Takumi Mikawa, and Kunitoshi Aono. 2013.                         Syst. 43, 6 (2024), 1741–1754. doi:10.1109/TCAD.2023.3344524
+     Filament scaling forming technique and level-verify-write scheme                    [40] Huize Li, Zhaoying Li, Zhenyu Bai, and Tulika Mitra. 2024. ASADI:
+     with endurance over 107 cycles in ReRAM. In 2013 IEEE Interna-                           Accelerating Sparse Attention Using Diagonal-based In-Situ Comput-
+     tional Solid-State Circuits Conference - Digest of Technical Papers, ISSCC               ing. In IEEE International Symposium on High-Performance Computer
+     2013, San Francisco, CA, USA, February 17-21, 2013. IEEE, 220–221.                       Architecture, HPCA 2024, Edinburgh, United Kingdom, March 2-6, 2024.
+     doi:10.1109/ISSCC.2013.6487708                                                           IEEE, 774–787. doi:10.1109/HPCA57654.2024.00065
+[29] Joonyoung Kim and Younsu Kim. 2014. HBM: Memory solution for                        [41] Shuangchen Li, Dimin Niu, Krishna T. Malladi, Hongzhong Zheng,
+     bandwidth-hungry processors. In 2014 IEEE Hot Chips 26 Symposium                         Bob Brennan, and Yuan Xie. 2017. DRISA: a DRAM-based reconfig-
+     (HCS), Cupertino, CA, USA, August 10-12, 2014. IEEE, 1–24. doi:10.1109/                  urable in-situ accelerator. In Proceedings of the 50th Annual IEEE/ACM
+     HOTCHIPS.2014.7478812                                                                    International Symposium on Microarchitecture, MICRO 2017, Cambridge,
+[30] Tae-Hyun Kim, Byungkyu Song, In Jun Jung, and Seong-Ook Jung.                            MA, USA, October 14-18, 2017, Hillery C. Hunter, Jaime Moreno, Joel S.
+     2022. A Sneak Current Compensation Scheme With Offset Cancel-                            Emer, and Daniel Sánchez (Eds.). ACM, 288–301. doi:10.1145/3123939.
+     lation Sensing Circuit for ReRAM-Based Cross-Point Memory Ar-                            3123977
+     ray. IEEE Trans. Circuits Syst. I Regul. Pap. 69, 4 (2022), 1583–1594.              [42] Lizi Liao, Grace Hui Yang, and Chirag Shah. 2023. Proactive Con-
+     doi:10.1109/TCSI.2021.3133945                                                            versational Agents in the Post-ChatGPT World. In Proceedings of the
+[31] Jack Kosaian and K. V. Rashmi. 2021. Arithmetic-intensity-guided                         46th International ACM SIGIR Conference on Research and Development
+     fault tolerance for neural network inference on GPUs. In International                   in Information Retrieval, SIGIR 2023, Taipei, Taiwan, July 23-27, 2023,
+     Conference for High Performance Computing, Networking, Storage and                       Hsin-Hsi Chen, Wei-Jou (Edward) Duh, Hen-Hsen Huang, Makoto P.
+     Analysis, SC 2021, St. Louis, Missouri, USA, November 14-19, 2021, Bro-                  Kato, Josiane Mothe, and Barbara Poblete (Eds.). ACM, 3452–3455.
+     nis R. de Supinski, Mary W. Hall, and Todd Gamblin (Eds.). ACM, 79.                      doi:10.1145/3539618.3594250
+     doi:10.1145/3458817.3476184                                                         [43] Akide Liu, Jing Liu, Zizheng Pan, Yefei He, Reza Haffari, and Bo-
+                                                                                              han Zhuang. 2024. MiniCache: KV Cache Compression in Depth
+
+
+
+
+                                                                                  1636
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                                            Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+
+     Dimension for Large Language Models. In Advances in Neural Infor-                        In-Storage Attention Offloading for Cost-Effective Long-Context LLM
+     mation Processing Systems 38: Annual Conference on Neural Informa-                       Inference. In IEEE International Symposium on High Performance Com-
+     tion Processing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada,                       puter Architecture, HPCA 2025, Las Vegas, NV, USA, March 1-5, 2025.
+     December 10 - 15, 2024, Amir Globersons, Lester Mackey, Danielle                         IEEE, 1510–1525. doi:10.1109/HPCA61900.2025.00113
+     Belgrave, Angela Fan, Ulrich Paquet, Jakub M. Tomczak, and Cheng                    [52] Artemis Panagopoulou, Le Xue, Ning Yu, Junnan Li, Dongxu Li, Shafiq
+     Zhang (Eds.). http://papers.nips.cc/paper_files/paper/2024/hash/                         Joty, Ran Xu, Silvio Savarese, Caiming Xiong, and Juan Carlos Niebles.
+     fd0705710bf01b88a60a3d479ea341d9-Abstract-Conference.html                                2024. X-InstructBLIP: A Framework for Aligning Image, 3D, Audio,
+[44] Fangxin Liu, Wenbo Zhao, Zongwu Wang, Yongbiao Chen, Xiaoyao                             Video to LLMs and its Emergent Cross-Modal Reasoning. In Computer
+     Liang, and Li Jiang. 2024. ERA-BS: Boosting the Efficiency of ReRAM-                     Vision - ECCV 2024 - 18th European Conference, Milan, Italy, September
+     Based PIM Accelerator With Fine-Grained Bit-Level Sparsity. IEEE                         29-October 4, 2024, Proceedings, Part XLV (Lecture Notes in Computer
+     Trans. Computers 73, 9 (2024), 2320–2334. doi:10.1109/TC.2023.3290869                    Science, Vol. 15103), Ales Leonardis, Elisa Ricci, Stefan Roth, Olga Rus-
+[45] Mushui Liu, Yuhang Ma, Zhen Yang, Jun Dan, Yunlong Yu, Zeng Zhao,                        sakovsky, Torsten Sattler, and Gül Varol (Eds.). Springer, 177–197.
+     Zhipeng Hu, Bai Liu, and Changjie Fan. 2025. LLM4GEN: Leveraging                         doi:10.1007/978-3-031-72995-9_11
+     Semantic Representation of LLMs for Text-to-Image Generation. In                    [53] Jaehyun Park, Jaewan Choi, Kwanhee Kyung, Michael Jaemin Kim,
+     AAAI-25, Sponsored by the Association for the Advancement of Artificial                  Yongsuk Kwon, Nam Sung Kim, and Jung Ho Ahn. 2024. AttAcc! Un-
+     Intelligence, February 25 - March 4, 2025, Philadelphia, PA, USA, Toby                   leashing the Power of PIM for Batched Transformer-based Generative
+     Walsh, Julie Shah, and Zico Kolter (Eds.). AAAI Press, 5523–5531.                        Model Inference. In Proceedings of the 29th ACM International Confer-
+     doi:10.1609/AAAI.V39I5.32588                                                             ence on Architectural Support for Programming Languages and Operat-
+[46] Tz-Yi Liu, Tian Hong Yan, Roy Scheuerlein, Yingchang Chen, Jef-                          ing Systems, Volume 2, ASPLOS 2024, La Jolla, CA, USA, 27 April 2024-
+     frey KoonYee Lee, Gopinath Balakrishnan, Gordon Yee, Henry Zhang,                        1 May 2024, Rajiv Gupta, Nael B. Abu-Ghazaleh, Madan Musuvathi,
+     Alex Yap, Jingwen Ouyang, Takahiko Sasaki, Sravanti Addepalli, Ali                       and Dan Tsafrir (Eds.). ACM, 103–119. doi:10.1145/3620665.3640422
+     Al-Shamma, Chin-Yu Chen, Mayank Gupta, Greg Hilton, Saurabh                         [54] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Brad-
+     Joshi, Achal Kathuria, Vincent Lai, Deep Masiwal, Masahide Mat-                          bury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein,
+     sumoto, Anurag Nigam, Anil Pai, Jayesh Pakhale, Chang Hua Siau,                          Luca Antiga, Alban Desmaison, Andreas Köpf, Edward Z. Yang,
+     Xiaoxia Wu, Ronald Yin, Liping Peng, Jang Yong Kang, Sharon                              Zachary DeVito, Martin Raison, Alykhan Tejani, Sasank Chilamkurthy,
+     Huynh, Huijuan Wang, Nicolas Nagel, Yoichiro Tanaka, Masaaki Hi-                         Benoit Steiner, Lu Fang, Junjie Bai, and Soumith Chintala. 2019. Py-
+     gashitani, Tim Minvielle, Chandu Gorla, Takayuki Tsukamoto, Takeshi                      Torch: An Imperative Style, High-Performance Deep Learning Library.
+     Yamaguchi, Mutsumi Okajima, Takayuki Okamura, Satoru Takase,                             In Advances in Neural Information Processing Systems 32: Annual Con-
+     Takahiko Hara, Hirofumi Inoue, Luca Fasoli, Mehrdad Mofidi, Ritu                         ference on Neural Information Processing Systems 2019, NeurIPS 2019,
+     Shrivastava, and Khandker Quader. 2013. A 130.7mm2 2-layer 32Gb                          December 8-14, 2019, Vancouver, BC, Canada, Hanna M. Wallach, Hugo
+     ReRAM memory device in 24nm technology. In 2013 IEEE Interna-                            Larochelle, Alina Beygelzimer, Florence d’Alché-Buc, Emily B. Fox,
+     tional Solid-State Circuits Conference - Digest of Technical Papers, ISSCC               and Roman Garnett (Eds.). 8024–8035. https://proceedings.neurips.cc/
+     2013, San Francisco, CA, USA, February 17-21, 2013. IEEE, 210–211.                       paper/2019/hash/bdbca288fee7f92f2bfa9f7012727740-Abstract.html
+     doi:10.1109/ISSCC.2013.6487703                                                      [55] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo
+[47] Yuhan Liu, Hanchen Li, Yihua Cheng, Siddhant Ray, Yuyang Huang,                          Goiri, Saeed Maleki, and Ricardo Bianchini. 2024. Splitwise: Efficient
+     Qizheng Zhang, Kuntai Du, Jiayi Yao, Shan Lu, Ganesh Anantha-                            Generative LLM Inference Using Phase Splitting. In 51st ACM/IEEE
+     narayanan, Michael Maire, Henry Hoffmann, Ari Holtzman, and                              Annual International Symposium on Computer Architecture, ISCA 2024,
+     Junchen Jiang. 2024. CacheGen: KV Cache Compression and Streaming                        Buenos Aires, Argentina, June 29 - July 3, 2024. IEEE, 118–132. doi:10.
+     for Fast Large Language Model Serving. In Proceedings of the ACM SIG-                    1109/ISCA59077.2024.00019
+     COMM 2024 Conference, ACM SIGCOMM 2024, Sydney, NSW, Australia,                     [56] Xiaochen Peng, Wriddhi Chakraborty, Ankit Kaul, Wonbo Shim,
+     August 4-8, 2024. ACM, 38–56. doi:10.1145/3651890.3672274                                Muhannad S Bakir, Suman Datta, and Shimeng Yu. 2020. Benchmark-
+[48] Zichang Liu, Aditya Desai, Fangshuo Liao, Weitao Wang, Victor                            ing Monolithic 3D Integration for Compute-in-Memory Accelerators:
+     Xie, Zhaozhuo Xu, Anastasios Kyrillidis, and Anshumali Shrivas-                          Overcoming ADC Bottlenecks and Maintaining Scalability to 7nm or
+     tava. 2023. Scissorhands: Exploiting the Persistence of Importance                       Beyond. In 2020 IEEE International Electron Devices Meeting (IEDM).
+     Hypothesis for LLM KV Cache Compression at Test Time. In Ad-                             30.4.1–30.4.4. doi:10.1109/IEDM13553.2020.9372091
+     vances in Neural Information Processing Systems 36: Annual Confer-                  [57] Reiner Pope, Sholto Douglas, Aakanksha Chowdhery, Jacob
+     ence on Neural Information Processing Systems 2023, NeurIPS 2023,                        Devlin, James Bradbury, Jonathan Heek, Kefan Xiao, Shivani
+     New Orleans, LA, USA, December 10 - 16, 2023, Alice Oh, Tristan                          Agrawal, and Jeff Dean. 2023. Efficiently Scaling Transformer
+     Naumann, Amir Globerson, Kate Saenko, Moritz Hardt, and Sergey                           Inference. In Proceedings of the Sixth Conference on Machine
+     Levine (Eds.). http://papers.nips.cc/paper_files/paper/2023/hash/                        Learning and Systems, MLSys 2023, Miami, FL, USA, June 4-8,
+     a452a7c6c463e4ae8fbdc614c6e983e6-Abstract-Conference.html                                2023, Dawn Song, Michael Carbin, and Tianqi Chen (Eds.). ml-
+[49] Jayashree Mohan, Amar Phanishayee, and Vijay Chidambaram. 2021.                          sys.org. https://proceedings.mlsys.org/paper_files/paper/2023/hash/
+     CheckFreq: Frequent, Fine-Grained DNN Checkpointing. In 19th                             c4be71ab8d24cdfb45e3d06dbfca2780-Abstract-mlsys2023.html
+     USENIX Conference on File and Storage Technologies, FAST 2021, Febru-               [58] Ramya Prabhu, Ajay Nayak, Jayashree Mohan, Ramachandran Ram-
+     ary 23-25, 2021, Marcos K. Aguilera and Gala Yadgar (Eds.). USENIX                       jee, and Ashish Panwar. 2025. vAttention: Dynamic Memory Man-
+     Association, 203–216. https://www.usenix.org/conference/fast21/                          agement for Serving LLMs without PagedAttention. In Proceedings
+     presentation/mohan                                                                       of the 30th ACM International Conference on Architectural Support
+[50] Shubham Negi, Utkarsh Saxena, Deepika Sharma, and Kaushik Roy.                           for Programming Languages and Operating Systems, Volume 1, ASP-
+     2025. HCiM: ADC-Less Hybrid Analog-Digital Compute in Memory                             LOS 2025, Rotterdam, The Netherlands, 30 March 2025 - 3 April 2025,
+     Accelerator for Deep Learning Workloads. In Proceedings of the 30th                      Lieven Eeckhout, Georgios Smaragdakis, Kaitai Liang, Adrian Samp-
+     Asia and South Pacific Design Automation Conference (Tokyo, Japan)                       son, Martha A. Kim, and Christopher J. Rossbach (Eds.). ACM, 1133–
+     (ASPDAC ’25). Association for Computing Machinery, New York, NY,                         1150. doi:10.1145/3669940.3707256
+     USA, 648–655. doi:10.1145/3658617.3697572                                           [59] Ruoyu Qin, Zheming Li, Weiran He, Jialei Cui, Feng Ren, Mingxing
+[51] Xiurui Pan, Endian Li, Qiao Li, Shengwen Liang, Yizhou Shan, Ke                          Zhang, Yongwei Wu, Weimin Zheng, and Xinran Xu. 2025. Mooncake:
+     Zhou, Yingwei Luo, Xiaolin Wang, and Jie Zhang. 2025. InstAttention:
+
+
+
+
+                                                                                  1637
+REPA: Reconfigurable PIM for the Joint Acceleration of KV Cache Offloading and Processing                    ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.
+
+
+     Trading More Storage for Less Computation - A KVCache-centric                            Peter Druschel, Antoine Kaufmann, and Jonathan Mace (Eds.). ACM,
+     Architecture for Serving LLM Chatbot. In 23rd USENIX Conference on                       364–381. doi:10.1145/3600006.3613145
+     File and Storage Technologies, FAST 2025, Santa Clara, CA, February                 [68] Lei Xie, Hoang Anh Du Nguyen, Mottaqiallah Taouil, Said Hamdioui,
+     25-27, 2025, Haryadi S. Gunawi and Vasily Tarasov (Eds.). USENIX                         and Koen Bertels. 2018. A Mapping Methodology of Boolean Logic
+     Association, 155–170. https://www.usenix.org/conference/fast25/                          Circuits on Memristor Crossbar. IEEE Trans. Comput. Aided Des. Integr.
+     presentation/qin                                                                         Circuits Syst. 37, 2 (2018), 311–323. doi:10.1109/TCAD.2017.2695880
+[60] Alireza Rezazadeh, Zichao Li, Wei Wei, and Yujia Bao. 2025. From Iso-               [69] Cong Xu, Dimin Niu, Naveen Muralimanohar, Rajeev Balasubramo-
+     lated Conversations to Hierarchical Schemas: Dynamic Tree Memory                         nian, Tao Zhang, Shimeng Yu, and Yuan Xie. 2015. Overcoming the
+     Representation for LLMs. In The Thirteenth International Conference                      challenges of crossbar resistive memory architectures. In 21st IEEE
+     on Learning Representations, ICLR 2025, Singapore, April 24-28, 2025.                    International Symposium on High Performance Computer Architecture,
+     OpenReview.net. https://openreview.net/forum?id=moXtEmCleY                               HPCA 2015, Burlingame, CA, USA, February 7-11, 2015. IEEE Computer
+[61] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan Li, Max Ryabinin,                       Society, 476–488. doi:10.1109/HPCA.2015.7056056
+     Beidi Chen, Percy Liang, Christopher Ré, Ion Stoica, and Ce Zhang.                  [70] Jiahong Xu, Haikun Liu, Zhuohui Duan, Xiaofei Liao, Hai Jin, Xi-
+     2023. FlexGen: High-Throughput Generative Inference of Large                             aokang Yang, Huize Li, Cong Liu, Fubing Mao, and Yu Zhang. 2024.
+     Language Models with a Single GPU. In International Conference                           ReHarvest: An ADC Resource-Harvesting Crossbar Architecture for
+     on Machine Learning, ICML 2023, 23-29 July 2023, Honolulu, Hawaii,                       ReRAM-Based DNN Accelerators. ACM Trans. Archit. Code Optim. 21,
+     USA (Proceedings of Machine Learning Research, Vol. 202), Andreas                        3 (2024), 63:1–63:26. doi:10.1145/3659208
+     Krause, Emma Brunskill, Kyunghyun Cho, Barbara Engelhardt, Sivan                    [71] An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng,
+     Sabato, and Jonathan Scarlett (Eds.). PMLR, 31094–31116. https:                          Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoran Wei,
+     //proceedings.mlr.press/v202/sheng23a.html                                               Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi
+[62] Devesh Singh and Donald Yeung. 2024. MORSE: Memory Overwrite                             Yang, Jingren Zhou, Junyang Lin, Kai Dang, Keming Lu, Keqin Bao,
+     Time Guided Soft Writes to Improve ReRAM Energy and Endurance. In                        Kexin Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu, Rui
+     Proceedings of the 2024 International Conference on Parallel Architectures               Men, Runji Lin, Tianhao Li, Tingyu Xia, Xingzhang Ren, Xuancheng
+     and Compilation Techniques, PACT 2024, Long Beach, CA, USA, October                      Ren, Yang Fan, Yang Su, Yichang Zhang, Yu Wan, Yuqiong Liu, Zeyu
+     14-16, 2024. ACM, 26–39. doi:10.1145/3656019.3676890                                     Cui, Zhenru Zhang, and Zihan Qiu. 2024. Qwen2.5 Technical Re-
+[63] Dmitri B Strukov, Gregory S Snider, Duncan R Stewart, and R Stanley                      port. CoRR abs/2412.15115 (2024). doi:10.48550/ARXIV.2412.15115
+     Williams. 2008. The missing memristor found. Nature 453, 7191 (2008),                    arXiv:2412.15115
+     80–83. doi:10.1038/nature06932                                                      [72] Dongjie Yang, Xiaodong Han, Yan Gao, Yao Hu, Shilin Zhang, and
+[64] Xiaotian Sun, Xinyu Wang, Wanqian Li, Yinhe Han, and Xiaoming                            Hai Zhao. 2024. PyramidInfer: Pyramid KV Cache Compression for
+     Chen. 2025. PIMCOMP: An End-to-End DNN Compiler for Processing-                          High-throughput LLM Inference. In Findings of the Association for
+     In-Memory Accelerators. IEEE Trans. Comput. Aided Des. Integr. Cir-                      Computational Linguistics, ACL 2024, Bangkok, Thailand and virtual
+     cuits Syst. 44, 5 (2025), 1745–1759. doi:10.1109/TCAD.2024.3496847                       meeting, August 11-16, 2024, Lun-Wei Ku, Andre Martins, and Vivek
+[65] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Alma-                       Srikumar (Eds.). Association for Computational Linguistics, 3258–3270.
+     hairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal                         doi:10.18653/V1/2024.FINDINGS-ACL.195
+     Bhargava, Shruti Bhosale, Dan Bikel, Lukas Blecher, Cristian Canton-                [73] Xiaoxuan Yang, Bonan Yan, Hai Li, and Yiran Chen. 2020. ReTrans-
+     Ferrer, Moya Chen, Guillem Cucurull, David Esiobu, Jude Fernandes,                       former: ReRAM-based Processing-in-Memory Architecture for Trans-
+     Jeremy Fu, Wenyin Fu, Brian Fuller, Cynthia Gao, Vedanuj Goswami,                        former Acceleration. In IEEE/ACM International Conference On Com-
+     Naman Goyal, Anthony Hartshorn, Saghar Hosseini, Rui Hou, Hakan                          puter Aided Design, ICCAD 2020, San Diego, CA, USA, November 2-5,
+     Inan, Marcin Kardas, Viktor Kerkez, Madian Khabsa, Isabel Kloumann,                      2020. IEEE, 92:1–92:9. doi:10.1145/3400302.3415640
+     Artem Korenev, Punit Singh Koura, Marie-Anne Lachaux, Thibaut                       [74] Yifei Yang, Zouying Cao, Qiguang Chen, Libo Qin, Dongjie Yang,
+     Lavril, Jenya Lee, Diana Liskovich, Yinghai Lu, Yuning Mao, Xavier                       Hai Zhao, and Zhi Chen. 2024. KVSharer: Efficient Inference via
+     Martinet, Todor Mihaylov, Pushkar Mishra, Igor Molybog, Yixin Nie,                       Layer-Wise Dissimilar KV Cache Sharing. CoRR abs/2410.18517 (2024).
+     Andrew Poulton, Jeremy Reizenstein, Rashi Rungta, Kalyan Saladi,                         doi:10.48550/ARXIV.2410.18517 arXiv:2410.18517
+     Alan Schelten, Ruan Silva, Eric Michael Smith, Ranjan Subramanian,                  [75] Lu Ye, Ze Tao, Yong Huang, and Yang Li. 2024. ChunkAttention: Ef-
+     Xiaoqing Ellen Tan, Binh Tang, Ross Taylor, Adina Williams, Jian Xi-                     ficient Self-Attention with Prefix-Aware KV Cache and Two-Phase
+     ang Kuan, Puxin Xu, Zheng Yan, Iliyan Zarov, Yuchen Zhang, Angela                        Partition. In Proceedings of the 62nd Annual Meeting of the Associa-
+     Fan, Melanie Kambadur, Sharan Narang, Aurélien Rodriguez, Robert                         tion for Computational Linguistics (Volume 1: Long Papers), ACL 2024,
+     Stojnic, Sergey Edunov, and Thomas Scialom. 2023. Llama 2: Open                          Bangkok, Thailand, August 11-16, 2024, Lun-Wei Ku, Andre Martins,
+     Foundation and Fine-Tuned Chat Models. CoRR abs/2307.09288 (2023).                       and Vivek Srikumar (Eds.). Association for Computational Linguistics,
+     doi:10.48550/ARXIV.2307.09288 arXiv:2307.09288                                           11608–11620. doi:10.18653/V1/2024.ACL-LONG.623
+[66] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion                   [76] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and
+     Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. 2017.                        Byung-Gon Chun. 2022. Orca: A Distributed Serving System for
+     Attention is All you Need. In Advances in Neural Information Pro-                        Transformer-Based Generative Models. In 16th USENIX Symposium
+     cessing Systems 30: Annual Conference on Neural Information Pro-                         on Operating Systems Design and Implementation, OSDI 2022, Carlsbad,
+     cessing Systems 2017, December 4-9, 2017, Long Beach, CA, USA, Is-                       CA, USA, July 11-13, 2022, Marcos K. Aguilera and Hakim Weather-
+     abelle Guyon, Ulrike von Luxburg, Samy Bengio, Hanna M. Wal-                             spoon (Eds.). USENIX Association, 521–538. https://www.usenix.org/
+     lach, Rob Fergus, S. V. N. Vishwanathan, and Roman Garnett                               conference/osdi22/presentation/yu
+     (Eds.). 5998–6008. https://proceedings.neurips.cc/paper/2017/hash/                  [77] Geng Yuan, Payman Behnam, Zhengang Li, Ali Shafiee, Sheng Lin,
+     3f5ee243547dee91fbd053c1c4a845aa-Abstract.html                                           Xiaolong Ma, Hang Liu, Xuehai Qian, Mahdi Nazm Bojnordi, Yanzhi
+[67] Zhuang Wang, Zhen Jia, Shuai Zheng, Zhen Zhang, Xinwei Fu, T. S. Eu-                     Wang, and Caiwen Ding. 2021. FORMS: Fine-grained Polarized ReRAM-
+     gene Ng, and Yida Wang. 2023. GEMINI: Fast Failure Recovery in                           based In-situ Computation for Mixed-signal DNN Accelerator. In 48th
+     Distributed Training with In-Memory Checkpoints. In Proceedings                          ACM/IEEE Annual International Symposium on Computer Architecture,
+     of the 29th Symposium on Operating Systems Principles, SOSP 2023,                        ISCA 2021, Virtual Event / Valencia, Spain, June 14-18, 2021. IEEE, 265–
+     Koblenz, Germany, October 23-26, 2023, Jason Flinn, Margo I. Seltzer,                    278. doi:10.1109/ISCA52012.2021.00029
+
+
+
+
+                                                                                  1638
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA.                                                     Yang Hong, Junlong Yang, Bo Peng, and Jianguo Yao
+
+
+[78] Zhenyu Zhang, Ying Sheng, Tianyi Zhou, Tianlong Chen, Lianmin                       Levine (Eds.). http://papers.nips.cc/paper_files/paper/2023/hash/
+     Zheng, Ruisi Cai, Zhao Song, Yuandong Tian, Christopher Ré, Clark W.                6ceefa7b15572587b78ecfcebb2827f8-Abstract-Conference.html
+     Barrett, Zhangyang Wang, and Beidi Chen. 2023. H2O: Heavy-Hitter               [79] Minxuan Zhou, Weihong Xu, Jaeyoung Kang, and Tajana Rosing. 2022.
+     Oracle for Efficient Generative Inference of Large Language Mod-                    TransPIM: A Memory-based Acceleration via Software-Hardware Co-
+     els. In Advances in Neural Information Processing Systems 36: Annual                Design for Transformer. In IEEE International Symposium on High-
+     Conference on Neural Information Processing Systems 2023, NeurIPS                   Performance Computer Architecture, HPCA 2022, Seoul, South Korea,
+     2023, New Orleans, LA, USA, December 10 - 16, 2023, Alice Oh, Tristan               April 2-6, 2022. IEEE, 1071–1085. doi:10.1109/HPCA53966.2022.00082
+     Naumann, Amir Globerson, Kate Saenko, Moritz Hardt, and Sergey
+
+
+
+
+                                                                             1639
+

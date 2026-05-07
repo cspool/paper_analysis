@@ -1,0 +1,1445 @@
+                                                                                                                                                                                     2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+
+                                                                                                                                                                     AUM: Unleashing the Efficiency Potential of Shared
+                                                                                                                                                                     Processors with Accelerator Units for LLM Serving
+                                                                                                                                                                                Xinkai Wang1 , Chao Li1 †, Yiming Zhuansun1 , Jinyang Guo1 , Xiaofeng Hou1 , Jing Wang1 ,
+                                                                                                                                                                              Luping Wang2 †, Weigao Chen2 , Cheng Huang2 , Guodong Yang2 , Liping Zhang2 and Minyi Guo1
+                                                                                                                                                                             1. School of Computer Science, Shanghai Jiao Tong University, 2. Alibaba Group, † Corresponding Authors
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408539
+
+
+
+
+                                                                                                                                                                                {unbreakablewxk, zsym2019, lazarus, jing618}@sjtu.edu.cn, {lichao, hou-xf, guo-my}@cs.sjtu.edu.cn
+                                                                                                                                                                                            {chamu.wlp, weigao.cwg, xiaoluo.hc, luren.ygd, liping.z}@alibaba-inc.com
+
+
+                                                                                                                                                                        Abstract—Generative AI, especially LLM, is driving a funda-                                               ① Changing Software Requirements
+                                                                                                                                                                     mental shift in software paradigms, prompting cloud providers                Evolving                                                                    …
+                                                                                                                                                                                                                                                                  Text     Media          Bigdata     AI     LLM
+                                                                                                                                                                     to build more efficient serving infrastructures. To meet the                Application
+                                                                                                                                                                     computational demands of emerging software, modern CPU                                    ④ AUV-oblivious Middleware                          Management
+                                                                                                                                                                     processors are integrating Accelerator Units (AU) in the pipeline            Resource                                                         Gap of AUV
+                                                                                                                                                                     to accelerate key operations, such as Intel AMX for matrix                   Manager        Exclusive SMT       FT       RDT    BP
+                                                                                                                                                                     multiplication. Current practices that dedicate AU-enabled CPU                            ③ Compiler Support for Usage                    AUM
+                                                                                                                                                                     exclusively to LLM serving lead to significant resource waste                   ISA
+                                                                                                                                                                                                                                                                   8086      MMX            SSE     AVX            AMX        …
+                                                                                                                                                                     and inferior efficiency. To this end, sharing AU-enabled CPU                 Extensions
+                                                                                                                                                                     with general workloads is necessary to harvest redundant re-                                      ② Variable Hardware Accelerator Units (AU)
+                                                                                                                                                                     sources and improve platform performance-per-watt. However,                    CPU                                                                       …
+                                                                                                                                                                                                                                                                   ALU/FPU        Vec. ALU/FPU        FMA          TMUL
+                                                                                                                                                                     perfectly sharing AU can be challenging since they introduce                Func. Units
+                                                                                                                                                                     three-dimensional variations: variable usage patterns, compul-
+                                                                                                                                                                     sory frequency interferences, and dissimilar resource bounds.                 Timeline      1980s    1990s     2000s         2010s    2020s      2030s
+                                                                                                                                                                     Existing resource managers are oblivious to complex Accelerator
+                                                                                                                                                                     Unit Variations (AUV), resulting in performance and efficiency              Fig. 1: The management gap between evolving AU and AU
+                                                                                                                                                                     degradations of up to 50% in shared environments.                           variations (AUV)-oblivious resource managers.
+                                                                                                                                                                        Therefore, this paper introduces AUM, a novel AU-aware
+                                                                                                                                                                     resource manager designed to handle AUV and maximize the
+                                                                                                                                                                     efficiency of shared processors. AUM has two cooperative com-               designed to accelerate key operations, such as Intel AMX1 [59]
+                                                                                                                                                                     ponents with three stages for three-dimensional AUV. The back-
+                                                                                                                                                                     ground profiler characterizes the usage, frequency, and resource            and RISC-V M-extension [2] for heavy matrix multiplications
+                                                                                                                                                                     information into a discrete model, guiding the runtime controller           in LLM serving [37]. Enabled by dedicated Instruction Set
+                                                                                                                                                                     to analyze usage-aware requirements, select frequency-aware                 Architecture (ISA) extensions for every emerging AU [24],
+                                                                                                                                                                     divisions, and make bound-aware resource decisions. Through                 [70], software applications can easily harness AU capabilities
+                                                                                                                                                                     extensive evaluations on production AU-enabled CPUs, we show                to achieve significant performance gains, as shown in Figure 1.
+                                                                                                                                                                     that AUM improves CPU efficiency by 4.7-8.8% while maintaining
+                                                                                                                                                                     high-performance AU applications by reducing SLO violations by              However, CPU execution becomes more heterogeneous due to
+                                                                                                                                                                     7-11% compared with state-of-the-art resource managers.                     newly-designed AU alongside conventional functional units,
+                                                                                                                                                                                                                                                 such as integer ALU and vector units [70]. To sidestep
+                                                                                                                                                                                                                                                 management complexities and guarantee AU application per-
+                                                                                                                                                                                            I. I NTRODUCTION                                     formance, current industry practice is to utilize AU-enabled
+                                                                                                                                                                                                                                                 CPU exclusively [41], [80] (i.e., allocating the whole processor
+                                                                                                                                                                        Recent advancements in Large Language Models (LLMs),
+                                                                                                                                                                                                                                                 to AU applications without sharing), leading to severe resource
+                                                                                                                                                                     such as GPT [62] and LLaMA [51], are fundamentally
+                                                                                                                                                                                                                                                 waste and poor platform efficiency.
+                                                                                                                                                                     transforming previous software across various domains, from
+                                                                                                                                                                                                                                                    Given the inefficiency of exclusive allocation, sharing AU-
+                                                                                                                                                                     personal assistants [100] to search engines [54]. This paradigm
+                                                                                                                                                                                                                                                 enabled CPU is essential for maximizing platform efficiency,
+                                                                                                                                                                     shift imposes immense pressure on cloud providers to develop
+                                                                                                                                                                                                                                                 but effective sharing is non-trivial due to variable behaviors
+                                                                                                                                                                     cost-efficient serving infrastructure capable of handling bil-
+                                                                                                                                                                                                                                                 of AU at three abstraction layers, which we term Accelerator
+                                                                                                                                                                     lions of user queries [67]. However, the high costs and con-
+                                                                                                                                                                                                                                                 Unit Variations (AUV). Variation-1: Variable Usage Pattern.
+                                                                                                                                                                     strained supply of top-performing accelerators like NVIDIA
+                                                                                                                                                                                                                                                 Software-layer AU utilization is highly dynamic in different
+                                                                                                                                                                     GPUs [61] and self-designed accelerators [52] have forced
+                                                                                                                                                                                                                                                 applications and operators. For instance, two LLM serving
+                                                                                                                                                                     major cloud providers, such as Amazon [13], Azure [32],
+                                                                                                                                                                                                                                                 phases (i.e., prefill and decode [102]) have distinct AU us-
+                                                                                                                                                                     and Inspur [80], to increasingly leverage ubiquitous general-
+                                                                                                                                                                                                                                                 ages due to different matrix operation dimensions. Variation-
+                                                                                                                                                                     purpose CPUs for LLM serving [21], [36].
+                                                                                                                                                                                                                                                 2: Compulsory Frequency Interference. Variable AU usages
+                                                                                                                                                                        To meet the computational demands of AI-driven software,
+                                                                                                                                                                     modern general-purpose CPUs are incorporating specialized                    1 In this paper, we use Intel Advanced Matrix Extension (AMX) for matrix
+                                                                                                                                                                     Accelerator Units (AU) in the execution pipeline, which are                 multiplication to represent one of the emerging accelerator units.
+
+
+
+
+                                                                                                                                                                            Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+cause compulsory system-layer frequency reduction to respect                     L1-Inst           ROB                        …
+                                                                                                                                                          Accelerator
+                                                                                                                 Registers           ALU   … AVX
+thermal design power (TDP) limits. The dynamic frequency                                                                     Port5                        Units (AU)
+                                                                                  Fetch        Rename            Scheduler           ALU   FPU      …
+scaling creates unpredictable performance interferences and                                                                  Port1
+makes it difficult to guarantee sharing service-level objectives                 Decoder           IDQ
+                                                                                                                 Registers           ALU   Vec.     DIV   … AMX
+                                                                                                                             Port0
+(SLO). Variation-3: Dissimilar Resource Bound. AU exhibits
+microarchitecture-layer resource affinities distinct from tra-                  Physical     L1/L2       HT 0    Physical      TMUL Accelerator            TILECFG
+                                                                                 Core 0      Cache       HT 1     Core 1
+ditional functional units. The imbalanced processor frontend                                                                  PE   PE … PE                 2D reg0
+and backend resource bounds lead to underutilized hardware                      Last-level Cache         DSA Accelerator      PE   PE … PE                 2D reg1
+                                                                                                                                      …                       …
+components in different cycles. The three-dimensional AUV                                  NUMA Memory 0
+                                                                                                                              1024 BF16 ops/cycle           8 * 1KB
+are challenging for guaranteeing performance and maximizing
+efficiency in shared environments.                                           Fig. 2: The block diagram of modern CPU with accelerator
+   However, conventional resource managers fail to handle                    units and the implementation of typical AMX.
+AUV for contradictory performance and efficiency objectives.
+To utilize the redundant resources, CPU platforms incorporate
+                                                                                  oblivious sharing resource managers cannot achieve high-
+workload-aware mechanisms as shown in Figure 1, including
+                                                                                  performance and efficient processors.
+Simultaneous Multi-Threading (SMT) variants, such as Fron-
+                                                                                • Design: We introduce AUM, a novel AU-aware resource
+tend Throttling (FT) [14] and Backend Partition (BP) [50],
+                                                                                  manager tailored for AU-enabled processors in shared
+and resource partitioning mechanisms, such as Intel Resource
+                                                                                  environments. We design two cooperative components to
+Director Technology (RDT) [11], [27]. We find that simply
+                                                                                  pursue optimal efficiency-performance trade-offs.
+applying current AUV-oblivious resource sharing managers is
+                                                                                • Evaluation: We implement and evaluate AUM thor-
+unacceptable since they cannot make precise decisions for
+                                                                                  oughly on production CPU platforms to prove its better
+variable AU, causing 10-50% AU application performance
+                                                                                  performance-per-watt efficiency and performance guaran-
+and CPU efficiency degradations. Therefore, we envision a
+                                                                                  tee compared to SOTA resource managers.
+critical management gap between more variable AU and
+AUV-oblivious resource managers, failing to maximize AU                                                         II. BACKGROUND
+capability and CPU efficiency.                                                 This section introduces current accelerator units and a
+   To bridge this management gap, we propose AUM, a                          prevailing AU-accelerated application, LLM serving.
+novel AU-aware resource Manager designed to handle AUV
+and maximize CPU efficiency in shared environments. More                     A. CPU Accelerator Units
+specifically, AUM offers higher manageability with two coop-                    To improve the performance of artificial intelligence (AI)
+erative components, and every component has three stages for                 applications on CPU platforms, hardware vendors have in-
+three-dimensional AUV. The Background AU Profiler synthe-                    tegrated specialized functional units into recent processors,
+sizes AUV offline from usage patterns, frequency reductions,                 such as Intel Advanced Matrix Extensions (AMX) [59],
+and resource bounds to obtain the discrete AUV Model. Guided                 ARM Scalable Matrix Extensions (SME) [5], and RISC-V
+by this model and runtime information, the Runtime AU Con-                   M-extension [2]. They follow the Single-Instruction-Multiple-
+troller decides the optimal AU configurations online, including              Data (SIMD) paradigm to accelerate operations like matrix
+usage-aware performance slacks, frequency-aware processor                    multiplication. Different from dedicated accelerators (e.g.,
+divisions, and collision-aware resource allocations. Overall,                Data Streaming Accelerator, DSA [40]) outside the CPU
+AUM selects AU sharing configurations that maximize CPU                      pipeline, these accelerator units (AU) on every physical core
+efficiency and minimize AU performance slowdowns.                            share the instruction flow, microarchitectural resources, and
+   To evaluate AUM, we have implemented a prototype and                      data access path with normal functional units [24]. The layout
+evaluated it with various workloads on three production                      of modern processors containing Intel AMX and AVX units is
+CPU platforms. Evaluation results show that AUM achieves                     shown in Figure 2, which are the targeted AU in this paper with
+better CPU performance-per-watt efficiency by up to 8.8%                     relatively mature software support. Every AMX unit contains
+and 4.7% compared with state-of-the-art (SOTA) exclusive                     an array of eight 2-dimensional registers (TILECFG) with
+AU usages and AUV-oblivious sharing methods, respectively.                   the size of 1KB and a matrix multiply accelerator (TMUL)
+Meanwhile, it maintains high-performance AU applications                     that performs 1024 ops per cycle with BF16 precision [25].
+by reducing SLO violations by up to 11%. AUM induces                         The matrix multiplications via TMUL compute C[M ][N ]+ =
+negligible management overheads and achieves better total                    A[M ][K] ∗ B[K][N ] with M ≤ 16 and N ≤ 64. AMX
+cost of ownership, enabling more efficient general-purpose                   is introduced from SPR [59] with BF16 precision and the
+processor management for the AI era.                                         following generations add support for more data types like
+   In summary, this paper makes the following contributions:                 FP16 in GNR [28] and FP8 in DMR [31].
+
+  •   Analysis: We envision the complex accelerator unit                     B. AU-accelerated LLM Serving
+      variations and characterize them from three abstraction                  Large language models (LLM) have shown impressive
+      layers. We show that both AU-exclusive usages and AUV-                 achievements and great potential in various creative tasks,
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+    Layers                                                                                            TABLE I: Hardware specifications of evaluated CPUs.
+                      Blocks          Prefill H      WT       Decode H      WT
+   Decoding         Feed Forward
+                                                                                                   Platforms                  GenA                GenB                        GenC
+                                       GEMM        AMX         GEMV       AVX
+  Transformer        Add & Norm                                                                   Generation              Sapphire Rapids     Sapphire Rapids             Granite Rapids
+      …                                           Matrix Operations                                  CPU                   Xeon 8475B         Xeon Max 9468               Xeon 6982P-C
+  Transformer       Multi-head        Prefill Q     KT        Decode Q      KT                  # cores/sockets               48 / 2              48 / 2                     120 / 1
+  Embedding         Attention                                                                  AU TFLOPS
+                                       GEMM        AMX         GEMV       AVX                                               25.6/206.4              25.6/206.4               32/344
+                                                                                               (AVX-512/AMX)
+  LLM Iteration 1        LLM Iteration 2           LLM Iteration 3       Tokens                Base Frequency                2.7 GHz             2.1 GHz                   2.8 GHz
+                                                                                                  L1-I / core                 32 KB                32 KB                    64 KB
+           I love        KV        Token-1:        KV        Token-2:    Token-3:                L1-D / core                  48 KB                48 KB                    48 KB
+          reading       Cache       HPCA          Cache       Papers       EOS                     L2 / core                  2 MB                 2 MB                     2 MB
+                                                                                                 LLC / socket                97.5 MB              105 MB                   504 MB
+                                                                                                    Memory                  DDR5 1TB            HBM 128GB                 MCR 768GB
+    Prefill Phase                             Decode Phase
+                                                                                                 Memory BW                  233.8 GB/s           588 GB/s                  600 GB/s
+Fig. 3: LLM serving with AU-accelerated matrix operations.
+                                                                                                     16
+
+
+
+
+                                                                                    Speedup w/ AFU
+                                                                                                     12     AU accelerate diverse AI-                            13.98x
+                                                                                                          based datacenter workloads.         7.5x
+                                                                                                      8                              3.91x
+leading the boom of the AI era [51], [62], [99]. Besides                                              4   1.69x   2.32x      2.5x                                 1.07      1.22   1.29
+once-for-all heavyweight LLM training, optimizing the LLM                                             0
+serving (i.e., inference) efficiency is gaining more attention in                                         d=256 d=1024 d=2048         c=4     c=8      c=16      bs=512 bs=2048bs=8192
+both academia and industry [42], [60]. LLM serving contains                                                       Faiss                     Vocoder                       DeepFM
+two phases: (1) The prefill phase processes all tokens of                                                                           AU-accelerated workloads
+the input prompt simultaneously to generate the first new                           Fig. 4: AU acceleration of three types of AI workloads under
+token. (2) The decode phase uses the previously generated                           different dimension (d), cores (c), and batch sizes (bs). All the
+token as input to produce the following tokens one by one                           results are normalized to AU-disabled GenC performance.
+until an end-of-sequence (EOS) token is produced [37]. Two
+phases are relatively independent and have different character-
+istics [67], [102]. As shown in Figure 3, LLM iteration passes                         2) Software: To accelerate LLM serving with AU, we use
+through repeated transformer layers composed of multiple                            Intel xFasterTransformer (xft) [21] framework with the latest
+blocks like multi-head attention to generate every subsequent                       Intel AMX support. We use xft to serve the open-sourced
+token. The heavy blocks are composed of matrix operations                           llama2-7b and llama2-13b [51] with BF16 precision and batch
+of different sizes, depending on phases, batch sizes, and                           size of 16. To study the cascaded yet different serving phases,
+input lengths [36]. They can be accelerated by AU-enabled                           prefill and decode [67], [102], we mimic them in xft with
+CPU [57] but the most efficient AU choices are changing with                        varying output length. We use Linux perf [19], pmu-tools [38],
+matrix dimensions [41]. Many LLM serving frameworks are                             and pqos [26] tools to characterize LLM and AU behaviors.
+exploring AU utilization to improve serving performance, such                       Meanwhile, we select various metrics widely used in previous
+as Ktransformer [41] and xFasterTransformer [33].                                   studies [56], [102]. The SLO of LLM serving are time-to-
+                                                                                    first-token (TTFT) for the prefill phase, indicating the time
+    III. D EFICIENCY OF E XCLUSIVE AU U TILIZATION                                  to generate the first token, and time-per-output-token (TPOT)
+                                                                                    for the decode phase, indicating the average time taken to
+   AU acceleration of diverse workloads is promising, but                           generate subsequent tokens. The performance of LLM serving
+current exclusive AU usages fall short compared with GPUs                           is measured via tokens per second (Throughput), indicating the
+in efficiency, calling for shared deployment to fully unleash                       generated tokens with performance guarantees.
+the efficiency potential of AU-enabled processors.
+                                                                                    B. Pros and Cons of Current AU Utilization
+                                                                                       Despite LLM serving [57], AU has proven its strengths
+A. Characterization Methodology
+                                                                                    in diverse AI-based datacenter workloads as shown in Fig-
+   1) Hardware: In Sections III, IV, V, and VII, we evaluate                        ure 4. Faiss vector search (Faiss) [53], speech vocoder
+three commercial off-the-shelf AU-enabled CPU platforms                             (Vocoder) [23], and deepfm recommendation (DeepFM) [20]
+with different memory devices: Intel 4th Sapphire Rapids                            are greatly accelerated with AU capabilities under different
+(SPR) [59] released in 2022, with DDR5 memory and High-                             parameters on the GenC platform. Admittedly, GPU-based
+Bandwidth Memory (HBM), as well as 6th Granite Rapids                               datacenters are the main trend in the AI era. But CPU is still
+(GNR) [28] released in 2024 with Multiplexer Combined                               worth optimizing for two reasons. Firstly, GPU is inadequate
+Ranks (MCR) memory. The hardware specifications are shown                           for the booming demand of AI-enabled applications with up to
+in Table I. The three platforms are equipped with AVX and                           40% shortage [3], thus utilizing AU to accommodate selective
+AMX units in every physical core, and we calculate AU                               AI workloads could free up the limited GPU for higher-
+TFLOPS based on their base frequencies. The main difference                         priority workloads such as Azure and AWS [13], [32], [80]
+among GenA, GenB, and GenC is memory configurations, and                            and improve cluster sustainability [44]. Secondly, even in a
+GenC further improves AU.                                                           GPU-centric datacenter such as Alibaba Cloud, there are also
+
+
+
+
+          Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                     TABLE II: Comparison of LLM of different architectures and
+                                        GenA           GenB            GenC              GPU-A100
+                                                                                                                     sizes. BB is backend bound and DB is dram bound. Every
+                     2.8                         Exclusively utilizing AU is inefficient
+Normalized Metrics
+
+
+                             2.7x         2.4x                                                                       value is denoted as percentages of Prefill / Decode phases.
+                     2.4                                 compared with GPU.
+                       2         1.6x                                                    2.1x          1.6x               Model        Size   Cycle Ratio   µop Ratio      BB        DB
+                                                               1.8x               1.5x                        1.3x
+                     1.6                              1.2x                 1.3x                 1.2x                    Phi-3 [83]     3.8B    17.8 / 1.9    4.1 / 0.9   84 / 89   21 / 53
+                     1.2    1x                   1x           1.1x    1x                   1                           Llama2 [51]      7B     14.4 / 1.5    3.7 / 0.5   92 / 96   24 / 59
+                     0.8                                                                                               Llama3 [51]      8B     13.1 / 1.3    3.5 / 0.5   91 / 96   24 / 60
+                           Perf.: Tokens/s       Power: Watt          Perf-Per-Watt       Perf-Per-Dollar              Gemma2 [82]      9B     13.3 / 1.4    3.3 / 0.4   92 / 96   25 / 62
+                                                                                                                       Llama2 [51]     14B     10.9 / 1.2    2.5 / 0.4   94 / 97   29 / 68
+Fig. 5: Inferior performance and efficiency of exclusive AU-                                                          Qwen3-A3B [84]   30B     18.2 / 2.3    4.5 / 1.1   82 / 90   21 / 51
+enabled CPU compared with GPU solutions.
+
+                                                                                                                     A. Variation-1: Variable Usage Pattern
+around 50% idle CPU cores with accelerator units that can                                                               Firstly, AU is used unequally in applications and operators,
+be better utilized besides its cooperation with GPUs [95].                                                           laying the foundation of AUV. We analyze the variable AU
+Current industrial providers concentrate on the AU application                                                       usage patterns to find the causes and proxies.
+performance and allocate the whole CPU exclusively to avoid                                                             1) AU usage analysis in LLM serving: AU is variably
+management complexity and hardware contention [41], [80].                                                            utilized in current AI applications. We observe three practical
+   Admittedly, exclusive AU usages without any sharing can                                                           metrics on CPU to characterize AU usage in applications [85].
+maximize its performance, but it causes both low CPU ef-                                                             Firstly, AMX cycle ratio, measured via tma amx busy metric,
+ficiency and waste of redundant hardware resources. Given                                                            indicates the proportion of cycles during which AMX is
+the enhanced AU on the CPU platform, the improved LLM                                                                busy with arithmetic operations. We find that AMX usage
+serving performance is still insufficient compared with high-                                                        is varying: the compute-intensive prefill phase (14.4%) is
+end GPUs like Nvidia A100, as shown in Figure 5. We                                                                  higher than the memory-intensive decode phase (1.5%), and
+compare with a single-GPU server driven by FlexGen [57],                                                             the high-bandwidth platforms (GenB and GenC) are higher.
+[73] on performance, power, and cost of the processing units                                                         Secondly, AMX µop ratio, measured via tma fp amx divided
+(1 CPU vs. 1 GPU). The absolute performance, power, and                                                              by tma fp arith, shows the proportion of floating-point op-
+cost of GenA are 188 tokens/s, 270 Watt, and $ 7200, respec-                                                         erations the AMX has finished. We find that FP operations
+tively. We find that GPU is even more efficient considering                                                          of prefill are mostly finished by AMX (3.7% / 3.8%), but the
+the power consumption, with a 2.1x better performance-per-                                                           decode phase uses AMX for FP operations less (0.5% / 1.5%).
+watt compared with GenA and 1.4x better than GenC. But                                                               Thirdly, the avx insts metric of the decode phase is higher
+the performance-per-cost of single-GPU servers is worse than                                                         because the vector-size operations are more efficient using
+that of the high-end CPU platforms. The performance gap                                                              AVX rather than AMX [41], showing different AU choices
+would be bigger with model parallelism [74] while the power                                                          for varying-size matrix multiplications.
+consumption would be significantly higher for multi-GPU                                                                 2) Analysis of LLM Architecture: We analyze more LLM
+servers and larger models (5kW vs. 500W), which are in                                                               of different architectures and sizes: Phi-3-Mini-128K-Instruct
+line with prior efficiency studies [66], [78]. It shows that                                                         of 3.8B size [83], Llama3 of 8B size [51], Gemma2 of 9B
+utilizing AU exclusively is not an efficient alternative to GPUs                                                     size [82], and Qwen3-30B-A3B of 30B size and Mixture-of-
+in large-scale datacenters. Moreover, exclusive AU usages                                                            Experts (MoE) architecture [84]. Also, larger models would
+cause a great waste of hardware resources. Applications with                                                         be restricted by the CPU memory bandwidth greatly, such that
+variable AU usages have distinct resource demands and leave                                                          they are more suitable for CPU-GPU hybrid deployment [36],
+redundant processor resources underutilized, which requires                                                          [41]. We mainly study the AU usage patterns and key backend
+proper sharing methods to deploy more general applications                                                           resource bounds of the six models as shown in Table II.
+and improve overall efficiency [11], [101].                                                                          We find that smaller models have higher AU usages and
+   Considering the performance pros and efficiency cons of                                                           MoE architecture is suitable for AU deployment as well. The
+exclusive AU utilization, sharing processors between AU and                                                          memory bound is more vital for larger models, but sparse
+general workloads is both necessary and worthwhile for more                                                          expert activation of the MoE architecture can relieve the
+cost-efficient AU-enabled processor management.                                                                      memory pressure. We choose the small-size models for the
+                                                                                                                     following experiments since they are suitable for CPU-only
+                                                                                                                     serving without GPU requirements [30], and larger LLMs
+            IV. U NDERSTANDING ACCELERATOR U NIT VARIATIONS                                                          behave similarly on AU usage patterns [57].
+                                                                                                                        3) Analysis of AU usage variations: The AU usage differ-
+   To better utilize and manage the emerging AU, we need                                                             ences mainly result from variable operator dimensions. The
+to understand their behaviors and differences. This section                                                          performance of GEMM operations achieves 40.57 TFLOPS
+systematically characterizes LLM serving with the modern                                                             in the prefill phase but 6.87 TFLOPS in the decode phase
+AU, Intel AMX, and demonstrates the three-dimensional AUV                                                            due to variations in matrix dimensions. Most GEMMs in the
+that hinder the intuitive sharing management.                                                                        prefill phase are 8192 × 4096 × 22016, where 8192 denotes
+
+
+
+
+                           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+                    Prefillwith
+                   Prefill  withAMX
+                                 AMX             Decodewith
+                                                Decode   withAVX
+                                                              AVX                             Compute
+                                                                                             Compute            OLAP
+                                                                                                               OLAP              Heavy Ops                 Light Ops            Branch Mispredict     Machine Clears
+                                  Cores
+                    AU-enabledCores
+                   AU-enabled                                 Cores
+                                                 AU-disabledCores
+                                                AU-disabled                                   SPECjbb
+                                                                                             SPECjbb                             Fetch Latency             Fetch Bandwidth      Memory Bound          Core Bound
+             3.3
+            3.3
+                                                               ~3.2
+                                                              ~3.2                    3.3                                      GenA:GEMM                                             92                                3
+                                                                                    3.3
+Frequency (GHz)
+Frequency (GHz)
+
+
+
+
+                                                                         Frequency (GHz)
+                                                                         Frequency (GHz)
+             3.1
+            3.1
+                                                                 ~3.1
+                                                                ~3.1                                                               GenA:D                                      77                              19
+             2.9
+            2.9                  causeslittle
+                         Sharingcauses
+                        Sharing                  frequencyreduction.
+                                         littlefrequency    reduction.
+                                                                                      2.8
+                                                                                    2.8
+                                                                                                                                   GenA:P         3                            70                              22
+                                  causesgreat
+                          Prefillcauses
+                         Prefill                frequencyreduction.
+                                         greatfrequency    reduction.
+             2.7
+            2.7                                                                                                                    GenB:P             8    8                        59                         22
+                     2.54
+                    2.54                                                                                                           GenC:P         5                       55                              35
+             2.5
+            2.5                                                                       2.3
+                                                                                    2.3
+                    0 0 1212 2424 3636 4848 6060 7272 8484 9696                             0 0 1212242436364848606072728484     SPEC:mcf             16       5     9                          70
+                                     Coresfor
+                          AU-enabledCores
+                         AU-enabled              LLMServing
+                                            forLLM   Serving                                  AUCores
+                                                                                                 Coresw/w/
+                                                                                             AU            SMT
+                                                                                                         SMT   Sharing
+                                                                                                             Sharing            Google:ads            14   3         20                          63
+(a) Impact of usage pattern on AU fre- (b) Sharing interferences af-                                                                         0%                20%        40%             60%          80%             100%
+quency reduction.                      fect frequency reduction.
+                                                                                                                               Fig. 7: Comparison of cycle distributions with variable AU
+        Fig. 6: Variable frequency reduction due to AU utilization.                                                            usages on evolving platforms. The yellow, gray, blue, and
+                                                                                                                               green categories are retiring, bad speculation, frontend bound,
+                                                                                                                               and backend bound, respectively.
+batch size 16 times input sequence length 512. However,
+most GEMMs in the decode phase are 16 × 4096 × 22016
+with the performance of 3.87 TFLOPS, where 16 denotes                                                                          different numbers of cores with three types of applications:
+batch size for one output token. Meanwhile, although the                                                                       Compute/OLAP/OLTP (detailed in Section V-A). Figure 6b
+request arrival rates for user-facing LLM serving are inherently                                                               presents the average frequency of the shared cores, showing
+variable, we find that it affects the AU usage pattern via batch                                                               that with increasing sharing pressure, relatively low AU usages
+size variations since current LLM serving frameworks always                                                                    in the decode phase also induce more severe and variable
+adopt continuous batching techniques [33], [42]. AU usage                                                                      frequency reduction. Moreover, the abrupt frequency drops on
+patterns are stable under certain model, phase, and batch size.                                                                limited cores (12-24) may be caused by heat accumulation
+Therefore, we choose to profile the variation of different batch                                                               on compute-intensive shared cores, and we observe similar
+sizes to reduce the overhead of profiling varying request arrival                                                              drops in repeated experiments with other applications, which
+rates, and we adaptively tune the configurations at runtime                                                                    excavates the complexity of frequency interference.
+based on SLO and performance slack of different requests,                                                                      Findings #2: Usage-based frequency reduction worsens AUV,
+similar to prior works have done [11], [102].                                                                                  and unstable frequency interference adds difficulties to maxi-
+Findings #1: Variable AU usages in applications initialize                                                                     mizing the efficiency of AU-enabled processors.
+AUV and requires usage-aware management.
+                                                                                                                               C. Variation-3: Dissimilar Resource Bound
+B. Variation-2: Compulsory Frequency Interference                                                                                 Thirdly, AU presents microarchitectural resource demand
+   Secondly, variable AU usages incur compulsory frequency                                                                     different from traditional functional units, changing with vari-
+reduction, excavating AUV. We analyze the frequency varia-                                                                     able AU usages. We adopt the top-down methodology [97] to
+tions and interferences on shared cores.                                                                                       analyze AU resource bounds and further deep dive into key
+   1) Compulsory frequency reduction: Due to the thermal de-                                                                   backend bottlenecks.
+sign power limit, physical cores enabling more power-hungry                                                                       1) Frontend resources are oversupplied.: Frontend re-
+AU trigger automatic frequency reduction, which changes                                                                        sources are responsible for providing µops for AU execution,
+with AU usage. We use the turbostat [45] tool to record                                                                        and frontend bound means execution stalls at the L1 instruc-
+the core frequency of GenA with all-core turbo frequency                                                                       tion cache, fetch unit, and decoder components. As shown in
+of 3.2 GHz. Figure 6a presents the impact of AU usages                                                                         Figure 7, we compare applications with variable AU usages
+on frequency reduction and varies the number of AU cores                                                                       with traditional non-AU applications, mcf benchmark from
+with (square) and without (circle) power stressors on the                                                                      SPECCPU [8], and ads services from Google [35]. Based on
+remaining physical cores. We have two observations: (1) The                                                                    CPU cycle distributions, we mainly have three observations:
+prefill phase with more AMX usages causes greater frequency                                                                    (1) AU frontend bound is significantly less than the general
+reduction to 2.5 GHz, which is influenced little by the number                                                                 functional units. AU follows the SIMD paradigm with a
+of AU cores (green circles). The decode phase with more AVX                                                                    smaller instruction working set and fewer i-cache misses,
+usages reduces frequency slightly to 3.1 GHz (blue circles).                                                                   leading to lower fetch latency than before [35] (5% → 1%).
+(2) The remaining AU-disabled cores experience no cascaded                                                                     (2) Increasing AU usages cause similar frontend bound by
+frequency reduction (gray squares). However, the frequency                                                                     comparing pure matrix multiplication (GEMM), prefill, and
+reduction of AU cores running the decode phase is more severe                                                                  decode on the GenA platform. (3) Higher bandwidth platforms
+when co-running power stressors (blue squares).                                                                                cause greater frontend bound.
+   2) Complex frequency interference: We find that AU-                                                                            2) Backend resources are overloaded.: Backend resources
+induced frequency reduction is further affected by sharing                                                                     are responsible for providing data for AU execution, and back-
+interferences, leading to variable cascaded performance degra-                                                                 end bound means execution stalls at the execution ports (core
+dation. We use all cores for the decode phase and share                                                                        bound) and memory access path (memory bound). Despite
+
+
+
+
+                     Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+   AMX busy
+     AMX busy              Divider
+                              Divider                   DRAM
+                                                           DRAMBound
+                                                                 Bound         L1 L1
+                                                                                  Cache  Bound
+                                                                                     Cache  Bound                                         LLM TTFT
+                                                                                                                                            LLM TTFT           LLM TPOT
+                                                                                                                                                                 LLM TPOT                             LLM TTFT
+                                                                                                                                                                                                        LLM TTFT      LLM TPOT
+                                                                                                                                                                                                                        LLM TPOT
+   Ports utilization
+     Ports  utilization    Serializing operation
+                             Serializing operation         Cache
+                                                        L2 L2    Bound
+                                                              Cache Bound      Last Level
+                                                                                  Last    Cache
+                                                                                       Level    Bound
+                                                                                             Cache Bound                                  OLAP Throughput
+                                                                                                                                            OLAP Throughput                                           Sharing
+                                                                                                                                                                                                        Sharing
+                                                                                                  4.9%
+                                                                                                    4.9%                              60%
+                                                                                                                                        60%                                   1515                  50%
+                                                                                                                                                                                                      50%
+
+
+
+
+                                                                                                                                                                                    Performance Slowdown
+                                                                                                                                                                                    Performance Slowdown
+
+
+                                                                                                                                                                                                                 31.2%
+
+
+
+
+                                                                                                                                                                                                                             43.3%
+                                                                                                                                                                                                                 31.2%
+
+
+
+
+                                                                                                                                                                                                                             43.3%
+                                                                                                                                                                                                                29.7%
+                                                                                                                                                                                                                29.7%
+                                                                  27.1%
+                                                                    27.1%                                                             50%
+
+
+
+
+                                                                                                           OLAP Slowdown
+            19.5%
+              19.5%                                                                                                                     50%
+
+
+
+
+                                                                                                           OLAP Slowdown
+
+
+
+
+                                                                                                                                                                                          LLM Slowdown
+                                                                                                                                                                                          LLM Slowdown
+                                                                                                                                                                                                    40%
+                                                                                                                                                                                                      40%
+
+
+
+
+                                                                                                                                                                                                              24.7%
+                                                                                                                                                                                                              24.7%
+                                                                               59.9%
+                                                                                 59.9%           4.5%
+                                                                                                   4.5%                               40%
+                                                                                                                                        40%                                   1010
+  19.6%                    20.4%
+                             20.4%
+                                        30.3%
+                                          30.3%         13.4%
+                                                          13.4%                                                                                                                                     30%
+                                                                                                                                                                                                      30%
+    19.6%
+                                                                                                                                      30%
+                                                                                                                                        30%
+
+
+
+
+                                                                                                                                                 3.24x
+                                                                                                                                                 3.24x
+                                                                                                                                               2.93x
+              14.4%
+                14.4%
+
+
+
+
+                                                                                                                                               2.93x
+                                                                                                                                               2.45x
+                                                                                                                                                                                                    20%
+
+
+
+
+                                                                                                                                               2.69x
+
+
+
+                                                                                                                                               2.82x
+                                                                     24.2%
+                                                                       24.2%
+
+
+
+
+                                                                                                                                              2.45x
+                                                                                                                                                                                                      20%
+
+
+
+
+                                                                                                                                              2.69x
+
+
+
+                                                                                                                                              2.82x
+                                                                                                                                               2.6x
+
+
+
+                                                                                                                                                2.8x
+                                                                                                                                               2.6x
+
+
+
+                                                                                                                                               2.8x
+                                                                                                                                      20%
+                                                                                                                                        20%                                   5 5
+
+
+
+
+                                                                                                                                             1.56x
+
+                                                                                                                                             1.68x
+
+                                                                                                                                             1.76x
+
+                                                                                                                                             1.97x
+                                                                                                                                            1.56x
+
+                                                                                                                                            1.68x
+
+                                                                                                                                            1.76x
+
+                                                                                                                                            1.97x
+                                                                                                                                            1.33x
+
+
+
+                                                                                                                                            1.49x
+                                                                                                                                            1.33x
+
+
+
+                                                                                                                                            1.49x
+                                                                                                                                             1.4x
+                                                                                                                                            1.4x
+
+
+
+
+                                                                                                                                                                                                                       6%
+                                                                                                                                                                                                                       5%
+                                                                                                                                                                                                                       6%
+                                                                                                                                                                                                                       5%
+                                                     4.3%
+                                                        4.3%                                                                          10%
+                                                                                                                                        10%                                                         10%
+                                                                                                                                                                                                      10%
+ 0.6%
+    0.6%                  1.5%
+                             1.5%
+       Prefill
+         Prefill                 Decode
+                                   Decode                      Prefill
+                                                                 Prefill              Decode
+                                                                                        Decode                                         0%0%                                   0 0                      0%0%
+                                                                                                                                             1 1 2 2 3 3 4 4 5 5 6 6 7 7                                        SPECjbb Compute
+                                                                                                                                                                                                              SPECjbb     Compute
+  (a) Core bound breakdown.                              (b) Memory bound breakdown.
+                                                                                                                                            Sharing OLAP
+                                                                                                                                              Sharing    Workload
+                                                                                                                                                      OLAP        Pressure
+                                                                                                                                                           Workload Pressure                                  Sharing Workloads
+                                                                                                                                                                                                                Sharing Workloads
+  Fig. 8: Decomposed AU demands on backend resources.                                                      (a) Impact of sharing pressures on AU (b) Impact of shared ap-
+                                                                                                           and shared applications.              plication types.
+
+abundant frontend resources for AU, backend resources are un-                                                                  Fig. 9: Variable SMT impact on AU sharing performance.
+der strain and restrict AU performance, as shown in Figure 7.
+To investigate the overload causes, we further decompose the                                                                                Exclusive TTFT               Exclusive TPOT                          Inclusive TTFT
+                                                                                                                                            Inclusive TPOT               Backend Bound
+backend resource in Figure 8.
+   Figure 8a breaks down the core bound. We find that the                                                                             1.8                                                                                       0.8
+                                                                                                                                                                                    71.3%
+
+
+
+
+                                                                                                           LLM Performance Slowdown
+                                                                                                                                             66.8%                                                                   71.8%
+                                                                                                                                                               65.5%
+instruction window resources [50] (e.g., reorder buffer) are
+
+
+
+
+                                                                                                                                                                                                                                      CPU Backend Bound
+                                                                                                                                      1.6
+critical for AU execution due to high serializing operations                                                                                                                                                                    0.6
+
+to guarantee instruction sequences. Meanwhile, the decode                                                                             1.4
+phase has higher demands on the instruction window resources                                                                                                                                                                    0.4
+                                                                                                                                      1.2
+with higher serializing ratios. As for more severe memory
+bound, we break down the memory path (L1 cache, L2 cache,                                                                              1                                                                                        0.2
+                                                                                                                                            Hyperthread       L2 Cache                LLC                     Mem BW
+LLC, DRAM) in Figure 8b. We find that for the decode
+                                                                                                                                                                 Isolated Resources
+phase, DRAM access has the highest influence, specifically
+on memory bandwidth rather than memory access latency. For                                                 Fig. 10: AUV-oblivious resource sharing impact on AU per-
+the prefill phase, the memory access path across the cache                                                 formance. Exclusive means partitioning the single resource.
+hierarchy and memory affects AU performance similarly.                                                     Inclusive means partitioning all resources on the left.
+Findings #3: AU microarchitectural resource bounds are
+variable and dissimilar from before, complicating AUV and
+optimal resource sharing decisions.                                                                        division (Compute) uses sysbench [39] to perform repeated
+                                                                                                           computations, evaluated by event throughput. (3) Complicated
+         V. D EFICIENCY OF AUV- OBLIVIOUS S HARING                                                         Java server (SPECjbb) uses SPECjbb 2015 benchmark [75]
+   The complex three-dimensional AUV pose new challenges                                                   to perform parallel transactions, evaluated by transaction
+to conventional sharing management. AUV-oblivious sharing                                                  throughput. The sharing selections are determined before the
+based on simultaneous multi-threading (SMT) and resource                                                   execution for different AU usage scenarios.
+partitioning (RP) fails to optimize AU-enabled processors for
+contradictory performance and efficiency goals.                                                            B. Deficiency of Conventional SMT Sharing
+                                                                                                              SMT-based sharing methods treat AU applications statically
+A. Real-world Sharing Scenarios with AU                                                                    and cause variable performance degradations. Conventional
+   Workload sharing is a common practice in datacenters to                                                 SMT uses redundant processor resources to execute multiple
+utilize redundant resources and improve overall efficiency [48],                                           threads on one processor core [101], failing to capture dynamic
+[49], [90]. Regarding AU processors, sharing is between AI-                                                AU usages and interferences as shown in Figure 9. Figure
+based applications with AU and general applications without                                                9a shows that AU performance degrades by more than 200%
+AU, where AU is not shared for hyperthreads, since AU                                                      while the co-running OLAP is affected by more than 40%,
+resources are limited for physical cores. As for sharing priority,                                         resulting from severe memory contentions. WE find that
+LLM serving is considered latency-critical (LC) in this paper                                              the interferences are unstable with variable AU usages but
+and we share it with other best-effort (BE) applications for                                               stable with increased sharing pressures. Figure 9b shows that
+two reasons. Firstly, LLM applications are mostly user-facing                                              compute-intensive shared application causes less than 10% AU
+scenarios, leading to its high sensitivity on SLO guarantee.                                               interference, but sharing Compute experiences 40% degrada-
+Secondly, it is rare to co-locate many LC workloads in                                                     tion due to compulsory frequency reduction. Therefore, AUV-
+realistic datacenters for better performance guarantee. We                                                 oblivious SMT sharing cannot properly control the variable
+select three representative BE applications based on real-world                                            AU behaviors and performance. Moreover, while SMT sharing
+parameters: (1) Memory-intensive online analytical processing                                              is known to create contention-based security vulnerabilities
+(OLAP) uses TPC-H [86] to replay joint queries, evaluated                                                  for co-running user threads [17], researchers have proposed
+by query throughput. (2) Compute-intensive prime number                                                    effective mitigation and isolation techniques without much
+
+
+
+
+            Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+     Software-layer AU Applications                   Sec VI.A System-layer AU-aware Resource Manager                    Hardware-layer AU Processor
+              LLM Inference Queue                                                                                       AFU               ROB   C C C C
+                                                   Variation-1:             Variation-2:            Variation-3:
+  Request-1    Prompt      Request-2   Token                                                                            Perf.             LLC   C C C C
+                                                  Usage Pattern        Frequency Interference     Resource Bound
+                                                                                                                                Res. Alloc.
+
+                                                                                                                                                AU Sharing
+    Sec. VI.C             SLO Analyzer         Performance            Core Switcher             Processor      Allocation Tuner                  Decisions
+  Runtime AU                                   Requirement                                      Placement
+   Controller           Slack          LAG                        Efficiency       Change                   Collision            Adjust
+                                                                                                                                                 AUM
+     Sec VI.B              AU Selecting            Processor Dividing             Resource Profiling                                AUV Model
+                                                                                                             AU
+   Background                                                                                                               [Usage, Frequency, Resource,
+                         ARI           Usage     Frequency           Split       Bound          Divide      Bucket
+   AU Profiler                                                                                                              Performance, Power]
+
+
+                        Fig. 11: Considerations of AUV and the workflow of two cooperative components of AUM.
+
+
+loss of SMT performance [81], which lead to the widespread                        3) Variation-3: Resource Bound. Applications in different
+deployment of SMT sharing in production datacenters like                             processor regions exhibit variable resource bounds, ex-
+ours in this paper.                                                                  periencing performance fluctuations. We need to study
+                                                                                     a unified model to guide resource tuning online to
+C. Deficiency of Application-aware Resource Partitioning                             precisely harvest resources for optimal CPU efficiency.
+   More advanced RP methods with application awareness                            To handle the complex AUV, we propose AUM, a novel
+cannot handle AUV and achieve optimal efficiency. RP con-                      AU-aware resource manager designed to maximize processor
+trols shared resources via identifying application interference                efficiency in shared environments. As shown in Figure 11,
+and allocating key resources (e.g., multi-level caches, memory                 it focuses on system-layer management to harvest AU unex-
+bandwidth) separately [47]. We isolate three key backend                       ploited resources for shared applications precisely and flexibly.
+resources between AU-accelerated LLM serving and SPECjbb                       AUM contains two cooperative components to handle the three-
+to observe their exclusive and inclusive effects. As shown                     dimensional AUV offline and online. The Background AU
+in Figure 10, we partition the L2 cache, LLC, and memory                       Profiler characterizes and summarizes AUV into an offline ref-
+bandwidth based on software preferences [11] and normalize                     erence model to guide the Runtime AU Controller for precise
+LLM serving performance to that under exclusive settings. We                   resource allocation with consideration of runtime status.
+find that isolating backend resources separately can slightly
+relieve AU slowdown, but fails to achieve the optimal decision.                B. Background AU Profiler
+Moreover, the critical backend bound is relieved differently by
+isolating various resources. Therefore, AUV-oblivious resource                    To portray the complex AUV, AUM selects three key varia-
+sharing cannot fully unleash the efficiency potential.                         tion indicators based on the analysis above. Firstly, it judges
+                                                                               application AU usage via arithmetic intensity (ARI) to catego-
+                          VI. D ESIGN OF AUM                                   rize operators. Secondly, it divides the processor into regions
+   This section describes the design considerations and tech-                  with different AU usages to assess frequency reductions.
+nical details of AUM. It aims to precisely handle the three-                   Thirdly, it considers specific AU resource bounds via profiling
+dimensional accelerator unit variations and fully unleash the                  minimal demands. Overall, the three-dimensional information
+efficiency potential of shared processors.                                     is summarized into the AUV Model.
+                                                                                  1) Usage-aware AU Selecting: To capture the variable AU
+A. Design Considerations and Overview                                          usage in different applications, we use ARI to determine
+  Given the deficiency of intuitive sharing managers, co-                      the proper AU for different operators. Based on previous
+optimizing the performance and efficiency of AU-enabled CPU                    analysis [36], [37], we can calculate the ARI of underlying
+must consider the three-dimensional AUV:                                       operations of AU applications, such as QKV mapping with
+  1) Variation-1: Usage Pattern. AU usages are variable in                     6(1/d + 3/BL)−1 in the prefill phase and 6(1/d + 3/B)−1
+     different applications and operators, leading to execution                in the decode phase. With larger model dimension d, batch
+     performance variations. We need to select efficient AU                    size B, and input length L, operations with higher ARI have
+     usages with lightweight indicators and analyze real-time                  higher AU usages, denoted as UAU . UAU captures the variable
+     requirements for the following management.                                AU usages analyzed in Section IV-A.
+  2) Variation-2: Frequency Interference. Variable AU usages                      2) Frequency-aware Processor Dividing: To properly man-
+     lead to dynamic frequency reductions, causing cascaded                    age the frequency interference, AU-Man recognizes the com-
+     performance fluctuations. We need to divide the pro-                      pulsory frequency reduction due to variable AU usage and
+     cessor into regions to avoid frequency interference and                   divides the processor cores into three regions based on Sec-
+     adjust the regions to satisfy runtime requirements.                       tion IV-B. (1) High-AU region CH with high AU usages and
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                   TABLE III: An example bucket in the AUV Model.
+                                Prefill:TTFT        Decode:TPOT         Decode:Throughput
+                   8                                                                           UAU     CAU        FAU       RL2C      RLLC      RBW        Pa      Pt
+Performance
+                           Different dividing provide
+ Normalized
+
+
+                                                                                               High     0-11    2.1 GHz       0-2       0-1     50%       0.42    0.31
+                   4       varying AU performance.                                             Low     12-15    2.8 GHz       3-6       2-4     40%       9.12    7.19
+                                                                                               None    16-23    3.2 GHz      7-15      5-15     10%       13.28   9.16
+                   0
+                         0/96 12/84 24/72 36/60 48/48 60/36 72/20 84/12 96/0
+                                               Decode Cores / Prefill Cores                  Table III. For three frequency regions with variable AU usages,
+Fig. 12: AU applications vary with processor dividing. All the                               we allocate varying resources and record the performance of
+results are normalized to exclusive performance on all cores.                                high AU application PH , low AU application PL , and shared
+                                                                                             application PN . To reduce profiling costs, we design the AU
+                                                                                             Bucket mechanism to discretize the continuous variations. For
+                                        GenA                 GenB             GenC           high/low/none AU usages, we profile three processor divisions
+Normalized TTFT
+
+
+
+
+                  1.8                                                                        with five performance-sensitive resource configurations. For
+                               ~80%       AU-enabled prefill phase is sensitive to LLC.
+                  1.5                                                                        every bucket, we record the 50% average performance P a ,
+                  1.2                                                                        90% tail performance P t , and processor power consumption
+                  0.9                                                                        WCP U . The variation profiles guide the runtime AU controller.
+                          1     2   3 4 5 6 7 8 9 10 11 12 13 14 15 16
+                                    Last-level caches ways for AU applications               C. Runtime AU Controller
+                  1.2
+Normalized TPOT
+
+
+
+
+                                                                                                To perform AU-aware processor management, AUM jointly
+                          <5%         AU-enabled decode phase is insensitive to LLC.
+                  1.1                                                                        considers AUV Model and runtime information to make adap-
+                  1.0                                                                        tive decisions as shown in Algorithm 1. Firstly, it analyzes AU
+                                                                                             performance to update requirements. Secondly, it selects shar-
+                  0.9
+                                                                                             ing decisions with maximized processor efficiency. Thirdly,
+                           1    2   3 4 5 6 7 8 9 10 11 12 13 14 15 16
+                                    Last-level caches ways for AU applications               it adjusts unexploited resource harvesting considering AU
+                                                                                             interference. Overall, the processor resource is properly shared
+Fig. 13: AU application with different usages varies with                                    to guarantee AU performance and maximize overall efficiency.
+last-level cache (LLC) resource allocation. All the results are                                 1) Slack-aware SLO Analyzer: To determine the varying
+normalized to performance with all LLC ways.                                                 AU SLO, AUM computes performance slacks for different AU
+                                                                                             usages. Firstly, for prefill tokens with high AU usages, better
+                                                                                             performance improves user satisfaction, so we simply use
+low frequency FH , such as generating prefill tokens. (2) Low-                               first-come-first-served (FCFS) to schedule prompts [57]. The
+AU region CL with low AU usages and moderate frequency                                       runtime SLO for prefill tokens SLOH is set as dT T F T −twait ,
+FL , such as generating decode tokens. (3) None-AU region                                    where dT T F T is the TTFT SLO and twait is the request
+CN with no AU usage and high frequency FN , only for                                         waiting time. Secondly, for abundant decode tokens with low
+shared applications. The UAU threshold is set based on server-                               AU usages, we track the performance of tokens and adapt to
+level AU usage distributions. As shown in Figure 12, AU-                                     varying request arrival rates at runtime with LAG analysis (a
+Man records the AU performance and the frequency lower                                       measurement of how far behind the token is compared to an
+bounds under different region divisions. The frequency profiles                              ideal schedule that meets the performance requirements).
+are recorded as processor regions C and frequencies F with                                      We quantify the relationship between the partial execution
+[CH , FH , CL , FL , CN , FN ].                                                              time at time t of serving request i (ei ) and its relative deadline,
+   3) Bound-aware Resource Profiling: To capture the distinct                                denoted as LAGi , as shown in Algorithm 1-Line 3. Ti (t) is the
+resource bounds and provide just the right resources for AU,                                 tokens of request i that have completed by time t. For token
+we record changing resource affinities of variable AU usages                                 token ∈ Ti (t), dT P OT is set as the TPOT SLO, and etoken is
+based on Section IV-C. For L2-cache and LLC capacity, as                                     the recorded execution time for token t, respectively. LAGi
+well as memory bandwidth, we can profile its variation using                                 reflects the real-time status of serving request i and quantifies
+resource partitioning interfaces [27], such as Cache Allocation                              how far ahead or behind the serving request is compared to
+Technology (CAT) for cache ways and Memory Bandwidth                                         the deadline at time t. If every LAG is 0, AU applications
+Allocation (MBA) for memory bandwidth. As shown in Fig-                                      are allocated precise resources. The AU application is perfect
+ure 13, we find that for LLC resources, varying AU usages                                    if every LAG within it is 0, which means all tokens have
+and underlying platforms induce diverse affinity, showing that                               exactly finished by their deadline so far and AU application
+we can harvest LLC resources for low-AU operators and high-                                  does not need more resources. The runtime SLO for decode
+AU operators on GenA. We can profile the minimal resource                                    tokens SLOL is set as dT P OT + LAGi . Since LAG indicates
+demands as a three-tuple RAU .                                                               how far behind (LAG < 0) or ahead (LAG > 0) every
+   Overall, the three-dimensional AU profiles are recorded                                   AU-accelerated request is, the AU configurations need to be
+into a AUV Model with consideration of AU application                                        adjusted accordingly for faster and slower execution. AUM
+performance and processor power consumption, as shown in                                     obtains the runtime performance requirements in this stage.
+
+
+
+
+                        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+  Algorithm 1: Workflow of the runtime AU controller.                        TABLE IV: Evaluated AU usage scenarios with different
+                                                                             prefill/decode SLOs and average input/output lengths.
+   Input: Reference AUV Model M
+   Output: AU-aware Resource Sharing Decision                                  Apps        Dataset          dTTFT        dTPOT       Input        Output
+   // Slack-aware SLO analysis                                                  cb      ShareGPT [64]       250 ms       100 ms       755          200
+                                                                                cc      HumanEval [10]       75 ms       150 ms       171          98
+ 1 SLOH = dT T F T − twait ;                                                    sm      LongBench [6]         1.5 s      100 ms       1738         91
+ 2 SLOL = dT P OT + LAGi ;
+                             P
+ 3 LAGi (token, Ti (t)) =       token∈Ti (t) (dT P OT − etoken );
+   // Efficiency-aware Core Switcher                                         guarantees runtime SLO, we can aggressively harvest AU
+ 4 ECP U = (α × PH + β × PL + γ × PN )/WCP U ;                               resources for shared applications, using average performance
+                             t                      t                          a
+ 5 Maximize ECP U s.t. PH < SLOH and PL < dT P OT ;                          PAU    to tune resource allocations. Otherwise, we need to
+ 6 U/C/F ← M (PH , PL );                                                     conservatively return resources to AU applications using tail
+                                                                                             t
+   // Collision-aware Allocation Tuner                                       performance PAU     to control. Given the varying AU resource
+                                                   m                         affinities, hardware resource that causes minimal AU perfor-
+ 7 Continuously monitor AU performance P              ;
+        m                    m                                               mance degradation are harvested first. The allocation tuner
+ 8 if PH < SLOH and PL < SLOL then
+       δAU ← UAU × SLO/P m ;
+              P
+ 9                                                                           needs to be refined by considering SLO guarantee of co-
+                     a
+10     RAU ← M (PH     , PLa );                                              running applications under the best-effort LLM serving sce-
+11 end                                                                       narios. Moreover, we compute the deviation δAU to denote
+12 else                                                                      the performance gap and higher AU usages result in greater
+       δAU ← UAU × P m /SLO;
+              P
+13                                                                           deviations to be eliminated as shown in Algorithm 1-Lines 9,
+                     t
+14     RAU ← M (PH     , PLt );                                              13. If the deviation δAU exceeds the threshold, tuning AU
+15 end                                                                       resources is not sufficient, and we need to switch the processor
+16 if δAU > threshold then                                                   division as shown in Algorithm 1-Line 17.
+17     C/F ← M (δAU , PAU , CAU , FAU )
+                                                                                              VII. E VALUATION OF AU-M AN
+18 end
+                                                                               Our evaluation wants to answer three questions: 1. How
+                                                                             does AUM improve CPU overall efficiency? (Section VII-B) 2.
+                                                                             How does AUM guarantee AU application performance given
+   2) Efficiency-aware Core Switcher: To optimize proces-                    varying requirements? (Section VII-C) 3. How are the costs
+sor efficiency with varying SLO, we switch processor core                    and revenues to deploy AUM on AU-enabled CPU? (Sections
+configurations with consideration of weighted efficiency. The                VII-D and VII-E)
+processor performance-per-watt efficiency ECP U is computed
+as the weighted sum of application performance divided by                    A. Evaluation Methodology
+CPU power consumption, as shown in Algorithm 1-Line 4.                          1) Implementations: We implement a prototype of AUM
+The prices of application outputs are used to normalize their                based on xFasterTransformer [21] with two components im-
+performance in different regions as α, β, and γ. The shared                  plemented in Python, acting as a system component. The
+applications are continuously running in the background and                  background profiler records the essential information of newer
+their pressures are proportional to the allocated cores CN /FN .             models with repeated experiments on dedicated nodes. The
+For lower management complexity, AUM switches processor                      runtime controller works as a system daemon to monitor the
+cores to different frequency regions to maximize the weighted                SLO and tune the allocation in production. For hyperparam-
+efficiency and satisfy diverse SLO primarily, as shown in                    eters of AUM, we select the performance prices α as 1.8 for
+Algorithm 1-Lines 5, 6. The frequency of every region is                     high-AU prefill tokens and β as 0.2 for low-AU decode tokens.
+set as the maximal level below the TDP. Admittedly, fine-                    Different from GPU-based token prices [63], we decide the
+grained frequency control schemes [66], [77] could further                   prices based on CPU time to produce a prefill and decode
+improve processor efficiency via per-core or per-workload                    token. γ for none-AU Compute, OLAP, and SPECjbb is set
+power capping. But it would significantly enlarge the opti-                  as 1e-3, 1e-6, and 3e-5, respectively. The prices are decided
+mization space, and our rule-based controller needs to integrate             based on CPU time to produce one query on the evaluated
+intelligent algorithms to make decisions [103], which leaves as              platform. These parameters are decided empirically and we
+our future work. The processor division and shared application               conduct a sensitivity experiment to evaluate AUM under dif-
+are relatively stable for the resource allocation tuning. AUM                ferent scenarios. We set the derivation δAU threshold as 2 to
+decides the processor placement in this stage.                               denote performance collision.
+   3) Collision-aware Allocation Tuner: To avoid dramatic                       2) Workloads: For hardware platforms, AUM experiments
+AU performance degradation, AUM tunes resource allocation                    are mainly conducted on the SPR platform (GenA) as shown
+considering the collision between AU and shared applica-                     in Table I if not otherwise specified. For evaluated workloads,
+tions. For every control iteration, AUM uses a continuous and                the evaluated AU applications are LLM serving of llama
+lightweight indicator to detect AU application performance                   models [51] similar to Section III-A, and the co-running
+like token latency. If the measured AU performance P m                       applications are Compute [39], OLAP [86], and SPECjbb [75]
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+                            1.3
+                                  Max increase of                                                                                                                               Higher is better.
+
+
+
+              Normalized
+   ALL-AU                   1.2                                               Min increase of
+
+
+
+
+               Efficiency
+                            1.1       15.3%                                        1.6%
+   SMT-AU
+                              1
+   RP-AU                    0.9
+
+
+
+
+                                                                                                                                                                                          1.05
+                                                                                                                                                                                          1.07
+                                                                                                                                                                                          1.09
+                                                                                                                                                                                          1.14
+                                     cb           cc         sm         cb                               cc                sm             cb                cc                 sm
+   AUM
+                                              Compute                                                   OLAP                                           SPECjbb                             Avg.
+Fig. 14: Comparison of CPU performance-per-watt efficiency with variable AU application scenarios and sharing selections.
+All the results are normalized to ALL-AU under chatbot scenario. AUM outperforms SOTA sharing baselines by 4.7%.
+
+
+     TABLE V: Three categories of evaluated baselines.                                                                       ALL-AU              SMT-AU                     RP-AU            AUM
+                                                                                                         2
+   Category                 Scheme                    Description
+
+
+
+
+                                                                                Normalized Efficiency
+ AU-exclusive               ALL-AU        Utilizing AU CPU without sharing                                         63%                 19%       50%                    11%         56%
+ AUV-oblivious              SMT-AU        SMT sharing AU CPU                                            1.5                                                                                    17%
+   Sharing                   RP-AU        Partition resources of AU CPU
+                             AU-UP        Sharing w/ usage pattern                                       1
+   AU-aware
+                             AU-FI        Sharing w/ frequency interference                                       GenA GenB GenC                GenA GenB GenC                  GenA GenB GenC
+   Resource
+                             AU-RB        Sharing w/ resource bound
+   Managers                                                                                                                chatbot                   code completion                summarization
+                              AUM         Our three-dimensional proposal
+                                                                                Fig. 15: Comparison of efficiency on three variable hardware
+                                                                                platforms when sharing with SPECjbb. All the results are
+similar to Section V-A. We evaluate different AU applications                   normalized to ALL-AU on GenA platform.
+use-cases [102] as shown in Table IV (1) ChatGPT-like chatbot
+(cb) [62]; (2) Cursor-like code completion (cc) [12]; (3)
+                                                                                                                     ALL-AU      SMT-AU      RP-AU      AUM-UP         AUM-FI       AUM-RB    AUM
+Summarization (sm) [43]. The benchmark selection is similar                                              1.2
+                                                                                                                                                             (a) Compute
+                                                                                Throughput
+
+
+                                                                                                                   1.00 0.94 0.95 0.94 0.94 0.95 0.97
+                                                                                Normalized
+
+
+
+
+as previous works [102] and represents datacenter scenarios.
+                                                                                                         0.9
+   3) Baselines: To understand the performance of AUM, we                                                                                                           1.04 1.00 1.04 1.11 1.07 1.17
+                                                                                                         0.6
+compare it with three types of baselines as shown in Table
+V. Firstly, AU-exclusive adopts non-sharing settings and uses                                            1.5
+                                                                                                                   1.00
+                                                                                Throughput
+
+
+
+
+                                                                                                                                                                 (b) OLAP
+                                                                                Normalized
+
+
+
+
+the whole AU-enabled processor for LLM serving. Secondly,                                                     1
+AUV-oblivious Sharing adopts state-of-the-art resource man-                                              0.5              0.24 0.26 0.29 0.30 0.31 0.35
+                                                                                                                                                                    1.04 1.00 1.04 1.19 1.21 1.28
+agers for shared CPU platforms [11], [69]. More specifi-                                                      0
+cally, SMT-AU adopts SMT sharing [69] and RP-AU adopts
+workload-aware resource partitioning [11] for LLM serving                                                1.2
+                                                                                                                   1.00                                          (C) SPECjbb
+                                                                                Throughput
+                                                                                Normalized
+
+
+
+
+                                                                                                                                                     0.89
+and co-located workloads. Thirdly, AU-aware Resource Man-                                                0.9              0.79 0.83 0.80 0.82 0.84
+agers are variants of AUM to investigate the effect of three-                                                                                                       0.96 1.00 0.96 1.03 1.03 1.08
+                                                                                                         0.6
+dimensional AU awareness.                                                                                                     AU Applications                         Sharing Applications
+
+                                                                                Fig. 16: Comparison of performance of AU and three types of
+B. Improving CPU Efficiency                                                     shared applications, averaged of three scenarios. The perfor-
+   We first evaluate AUM in improving CPU efficiency, which                     mance results of AU and shared applications are normalized
+is the primary design goal. We compare the performance-                         to ALL-AU and RP-AU, respectively.
+per-watt efficiency of the CPU platform when sharing AU-
+accelerated LLM serving with background co-running applica-
+tions. As shown in Figure 14, AUM achieves the best efficiency                     Further, we investigate the efficiency on hardware platforms
+on the CPU platform, resulting from precisely harvesting AU                     with evolving AU. We choose to share with SPECjbb since it
+underutilized resources for shared applications. On average,                    presents complex execution and moderate sharing revenues.
+AUM improves 8.8%, 6.7%, and 4.7% efficiency compared                           As shown in Figure 15, newer CPU platforms show better
+with AU-exclusive and AUV-oblivious sharing baselines. More                     efficiency under various scenarios due to more powerful AU
+specifically, we have two observations. Firstly, sharing AU                     and memory devices, increasing 1.55x on average for exclusive
+needs to select co-running applications carefully. Sharing                      AU usages. The shared AU usages with AUM have higher
+with memory-intensive applications like OLAP has marginal                       rates of efficiency increase (63%, 50%, and 56%) compared
+efficiency improvements under diverse scenarios even with                       to AU-exclusive schemes. On the latest GenC platform, AUM
+precise allocation. Secondly, CPU achieves better efficiency                    increases efficiency by 19%, 11%, and 17% over AU-exclusive
+under the code completion scenario with loose SLO require-                      baselines. The higher increase rates over GenA result from
+ments via AUV-aware management.                                                 more resources for tuning and harvesting.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+                                   ALL-AU           SMT-AU                         RP-AU        AUM                                      ALL-AU             SMT-AU                                   RP-AU           AUM
+                      1                                                                                                      1                                                              1
+TTFT SLO Guarantee
+
+
+
+
+                                                        TPOT SLO Guarantee
+                                                                              1
+
+
+
+
+                                                                                                                                                                    Bandwidth Allocation
+                             AU cannot satisfy
+                     0.8    strict requirements.                                                                            0.8                                                            0.8
+
+
+
+
+                                                                                                           LLC Allocation
+                                                                             0.9
+                     0.6                                                                                                    0.6                                                            0.6
+                                                                             0.8
+                     0.4                                                                                                    0.4                                                            0.4
+                     0.2                                                     0.7
+                                                                                                                            0.2                                                            0.2         AUM allocates memory
+                      0                                                      0.6                                                      AUM allocates less LLC.                                         bandwidth more flexibly.
+                             cb         cc         sm                              cb      cc         sm                     0                                                              0
+                                                                                                                                  0          0.5                1                                0            0.5                1
+Fig. 17: Comparison of AU application SLO guarantee when                                                                                     CDF                                                             CDF
+sharing with SPECjbb. Left shows the high-AU prefill phase                                                 Fig. 18: Resource allocation Cumulative Distribution Function
+and right shows the low-AU decode phase. AUM shows better                                                  (CDF) under SPECjbb and chatbot scenario. AUM manages
+performance guarantee than SOTA sharing baselines.                                                         resources more flexibly for shared applications.
+
+
+   To understand the detailed performance decomposition of                                                 emerging situation where token prices are cheaper and cheaper.
+AUM on AU and shared applications, we investigate the decom-                                               Under the default 1.8/0.2 setting, the efficiency with AUM
+posed performance as shown in Figure 16. The AU-exclusive                                                  outperforms 7.6% over the SMT-AU baseline when sharing
+scheme achieves the best LLM serving performance but zero                                                  Compute with cc. For a lower 0.9/0.1 setting, AUM exceeds
+sharing performance. The AUV-oblivious sharing schemes                                                     9.1% over SMT-AU since it allocates more resources to sharing
+cause varying slowdowns. As for variants of AUM, AU-UP                                                     applications with little sacrifice of AU applications for overall
+only optimizes manipulation of AU applications rather than                                                 efficiency based on the weighted calculation.
+sharing; AU-FI splits the processor to mostly improve sharing                                                 The runtime overheads of AUM are critical for realistic
+performance; and AU-RB enhances traditional resource parti-                                                deployment. The Background AU Profiler works offline, and
+tioning for both co-runners.                                                                               it takes around 450 AU-enabled executions to converge and
+                                                                                                           construct the AUV Model, including 3 division ×3 shar-
+C. Guaranteeing AU Performance
+                                                                                                           ing ×5 configurations ×10 repetitions. Moreover, the overhead
+   We next evaluate AUM in guaranteeing AU performance                                                     of a single profiling could optimize thousands of processor
+SLOs under different scenarios. CPU efficiency improvements                                                cores with the same model, thus amortizing the offline resource
+must guarantee the primary AU applications. As shown in Fig-                                               overheads. The Runtime AU Controller decides resource al-
+ure 17, AU-Man achieves better SLO guarantee compared with                                                 location with one CPU core in less than 1 ms to lookup
+AUV-oblivious sharing methods. We have two observations.                                                   table, which is negligible compared with 100 ms-scale token
+Firstly, AU-enabled CPU should be used as prompt machines                                                  SLO. Meanwhile, AUM consumes around 15 MB to store
+under specific scenarios [67]. For cc with strict TTFT SLOs,                                               AUV and runtime information, which is also negligible for
+even using AU exclusively for prefill cannot meet the SLO due                                              256 GB memory capacity. More specifically, for benchmarks
+to a lack of computing units. For sm with loose TTFT SLO,                                                  with rapidly fluctuating resources like SPECjbb, the runtime
+AUM achieves 93.6% SLO guarantee ratio, which is 11% better                                                controller adapts to the resource collisions and decides the
+than AUV-oblivious schemes. Secondly, AUM achieves better                                                  most efficient configurations for every iteration. The limitation
+SLO guarantees for low-AU decode performance. For the                                                      of AUM is reliance on runtime controlling rather than online
+loose cc scenario, sharing CPU merely causes SLO violations.                                               learning to continuously complement the AUV model.
+For the strict cb and sm scenarios, harvesting critical memory
+bandwidth causes SLO violations, but AUM achieves similar                                                  E. Total Cost of Ownership Analysis
+TPOT SLO performance with AU-exclusive schemes, which                                                         Cost-effectiveness has become the top factors that drive
+is 7% better than AUV-oblivious sharing methods.                                                           next-generation system architecture. We briefly discuss the
+                                                                                                           impact of AUM on the total cost of ownership (TCO), including
+D. Detailed Analysis of AUM                                                                                the capital expenditure (CapEx) for hardware acquisition and
+   More specifically, we investigate AUM resource management                                               the operating expenses (OpEx) for hardware execution. For
+decisions of two examples, LLC and memory bandwidth,                                                       CapEx, according to 1.3x perf-per-dollar of GPU in Figure 5
+as shown in Figure 18. Different from static AUV-oblivious                                                 and 15% improvements with AUM in Figure 14, CPU with
+sharing allocation that gives more resources to AU applica-                                                AUM achieves 88% performance-per-CapEx compared with
+tions, AUM considers AUV and adopts more flexible resource                                                 GPU solutions. For OpEx, the maintenance and cooling costs
+allocation based on runtime information. It harvests more LLC                                              are lower for CPU servers but there are more complex fac-
+resources from AU to shared applications, and harvests the                                                 tors affecting the TCO [7], such as machine utilization and
+high-affinity memory bandwidth adaptively. Better utilization                                              amortization. But our conclusion is that if we could unleash
+of hardware resources contributes to improved CPU efficiency.                                              the full AU efficiency via AUM, the AU-enabled CPU could
+   To evaluate the parameter sensitivity of AUM on efficiency                                              cede the limited GPUs to critical scenarios or even become a
+improvements, we change the value of α/β to mimic the                                                      competitive alternative in the GPU-dominant AI era.
+
+
+
+
+                           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+                       VIII. D ISCUSSION                                    usage is studied and optimized via core specialization [16].
+   This section discusses four limitations of AUM and potential             Meanwhile, many works focus on virtualizing dedicated ac-
+optimization directions.                                                    celerators outside the CPU cores for more flexible utilization,
+   Large-scale cluster scalability: Currently, AUM focuses                  such as GPU [34], [98], NPU [96], FPGA [15], and video
+on machine-level scheduling with better arrangement of all                  accelerators [58]. Their optimizations are orthogonal to the
+processor cores. However, the extracted AUV are easy to                     accelerator units within the CPU pipeline, which is the focus
+be exploited in scale-out clusters. For sharding workloads                  of AUM, but they can further enhance AUM to offer a better
+across multiple servers, we can analyze the AUV of every                    sharing infrastructure across CPU and other accelerators.
+processor and adopt load balancing [48] to maximize their                      Research on AU-accelerated systems: LLM serving sys-
+efficiency separately. The proposed methodology of profile-                 tems are gaining popularity in both academia and indus-
+control is applicable to all AU-enabled benchmarks besides                  try [42], [67], [102]. Researchers are exploring AU-based
+LLM serving. It is promising and underway to integrate AUM                  LLM serving from memory optimization [21], [41], [93],
+into cluster-level scheduling for better cluster efficiency.                sparsity [1] and CPU-GPU computing [36], [56]. Moreover,
+   Adaptability to AU operators: In this paper, AUM focuses                 AU are exploited to accelerate diverse workloads such as
+on the xFasterTransformer implementation of AU operators                    scientific applications [22]. AUM builds upon these AU-centric
+based on Intel oneDNN [29]. Current software developers                     optimization to pursue better overall processor efficiency in
+are exploring AU deeply to support unstructured sparsity [1]                the shared environments.
+and memory tiling [41]. The different implementations and                      Research on CPU sharing: CPU sharing is a common
+optimizations of AU operators further increase AUV. However,                method to harvest spare resources and improve utilization in
+AUM could be manually optimized to high-performance AU-                     cloud data centers [46], [101]. SMT sharing [49], [50] and
+enabled operators and adapt itself with the runtime controller.             workload-aware resource partitioning [11], [92] are discussed
+   Hardware topology adaptability: In this paper, AUM fo-                   above. The intelligent sharing decision models, such as in-
+cuses on analyzing and sharing AMX-enabled CPU cores                        terference prediction [48], can further enhance AUM. There
+for better efficiency while it can be further enhanced under                are more general works on sharing execution units between
+different hardware topologies. For different hardware sharing               cores [55], [72] but AUM focuses on more varying matrix
+topologies, AUM can handle the trade-off between single-                    accelerator unit management in the emerging AI era.
+threading and multi-threading cores under different scenar-                    Research on resource harvesting: Resource harvesting
+ios based on adaptive processor efficiency calculation. For                 denotes identifying and utilizing allocated but temporarily idle
+emerging AU topologies such as sharing SME among physical                   resources for higher utilization. These works operate at cluster-
+cores [4], the current assumption that AU is not shared                     level [89], server-level [91], [94], cycle-level [49], [79], and
+for hyperthreads, as stated in Section V-A, falls short and                 device-level [68]. However, the idle resources in AU-enabled
+AUM needs to refine its profiler with a new dimension of                    CPU result from its distinct resource demands and are hidden
+contentions on a single AU. For hybrid topologies where                     from utilization identifiers [18].
+CPU AU interacts with dedicated accelerators like GPU and
+NPU, there are other concurrent works focusing on offloading                                           X. C ONCLUSION
+orchestration and communication optimization, like LIA [36]                    To meet the AI-driven software shift, CPUs are incorpo-
+and ktransformer [9]. Therefore, hybrid topologies are beyond               rating variable accelerator units. We show the deficiency of
+AUM in this paper and are our future works.                                 exclusive AU usages and the challenges of sharing AU usages,
+   Challenges of AUM on other ISAs: The integration of AU                   summarized into three-dimensional accelerator unit variations.
+into modern CPUs is a universal trend for different vendors                 Therefore, we propose AUM, a novel AU-aware resource
+besides Intel AVX/AMX [25], such as ARM SVE/SME [5],                        manager designed to handle AU variations and maximize the
+[76] and RISC-V V/M-extension [2], [71]. We focus on                        efficiency of shared processors. Through extensive evaluations,
+Intel in this paper due to its mature software support of                   AUM improves processor efficiency by up to 8.8% while
+its accelerator units [33], [41]. AUM recognizes the unique                 maintaining high-performance AU application by reducing
+AUV, and the three-dimensional designs are independent of                   SLO violations by up to 11% compared with SOTA methods.
+underlying hardware component implementations, which can                    AUM enables a more efficient and high-performance CPU
+be easily applied to more heterogeneous ISA architectures.                  infrastructure in the prevailing AI era.
+                     IX. R ELATED W ORK
+                                                                                                   ACKNOWLEDGEMENTS
+   Research on hardware asymmetry: Asymmetric hardware
+is widely studied for accelerating domain-specific tasks. There                We sincerely thank all the anonymous reviewers for their
+are three main asymmetries inside the CPU. (1) ISA asym-                    valuable comments that helped us to improve the paper. This
+metry [87] via design space exploration [88]. (2) Processor                 work is supported by the National Natural Science Founda-
+asymmetry that adopts big.LITTLE architecture [65]. (3) Unit                tion of China (No. U23A6007 and No. U24A20234) and an
+asymmetry that considers specialized accelerator units within               Alibaba Research Grant. The corresponding authors are Chao
+the CPU as AUM does. Prior to AMX usage [37], AVX                           Li and Luping Wang.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+                            R EFERENCES                                        [16] M. Gottschlag, P. Machauer, Y. Khalil, and F. Bellosa, “Fair scheduling
+                                                                                    for avx2 and avx-512 workloads,” in 2021 USENIX Annual Technical
+ [1] A. F. AbouElhamayed, J. Dotzel, Y. Akhauri, C.-C. Chang, S. Gobriel,           Conference (USENIX ATC), 2021, pp. 745–758. [Online]. Available:
+     J. P. Muñoz, V. S. Chua, N. Jain, and M. S. Abdelfattah, “Sparamx:            https://www.usenix.org/conference/atc21/presentation/gottschlag
+     Accelerating compressed llms token generation on amx-powered              [17] B. Gras, K. Razavi, H. Bos, and C. Giuffrida, “Translation
+     cpus,” 2025. [Online]. Available: https://arxiv.org/abs/2502.12444             leak-aside buffer: Defeating cache side-channel protections with
+ [2] S. I. C. D. E. D. U. o. C. B. Andrew waterman, Krste Asanovic, “The            TLB attacks,” in 27th USENIX Security Symposium (USENIX
+     risc-v instruction set manual: Volume i,” Chapter 9. ”M” Standard              Security 18). Baltimore, MD: USENIX Association, Aug. 2018,
+     Extension for Integer Multiplication and Division, Version 2.0,                pp. 955–972. [Online]. Available: https://www.usenix.org/conference/
+     2022. [Online]. Available: https://lists.riscv.org/g/tech-unprivileged/        usenixsecurity18/presentation/gras
+     attachment/535/0/unpriv-isa-asciidoc.pdf                                  [18] B. Gregg, Systems Performance: Enterprise and the Cloud, 1st ed.
+ [3] M. Arik, “The concern around gpu shortages and how                             USA: Prentice Hall Press, 2013. [Online]. Available: https://dl.acm.
+     these could impact the ai revolution,” 2023. [Online].                         org/doi/10.5555/2568162
+     Available: https://www.techuk.org/resource/the-concern-around-gpu-        [19] B. Gregg, “perf examples,” 2024. [Online]. Available: https:
+     shortages-and-how-these-could-impact-the-ai-revolution.html                    //www.brendangregg.com/perf.html
+ [4] ARM, “The c1-sme2 unit,” 2025. [Online]. Available: https:                [20] H. Guo, R. Tang, Y. Ye, Z. Li, and X. He, “Deepfm: A factorization-
+     //developer.arm.com/documentation/107831/0102/The-C1-SME2--unit                machine based neural network for ctr prediction,” 2017. [Online].
+ [5] ARM,        “Sme       and      sme2,”     2025.     [Online].   Avail-        Available: https://arxiv.org/abs/1703.04247
+     able:      https://developer.arm.com/documentation/109246/0101/SME-       [21] P. He, S. Zhou, W. Huang, C. Li, D. Wang, B. Guo, C. Meng,
+     Overview/SME-and-SME2                                                          S. Gui, W. Yu, and Y. Xie, “Inference performance optimization
+ [6] Y. Bai, X. Lv, J. Zhang, H. Lyu, J. Tang, Z. Huang, Z. Du, X. Liu,             for large language models on cpus,” 2024. [Online]. Available:
+     A. Zeng, L. Hou, Y. Dong, J. Tang, and J. Li, “Longbench: A                    https://arxiv.org/abs/2407.07304
+     bilingual, multitask benchmark for long context understanding,” 2024.     [22] A. Heinecke, G. Henry, M. Hutchinson, and H. Pabst, “Libxsmm:
+     [Online]. Available: https://arxiv.org/abs/2308.14508                          accelerating small matrix multiplications by runtime code generation,”
+ [7] L. A. Barroso, U. Hölzle, and P. Ranganathan, The datacenter as a             in Proceedings of the International Conference for High Performance
+     computer: Designing warehouse-scale machines. Springer Nature,                 Computing, Networking, Storage and Analysis (SC), 2016. [Online].
+     2019.                                                                          Available: https://doi.org/10.1109/SC.2016.83
+ [8] J. Bucek, K.-D. Lange, and J. v. Kistowski, “Spec cpu2017:                [23] R. Huang, F. Chen, Y. Ren, J. Liu, C. Cui, and Z. Zhao, “Multi-
+     Next-generation compute benchmark,” in Companion of the 2018                   singer: Fast multi-singer singing voice vocoder with a large-scale
+     ACM/SPEC International Conference on Performance Engineering                   corpus,” in Proceedings of the 29th ACM International Conference
+     (ICPE). New York, NY, USA: Association for Computing Machinery,                on Multimedia (MM), 2021, p. 3945–3954. [Online]. Available:
+     2018, p. 41–42. [Online]. Available: https://doi.org/10.1145/3185768.          https://doi.org/10.1145/3474085.3475437
+     3185771                                                                   [24] Intel, “Intel® 64 and ia-32 architectures software developer’s
+ [9] H. Chen, W. Xie, B. Zhang, J. Tang, J. Wang, J. Dong, S. Chen,                 manual,” Volume 1 (3A, 3B, 3C & 3D): Basic Architecture,
+     Z. Yuan, C. Lin, C. Qiu, Y. Zhu, Q. Ou, J. Liao, X. Chen,                      Chapter 18: Programming With Intel® Advanced Matrix Extensions,
+     Z. Ai, Y. Wu, and M. Zhang, “Ktransformers: Unleashing the                     2022. [Online]. Available: https://www.intel.com/content/www/us/en/
+     full potential of cpu/gpu hybrid inference for moe models,” in                 developer/articles/technical/intel-sdm.html
+     Proceedings of the ACM SIGOPS 31st Symposium on Operating
+                                                                               [25] Intel, “Intel® architecture instruction set extensions and future features
+     Systems Principles, ser. SOSP ’25. New York, NY, USA: Association
+                                                                                    64 and ia-32 architectures software developer’s manual,” Chapter
+     for Computing Machinery, 2025, p. 1014–1029. [Online]. Available:
+                                                                                    3: Intel® AMX INSTRUCTION SET REFERENCE, 2024. [On-
+     https://doi.org/10.1145/3731569.3764843
+                                                                                    line]. Available: https://cdrdv2-public.intel.com/843860/architecture-
+[10] M. Chen, J. Tworek, H. Jun, Q. Yuan, H. P. de Oliveira Pinto,                  instruction-set-extensions-programming-reference-dec-24.pdf
+     J. Kaplan, H. Edwards, Y. Burda, N. Joseph, G. Brockman, A. Ray,
+                                                                               [26] Intel, “Intel® rdt software package,” 2024. [Online]. Available:
+     R. Puri, G. Krueger, M. Petrov, H. Khlaaf, G. Sastry, P. Mishkin,
+                                                                                    https://github.com/intel/intel-cmt-cat
+     B. Chan, S. Gray, N. Ryder, M. Pavlov, A. Power, L. Kaiser,
+     M. Bavarian, C. Winter, P. Tillet, F. P. Such, D. Cummings,               [27] Intel, “Intel® resource director technology framework,” 2024. [Online].
+     M. Plappert, F. Chantzis, E. Barnes, A. Herbert-Voss, W. H. Guss,              Available: https://www.intel.com/content/www/us/en/architecture-and-
+     A. Nichol, A. Paino, N. Tezak, J. Tang, I. Babuschkin, S. Balaji,              technology/resource-director-technology.html
+     S. Jain, W. Saunders, C. Hesse, A. N. Carr, J. Leike, J. Achiam,          [28] Intel, “Intel unveils future-generation xeon with robust
+     V. Misra, E. Morikawa, A. Radford, M. Knight, M. Brundage,                     performance and efficiency architectures,” 2024. [Online]. Avail-
+     M. Murati, K. Mayer, P. Welinder, B. McGrew, D. Amodei,                        able: https://newsroom.intel.com/artificial-intelligence/intel-unveils-
+     S. McCandlish, I. Sutskever, and W. Zaremba, “Evaluating large                 future-generation-xeon#gs.ihuopp
+     language models trained on code,” 2021. [Online]. Available:              [29] Intel, “oneapi deep neural network library (onednn),” 2024. [Online].
+     https://arxiv.org/abs/2107.03374                                               Available: https://github.com/uxlfoundation/oneDNN
+[11] S. Chen, C. Delimitrou, and J. F. Martı́nez, “Parties: Qos-               [30] Intel, “Overview of accelerating ai inference and llm applications with
+     aware resource partitioning for multiple interactive services,” in             cpus,” 2025. [Online]. Available: https://www.intel.cn/content/dam/
+     Proceedings of the Twenty-Fourth International Conference on                   www/central-libraries/cn/zh/documents/2024-09/24-cmf41-overview-
+     Architectural Support for Programming Languages and Operating                  of-accelerating-ai-inference-and-llm-applications-with-cpus.pdf
+     Systems (ASPLOS), 2019, p. 107–120. [Online]. Available: https:           [31] Intel, “Support for next generation intel xeon scalable processors,”
+     //doi.org/10.1145/3297858.3304005                                              2025. [Online]. Available: https://www.intel.com/content/www/us/en/
+[12] Cursor, “The ai code editor,” 2025. [Online]. Available: https:                developer/articles/technical/next-gen-performance-gcc-15.html
+     //cursor.com/en                                                           [32] Intel, “Unlock your ai potential with a winning combination,” 2025.
+[13] V. G. K. Dylan Souvage and A. Kumar, “How aws and intel                        [Online]. Available: https://cdrdv2-public.intel.com/862506/azure-dv6-
+     make llms more accessible and cost-effective with deepseek,” 2025.             ai-benchmarks-business-brief-1.pdf
+     [Online]. Available: https://lnkd.in/dhPCgcfU                             [33] Intel, “xfastertransformer,” 2025. [Online]. Available: https://github.
+[14] S. Everman and L. Eeckhout, “A memory-level parallelism aware                  com/intel/xFasterTransformer
+     fetch policy for smt processors,” in Proceedings of the 2007              [34] N. Jing, L. Jiang, T. Zhang, C. Li, F. Fan, and X. Liang, “Energy-
+     IEEE 13th International Symposium on High Performance Computer                 efficient edram-based on-chip storage architecture for gpgpus,” IEEE
+     Architecture (HPCA), 2007, p. 240–249. [Online]. Available: https:             Transactions on Computers, vol. 65, no. 1, pp. 122–135, 2016.
+     //doi.org/10.1109/HPCA.2007.346201                                        [35] S. Kanev, J. P. Darago, K. Hazelwood, P. Ranganathan, T. Moseley,
+[15] S. A. Fahmy, K. Vipin, and S. Shreejith, “Virtualized fpga accelerators        G.-Y. Wei, and D. Brooks, “Profiling a warehouse-scale computer,”
+     for efficient cloud computing,” in 2015 IEEE 7th International Confer-         in Proceedings of the 42nd Annual International Symposium on
+     ence on Cloud Computing Technology and Science (CloudCom), 2015,               Computer Architecture (ISCA), 2015, p. 158–169. [Online]. Available:
+     pp. 430–435.                                                                   https://doi.org/10.1145/2749469.2750392
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+[36] H. Kim, N. Wang, Q. Xia, J. Huang, A. Yazdanbakhsh, and                      [54] Microsoft, “Introducing the new bing. the ai-powered assistant for
+     N. S. Kim, “Lia: A single-gpu llm inference acceleration with                     your search.” 2024. [Online]. Available: https://www.microsoft.com/en-
+     cooperative amx-enabled cpu-gpu computation and cxl offloading,”                  us/edge/features/the-new-bing?form=MT00D8
+     in Proceedings of the 52nd Annual International Symposium on                 [55] S. Mittal and J. S. Vetter, “A survey of cpu-gpu heterogeneous
+     Computer Architecture (ISCA’25), 2025, p. 544–558. [Online].                      computing techniques,” ACM Computing Surveys (CSUR), vol. 47,
+     Available: https://doi.org/10.1145/3695053.3731092                                no. 4, pp. 1–35, 2015.
+[37] H. Kim, G. Ye, N. Wang, A. Yazdanbakhsh, and N. S. Kim, “Exploiting          [56] S. Na, G. Jeong, B. H. Ahn, A. Jezghani, J. Young, C. J.
+     intel® advanced matrix extensions (amx) for large language model                  Hughes, T. Krishna, and H. Kim, “Flexinfer: Flexible LLM
+     inference,” IEEE Computer Architecture Letters (CAL), 2024. [Online].             inference with CPU computations,” in Eighth Conference on
+     Available: https://doi.org/10.1109/LCA.2024.3397747                               Machine Learning and Systems (MLSYS), 2025. [Online]. Available:
+[38] A. Kleen, “Intel pmu profiling tools,” 2024. [Online]. Available:                 https://openreview.net/forum?id=sFNRNTduKO
+     https://github.com/andikleen/pmu-tools                                       [57] S. Na, G. Jeong, B. H. Ahn, J. Young, T. Krishna, and
+[39] A. Kopytov, “sysbench,” 2025. [Online]. Available: https://github.com/            H. Kim, “Understanding performance implications of llm inference
+     akopytov/sysbench                                                                 on cpus,” in 2024 IEEE International Symposium on Workload
+[40] R. Kuper, I. Jeong, Y. Yuan, R. Wang, N. Ranganathan, N. Rao,                     Characterization (IISWC). IEEE, 2024, pp. 169–180. [Online].
+     J. Hu, S. Kumar, P. Lantz, and N. S. Kim, “A quantitative analysis                Available: https://doi.org/10.1109/IISWC63097.2024.00024
+     and guidelines of data streaming accelerator in modern intel xeon            [58] N. C. Nachiappan, H. Zhang, J. Ryoo, N. Soundararajan,
+     scalable processors,” in Proceedings of the 29th ACM International                A. Sivasubramaniam, M. T. Kandemir, R. Iyer, and C. R.
+     Conference on Architectural Support for Programming Languages and                 Das, “Vip: virtualizing ip chains on handheld platforms,” in
+     Operating Systems, Volume 2 (ASPLOS), 2024, p. 37–54. [Online].                   Proceedings of the 42nd Annual International Symposium on
+     Available: https://doi.org/10.1145/3620665.3640401                                Computer Architecture, ser. ISCA ’15. New York, NY, USA:
+[41] kvcache        ai,     “Qwen        3      +      ktransformers        0.3        Association for Computing Machinery, 2015, p. 655–667. [Online].
+     (+amx)      =      ai   workstation/pc,”    2025.     [Online].     Avail-        Available: https://doi.org/10.1145/2749469.2750382
+     able: https://github.com/kvcache-ai/ktransformers/blob/main/doc/en/          [59] N. Nassif, A. O. Munch, C. L. Molnar, G. Pasdast, S. V.
+     AMX.md#qwen-3--ktransformers-03-amx--ai-workstationpc                             Lyer, Z. Yang, O. Mendoza, M. Huddart, S. Venkataraman,
+[42] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H.                              S. Kandula, R. Marom, A. M. Kern, B. Bowhill, D. R. Mulvihill,
+     Yu, J. Gonzalez, H. Zhang, and I. Stoica, “Efficient memory                       S. Nimmagadda, V. Kalidindi, J. Krause, M. M. Haq, R. Sharma,
+     management for large language model serving with pagedattention,”                 and K. Duda, “Sapphire rapids: The next-generation intel xeon
+     in Proceedings of the 29th Symposium on Operating Systems                         scalable processor,” in 2022 IEEE International Solid-State Circuits
+     Principles (SOSP), 2023, p. 611–626. [Online]. Available: https:                  Conference (ISSCC), vol. 65, 2022, pp. 44–46. [Online]. Available:
+     //doi.org/10.1145/3600006.3613165                                                 https://doi.org/10.1109/ISSCC42614.2022.9731107
+                                                                                  [60] Nvidia, “Triton inference server,” 2017. [Online]. Available: https:
+[43] LangChain, “Summarize text,” 2025. [Online]. Available: https:
+                                                                                       //github.com/triton-inference-server/server
+     //python.langchain.com/docs/tutorials/summarization/
+                                                                                  [61] Nvidia, “Nvidia h100 tensor core gpu,” 2024. [Online]. Available:
+[44] Y. Li, Z. Hu, E. Choukse, R. Fonseca, G. E. Suh, and U. Gupta,
+                                                                                       https://www.nvidia.com/en-us/data-center/h100/
+     “Ecoserve: Designing carbon-aware ai inference systems,” 2025.
+                                                                                  [62] OpenAI, “Gpt-4,” 2024. [Online]. Available: https://openai.com/index/
+     [Online]. Available: https://arxiv.org/abs/2502.05043
+                                                                                       gpt-4/
+[45] Linux, “turbostat - report processor frequency and idle statistics,” 2024.
+                                                                                  [63] OpenAI, “Api pricing,” 2025. [Online]. Available: https://openai.com/
+     [Online]. Available: https://www.linux.org/docs/man8/turbostat.html
+                                                                                       api/pricing/
+[46] Z. Liu, J. Leng, Z. Zhang, Q. Chen, C. Li, and M. Guo, “Veltair:             [64] OpenAI, “Sharegpt,” 2025. [Online]. Available: https://sharegpt.com/
+     towards high-performance multi-tenant deep learning services via
+                                                                                  [65] E. L. Padoin, L. L. Pilla, M. Castro, F. Z. Boito, P. O.
+     adaptive compilation and scheduling,” in Proceedings of the 27th ACM
+                                                                                       Alexandre Navaux, and J.-F. Méhaut, “Performance/energy trade-off
+     International Conference on Architectural Support for Programming
+                                                                                       in scientific computing: the case of arm big. little and intel sandy
+     Languages and Operating Systems (ASPLOS), 2022, p. 388–401.
+                                                                                       bridge,” IET Computers & Digital Techniques, vol. 9, no. 1, pp. 27–35,
+     [Online]. Available: https://doi.org/10.1145/3503222.3507752
+                                                                                       2015. [Online]. Available: https://doi.org/10.1049/iet-cdt.2014.0074
+[47] D. Lo, L. Cheng, R. Govindaraju, P. Ranganathan, and C. Kozyrakis,           [66] P. Patel, E. Choukse, C. Zhang, I. n. Goiri, B. Warrier, N. Mahalingam,
+     “Heracles: improving resource efficiency at scale,” in Proceedings of             and R. Bianchini, “Characterizing power management opportunities
+     the 42nd Annual International Symposium on Computer Architecture                  for llms in the cloud,” in Proceedings of the 29th ACM International
+     (ISCA), 2015, p. 450–462. [Online]. Available: https://doi.org/10.1145/           Conference on Architectural Support for Programming Languages
+     2749469.2749475                                                                   and Operating Systems, Volume 3, ser. ASPLOS ’24. New York,
+[48] C. Lu, H. Xu, K. Ye, G. Xu, L. Zhang, G. Yang, and                                NY, USA: Association for Computing Machinery, 2024, p. 207–222.
+     C. Xu, “Understanding and optimizing workloads for unified                        [Online]. Available: https://doi.org/10.1145/3620666.3651329
+     resource management in large cloud platforms,” in Proceedings                [67] P. Patel, E. Choukse, C. Zhang, A. Shah, I. n. Goiri, S. Maleki,
+     of the Eighteenth European Conference on Computer Systems                         and R. Bianchini, “Splitwise: Efficient generative llm inference using
+     (EuroSys), 2023, p. 416–432. [Online]. Available: https://doi.org/10.             phase splitting,” in Proceedings of the 51st Annual International
+     1145/3552326.3587437                                                              Symposium on Computer Architecture (ISCA), 2025, p. 118–132.
+[49] Z. Luo, S. Son, S. Ratnasamy, and S. Shenker, “Harvesting memory-                 [Online]. Available: https://doi.org/10.1109/ISCA59077.2024.00019
+     bound cpu stall cycles in software with msh,” in 18th USENIX                 [68] L. Peng, W. Wu, S. Yi, X. Chen, C. Wang, S. Liang, Z. Wang,
+     Symposium on Operating Systems Design and Implementation                          N. Xiao, Q. Li, M. Zhang, and J. Zhang, “Xharvest: Rethinking
+     (OSDI), 2024, pp. 57–75. [Online]. Available: https://www.usenix.org/             high-performance and cost-efficient ssd architecture with cxl-driven
+     conference/osdi24/presentation/luo                                                harvesting,” in Proceedings of the 52nd Annual International
+[50] A. Margaritov, S. Gupta, R. Gonzalez-Alberquilla, and B. Grot,                    Symposium on Computer Architecture (ISCA), 2025, p. 434–449.
+     “Stretch: Balancing qos and throughput for colocated server                       [Online]. Available: https://doi.org/10.1145/3695053.3731028
+     workloads on smt cores,” in 2019 IEEE International Symposium on             [69] A. Pi, X. Zhou, and C. Xu, “Holmes: Smt interference diagnosis
+     High Performance Computer Architecture (HPCA). IEEE, 2019, pp.                    and cpu scheduling for job co-location,” in Proceedings of
+     15–27. [Online]. Available: https://doi.org/10.1109/HPCA.2019.00024               the 31st International Symposium on High-Performance Parallel
+[51] Meta, “Introducing llama 3.2,” 2024. [Online]. Available: https:                  and Distributed Computing (HPDC), 2022, p. 110–121. [Online].
+     //www.llama.com/                                                                  Available: https://doi.org/10.1145/3502181.3531464
+[52] Meta, “Our next-generation meta training and inference accelerator,”         [70] J. R. Reinders, “Intel® avx-512 instructions,” 2017. [On-
+     2024. [Online]. Available: https://ai.meta.com/blog/next-generation-              line]. Available: https://www.intel.com/content/www/us/en/developer/
+     meta-training-inference-accelerator-AI-MTIA/                                      articles/technical/intel-avx-512-instructions.html
+[53] Meta, “Faiss,” 2025. [Online]. Available: https://github.com/                [71] RISC-V, “riscv-v-spec,” 2025. [Online]. Available: https://github.com/
+     facebookresearch/faiss                                                            riscvarchive/riscv-v-spec
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+[72] R. Rodrigues, I. Koren, and S. Kundu, “Performance and power benefits            in Proceedings of the 30th ACM International Conference on
+     of sharing execution units between a high performance core and a low             Architectural Support for Programming Languages and Operating
+     power core,” in 2014 27th International Conference on VLSI Design                Systems, Volume 2, ser. ASPLOS ’25. New York, NY, USA:
+     and 2014 13th International Conference on Embedded Systems, 2014,                Association for Computing Machinery, 2025, p. 355–372. [Online].
+     pp. 204–209.                                                                     Available: https://doi.org/10.1145/3676641.3716283
+[73] Y. Sheng, L. Zheng, B. Yuan, Z. Li, M. Ryabinin, B. Chen, P. Liang,         [91] X. Wang, C. Li, L. Sun, Q. Lyu, X. Hou, J. Leng, and M. Guo, “Sheeo:
+     C. Ré, I. Stoica, and C. Zhang, “Flexgen: high-throughput generative            Continuous energy efficiency optimization in autonomous embedded
+     inference of large language models with a single gpu,” in Proceed-               systems,” in 2024 IEEE 42nd International Conference on Computer
+     ings of the 40th International Conference on Machine Learning, ser.              Design (ICCD), 2024, pp. 496–503.
+     ICML’23, 2023.                                                              [92] X. Wang, C. Li, L. Zhang, X. Hou, Q. Chen, and M. Guo, “Exploring
+[74] M. Shoeybi, M. Patwary, R. Puri, P. LeGresley, J. Casper,                        efficient microservice level parallelism,” in 2022 IEEE International
+     and B. Catanzaro, “Megatron-lm: Training multi-billion parameter                 Parallel and Distributed Processing Symposium (IPDPS), 2022, pp.
+     language models using model parallelism,” 2020. [Online]. Available:             223–233.
+     https://arxiv.org/abs/1909.08053                                            [93] X. Wang, Y. Zhuansun, C. Li, J. Wang, X. Hou, L. Sun, L. Wang,
+[75] SPEC, “Specjbb 2015,” 2024. [Online]. Available: https://www.spec.               and M. Guo, “Asymserve: Demystifying and optimizing llm serving
+     org/jbb2015/                                                                     efficiency on cpu acceleration units,” in Advanced Parallel Processing
+[76] N. Stephens, S. Biles, M. Boettcher, J. Eapen, M. Eyole, G. Gabrielli,           Technologies, C. Li, X. Qian, D. Gizopoulos, and B. Grot, Eds.
+     M. Horsnell, G. Magklis, A. Martinez, N. Premillieu, A. Reid,                    Singapore: Springer Nature Singapore, 2026, pp. 231–245.
+     A. Rico, and P. Walker, “The arm scalable vector extension,” IEEE           [94] Y. Wang, K. Arya, M. Kogias, M. Vanga, A. Bhandari, N. J.
+     Micro, vol. 37, no. 2, p. 26–39, Mar. 2017. [Online]. Available:                 Yadwadkar, S. Sen, S. Elnikety, C. Kozyrakis, and R. Bianchini,
+     https://doi.org/10.1109/MM.2017.35                                               “Smartharvest: harvesting idle cpus safely and efficiently in the
+[77] J. Stojkovic, P. A. Misra, Goiri, S. Whitlock, E. Choukse, M. Das,               cloud,” in Proceedings of the Sixteenth European Conference on
+     C. Bansal, J. Lee, Z. Sun, H. Qiu, R. Zimmermann, S. Samal,                      Computer Systems (EuroSys), 2021, p. 1–16. [Online]. Available:
+     B. Warrier, A. Raniwala, and R. Bianchini, “Smartoclock: Workload-               https://doi.org/10.1145/3447786.3456225
+     and risk-aware overclocking in the cloud,” in 2024 ACM/IEEE 51st            [95] Q. Weng, W. Xiao, Y. Yu, W. Wang, C. Wang, J. He, Y. Li,
+     Annual International Symposium on Computer Architecture (ISCA),                  L. Zhang, W. Lin, and Y. Ding, “Mlaas in the wild: Workload
+     2024, pp. 437–451.                                                               analysis and scheduling in large-scale heterogeneous gpu clusters,”
+[78] J. Stojkovic, C. Zhang, I. n. Goiri, E. Choukse, H. Qiu, R. Fonseca,             in 19th USENIX Symposium on Networked Systems Design and
+     J. Torrellas, and R. Bianchini, TAPAS: Thermal- and Power-Aware                  Implementation (NSDI 22). Renton, WA: USENIX Association,
+     Scheduling for LLM Inference in Cloud Platforms. New York, NY,                   Apr. 2022, pp. 945–960. [Online]. Available: https://www.usenix.org/
+     USA: Association for Computing Machinery, 2025, p. 1266–1281.                    conference/nsdi22/presentation/weng
+     [Online]. Available: https://doi.org/10.1145/3676641.3716025                [96] Y. Xue, Y. Liu, L. Nai, and J. Huang, “Hardware-assisted virtual-
+[79] L. Sun, C. Li, X. Hou, T. Huang, C. Xu, X. Wang, G. Bao, B. Sun,                 ization of neural processing units for cloud platforms,” in 2024 57th
+     S. Rui, and M. Guo, “Jigsaw: Taming bev-centric perception on                    IEEE/ACM International Symposium on Microarchitecture (MICRO),
+     dual-soc for autonomous driving,” in 2024 IEEE Real-Time Systems                 2024, pp. 1–16.
+     Symposium (RTSS), 2024, pp. 280–293.                                        [97] A. Yasin, “A top-down method for performance analysis and counters
+[80] I. SYSTEMS, “Ieit systems launches cpu inference servers to                      architecture,” in 2014 IEEE International Symposium on Performance
+     accelerate enterprise ai adoption,” 2025. [Online]. Available: https://          Analysis of Systems and Software (ISPASS). IEEE, 2014, pp. 35–44.
+     www.linkedin.com/feed/update/urn:li:activity:7308400653385486336/                [Online]. Available: https://doi.org/10.1109/ISPASS.2014.6844459
+[81] M. Taram, X. Ren, A. Venkat, and D. Tullsen, “Secsmt: Securing smt          [98] H. Yu, A. M. Peters, A. Akshintala, and C. J. Rossbach, “Ava:
+     processors against contention-based covert channels,” in 31st USENIX             Accelerated virtualization of accelerators,” in Proceedings of the
+     Security Symposium (USENIX Security 22). Boston, MA: USENIX                      Twenty-Fifth International Conference on Architectural Support for
+     Association, Aug. 2022, pp. 3165–3182. [Online]. Available: https:               Programming Languages and Operating Systems, ser. ASPLOS ’20.
+     //www.usenix.org/conference/usenixsecurity22/presentation/taram                  New York, NY, USA: Association for Computing Machinery, 2020,
+[82] G. Team, “Gemma 2: Improving open language models at a practical                 p. 807–825. [Online]. Available: https://doi.org/10.1145/3373376.
+     size,” 2024. [Online]. Available: https://arxiv.org/abs/2408.00118               3378466
+[83] P.-. Team, “Phi-3 technical report: A highly capable language               [99] L. Zhang, Y. Qian, X. Wang, M. Thakker, D. Wang, J. Yu, H. Wu,
+     model locally on your phone,” 2024. [Online]. Available: https:                  Y. Hu, J. Li, Y. Qian, and S. Zhao, “Covomix2: Advancing zero-shot
+     //arxiv.org/abs/2404.14219                                                       dialogue generation with fully non-autoregressive flow matching,”
+[84] Q. Team, “Qwen3,” April 2025. [Online]. Available: https://qwenlm.               2025. [Online]. Available: https://arxiv.org/abs/2506.00885
+     github.io/blog/qwen3/                                                      [100] L. Zhang, Y. Qian, L. Zhou, S. Liu, D. Wang, X. Wang, M. Yousefi,
+[85] L. Torvalds, “Perf pmu events on sapphirerapids,” 2023.                          Y. Qian, J. Li, L. He, S. Zhao, and M. Zeng, “Covomix: advancing zero-
+     [Online]. Available: https://github.com/torvalds/linux/blob/master/              shot speech generation for human-like multi-talker conversations,” in
+     tools/perf/pmu-events/arch/x86/sapphirerapids/spr-metrics.json                   Proceedings of the 38th International Conference on Neural Informa-
+[86] TPC, “Tpc-h version 2 and version 3,” 2024. [Online]. Available:                 tion Processing Systems, ser. NIPS ’24. Red Hook, NY, USA: Curran
+     https://www.tpc.org/tpch/                                                        Associates Inc., 2024.
+[87] A. Venkat, H. Basavaraj, and D. M. Tullsen, “Composite-isa cores:          [101] Y. Zhang, M. A. Laurenzano, J. Mars, and L. Tang, “Smite: Precise
+     Enabling multi-isa heterogeneity using a single isa,” in 2019                    qos prediction on real-system smt processors to improve utilization
+     IEEE International Symposium on High Performance Computer                        in warehouse scale computers,” in 2014 47th Annual IEEE/ACM
+     Architecture (HPCA). IEEE, 2019, pp. 42–55. [Online]. Available:                 International Symposium on Microarchitecture. IEEE, 2014, pp.
+     https://doi.org/10.1109/HPCA.2019.00026                                          406–418. [Online]. Available: https://doi.org/10.1109/MICRO.2014.53
+[88] A. Venkat and D. M. Tullsen, “Harnessing isa diversity: design of          [102] Y. Zhong, S. Liu, J. Chen, J. Hu, Y. Zhu, X. Liu, X. Jin,
+     a heterogeneous-isa chip multiprocessor,” in Proceeding of the 41st              and H. Zhang, “Distserve: Disaggregating prefill and decoding for
+     Annual International Symposium on Computer Architecuture (ISCA),                 goodput-optimized large language model serving,” in 18th USENIX
+     2014, p. 121–132.                                                                Symposium on Operating Systems Design and Implementation (OSDI),
+[89] X. Wang, H. He, Y. Li, C. Li, X. Hou, J. Wang, Q. Chen,                          2024, pp. 193–210. [Online]. Available: https://www.usenix.org/
+     J. Leng, M. Guo, and L. Wang, “Not all resources are visible:                    conference/osdi24/presentation/zhong-yinmin
+     Exploiting fragmented shadow resources in shared-state scheduler           [103] L. Zhou, L. N. Bhuyan, and K. K. Ramakrishnan, “Gemini: Learning
+     architecture,” in Proceedings of the 2023 ACM Symposium on                       to manage cpu power for latency-critical search engines,” in 2020
+     Cloud Computing (SoCC), 2023, p. 109–124. [Online]. Available:                   53rd Annual IEEE/ACM International Symposium on Microarchitecture
+     https://doi.org/10.1145/3620678.3624650                                          (MICRO), 2020, pp. 637–349.
+[90] X. Wang, X. Hou, C. Li, Y. Li, D. Liu, G. Xu, G. Yang,
+     L. Zhang, Y. Wu, X. Yuan, Q. Chen, and M. Guo, “Exist: Enabling
+     extremely efficient intra-service tracing observability in datacenters,”
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:25:44 UTC from IEEE Xplore. Restrictions apply.
+

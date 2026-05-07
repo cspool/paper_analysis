@@ -1,0 +1,1389 @@
+SpeContext: Enabling Efficient Long-context Reasoning
+     with Speculative Context Sparsity in LLMs
+                 Jiaming Xu                                Jiayi Pan                                  Hanzhen Wang
+         jiamingxu@sjtu.edu.cn                      pan_jiayi@sjtu.edu.cn                          alex-wang@sjtu.edu.cn
+     Shanghai Jiao Tong University; SII          Shanghai Jiao Tong University;                 Shanghai Jiao Tong University
+            Shanghai, China                             Infinigence-AI                                 Shanghai, China
+                                                       Shanghai, China
+
+              Yongkang Zhou                                Jiancai Ye                                     Yu Wang
+       zeenny.willians@sjtu.edu.cn                  yejiancai@sjtu.edu.cn                        yu-wang@tsinghua.edu.cn
+     Shanghai Jiao Tong University; SII          Shanghai Jiao Tong University                      Tsinghua University
+            Shanghai, China                            Shanghai, China                                 Beijing, China
+
+                                                         Guohao Dai∗
+                                                    daiguohao@sjtu.edu.cn
+                                                 Shanghai Jiao Tong University;
+                                                      Infinigence-AI; SII
+                                                       Shanghai, China
+
+Abstract                                                                    In this paper, we point out that the objective of the re-
+As test-time scaling in large language model(LLM) reasoning              trieval algorithms is to align with the LLM, which is similar
+has been proven effective in enhancing the model perfor-                 to the objective of knowledge distillation in LLMs. We ana-
+mance through step-by-step generation, this long-context                 lyze the similarity in information focus between the distilled
+generation incurs substantial Key-Value(KV) cache, posing a              language model(DLM) and the original LLM from the per-
+critical bottleneck for practical applications deployment(e.g.,          spective of information theory, and thus propose a novel
+Agents). While recent KV cache optimizations perform well                paradigm that leverages a DLM as the retrieval algo-
+in the long-context input scenario, the following problems re-           rithm. Based on the insight, we present SpeContext, an algo-
+main unsolved if directly applied to long-context reasoning.             rithm and system co-design for long-context reasoning. (1)
+(1) Time-consuming layer-wise retrieval operation. The                   At the algorithm level, SpeContext proposes lightweight
+retrieval operation, which selects the important KV pairs in             retrieval head based on the head-level attention weights of
+each layer, brings the synchronization overhead that scales              DLM, achieving > 90% parameters reduction by pruning the
+with model depth due to the data dependency, resulting in                redundancy. (2) At the system level, SpeContext designs an
+up to 60% latency overhead. (2) Complete retention of the                asynchronous prefetch dataflow via the elastic loading
+newly generated KV cache. Existing works designed for                    strategy, effectively overlapping KV cache retrieval with the
+long-context input choose to retain the KV pair of newly gen-            LLM computation. (3) At the compilation level, SpeContext
+erated tokens to avoid repeated, time-consuming processing               constructs the theoretical memory model and implements an
+on the KV cache, rendering them ineffective in long-context              adaptive memory management system to achieve accel-
+reasoning. (3) Performance degradation with a tiny in-                   eration by maximizing GPU memory utilization. We deploy
+crease in sequence length. Existing offloading strategies                and evaluate SpeContext in two resource-constrained envi-
+determined before inference cannot adapt to the increasing               ronments, cloud and edge. Extensive experiments show that,
+sequence length, resulting in > 80% performance degrada-                 compared with the Huggingface and FlashInfer framework,
+tion with a tiny increase in sequence length.                            SpeContext achieves up to 24.89× and 2.19× throughput im-
+                                                                         provement in cloud and 10.06× and 8.02× speedup in edge
+∗ Corresponding Author                                                   with negligible accuracy loss, pushing the Pareto frontier of
+                                                                         accuracy and throughput.
+
+
+This work is licensed under a Creative Commons Attribution-
+NonCommercial-NoDerivatives 4.0 International License.
+ASPLOS ’26, Pittsburgh, PA, USA
+                                                                         CCS Concepts: • Computing methodologies → Natural
+© 2026 Copyright held by the owner/author(s).
+                                                                         language generation; Parallel algorithms; • Computer
+ACM ISBN 979-8-4007-2359-9/2026/03                                       systems organization → Real-time operating systems; •
+https://doi.org/10.1145/3779212.3790224                                  Mathematics of computing → Information theory.
+
+
+
+                                                                  1832
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                             Jiaming Xu et al.
+
+
+                                        Prefill
+                                                                        Autoregressive decode                      To effectively support long-context reasoning, LLM providers
+                             QKV                                    QKV                                         have enhanced the long-context processing capabilities of
+                                       Attention        FFN                   Attention     FFN
+                             Gen.                                   Gen.                                        their LLMs during pretraining, with context windows of
+         Prompt                    New Token                                      Excluded Token                over 100K tokens becoming a common standard (e.g., Kimi
+                                                                                                                K2 with 128K [42] and OpenAI o3 with 200K [14]). Despite
+                         Full KV Cache               4 Request                 Selected KV Cache                these algorithm advances, the computational and memory
+                                                   16K Length +
+                                                   Model > 24GB
+                                                                Select                                          burden associated with Key-Value(KV) cache still prevents
+                             Full Attention                                       Sparse Attention
+                                                    (RTX 4090)                                                  the efficient practical deployment. KV cache is a fundamen-
+                        Huggingface            FlashAttention      Quest               FlashInfer               tal component in the LLM, which effectively reduces the
+                        ClusterKV              ShadowKV            Ours                                         computation by reusing past key-value pairs, but introduces
+                                  (a) Long-context Input                (b) Long-context Reasoning              significant memory overhead, which is proportional to the
+                        1                                          1
+ Normalized Accuracy
+
+
+
+
+                                                                                                                context length. Furthermore, during the autoregressive de-
+                                  Budget =                                                                      coding, the generation of each new token requires reading
+                                 1024, 2048                              Budget =
+                       0.9                                        0.8   1024, 2048                              the entire KV cache to compute attention weights, leading to
+                                                       Better                             Better                severe latency overhead. For example, in the case of Llama3.1-
+                                                                                                                8B [17] on a NVIDIA RTX 4090 GPU, generating a single
+                       0.8                                        0.6
+                             0          2          4          6         0     2       4      6       8
+                                                                                                                token with a 16K context takes twice as long as generating
+                                                   Normalized Throughput                                        a token with a 1k context, and theoretically generates 2GB
+                                                                                                                of memory footprint for KV cache, which means that for an
+Figure 1. (a)(b) Pareto frontiers on KV cache selection in                                                      NVIDIA RTX 4090 GPU, only 3 requests can be processed in
+long-context input and reasoning scenarios.                                                                     parallel at most shown in Figure 1. For the LLM cloud service
+Keywords: Large Language Models, Long-context Reason-                                                           vendors, the longer response and limited throughput will
+ing, Sparse Attention, KV Cache Selection, GPU                                                                  translate to higher infrastructure costs (e.g., energy and hard-
+                                                                                                                ware consumption) and suboptimal user experiences [20].
+ACM Reference Format:                                                                                              Consequently, many previous works have explored var-
+Jiaming Xu, Jiayi Pan, Hanzhen Wang, Yongkang Zhou, Jiancai                                                     ious techniques for KV cache optimization, particularly in
+Ye, Yu Wang, and Guohao Dai. 2026. SpeContext: Enabling Effi-                                                   resource-constrained environments by reducing the KV cache
+cient Long-context Reasoning with Speculative Context Sparsity
+                                                                                                                involved during inference, encompassing algorithm opti-
+in LLMs. In Proceedings of the 31st ACM International Conference
+on Architectural Support for Programming Languages and Operating
+                                                                                                                mization (e.g., permanent eviction [6, 46] and dynamic se-
+Systems, Volume 2 (ASPLOS ’26), March 22–26, 2026, Pittsburgh, PA,                                              lection [30, 39, 40] of KV cache), system enhancement (e.g.,
+USA. ACM, New York, NY, USA, 16 pages. https://doi.org/10.1145/                                                 customized CUDA kernel design [30, 39, 40]). These algo-
+3779212.3790224                                                                                                 rithms establish a paradigm centered on layer-wise retrieval
+                                                                                                                operation during the decoding phase shown in Figure 2(a).
+                                                                                                                LLM inference can be divided into two phases, the prefill
+1                       Introduction                                                                            and decoding phase detailed in Section 2. Most previous
+Generative large language models(LLMs) mark a signifi-                                                          works [30, 39, 40] preprocess KV cache upon completion
+cant advancement in the pursuit of Artificial General In-                                                       of the prefill phase, and the corresponding retrieval algo-
+telligence(AGI). Their successful application across various                                                    rithms retrieve a subset of preprocessed KV cache for each
+domains has greatly contributed to the rapid advancement                                                        generation during decoding phase.
+of numerous downstream tasks (e.g., pharmaceutical [36],                                                           However, the core trade-off of this paradigm is its depar-
+finance [25], and ecology [34]), and their remarkable capa-                                                     ture from mathematical equivalence. By selectively comput-
+bilities have attracted widespread attention, spurring the                                                      ing attention over a fraction of the context, these methods
+development of a new wave of LLM-based software applica-                                                        inherently introduce computational shortcuts that can lead
+tions (e.g., AI agents [18]). As the scaling law gradually slows                                                to a degradation in model accuracy. Therefore, as illustrated
+down, the test-time scaling [35] in LLM reasoning is emerg-                                                     in Figure 1(a)(b), two Pareto frontiers in long-context input
+ing as a powerful tool in enhancing the model capabilities,                                                     and reasoning scenarios are established, forcing a compro-
+especially in solving complex problems(e.g., mission plan-                                                      mise between inference speed and model accuracy. Despite
+ning [13, 18, 52] and mathematical derivation [1]), through                                                     this paradigm performing well in the long-context input
+step-by-step chain-of-thought generation [19]. Moreover,                                                        scenario, it still suffers from the following critical limita-
+some latest works point out that as the length of the chain-                                                    tions during the decoding phase if directly applied in the
+of-thought reasoning increases, the LLM capabilities, espe-                                                     long-context reasoning scenario.
+cially the mission planning(e.g., 8𝐾 reasoning length) and                                                         Challenge-1: Time-consuming layer-wise retrieval
+information search(5𝑀 search length) in AI agents [52], can                                                     operation. Figure 2(a) shows that the algorithm paradigm
+be significantly improved.                                                                                      needs to perform the retrieval over the KV cache and load the
+
+
+
+                                                                                                         1833
+SpeContext                                                                                                             ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+             (a) Algorithm Paradigm                                   (b) Key Insight                                                 (c) Contributions
+                  Decoding Phase                                          KV Cache
+                                                                                                                   Distilled LM                     Input
+                                                                      Retrieve and Load
+    Layeri                                                                                                       (~0.5B Param.)
+                     KV Cache                                                                                                Prune           Lightweight Selected
+      QKV                              Attention         Efficient                    Original                                                                               LLM
+                 Retrieve and Load                                                                                                          Retrieval head Token
+                                                       Retrieval Alg.                  LLM                     Lightweight Retrieval
+                                  Latency                                                                     head (~0.03B Param.)
+                                  QKV                     Retrieve                    Compute
+  Prompt New Token        Other       Attn                               Objective:                                  C1: Lightweight retrieval head (Sec. 4)
+                                                           Sparse         Align          Full
+     Full KV Cache            FFN                         Attention                   Attention
+                                     KV R&L              Retrieval                     Model                           Stream1                        Loaded
+                                                         Accuracy            ∝        Accuracy                 Attn FFN Attn FFN Attn                 Last KV
+                                                                                                                                                             Contextual        Elastic
+     Select Up to 60% ① Time-consuming                           Key Insight                                                                                  Similarity      Loading
+              overhead retrieval operation                                                                       Load Load Load                       Required
+                                                       Prompt: What is the largest ocean?                                                             Cur. KV
+                                                                                                                           Stream2
+                                                                  Distilled
+   Selected KV           ② Complete retention         Original                    Distilled LM
+                           of new KV pairs                      Homologous           (DLM)
+                                                                                                                 C2: Asynchronous prefetch dataflow (Sec. 5)
+     Cache                                             LLM
+                           Speed (tokens/s)
+                                                             Important Information Focus
+                             45.3                                                                                     Layer1            Adaptive memory
+       Offload                                                                                                                                                             GPU HBM
+                                                     What, largest,        Similar          ocean, ?,                 Layer2           management system
+                                  Tiny length 9.7
+                                   increase
+                                                      ocean, ?                            largest, What
+                                                                                                              LLM      ……                 Support
+    GPU         CPU                                                                                                  Layern-1
+                           120K Len.     128K Len.
+    HBM        DRAM                                                                                                                         Theoretical
+                            4 Batch       4 Batch            Key insight (Sec. 3):                                    Layern               memory model                    CPU DRAM
+                           (All GPU)     (All CPU)
+   ③ Performance degradation with a tiny             Distilled language model exhibits
+       increase in sequence length                       similar information focus.                               C3: Adaptive memory management (Sec. 6)
+
+Figure 2. Overview of SpeContext. (a) Three challenges in existing algorithm paradigm in the long-context reasoning scenario.
+(b) Key Insight: Distilled language model exhibits similar information focus. (c) Contributions from Section 4 to Section 6
+
+corresponding KV pairs based on the retrieval result before                                               Hardware                       Model                     Serving System
+attention computation in each layer, resulting in the sequen-
+tial dataflow due to data dependency. This serialization in-                                                                              LLM
+troduces substantial synchronization overhead, breaking the
+natural overlap between computation and memory access in                                                      Hardware SPEC.                  Model Arch.                     Requests
+the original pipeline. Furthermore, the retrieval operation is                                                                       Compilation
+repeated in each layer during decoding, and thus the over-
+                                                                                                       KV Cache Manager                                        Initiate and Map
+head scales linearly with model depth and quickly becomes                                          Model     𝑆 % = [𝑆&% , … , 𝑆'% ]                     Init                       CPU
+bottleneck(up to 60% latency) shown in Figure 2(a).                                                                                        Deploy                            Map
+                                                                                                    𝑓(·)     𝐾𝑉$"#        𝐾𝑉!"#                                                    GPU
+   Challenge-2: Complete retention of the newly gen-
+                                                                                                                     Model, Requests           𝑆 % = [𝑆&% , … , 𝑆'% ]
+erated KV cache. Existing works designed for the long-
+                                                                                                                                       Inference
+context input scenario preprocess the KV cache by com-
+plex and time-consuming algorithms(e.g., clustering [30]                                                                               Lightweight Retrieval Head
+                                                                                                                        Requests
+
+
+
+
+and quantization [39]) during the prefill phase(i.e., the KV                                         Requests                       Lightweight    Attn                         KV
+                                                                                                                                                                Top-K
+cache of the prompt), and only retrieve the preprocessed                                                                           Retrieval Head Scores                      Indices
+
+KV cache and completely retain the newly generated KV
+pair during the decoding phase to avoid the repeated prepro-
+                                                                                                             L                          Asynchronous Prefetcher
+cessing shown in Figure 2(a). With the substantial retrieval
+                                                                                                             L          Last-Cur
+overhead in each layer, performance thus degrades greatly                                                                                              Instruction             Elastic
+                                                                                                             M                                            Issue               Loading
+in the long-context reasoning scenario, even worse than full                                                            Cur-Last
+attention(i.e., FlashInfer [51]), as shown in Figure 1(b).
+   Challenge-3: Performance degradation with a tiny                                                             Figure 3. Architecture of SpeContext.
+increase in sequence length. In resource-constrained en-
+vironments(e.g., low-end GPU with limited memory in edge                                       80% performance degradation with a tiny increase in se-
+and high-end GPU with multi-requests in cloud), KV cache                                       quence length.
+tends to be offloaded to the lower-tier memory (e.g., from                                        In this paper, we point out that the core objective of the
+GPU HBM to CPU DRAM). However, existing systems de-                                            retrieval algorithms is to align with the LLM, especially in
+termine the offloading strategy that either fully offloading                                   the information focus, and the retrieval accuracy directly
+or never offloading (e.g., ClusterKV [30]) before inference.                                   influences the LLM performance(> 10% accuracy gap be-
+Due to the inference dynamics in LLM reasoning, the prede-                                     tween Quest [40] and ClusterKV [30] using two different
+termined strategy cannot adapt to the increasing sequence                                      algorithms). Inspired by the objective of alignment in the
+length during the autoregressive decoding, resulting in >                                      output distribution in the LLM knowledge distillation [48],
+
+
+
+                                                                                      1834
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                   Jiaming Xu et al.
+
+
+we consider that due to the homology between the distilled           model and initializes the memory for the KV cache. During
+LM and the original LLM, the information they focus on (i.e.,        autoregressive inference, the lightweight retrieval head aims
+the important tokens) exhibits a high degree of similarity           to identify critical KV pairs in all KV cache and obtain their
+given the same inputs, and we also analyze this similarity           indices. These indices are immediately fed to the asynchro-
+through the mutual information [21] and the data process-            nous prefetcher for difference calculation, kicking off KV
+ing inequality [4] in information theory [38]. Therefore, we         prefetching with elastic loading in parallel with the original
+propose a novel paradigm that leverages a DLM as the                 LLM inference to enable the overlap of GPU computation
+retrieval algorithm to efficiently retrieve important in-            and CPU-GPU data transfer.
+formation focus shown in Figure 2(b). Based on the insight,             We deploy and evaluate SpeContext in two resource-limited
+we present SpeContext, an algorithm and system co-design             environments, a low-end GPU with limited memory in edge
+for speculative context sparsity in long-context reasoning.          and a high-end GPU with multiple requests in cloud, target-
+The contributions of SpeContext can be summarized into               ing long-context input and reasoning scenarios. Extensive
+three levels as follows.                                             experiments demonstrate that, compared with the Hugging-
+   (1) Lightweight retrieval head design at the algo-                face and FlashInfer framework, SpeContext achieves 24.89×
+rithm level. Based on the insight mentioned above, we                and 2.19× throughput improvement in the cloud environ-
+integrate a DLM before the LLM inference shown in Fig-               ment and 10.06× and 8.02× speedup in the edge environment
+ure 2(c)-C1, and explore the similarity of the focused tokens        with negligible accuracy loss, pushing the Pareto frontier of
+between the DLM and the original LLM based on the atten-             accuracy and throughput for long-context input and reason-
+tion weights from two mapping dimensions, head-level and             ing scenarios.
+batch-level. Statistical data shows that there exists a higher
+similarity in the head-level dimension. Therefore, we design
+                                                                     2   Background and Related Work
+a lightweight retrieval head based on the head-level atten-
+tion weights by pruning the redundant operations in DLM,             2.1 Large Language Model
+achieving > 90% parameter reduction.                                 Figure 4(a) shows that LLM inference is composed of two
+   (2) Asynchronous prefetch dataflow via elastic load-              phases, prefill and decoding phase. The prefill phase pro-
+ing at the system level. We further point out that, different        cesses the prompt to generate the first token and caches its
+from the existing works, SpeContext selects the important            key-value pairs. Subsequently, the decoding phase uses the
+KV pairs before the LLM inference through the lightweight            KV cache to generate the new token autoregressively and
+retrieval head, eliminating the data dependency between the          appends the new key-value pair to the KV cache. Nowadays,
+KV retrieval and loading during inference. Therefore, we             mainstream LLMs select the Transformer decoder [44] as the
+design an asynchronous KV cache prefetch dataflow shown              backbone layer, which primarily includes two modules, the
+in Figure 2(c)-C2. The dataflow only requires several lines of       attention mechanism and the feed-forward network(FFN).
+code about KV positions modification on the original LLM             The attention mechanism requires that the current token
+pipeline. Furthermore, we observe that the retrieval results         generation is solely dependent on previous tokens. The FFN
+between adjacent token generation are similar, and thus pro-         aims to capture deeper features and handle nonlinear rela-
+pose an elastic loading strategy into the dataflow, which only       tionships.
+loads the different KV pair required by the current genera-
+tion, successfully reducing data transfer by up to 90%.              2.2 KV Cache Optimization
+   (3) Adaptive memory management at the compila-
+                                                                     As illustrated in Figure 4(a), to reduce computation, existing
+tion level. The critical path of LLM inference in resource-
+                                                                     LLM inference systems leverage the KV cache to store the
+constrained environments is dominated by the latency of
+                                                                     keys and values generated from this previous content, but
+CPU-GPU data transfer. We develop a theoretical memory
+                                                                     introduce the memory overhead that scales linearly with
+overhead model that considers LLM, hardware, and workload
+                                                                     the context length (e.g., 4GB memory footprint with 32K
+to optimize memory usage and inference latency by maxi-
+                                                                     context in Llama3.1-8B [17]), posing significant challenges
+mizing the GPU memory utilization. Guided by the model,
+                                                                     in resource-constrained environments.
+we propose an adaptive memory management system shown
+                                                                        Owing to the softmax operation in attention described
+in Figure 2(c)-C3, which adaptively allocates memory to max-
+                                                                     in Equation 1, the attention weights exhibit approximate
+imize the inference speed with increasing sequence length
+                                                                     sparsity (i.e., many values are close to zero). Capitalizing on
+in LLM reasoning.
+                                                                     this phenomenon, many techniques emerged to optimize the
+   The architecture of SpeContext is shown in Figure 3. SpeCon-
+                                                                     KV cache, such as permanent eviction and dynamic selection.
+text begins when receiving the inference workload(e.g., re-
+quests) processed by the serving system. In the compila-
+tion stage, the adaptive memory management system calcu-                                                    𝑄𝐾 𝑇
+                                                                                   𝐴𝑡𝑡𝑛_𝑤𝑒𝑖𝑔ℎ𝑡 = 𝑠𝑜 𝑓 𝑡𝑚𝑎𝑥 ( √ )                  (1)
+lates the sequence length thresholds based on the theoretical                                                 𝑑
+
+
+
+                                                              1835
+SpeContext                                                                                                                        ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+                                              (a) LLM Inference dataflow                                                                   (b) KV Cache Optimization
+                                                                                   Autoregressive decode
+     What                   Prefill                                                                                              Permanent eviction            Permanent eviction
+         is
+       the      QKV                                                                QKV
+   largest                  Attention          FFN                     Pacific                Attention    FFN           Ocean
+    ocean       Gen.                                                               Gen.
+          ?                                                  Pacific
+                                                                                                                                   KV         Evict       KV                  KV
+                           𝑄K !
+                                               Contextual                         Q                                               Cache                  Cache               Cache
+                                                                                                   Attn weight
+                                         ·
+
+
+                                     ·
+
+
+                                 ·
+
+
+                                              dependency                          Q_heads
+                Q            𝑑                                                                                                      V                        V                V
+                                         ·
+
+
+                                     ·
+
+
+                                 ·
+
+
+
+
+                                      Attn                              Proj.                𝑄K !                                   Full               Sliding Window    StreamingLLM
+        Proj.
+                Q_heads              weight                                                    𝑑
+                                                                                                                                                                             ICLR24
+                                                     Proj.                         K
+                                                                                                                                 Dynamic selection
+                                                                                 Cache                    O              O                         Retrieval
+                K                             O              O                    K
+                                                                                                                 Proj.
+                                                                                                                                                      Paging             √           √
+                                                                                  KV_heads                                                        [Quest, ICML24]                    √
+                                                                                                                                   KV                                    √    KV
+                                                                                                                                                   Clustering
+                                                                                   V                                              Cache          [ClusterKV, DAC25]          Cache √
+                                                                                                                                                                         √
+                V                                                                Cache
+                                                                                                                                                                              V
+                                                                                                                                    V              Quantizing
+                KV_heads                                                          V                                                Full         [ShadowKV, ICML25]
+
+
+
+                           Figure 4. (a) Inference dataflow of LLM. (b) Existing works on KV cache optimization.
+   Permanent eviction. Sliding Window [6] is a typical rep-                                             leading to a notable accuracy improvement. Similarly, the
+resentative of permanent eviction and is still used in some in-                                         ShadowKV [39] quantizes the key cache and computes at-
+dustrial LLM deployments(e.g., Gemma 3 [41]). It retains only                                           tention between the query and the quantized keys. Based on
+a fixed number of the most recent KV pairs(i.e., “window")                                              the results, it selects the important KV pairs for computation.
+and evicts the farthest ones as new tokens are generated(i.e.                                           A common characteristic of all these approaches is their re-
+“sliding"). While this approach ensures a constant memory                                               liance on preprocessing the KV cache. This requirement is
+for the KV cache, it discards too much historical context,                                              ill-suited for the long-context reasoning scenario, where the
+resulting in significant accuracy loss. StreamingLLM [46]                                               KV cache continuously grows during the decoding phase,
+represents a notable optimization on this paradigm. It builds                                           making repeated preprocessing computationally expensive.
+on the insight that, due to the nature of the softmax, the                                              In this paper, SpeContext aims to achieve the efficient long-
+initial few tokens accumulate a wealth of information, called                                           context reasoning of LLM through the lightweight retrieval
+“attention sink". Therefore, in addition to the sliding window,                                         head on raw KV cache without complex preprocessing.
+StreamingLLM perpetually retains these crucial initial KV
+pairs to improve the model accuracy.                                                                    2.3 Knowledge Distillation in LLMs
+   Dynamic selection. To address the significant accuracy                                               Knowledge Distillation is a typical technique to address the
+degradation caused by irreversible information loss in per-                                             challenge of deploying the LLMs in some resource-constrained
+manent eviction, some works [30, 39, 40] propose the dy-                                                scenarios. Its primary goal is to compress a large “teacher"
+namic selection, which retains the entire KV pairs or offloads                                          LLM into a smaller, more efficient “student" LLM while pre-
+them to lower-tier memory(e.g., CPU DRAM) in resource-                                                  serving high performance. The student LLM learns to mimic
+constrained environments, and retrieves the necessary KV                                                the outputs of the teacher LLM to achieve the alignment
+pairs based on the input during inference. In order to min-                                             of the probability distributions by minizing the Kullback-
+imize the retrieval overhead, most works require prepro-                                                Leibler Divergence [22] formulated as follows.
+cessing the KV cache (e.g., paging [40], clustering [30], and                                                                        ∑︁              𝑃𝑇 (𝑥𝑖 )
+quantization [39]). Given the substantial overhead of the                                                          𝐷 𝐾𝐿 (𝑃𝑇 ||𝑃𝑆 ) =    𝑃𝑇 (𝑥𝑖 )𝑙𝑜𝑔(          )   (2)
+preprocessing, most works only preprocess the KV cache of                                                                             𝑖
+                                                                                                                                                     𝑃𝑆 (𝑥𝑖 )
+the input prompt after the prefill phase, and only retrieve                                             The 𝑃𝑇 denotes the probability distribution of the teacher
+the preprocessed KV cache during the decoding phase with                                                LLM, and the 𝑃𝑆 denotes the probability distribution of the
+the retention of newly generated KV pairs. Quest [40] is a                                              student model. Recently, knowledge distillation is further
+representative work in dynamic selection, which partitions                                              used to accelerate LLM inference through speculative de-
+the KV cache into pages and creates a page vector by taking                                             coding. The EAGLE family [26–28] is a representative work.
+the element-wise maximum and minimum values. During                                                     It leverages a distilled small language model to autoregres-
+retrieval, importance scores are computed only for these                                                sively generate draft tokens, which are then fed into the LLM
+page vectors to select the Top-K pages. Subsequently, all                                               for parallel verification. Since the training objective of the
+KV pairs within the selected pages are loaded for compu-                                                distilled model is to align its output distribution with that of
+tation. ClusterKV [30] improves upon Quest by employing                                                 the LLM, the number of tokens passing verification is often
+clustering to categorize the KV cache. It uses the cluster cen-                                         greater than one, allowing the LLM to generate multiple
+troids as the cluster vectors for the importance calculation,                                           tokens in a single forward inference.
+
+
+
+                                                                                               1836
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                           Jiaming Xu et al.
+
+
+3    Motivation                                                           exiting [47]), we consider that the goal of DLM in these
+3.1 Two Core Questions of KV Selection                                    works is to generate the probability distribution that resem-
+                                                                          bles the original LLM. From the perspective of information,
+Question: What is the essential objective of retrieval
+                                                                          we intuitively consider that if the probability distribution is
+algorithms?
+                                                                          nearly the same, the contextual information focus(i.e., the
+   Answer: The retrieval algorithms aim to efficiently align
+                                                                          tokens contribute most to the result) in the DLM and the
+with the intrinsic properties on the LLM contextual focus.
+                                                                          original LLM must be highly similar. Otherwise, any signifi-
+   Analysis: As mentioned in Section 2.2, permanent evic-
+                                                                          cant information discrepancy would prevent the alignment
+tion strategies [6, 46] are typically informed by coarse-grained
+                                                                          in the probability distribution.
+statistical and theoretical analysis of the attention mecha-
+                                                                             Theoretical Analysis. As mentioned in Section 2.3, the
+nism. These works reveal intrinsic, input-agnostic properties
+                                                                          objective of knowledge distillation in LLMs is to minimize
+of LLMs, such as the consistent focus on local context or spe-
+                                                                          the KL divergence of the probability distributions in Equa-
+cific absolute positions (e.g., the initial tokens [46]), leading
+                                                                          tion 2. We consider that this inherently requires the student
+to the design of fixed retrieval algorithms that are indepen-
+                                                                          model to learn the context information extraction strategy
+dent of the input query. In contrast, dynamic selection strate-
+                                                                          similar to that of the teacher model. This insight can be
+gies [30, 39, 40] are based on fine-grained experimental anal-
+                                                                          analyzed through mutual information [21] and the data pro-
+ysis that the focus is highly dynamic and content-dependent.
+                                                                          cessing inequality [4] in information theory [38]. Mutual
+By leveraging the intrinsic properties of LLMs(e.g., represen-
+                                                                          information(𝐼 (𝑋 ; 𝑌 )) measures the dependence between two
+tational similarity [30] and low-rank characteristics [39]),
+                                                                          variables. For a well-trained teacher model(𝑇 ), there exists
+these works propose query-aware retrieval algorithms. As
+                                                                          high mutual information between the output probability
+illustrated in Figure 2(b), we point out that the core of the
+                                                                          distribution (𝑃𝑇 ) and the input context(𝐶) (i.e., 𝐼 (𝐶; 𝑃𝑇 ) is
+retrieval algorithms is to first identify the intrinsic proper-
+                                                                          large). This means that the teacher’s output is highly depen-
+ties of the LLM on the contextual focus, and then align with
+                                                                          dent on the context and not random guessing. Moreover,
+these properties in an efficient way. The alignment degree
+                                                                          the information flow from the context(𝐶) through the in-
+between the retrieval algorithm and LLM decides retrieval
+                                                                          ternal representation(𝑅𝑆 ) of the student model(𝑆) to output
+accuracy, proportional to the model accuracy.
+                                                                          probability distribution (𝑃𝑆 ) forms a Markov chain [32]:
+   Question: Why do the existing retrieval algorithms
+need complex and time-consuming preprocessing?
+                                                                                                   𝐶 → 𝑅𝑆 → 𝑃𝑆                            (4)
+   Answer: The primary purpose of preprocessing is to mitigate
+the computational overhead during retrieval.
+                                                                          According to the DPI, we can get
+   Analysis: To retrieve the important KV pairs, most ex-
+isting retrieval algorithms in each layer take matrix mul-
+                                                                                                𝐼 (𝐶, 𝑃𝑆 ) ≤ 𝐼 (𝐶, 𝑅𝑆 )                   (5)
+tiplication of 𝑄𝑢𝑒𝑟𝑦 ∈ 𝑅𝑏𝑠𝑧×ℎ𝑒𝑎𝑑𝑠 ×𝑑𝑖𝑚 with 𝐾𝑒𝑦𝑠𝑐𝑎𝑛𝑑𝑖𝑑𝑎𝑡𝑒 ∈
+𝑅𝑑𝑖𝑚×ℎ𝑒𝑎𝑑𝑠 ×𝑙𝑒𝑛𝑘𝑒𝑦𝑠 to get the importance scores, and then
+                                                                             This indicates that the amount of information about the
+select the Top-K candidates for the final computation. There-
+                                                                          context contained in the output cannot exceed the informa-
+fore, the retrieval overhead(𝑂𝑡𝑜𝑡 ) in a single LLM inference
+                                                                          tion captured by its internal representation. The distillation
+can be defined as follows.
+                                                                          process drives 𝑃𝑆 → 𝑃𝑇 by minimizing 𝐷 𝐾𝐿 (𝑃𝑇 ||𝑃𝑆 ). Since
+                                                                          𝑃𝑇 has high mutual information with 𝐶, a successful distilla-
+    𝑂𝑡𝑜𝑡 = 𝑙𝑎𝑦𝑒𝑟𝑠 × 𝑏𝑠𝑧 × ℎ𝑒𝑎𝑑𝑠 × 𝑑𝑖𝑚 × 𝑙𝑒𝑛𝑘𝑒𝑦𝑠 × 𝑂𝑚𝑢𝑙       (3)          tion will ensure that 𝑃𝑆 also exhibits high mutual informa-
+                                                                          tion with 𝐶, i.e., 𝐼 (𝐶, 𝑃𝑆 ) → 𝐼 (𝐶; 𝑃𝑇 ). To achieve a high level
+As mentioned in Section 2.2, Quest and ClusterKV leverage                 of 𝐼 (𝐶, 𝑃𝑆 ), the DPI dictates that the student model must
+preprocessing algorithms(e.g., paging and clustering) which               learn to generate an internal representation(𝑅𝑆 ) that also
+select a single vector as the representative of several Keys,             captures significant contextual information in 𝐶, ensuring
+to reduce the length of candidate keys(𝑙𝑒𝑛𝑘𝑒𝑦𝑠 ). ShadowKV                that 𝐼 (𝐶, 𝑅𝑆 ) ≥ 𝐼 (𝐶, 𝑃𝑆 ). Therefore, the student model must
+reduce the single multiplication overhead(𝑂𝑚𝑢𝑙 ) by quan-                 extract the contextual information that the teacher model
+tizing the key vectors to low bit level. From Equation 3, if              deems important.
+without preprocessing, the retrieval overhead is equivalent                  Building on the insight and analysis above, we propose a
+to the attention weights computation in Equation 1, losing                novel paradigm that leverages the DLM of the original
+the meaning of KV selection.                                              LLM as the retrieval algorithm. This paradigm can trans-
+                                                                          fer the information focus from the DLM to the original LLM
+3.2 Key Insight and Theoretical Analysis                                  during inference, eliminating layer-wise time-consuming
+Key Insight. Inspired by the alignment objective of knowl-                retrieval detailed in Section 1 and complex preprocessing
+edge distillation in LLM and its wide application across var-             mentioned above, and thus effectively supporting the long-
+ious domains(e.g, speculative decoding [26–28] and early                  context reasoning scenario.
+
+
+
+                                                                   1837
+SpeContext                                                                                                                                                                           ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+                                             (a) Lightweight Retrieval Head Design                                                                   (b) Support for Multi-Head Attention                (c) Support for Grouped-Query Attention
+                                                                                                                                                                                                                     Retrieval Same Attention
+                                                                                                                                                          Retrieval                                                                               LLM
+             Input_id                                            Distilled LM Architecture                                          FFN                             Same Attention        LLM                         Head      Mechanism
+
+           Embedding                         Query
+                                                                                                                    Pruned      LM_Head
+                                                                                                                                                           Head      Mechanism                                    Head-level                    Head-level
+
+
+
+
+                                                        MatMul
+                                                                                                                                                          Head-level                    Head-level
+                                                                     Attention                                                                                                                                 Attention weights                KV Cache
+                               Projection
+
+
+
+
+                                                                                                       Projection
+                                                                                                                                    Logits             Attention weights                KV Cache
+                       X                     Key                     Weights                Output                  Output
+                                                                                                                                                                                                               Head1
+                                                                                                                                                                                                        Group1 Head2
+                                                                                                                                    Sample           Head1
+                                                                                                                                                      Head2                                              Group2 Head3
+                                                                                                                                                                                                                 Head4
+                                                                                                                                                       Head3
+                                             Value                           MatMul                                             Output_id               Head4                                                     Group-level
+                                                                                                                                                                                                               Element-wise Max             Grouped-Query
+                                                                                                                                                         Head-Level         Gather     Head-level                                           Sparse Attention
+                                                                                                                                                           Top-K                     Sparse Attention      Group1
+                                                                                                                                                                                                            Group2                 Gather
+                                                                               Head1                                                Head1            Head1                                                                                Head1
+                                                                                                                    ……                                Head2                                                    Group-level Top-K           Head2
+                                                                               Head2                                                Headn              Head3                                                                                Head3
+            Attention                                                                                                                                   Head4                                                                                Head4
+                                                             ……
+            Weights                                                                                                      Max
+                                                                               Headn
+    [batchs, heads,                                                                                                                                  (d) Support for Multi-Query Attention              (e) Support for Multi-Head Latent Attention
+      seqlen, dim]                                 Head Level Top-K                                    Batch Level Top-K
+                                                                                                                                                          Retrieval Same Attention                             Retrieval Same Attention
+                                                                                                                                                                                          LLM                                                   LLM
+                                             Head-Level Retrieval                                                   Batch-Level Retrieval                  Head      Mechanism                                  Head      Mechanism
+                       1.0                                                                  1.0                                                           Head-level                    Head-level             Head-level              Head-level 𝑐 Cache
+                                                                                                                                                       Attention weights                KV Cache
+    Attention weight
+
+
+
+
+                                                                                                                                                                                                            Attention weights
+                       0.8                                                                  0.8
+     accumulation
+
+
+
+
+                                                                                                                                                     Head1                                                Head1
+                                                                                                                                                      Head2
+                                                                                 Hit rate
+
+
+
+                       0.6                                                                  0.6                                                        Head3                                               Head2
+                                                                                                                                                        Head4                                               Head3                           Projection
+                                                                                                                                                                                                             Head4
+                       0.4                                                                  0.4                                                        Element-wise Max Gather         Head-level
+                                                                                                                                                                                     Sparse Attention         Head-Level
+                       0.2                                                                  0.2                                                                                                                 Top-K           Gather
+                       0.0                                                                  0.0                                                             Top-K                                                                              Head-level
+                                                                                                                                                                                                          Head1                              Sparse Attention
+                                                                                                                                                                                                           Head2
+                        K=                                                                   K=                                                                                                             Head3
+                                              8
+
+                                                     6
+
+                                                                 2
+
+
+
+
+                                                                                                                     8
+
+                                                                                                                           6
+
+                                                                                                                                2
+                             32
+
+                                        64
+
+
+
+
+                                                                                                  32
+
+                                                                                                           64
+                                                                     24
+
+                                                                          48
+
+
+
+
+                                                                                                                                     24
+
+                                                                                                                                             48
+                                             12
+
+                                                   25
+
+                                                           51
+
+
+
+
+                                                                                                                    12
+
+                                                                                                                         25
+
+                                                                                                                               51
+                                                                                                                                                                                                             Head4
+                                                                  10
+
+                                                                        20
+
+
+
+
+                                                                                                                                    10
+Figure 5. (a) We design the lightweight retrieval head by pruning redundancy and adopt the head-level attention weights for              20
+selection. (b)∼(e) The detailed implementations of four attention mechanisms supported by the lightweight retrieval head.
+ Table 1. Analysis on attention weights with short input.                                                                                              Table 2. Analysis on attention weights with long input.
+
+                             Budget                  gsm8k                       QA                        Humaneval-code                                             Budget             Longmagpie                  HotpotQA               RepoBench
+Head-                          32                 0.74(0.13) 0.86(0.10)                                              0.75(0.13)                       Head-                512              0.89(0.07)                0.90(0.07)                0.88(0.09)
+Level                          64                 0.80(0.10) 0.91(0.06)                                              0.81(0.12)                       Level                1024             0.95(0.04)                0.97(0.02)                0.92(0.07)
+Batch-                         32                 0.68(0.15) 0.72(0.13)                                              0.68(0.16)                       Batch                 512             0.70(0.09)                0.79(0.10)                0.72(0.12)
+Level                          64                 0.72(0.12) 0.79(0.10)                                              0.75(0.12)                       Level                1024             0.73(0.08)                0.83(0.06)                0.76(0.10)
+                                                                                                                                                     might be "What" with 0.2 attention weight, "is" with 0.1 at-
+4           Lightweight Retrieval Head Design
+                                                                                                                                                     tention weight, "largest" with 0.25 attention weight, "ocean"
+4.1 Challenge: Time-consuming DLM                                                                                                                    with 0.25 attention weight, "?" with 0.2 attention weight.
+Based on the key insight mentioned above, we deploy the                                                                                              Therefore, we do not expect or require the attention distri-
+DLM before the original LLM to capture globally important                                                                                            bution of DLM to be identical to that in any of the LLM’s
+tokens shown in Figure 3. In this paper, we utilize the DLM                                                                                          layers, and as illustrated, it would be impossible for it to
+provided by EAGLE-3 [28], which has the complete LM archi-                                                                                           be. Our objective is to ensure a crucial outcome, "Do the
+tecture(including tokenizer, embedding and LM_Head) with a                                                                                           tokens selected by the DLM capture high LLM attention
+single Transformer decoder layer. As shown in Figure 3, the                                                                                          weights?". We conduct experiments on the similarity be-
+DLM processes the same inputs as the LLM, and performs                                                                                               tween the DLM and the original LLM from two mapping
+complete inference with the full KV cache, resulting in ∼ 20%                                                                                        dimensions in attention weights, batch-level and head-level
+additional overhead, especially for the LLM with large vo-                                                                                           in Figure 5(a), and demonstrate the mean and standard devia-
+cabulary(e.g., > 1.2 × 105 tokens in Llama3-8B). Therefore,                                                                                          tion of the sum of attention weights for selected tokens across
+the key issue is how to design a lightweight retrieval                                                                                               diverse datasets(Math[gsm8k [8]], QA[QA [23], LongBench-
+algorithm based on the DLM to minimize the overhead.                                                                                                 HotpotQA [50]], Code[Humaneval-code [7], LongBench-
+                                                                                                                                                     repobench [31]], Multi-doc[Longmagpie [16], LongBench-
+4.2 Insight and Analysis: Redundant Operation                                                                                                        HotpotQA [50]]) in Table 1 and Table 2. The batch-level
+We further point out that the role of the single-layer DLM is                                                                                        retrieval adopts a coarse-grained approach, retaining a sin-
+primarily to identify all important tokens in multi-layer LLM,                                                                                       gle set of important tokens that apply to all attention heads.
+which are often determined by the attention weights. For                                                                                             In contrast, the head-level retrieval is more fine-grained, re-
+example, when LLM processes "What is the largest ocean?",                                                                                            taining different important tokens for each attention head.
+the first layer in LLM might focus on "?" with 0.8 atten-                                                                                            As illustrated in Figure 5, the head-level retrieval exhibits a
+tion weight, and the second layer might focus on "What"                                                                                              higher similarity of the important tokens and higher hit rate
+with 0.9 attention weight, and third layer might focus on                                                                                            of the generated tokens. Therefore, we only need operations
+"largest" with 0.5 attention weight and "ocean" with 0.4 at-                                                                                         related to the calculation of attention weights (e.g., Query
+tention weight. However, the attention distribution of DLM                                                                                           and Key generation), while other operations are redundant.
+
+
+
+                                                                                                                                              1838
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                            Jiaming Xu et al.
+
+
+4.3 Approach: Lightweight Retrieval Head                                           6.0
+                                                                                         (a)
+                                                                                                                                       1.0
+                                                                                                                                             (b)
+                                                                                   5.0
+
+
+
+
+                                                                     Latency(ms)
+
+
+
+
+                                                                                                                        Overlap rate
+Building on the insight and analysis, we design the light-                         4.0
+                                                                                                                                       0.5
+weight retrieval head based on the DLM. The retrieval head                         3.0
+                                                                                   2.0
+supports three mainstream LLM attention mechanisms (i.e.,
+                                                                                   1.0                                                 0.0
+Multi-Head Attention(MHA), Grouped-Query Attention(GQA),                                       Single Layer Inference
+                                                                                   0.0
+
+
+
+
+                                                                                                                                                         8
+
+                                                                                                                                                              6
+
+                                                                                                                                                                   2
+                                                                                                                                             32
+
+                                                                                                                                                   64
+
+
+
+
+                                                                                                                                                                        24
+
+                                                                                                                                                                             48
+                                                                                                                                                        12
+
+                                                                                                                                                             25
+
+                                                                                                                                                                  51
+Multi-Query Attention(MQA), and Multi-Head Latent Atten-                                  32   64   128 256 512 1024
+
+
+
+
+                                                                                                                                                                       10
+
+                                                                                                                                                                            20
+                                                                                                KV Budget                                                KV Budget
+tion(MLA)). The implementation details are as follows.
+   Implementation Details. As illustrated in Figure 3, we
+                                                                     Figure 6. (a) The latency of prefetching with different KV
+deploy the retrieval head before the original LLM and process
+                                                                     budget and a LLM layer inference. (b) Overlap rate of selected
+the same input as the LLM. This retrieval head retains the
+                                                                     tokens in adjacent generation with different KV budget.
+essential components of DLM provided by EAGLE-3 [28], the
+embedding module and the QK projection weights. Although             Therefore, the implementation of SpeContext in MQA is sim-
+the original DLM only supports 2k context length, we enable          ilar to that in GQA shown in Figure 5(d), i.e., 𝑛 is changed to
+it to process long context using the training-free method            the number of all heads.
+provided by YaRN [37]. During the inference, the retrieval              Support for MLA. MLA is a novel variant of MHA em-
+head maintains a full Key (K) cache and calculates attention         ployed in a new series of models(e.g., DeepSeek-V3/R1 [29]
+weights after the QK projection. Based on the analysis in            and Kimi-K2 [42]). Instead of caching the full Key-Value pairs,
+Section 4.2, we perform the head-level retrieval of important        MLA caches a lower-dimensional latent representation, de-
+tokens based on the attention weights and feef the selected          noted as 𝑐. During computation, the 𝑐 is mapped to a higher
+tokens into the original LLM inference. The implementation           dimensional space for the attention calculations. Since MLA
+of the head-level retrieval tailored for the different attention     does not reduce the number of attention heads, our retrieval
+mechanisms is as follows.                                            remains similar to that in MHA. The primary difference lies
+   Support for MHA. MHA was once a mainstream atten-                 that only the selected 𝑐 cache is subjected to the increase in
+tion mechanism adopted by many LLMs(e.g., Llama-2 [43]).             dimension as shown in Figure 5(e).
+The number of heads for Keys(𝐾) and Values(𝑉 ) is the same
+as that of Queries(𝑄) in Figure 4(a). Since the attention mech-      5              Asynchronous Prefetch Dataflow
+anism of the retrieval head is the same as that of the original      5.1 Motivation: Data independence
+LLM, the retrieval head selects important tokens at the head
+level based on the attention weights shown in Figure 5(b).           As previously mentioned in Section 1, inference engines
+The selected tokens are then mapped to the attention com-            will offload the KV cache to lower-tier memory in resource-
+putation of the original LLM by using the torch.gather op-           constrained environments. As illustrated in Figure 7, existing
+eration to load the important KV cache into different heads.         KV cache retrieval works must load the required KV cache
+   Support for GQA. GQA is introduced to optimize the sub-           based on retrieval results for attention computation in each
+stantial KV cache overhead of MHA, and most mainstream               layer. This design introduces the synchronization and control
+LLMs(e.g., Llama3 [17] and Qwen3 [49]) have updated to               caused by data dependencies. As mentioned in Section 3.2,
+GQA. As illustrated in Figure 5(c), GQA divides the query            the lightweight retrieval head in is deployed before LLM in-
+heads into groups, where all heads in the group share the            ference and dependent solely on the LLM input. eliminating
+same KV cache. Consequently, the number of heads in the              the data dependency mentioned above. Consequently, we
+KV cache is reduced to 𝛼1 of the query heads, where 𝛼 is the         further propose the asynchronous dataflow through multiple
+number of groups. For computational convenience, the KV              CUDA streams, enabling concurrent execution of computa-
+heads are often repeated 𝛼 times before the attention calcu-         tion and KV cache prefetching shown in Figure 2(c)-C2.
+lation, resulting in attention weights with the same number
+                                                                     5.2 Challenge: Heavy Data transfer
+of heads as the query. This thus creates the mismatch be-
+tween the attention weights of the retrieval head and the            However, due to the combination of limited memory band-
+physical KV cache of original LLM in head numbers. To ad-            width and the immense computational power of GPUs, a
+dress this, as shown in Figure 5(c), we apply an element-wise        significant imbalance arises. As illustrated in Figure 6(a),
+maximum operation along the hidden dimension within the              for the large KV budget(i.e., self-determined amount of KV
+same group of heads in the attention weights, to generate            cache for loading), the data transfer latency far exceeds the
+the group-level attention weights. We then take the group-           LLM inference latency As a result, in resource-constrained
+level attention weights for important token selection and            scenarios, the end-to-end inference latency becomes dom-
+subsequent operations, which are similar to MHA.                     inated by the I/O for loading the KV cache. Therefore, the
+   Support for MQA. MQA divides all heads of the query               key challenge is how to reduce the data transfer time
+into a single group, where all heads share the same KV cache.        (i.e., minimize the volume of KV cache loaded) without
+                                                                     sacrificing accuracy.
+
+
+
+                                                              1839
+SpeContext                                                                                             ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+ (a) Prefetch Full KV Cache         Attn   FFN                  Attn   FFN            Table 3. Symbols mentioned in Section 6 and description.
+            KV Prefetch                    KV Prefetch              …… time            Category    Symbol                   Description
+ (b) Fetch Sparse KV Cache (e.g., Quest/ClusterKV with offloading)                                   𝑀𝑂          Memory size of original LLM
+                                                                                                     𝑀𝐷              Memory size of DLM
+ Re.                      Attn FFN Re.                   Attn FFN
+                                                                                                      𝐿           Number of layers in LLM
+           KV Fetch                        KV Fetch       ……            time                          𝐷            Head dimension in LLM
+ (c) Prefetch Sparse KV Cache (e.g., InfiniGen)                                                      𝐻           Number of KV heads in LLM
+                                                                                          Model
+                                                                                                      𝑆            Current sequence length
+                 Re. Attn FFN Re.     Attn FFN
+                                                                                                      𝐵           KV cache retrieval budget
+   KV Prefetch        KV Prefetch          ……                           time                        𝐿𝐶𝑃𝑈      Number of layers of KV cache on CPU
+ (d) Prefetch Sparse V Cache (e.g., ShadowKV)
+                                                                                                    𝐿𝐺𝑃𝑈      Number of layers of KV cache on GPU
+                                                                                                      𝛼           Groups of attention heads
+         K                    K
+ Re.           Attn FFN Re.         Attn FFN
+       Recons.              Recons.                                                   Hardware    𝑀𝑒𝑚𝐺𝑃𝑈            Size of GPU global memory
+       V Fetch                  V Fetch     ……                          time
+                                                                                      Workload        𝑅                       Requests
+ (e) SpeContext(Ours)
+                                    Reduction
+ Re.         Attn FFN Attn FFN
+        KV KV
+                                                                                      6    Adaptive Memory Management
+                          Data Independence & Elastic Transfer          time
+       Pref. Pref.                                                                    6.1 Motivation: Performance Degradation
+                                                                                      As mentioned in Section 1, most existing works designed
+Figure 7. Elastic loading effectively reduces the KV transfer,                        for long-context input scenario determines the KV cache
+making SpeContext outperform previous works.                                          management strategy that whether to store the entire cache
+                                                                                      in GPU HBM or offload it to CPU DRAM before LLM infer-
+                                                                                      ence. However, unlike the long-context input scenario, the
+5.3 Insight: Contextual Similarity                                                    sequence length exhibits is dynamic and unpredictable in
+Inspired by the contextual similarity explored in early exit-                         the long-context reasoning scenario because the inference
+ing [47] and sparse activation [33], we conduct experiments                           termination is completely determined by the LLM itself. Con-
+to explore the relationship of the selected tokens between                            sequently, as shown in Figure 2(a), even a tiny increase in
+two adjacent token generation. As illustrated in Figure 6(b),                         task workload (e.g., the longer context length and more re-
+statistical analysis reveals the high overlap(> 80%) in the                           quests) can trigger a complete offload of the entire KV cache
+important token selection between adjacent generation. This                           to the CPU, leading to > 80% performance degradation.
+implies that for the subsequent generation, only about 20% of
+the KV cache on GPU requires to be updated. Consequently,                             6.2 Approach: Adaptive Memory Management
+we can maintain the accuracy by loading only 20% updating                             Theoretical Model and Analysis. Inspired by a series of
+KV cache, effectively reducing the data transfer volume.                              works on adaptive scheduling for resource allocation [9, 47],
+                                                                                      we develop a theoretical memory overhead model based
+5.4 Approach: Elastic Loading                                                         on LLM architecture, hardware specifications and inference
+Based on the contextual similarity, we propose the elas-                              workload detailed in Table 3, and further propose a novel
+tic loading strategy and integrate it into the asynchronous                           adaptive memory management system.
+dataflow. Its objective is to reuse the KV cache already res-                            During LLM inference, additional memory, called runtime
+ident on the GPU from the previous generation and fetch                               memory, is required to serve as a temporary buffer to store
+only those not yet present. This strategy can be implemented                          intermediate values (e.g., activations). We checked some ref-
+with minimal code modifications to the existing asynchro-                             erences and found that runtime memory typically amounts
+nous dataflow. The implementation details are as follows.                             to around 20% to 30% of the model size [5, 9, 15, 53]. This
+We denote the set of important token indices in last gener-                           buffer is dynamically used and released during the LLM in-
+ation as 𝑆𝑙𝑎𝑠𝑡 . And we obtain the indices 𝑆𝑛𝑜𝑤 for current                           ference. As a result, we select 30% of the model size as the
+generation by the retrieval head. The set of KV cache in-                             runtime memory. As mentioned in Section 4, the decode layer
+dices to be updated on GPUs can be calculated by the set                              of DLM is consistent with the original LLM architecture and
+difference 𝑆𝑙𝑎𝑠𝑡 − 𝑆𝑛𝑜𝑤 while the KV cache indices for elastic                        has only one layer, and due to the repeat_kv operation in
+loading are calculated by 𝑆𝑛𝑜𝑤 − 𝑆𝑝𝑟𝑒 . Because we main-                              GQA or MQA, an additional buffer(𝑆𝛼𝐻 𝐷) must allocated
+tain a fixed KV budget(i.e., |𝑆𝑙𝑎𝑠𝑡 | = |𝑆𝑛𝑜𝑤 |), it follows that                     for computation. So the total number of layers in the KV
+|𝑆𝑙𝑎𝑠𝑡 − 𝑆𝑛𝑜𝑤 | = |𝑆𝑛𝑜𝑤 − 𝑆𝑙𝑎𝑠𝑡 |. Then 𝑆𝑙𝑎𝑠𝑡 needs to be updated                     cache is (𝐿 + 1 +𝛼). Moreover, Due to the Key and Value with
+by 𝑆𝑛𝑜𝑤 . Practically, we perform in-place updates for the                            FP16 precision which is 2 byte per value, the coefficient of
+required KV loading through Tensor.copy_().                                           KV cache is 4. Therefore, we can calculate the total memory
+
+
+
+                                                                               1840
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                  Jiaming Xu et al.
+
+
+Algorithm 1 Adaptive memory management in inference                             Algorithm 2 Sequence length threshold calculation in com-
+Input: The sequence length threshold list: 𝑆𝑇       = [𝑆𝑇0 , ...𝑆𝑇𝐿 ],
+                                                                                pilation
+      Prompt: 𝑖𝑛𝑝𝑢𝑡_𝑖𝑑, LLM Layers: 𝐿𝑎𝑦𝑒𝑟 = [𝐿𝑎𝑦𝑒𝑟 0, ...𝐿𝑎𝑦𝑒𝑟 𝐿−1 ].           Input: The Symbols in Table 3.
+                                                                                Output: The sequence length threshold list 𝑆𝑇 = [𝑆𝑇0 , ...𝑆𝑇𝐿 ].
+ 1: 𝐿𝐶𝑃𝑈 ← 0; 𝐿𝐺𝑃𝑈 ← 𝐿              ⊲ Initiate 𝐿𝐶𝑃𝑈 and 𝐿𝐺𝑃𝑈                                 𝑀𝑒𝑚𝐺𝑃𝑈 −1.3× (𝑀𝑂 +𝑀𝐷 )
+                                                                                 1: 𝑆𝑇
+                                                                                     0 ← ⌊    4×𝑅×𝐻 ×𝐷 × (𝐿+1+𝛼 ) ⌋ ⊲ Place all KV cache on GPU
+ 2: 𝑆 ← 𝑙𝑒𝑛(𝑖𝑛𝑝𝑢𝑡_𝑖𝑑)            ⊲ Initiate Sequence length 𝑆                    2: for 𝑖 ← 1 to 𝐿 do
+ 3: while True do                                                                             𝑀𝑒𝑚𝐺𝑃𝑈 −1.3× (𝑀𝑂 +𝑀𝐷 ) − (𝑖 ×𝐵) ×𝑅×𝐻 ×𝐷
+                                                                                 3:   𝑆𝑖𝑇 = ⌊         4× (𝐿+1+𝛼 −𝑖 ) ×𝑅×𝐻 ×𝐷          ⌋ ⊲ Place last
+ 4:   while 𝑆 ≥ 𝑆𝑇𝐿   and 𝐿𝐶𝑃𝑈 < 𝐿 do
+                      𝐶𝑃𝑈                                                             i layers of KV cache on GPU
+ 5:      𝐾𝑉 _𝐶𝑎𝑐ℎ𝑒_𝑂 𝑓 𝑓 𝑙𝑜𝑎𝑑 (𝐿 − 𝐿𝐶𝑃𝑈 − 1)         ⊲ Offload the KV            4: end for
+         cache of 𝐿𝑎𝑦𝑒𝑟 𝐿−𝐿𝐶𝑃𝑈 −1                                                5: return 𝑆𝑇
+ 6:      𝐿𝐶𝑃𝑈 ← 𝐿𝐶𝑃𝑈 + 1
+ 7:   end while
+ 8:   𝑖𝑛𝑝𝑢𝑡_𝑖𝑑 = 𝐿𝐿𝑀 (𝑖𝑛𝑝𝑢𝑡_𝑖𝑑)                                                 if we want to place all the KV cache on GPU, the current
+ 9:   𝑆 ←𝑆 +1                                                                   sequence length(𝑆) must be smaller than 𝑆𝑇0 . If 𝑆 > 𝑆𝑇0 , we
+10:   if 𝑠𝑡𝑜𝑝_𝑖𝑑 in 𝑖𝑛𝑝𝑢𝑡_𝑖𝑑 then                                               need to offload the KV cache of the final layer to CPU for
+11:      Break                                                                  more GPU memory.
+12:   end if                                                                       During LLM inference, the adaptive memory management
+13: end while
+                                                                                system will offload the KV cache of an additional layer to
+                                                                                CPU DRAM at the exact time point based on these thresholds
+requirements for placing all KV cache the GPU as follows.                       to maintain optimal memory usage. Algorithm 1 shows the
+                                                                                details of LLM inference with adaptive memory management.
+ 𝑀𝑎𝑙𝑙 = 𝑀𝑀𝑜𝑑𝑒𝑙 +𝑀𝐾𝑉 = 1.3(𝑀𝑂 +𝑀𝐷 )+4𝑅(𝐿+1+𝛼)𝑆𝐻 𝐷 (6)                            For example, if the prompt length is between 𝑆𝑇2 and 𝑆𝑇3 at
+   Based on the Equation 6, if we keep all the data on the                      the beginning of LLM inference, the system will offload the
+GPU, we need to make sure that 𝑀𝑎𝑙𝑙 < 𝑀𝑒𝑚𝐺𝑃𝑈 .                                  KV cache of last two layers(e.g., the 31st and 32nd layer in
+   For the resource-constrained environment(e.g., low-end                       Llama3-8B) to CPU DRAM and keep the KV cache of the
+GPU with limited memory(i.e., 𝑀𝑒𝑚𝐺𝑃𝑈 is insufficient) and                       left layers on GPU. As sequence length increases during
+high-end GPU with multi-requests(i.e., 𝑀𝑎𝑙𝑙 is too large)), it                  inference(i.e., line 9 in Algorithm 1) and exceeds 𝑆𝑇3 , the
+is necessary to split the KV cache across different memory                      management system will offload the KV cache of the 30th
+tiers. Specifically, the KV cache of some layers(𝐿𝐺𝑃𝑈 ) should                  layer to CPU. With the adaptive memory management, we
+be stored on the GPU, while the KV cache of others(𝐿𝐶𝑃𝑈 ) are                   maximize the utilization of GPU HBM for better performance
+offloaded to the CPU. However, for the layers where the KV                      and convenient deployment.
+cache is offloaded to the CPU, it is still necessary to reserve
+a small GPU buffer to store KV cache budget(𝐵) loaded from                      7    Evaluation
+the CPU for the computation. Therefore, the total memory                        7.1 Environmental Setup
+requirements in this case can be calculated as follows:                         We evaluate the performance of SpeContext with various
+𝑀𝑝𝑎𝑟𝑡 = 1.3(𝑀𝑂 + 𝑀𝐷 ) + 4𝑅 [(𝐿𝐺𝑃𝑈 + 1 + 𝛼)𝑆 + (𝐿𝐶𝑃𝑈 𝐵)]𝐻 𝐷                      LLMs in two resource-constrained environments, a low-end
+                                                          (7)                   GPU with limited memory in edge and a high-end GPU with
+   To maximize the utilization of the GPU memory, the theo-                     multi-requests in cloud, targeting the long-context input
+retical optimization model thus can be abstracted as follows.                   and reasoning scenarios. We compare the performance with
+                             𝑀𝑎𝑥 (𝐿𝐺𝑃𝑈 );                                       several LLM inference engines and some latest works on KV
+                                                                  (8)           cache optimization in these two environments.
+                      𝑠.𝑡 . 𝑀𝑝𝑎𝑟𝑡 ≤ 𝑀𝑒𝑚𝐺𝑃𝑈
+6.2.1 Implementation Details. As mentioned above, the                                            Table 4. Hardware Platforms
+sequence length grows continuously during long-context                                          High-end GPU                Low-end GPU
+reasoning. Following the objective of maximizing 𝐿𝐺𝑃𝑈 in
+                                                                                              A800, 80GB HBM              RTX 4060 Laptop
+Equation 8, we propose an adaptive memory management                                GPU
+                                                                                                CUDA 12.1              8GB GDDR6, CUDA 12.6
+system that progressively offloads the KV cache of each
+LLM layer to the CPU as the context length increases during                               Intel Xeon Platinum 8358         Intel i7-13650HX
+                                                                                    CPU
+reasoning, thereby freeing additional GPU memory to store                                       1008GB DRAM                  24GB DRAM
+more KV cache in other layers. Our analysis indicates that                        Hardware Platforms. For the scenario of the high-end
+during the inference, the primary factor influencing memory                     GPU with multi-requests in cloud, we choose a workstation
+overhead is the sequence length. Capitalizing on this, we can                   with an NVIDIA A100-80GB GPU. For the scenario of the
+pre-calculate the sequence length thresholds in compilation                     low-end GPU with limited memory in edge, we select the
+detailed in Algorithm 2. The threshold 𝑆𝑇0 represents that                      Lenovo Legion Y7000 PC with NVIDIA RTX 4060 Laptop
+
+
+
+                                                                         1841
+SpeContext                                                                                                                                                         ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+           47                                                      95                                                                     80                                                  95
+                              2WiKiMQA                                                      TriviaQA                                                         2WiKiMQA                                                   TriviaQA
+           45   Full Attn                                          90
+                                                                            Full Attn                                                                                                         94
+                                                                                                                                                                                                        Full Attn
+                                                                                                                                          70   Full Attn
+           43                                                      85                                                                                                                         93
+F1 score
+
+
+
+
+                                                                                                                               F1 score
+                                                                                                                                          60
+           41                                                      80                                                                                                                         92
+                                              Quest                                                        Quest
+                                              ClusterKV                                                    ClusterKV                      50
+           39                                                      75                                                                                                        Ours             91                                      Ours
+                                              ShadowKV                                                     ShadowKV
+                                              Ours                                                         Ours
+           37                                                      70                                                                     40                                                  90
+                  512        1024      2048      4096                         512        1024       2048       4096                              512        1024      2048    4096                        512        1024    2048       4096
+           50                                                           8                                                                 60                                                       17
+                               HotpotQA                                                  Passage count                                                        HotpotQA                                               Passage count
+                Full Attn                                                                                                                      Full Attn                                                Full Attn
+           45                                                           7                                                                 55                                                       16
+
+                                                          Count Score
+
+
+
+
+                                                                                                                                                                                     Count Score
+                                                                            Full Attn
+F1 score
+
+
+
+
+                                                                                                                               F1 score
+           40                                                           6                                                                 50                                                       15
+
+
+           35                                                           5                                                                 45                                                       14
+                            Quest             ClusterKV                                  Quest              ClusterKV
+                                                                                                                                                                             Ours                                                     Ours
+                            ShadowKV          Ours                                       ShadowKV           Ours
+           30                                                           4                                                                 40                                                       13
+                  512        1024      2048      4096                         512        1024       2048       4096                              512        1024      2048    4096                         512        1024    2048      4096
+                            KV Cache Budget                                             KV Cache Budget                                                    KV Cache Budget                                          KV Cache Budget
+
+            Figure 8. Accuracy in LongBench on Llama3.1-8B.                                                                               Figure 9. Accuracy in LongBench on Llama3.1-70B.
+                                                                                                                               SpeContext and baselines on six dimensions(relevance, ac-
+GPU(8GB) and Intel i7-13650HX CPU. Table 4 shows the                                                                           curacy, coherence, clarity, breadth and depth and reading
+detailed hardware specification.                                                                                               experience). Figure 10 shows the average scores, and the de-
+  Baselines. To evaluate the performance, we select the                                                                        tailed score is in Table 6 in Appendix A. During experiments,
+typical LLM framework Huggingface [45] and the famous                                                                          we find that since Quest, ClusterKV and ShadowKV only
+LLM inference fast engine, FlashInfer [51], as the baselines                                                                   preprocess the input and retain the KV pair of the newly
+for full attention. We also select three latest open-sourced                                                                   generated tokens as mentioned in Section 3, the input con-
+works on KV cache optimization, Quest [40], ClusterKV [30]                                                                     tent, which is only about 100 tokens and less than all the KV
+and ShadowKV [39] as the baselines for sparse attention.                                                                       budgets, will be completely selected during inference. There-
+  Models and Benchmarks. We select three LLMs, Llama3.1-                                                                       fore, the generated outputs with different KV budgets are the
+8B [17], DeepSeek-R1-Distill-Llama-8B [29] and Qwen3-8B [49]                                                                   same, resulting in the same scores close to the score of the
+for evaluation in the cloud environment with multiple re-                                                                      full attention, but with poor throughput due to the invalid
+quests on single GPU. We also select a larger LLM, Llama3.1-                                                                   KV optimization. We find that SpeContext might get higher
+70B [17] for evaluation on multi-GPUs in cloud with multiple                                                                   score even than full attention in Figure 10(e.g., Qwen3-8B
+requests. For the edge environment, we select the Reasoning-                                                                   with 4096 budget), and thus we profile the output of SpeCon-
+Llama-3.2-1B [12], which is the reasoning model finetuned on                                                                   text and full attention and point out that the full attention
+Llama3.2-1B [17], due to the limited memory. To evaluate the                                                                   suffers from repetition which significantly hurts its score
+accuracy of SpeContext in two scenarios mentioned above,                                                                       while SpeContext with sparse attention mechanism mitigates
+we select the four tasks(i.e., 2WiKiMQA, TriviaQA, Hot-                                                                        this specific issue, obtaining higher score.
+potQA, and Passage count) from LongBench [2] for the long-
+context input scenario, the LongWriter benchmark [3] for                                                                       8.1.3 Results in Multi-round dialogue Scenario. For
+the long-context reasoning scenario and the ultrachat [11]                                                                     the multi-round dialogue dataset, ultrachat, we evaluate
+dataset for multi-round dialogue scenario.                                                                                     Distill-DeepSeek-Llama3-8B with different KV budgets and
+                                                                                                                               use the GPT-4o to score the output on six dimensions(relevance,
+8           Evaluation                                                                                                         accuracy, coherence, clarity, breadth and depth and reading
+                                                                                                                               experience). The detailed data is shown in Table 7 in Appen-
+8.1 Evaluation on Accuracy                                                                                                     dix A.
+8.1.1 Results in Long-context Input Scenario. Figure 8
+and Figure 9 shows the accuracy results of four tasks in Long-                                                                 8.2 Evaluation on Speedup and Throughput
+Bench on Llama3.1-8B and Llama3.1-70B. Different from ex-                                                                      Based on the accuracy evaluation, we select 2048 as the
+isting work, which selects tokens in each layer, we only select                                                                KV budget for the following evaluation. We only select
+globally important tokens before each inference. Therefore,                                                                    DeepSeek-Distill-Llama-8B and Qwen3-8B for speedup eval-
+when the budget is small (i.e., 512), our accuracy is slightly                                                                 uation because Llama3-8B and DeepSeek-Distill-Llama-8B
+lower than ClusterKV [30]. When the budget reaches 1k,                                                                         share the same model architecture without impact on speed.
+SpeContext surpasses the baselines and reaches the accuracy
+of full attention.                                                                                                             8.2.1 High-end GPU with multiple requests in cloud.
+                                                                                                                               We evaluate SpeContext in two cloud cases, single request
+8.1.2 Results in Long-context Reasoning Scenario. We                                                                           and multiple requests, because Quest and ClusterKV only
+use OpenAI GPT-4o to score the output generated from                                                                           support the single request. Figure 11(a) shows the result of
+
+
+
+                                                                                                                        1842
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                                                  Jiaming Xu et al.
+
+
+                                 Table 5. End-to-end throughput (tokens/s) of high-end GPU with multiple requests in cloud.
+                    Model              [In, Out]     Full Attn(Eager)       Full Attn(Flash Attn)             Full Attn(FlashInfer)                 ShadowKV                          Ours
+                                       [2k, 16k]      45.57(4, 1.00×)         145.88(16, 3.20×)                     490.04(16, 10.75×)           366.74(16, 8.05×)          824.22(32, 18.09×)
+  DeepSeek-Distill                     [2k, 32k]      27.74(4, 1.00×)          87.74(8, 3.16×)                      314.25(8, 11.32×)            240.47(16, 8.67×)          690.59(32, 24.89×)
+    -Llama-8B                          [16k, 2k]          OOM                  87.71(8, 1.00×)                       320.41(8, 3.65×)            168.06(32, 1.92×)           526.47(16, 6.02×)
+                                       [32k, 2k]          OOM                  46.89(6, 1.00×)                       222.06(8, 4.74×)            132.07(64, 2.81×)           346.88(16, 7.40×)
+                                       [2k, 16k]      33.77(4, 1.00×)         129.67(16, 3.83×)                     420.12(16, 12.44×)                       -              592.39(32, 17.54×)
+                                       [2k, 32k]      19.28(4, 1.00×)          62.89(8, 3.26×)                      254.92(8, 13.22×)                        -              424.92(32, 22.03×)
+                Qwen3-8B
+                                       [16k, 2k]          OOM                  60.31(8, 1.00×)                       259.28(8, 4.29×)                        -               336.71(16, 5.58×)
+                                       [32k, 2k]          OOM                  32.56(6, 1.00×)                       156.92(6, 4.81×)                        -               210.75(16, 6.47×)
+                                                                                                                              Full Attn(Eager)        Full Attn(Flash Attn)        FlashInfer
+                                                   Llama3.1-8B                                                                Quest                   ShadowKV                     ClusterKV
+                         Quest           ClusterKV            ShadowKV              Ours                                      Ours
+                4                                                                                                   100
+                3    2.84                                                                                                 (a)      2.71×            3.73×                 1.97×                 2.48×
+                    (Full)
+                2    2.79 2.81 2.77 2.74       2.79 2.81 2.77 2.86      2.79 2.81 2.77 2.95                          50
+                1
+
+
+
+
+                                                                                                                                                                 OOM
+
+
+
+
+                                                                                                                                                                                      OOM
+                                                                                                         Tokens/s
+                                          DeepSeek-Distill-Llama-8B                                                   0
+                5
+                     3.55                                                                                                       [2k,16k]          [2k,32k]             [16k,2k]             [32k,2k]
+                                                                                                                    100
+                3   (Full)                                                                                                (b)
+Average Score
+
+
+
+
+                                                                                                                                   5.18×            10.06×                 7.40×             1.17×
+                     3.51 3.53   3.4    3.43   3.51 3.53   3.4   3.54   3.51 3.53    3.4   3.54
+                1                                                                                                    50
+                                                    Qwen3-8B
+                4                                                                          2.55                                                                                         OOM
+                     2.35          2.05                          2.35                                                 0
+                2   (Full)                                                                                                      [2k,16k]          [2k,32k]             [16k,2k]             [32k,2k]
+                      None Support             None Support             None Support                                               [Input sequence length, Output sequence length]
+                0
+                                                   Llama3.1-70B
+                6                                                                                        Figure 11. End-to-end throughput with a single request (a)
+                     4.61          4.48                          4.52                      4.57
+                4   (Full)                                                                               in the cloud environment (b) in the edge environment.
+                      None Support             None Support             None Support
+                2
+                             1024                      2048                    4096
+                                                                                                         8.2.3 Multi-GPU with abundant resources in cloud.
+                                               KV Cache Budget                                           We evaluate Llama3.1-70B with pagedKV [24] using 8 A800-
+                                                                                                         SXM 80GB. In common multi-GPU parallelism strategies(tensor
+                Figure 10. Average score on LongWriter benchmark.                                        parallelism, pipeline parallelism and expert parallelism), the
+                                                                                                         KV cache remains local to each GPU and does not involve
+                                                                                                         GPU transmission via NVLink or PCIE. Our logical elastic
+a single request case. SpeContext outperforms others in the                                              loading in Section 5 is highly compatible with them. The
+long-context reasoning scenario because SpeContext effec-                                                additional overhead is only the token index([batchsize, 1,
+tively reduces the KV cache in attention computation during                                              heads, budget]) transmission from the DLM device to other
+generation and others use time-consuming preprocessing                                                   devices. Since the other baselines don’t support multi-GPU
+mentioned in Section 3.1, but is slightly slower than FlashIn-                                           inference, we achieve 1.74× with multi-requests compared
+fer in long-context input scenario due to the time-consuming                                             with FlashInfer framework.
+retrieval. The results of another case with multiple requests                                            8.3 Overhead Evaluation
+are shown in Table 5. The grey text is the number of requests
+and the green text is normalized speedup in throughput                                                   The overhead in this paper primarily is the memory and
+compared with full attention using Eager implementation in                                               training of the retrieval head. As described in Section 4, the
+Huggingface. Experiments show that SpeContext achieves                                                   retrieval head is obtained through DLM pruning. The weight
+up to 24.89× and 2.20× throughput improvement compared                                                   of the retrieval head for Llama3-8B or Qwen3-8B is only
+with full attention(eager) and state-of-the-art implementa-                                              about 60MB. And the K cache is analyzed in Section 6. For
+tion FlashInfer [51].                                                                                    the training time, the DLM is provided by EAGLE-3 [28],
+                                                                                                         which only needs 24 hours of training using an RTX 3090
+                                                                                                         GPU for Llama3-8B or Qwen3-8B as described in its paper.
+8.2.2 Low-end GPU with limited memory in edge.
+In the edge scenario, we limit the GPU memory usage to                                                   8.4 Ablation Study
+4GB and compare the performance with full attention(Eagle
+                                                                                                         We select the results of the DeepSeek-Distill-Llama-8B in
+and Flash Attention [10]) and ShadowKV with the offload-
+                                                                                                         Table 5 for the ablation study shown in Figure 12.
+ing strategy. Figure 11(b) shows that SpeContext achieves
+up to 10.06× and 1.17× speedup compared with full atten-                                                 8.4.1 C1: Lightweight retrieval head. SpeContext is de-
+tion(eager) and state-of-the-art implementation ShadowKV [39].                                           veloped based on the FlashInfer framework [51]. The speedup
+
+
+
+                                                                                                  1843
+SpeContext                                                                                                                  ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+      1000
+                         HF            HF+C1         HF+C1+C2          HF+C1+C2+C3                      10    Conclusion
+                              18.09×
+                                                 24.89×                                                 In this paper, we analyze the similarity in information focus
+                      12.07×                                       2.02×
+Tokens/s
+
+
+
+
+           500     8.78×                  14.43×              1.57×                  2.16×              between the distilled language model(DLM) and the original
+                                       9.02×              1.00×                  1.73×
+                 1.00×             1.00×
+                                                                             1.00×                      LLM from the perspective of information theory, and pro-
+             0                                        OOM                  OOM
+                     [2k,16k]             [2k,32k]          [16k,2k]           [32k,2k]
+                                                                                                        pose a novel paradigm that leverages a DLM as the retrieval
+                          [Input sequence length, Output sequence length]                               algorithm for important information selection. We think the
+                                                                                                        methodology and perspective can be extended to further
+             Figure 12. Ablation study of three contributions.                                          studies on machine learning architecture and system design
+                                                                                                        considering information retrieval.
+of C1 mainly comes from two parts, the FlashInfer frame-                                                   Based on the paradigm, we present SpeContext, an algo-
+work, which provides a better backend, and sparse attention,                                            rithm and system co-design for speculative context sparsity
+which enables more parallel requests processing due to lower                                            in long-context reasoning. SpeContext proposes three contri-
+memory requirements on the GPU.                                                                         butions at three levels of algorithm, system and compilation
+                                                                                                        for KV retrieval optimization in long-context reasoning, and
+8.4.2 C2: Asynchronous prefetch dataflow. Due to the
+                                                                                                        aachieves up to 24.89× and 2.19× throughput improvement
+heavy KV transfer in C1, the inference is bound to the mem-
+                                                                                                        in cloud and 10.06× and 8.02× speedup in edge with neg-
+ory access. Therefore, the speedup improvement of asyn-
+                                                                                                        ligible accuracy loss compared with the Huggingface and
+chronous dataflow with elastic loading in Figure 12 is mainly
+                                                                                                        FlashInfer framework, successfully pushing the Pareto fron-
+from the reduction in data volume.
+                                                                                                        tier of accuracy and speedup.
+8.4.3 C3: Adaptive memory management. Guided by
+the theoretical model, we aim to place more KV cache on
+the GPU to minimize the data transfer overhead, achiev-
+                                                                                                        Acknowledgments
+ing speedup improvement in Figure 12 compared with the                                                  This work was sponsored by Shanghai Rising-Star Program
+HuggingFace with complete offloading.                                                                   (No. 24QB2706200) and the National Natural Science Foun-
+                                                                                                        dation of China (No. U21B2031, 62325405).
+9           Future Work
+9.1 DLM Design                                                                                          References
+In Section 4, we propose to use the DLMs from EAGLE [28].                                               [1] Janice Ahn, Rishu Verma, Renze Lou, Di Liu, Rui Zhang, and Wen-
+EAGLE relies on Kullback-Leibler divergence loss (𝐿𝐾𝐿 ) [54]                                                peng Yin. 2024. Large language models for mathematical reasoning:
+to align the output distribution between the student model                                                  Progresses and challenges. arXiv preprint arXiv:2402.00157 (2024).
+                                                                                                        [2] Yushi Bai, Xin Lv, Jiajie Zhang, Hongchang Lyu, Jiankai Tang, Zhidian
+(DLM) and the teacher model (orginal LLM), implicitly guid-                                                 Huang, Zhengxiao Du, Xiao Liu, Aohan Zeng, Lei Hou, Yuxiao Dong,
+ing the student model to align its contextual focus with                                                    Jie Tang, and Juanzi Li. 2024. LongBench: A Bilingual, Multitask Bench-
+the teacher model as illustrated in Section 3. However, we                                                  mark for Long Context Understanding. In Proceedings of the 62nd
+consider that we can make this explicit by adding a new                                                     Annual Meeting of the Association for Computational Linguistics
+loss(𝐿𝑎𝑡𝑡𝑛 ) as follows in the future work.                                                                 (Volume 1: Long Papers). Association for Computational Linguistics,
+                                                                                                            Bangkok, Thailand, 3119–3137. doi:10.18653/v1/2024.acl-long.172
+                                       𝐿 = 𝐿𝐾𝐿 + 𝛼𝐿𝑎𝑡𝑡𝑛                                    (9)          [3] Yushi Bai, Jiajie Zhang, Xin Lv, Linzhi Zheng, Siqi Zhu, Lei Hou, Yux-
+                                                                                                            iao Dong, Jie Tang, and Juanzi Li. 2024. LongWriter: Unleashing
+                                                                                                            10,000+ Word Generation from Long Context LLMs. arXiv preprint
+                                        ∑︁                                                                  arXiv:2408.07055 (2024).
+                         𝐿𝑎𝑡𝑡𝑛 = −             𝐷𝐿𝑀_𝐴𝑡𝑡𝑛_𝑤𝑒𝑖𝑔ℎ𝑡 (𝑖)                        (10)          [4] Normand J Beaudry and Renato Renner. 2011. An intuitive proof of
+                                        𝑖 ∈𝐼                                                                the data processing inequality. arXiv preprint arXiv:1107.0740 (2011).
+                                                                                                        [5] Kyle Bell. 2025. Estimating LLM Inference Memory Requirements.
+                                                                                                            [Online]. https://tensorwave.com/blog/estimating-llm-inference-
+𝐼 = ∪{𝑖𝑑𝑥 |𝑖𝑑𝑥 = 𝑇𝑜𝑝𝐾 (𝐿𝐿𝑀_𝐴𝑡𝑡𝑛_𝑤𝑒𝑖𝑔ℎ𝑡𝑙 ), 𝑙 = 0...𝐿 − 1}                                                   memory-requirements.
+                                                      (11)                                              [6] Iz Beltagy, Matthew E Peters, and Arman Cohan. 2020. Longformer:
+                                                                                                            The long-document transformer. arXiv preprint arXiv:2004.05150
+9.2 Fallback Mechanism                                                                                      (2020).
+                                                                                                        [7] Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde
+In the future work, to avoid the significant accuracy loss, we                                              de Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas
+consider a confidence-based fallback mechanism. We sum                                                      Joseph, Greg Brockman, Alex Ray, Raul Puri, Gretchen Krueger,
+the weights of selected tokens in DLM. If this sum falls below                                              Michael Petrov, Heidy Khlaaf, Girish Sastry, Pamela Mishkin, Brooke
+                                                                                                            Chan, Scott Gray, Nick Ryder, Mikhail Pavlov, Alethea Power, Lukasz
+a predefined threshold(e.g., 0.8), we consider this attention is
+                                                                                                            Kaiser, Mohammad Bavarian, Clemens Winter, Philippe Tillet, Fe-
+not concentrated on a small set of tokens. Therefore, the fall-                                             lipe Petroski Such, Dave Cummings, Matthias Plappert, Fotios
+back mechanism will make LLM revert to the full attention                                                   Chantzis, Elizabeth Barnes, Ariel Herbert-Voss, William Hebgen Guss,
+mechanism.                                                                                                  Alex Nichol, Alex Paino, Nikolas Tezak, Jie Tang, Igor Babuschkin,
+
+
+
+
+                                                                                                 1844
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                               Jiaming Xu et al.
+
+
+     Suchir Balaji, Shantanu Jain, William Saunders, Christopher Hesse, An-                  2023. Efficient memory management for large language model serv-
+     drew N. Carr, Jan Leike, Josh Achiam, Vedant Misra, Evan Morikawa,                      ing with pagedattention. In Proceedings of the 29th symposium on
+     Alec Radford, Matthew Knight, Miles Brundage, Mira Murati, Katie                        operating systems principles. 611–626.
+     Mayer, Peter Welinder, Bob McGrew, Dario Amodei, Sam McCandlish,                   [25] Yinheng Li, Shaofei Wang, Han Ding, and Hang Chen. 2023. Large
+     Ilya Sutskever, and Wojciech Zaremba. 2021. Evaluating Large Lan-                       language models in finance: A survey. In Proceedings of the fourth
+     guage Models Trained on Code. arXiv:2107.03374 [cs.LG]                                  ACM international conference on AI in finance. 374–382.
+ [8] Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Hee-                    [26] Yuhui Li, Fangyun Wei, Chao Zhang, and Hongyang Zhang. 2024.
+     woo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton,                  EAGLE-2: Faster Inference of Language Models with Dynamic Draft
+     Reiichiro Nakano, et al. 2021. Training verifiers to solve math word                    Trees. In Proceedings of the 2024 Conference on Empirical Methods
+     problems. arXiv preprint arXiv:2110.14168 (2021).                                       in Natural Language Processing. 7421–7432.
+ [9] Guohao Dai, Ke Hong, Qiuli Mao, Xiuhong Li, Jiaming Xu, Haofeng                    [27] Yuhui Li, Fangyun Wei, Chao Zhang, and Hongyang Zhang. 2024. EA-
+     Huang, Hongtu Xia, Xuefei Ning, Shengen Yan, Yun Liang, et al. 2025.                    GLE: speculative sampling requires rethinking feature uncertainty.
+     FlashDecoding++Next: High Throughput LLM Inference with Latency                         In Proceedings of the 41st International Conference on Machine
+     and Memory Optimization. IEEE Trans. Comput. (2025).                                    Learning. 28935–28948.
+[10] Tri Dao. 2023. Flashattention-2: Faster attention with better parallelism          [28] Yuhui Li, Fangyun Wei, Chao Zhang, and Hongyang Zhang. 2025.
+     and work partitioning. arXiv preprint arXiv:2307.08691 (2023).                          Eagle-3: Scaling up inference acceleration of large language models
+[11] Ning Ding, Yulin Chen, Bokai Xu, Yujia Qin, Zhi Zheng, Shengding Hu,                    via training-time test. arXiv preprint arXiv:2503.01840 (2025).
+     Zhiyuan Liu, Maosong Sun, and Bowen Zhou. 2023. Enhancing Chat                     [29] Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao Wu, Chengda
+     Language Models by Scaling High-quality Instructional Conversations.                    Lu, Chenggang Zhao, Chengqi Deng, Chenyu Zhang, Chong Ruan, et al.
+     arXiv preprint arXiv:2305.14233 (2023).                                                 2024. Deepseek-v3 technical report. arXiv preprint arXiv:2412.19437
+[12] EpistemeAI. 2025. Introducing Reasoning Llama 3.2 1B: The Next                          (2024).
+     Evolution in Conversational AI. [Online]. https://huggingface.co/                  [30] Guangda Liu, Chengwei Li, Jieru Zhao, Chenqi Zhang, and Minyi Guo.
+     EpistemeAI/Reasoning-Llama-3.2-1B-Instruct-v1.2.                                        2024. Clusterkv: Manipulating llm kv cache in semantic space for
+[13] Mohamed Amine Ferrag, Norbert Tihanyi, and Merouane Debbah.                             recallable compression. arXiv preprint arXiv:2412.03213 (2024).
+     2025. From llm reasoning to autonomous ai agents: A comprehensive                  [31] Tianyang Liu, Canwen Xu, and Julian McAuley. 2023. RepoBench:
+     review. arXiv preprint arXiv:2504.19678 (2025).                                         Benchmarking Repository-Level Code Auto-Completion Systems.
+[14] Yuankun Fu. 2024. LLM Inference Sizing and Performance Guidance.                        arXiv:2306.03091 [cs.CL]
+     [Online]. https://platform.openai.com/docs/models/o3.                              [32] Andrei Andreevich Markov. 1906. Rasprostranenie zakona bol’shih
+[15] Yuankun Fu. 2024. LLM Inference Sizing and Performance Guidance.                        chisel na velichiny, zavisyaschie drug ot druga.             Izvestiya
+     [Online]. https://blogs.vmware.com/cloud-foundation/2024/09/25/llm-                     Fiziko-matematicheskogo obschestva pri Kazanskom universitete 15,
+     inference-sizing-and-performance-guidance/.                                             135-156 (1906), 18.
+[16] Chaochen Gao, Xing Wu, Zijia Lin, Debing Zhang, and Songlin Hu.                    [33] Seyed Iman Mirzadeh, Keivan Alizadeh-Vahid, Sachin Mehta, Carlo C
+     2025. LongMagpie: A Self-synthesis Method for Generating Large-scale                    del Mundo, Oncel Tuzel, Golnoosh Samei, Mohammad Rastegari, and
+     Long-context Instructions. arXiv preprint arXiv:2505.17134 (2025).                      Mehrdad Farajtabar. [n. d.]. ReLU Strikes Back: Exploiting Activa-
+[17] Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav                             tion Sparsity in Large Language Models. In The Twelfth International
+     Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil                           Conference on Learning Representations.
+     Mathur, Alan Schelten, Alex Vaughan, et al. 2024. The llama 3 herd of              [34] Albert Morera. 2024. Foundation models in shaping the future of
+     models. arXiv preprint arXiv:2407.21783 (2024).                                         ecology. Ecological Informatics 80 (2024), 102545.
+[18] Taicheng Guo, Xiuying Chen, Yaqi Wang, Ruidi Chang, Shichao Pei,                   [35] Niklas Muennighoff, Zitong Yang, Weijia Shi, Xiang Lisa Li, Li Fei-
+     Nitesh V Chawla, Olaf Wiest, and Xiangliang Zhang. 2024. Large lan-                     Fei, Hannaneh Hajishirzi, Luke Zettlemoyer, Percy Liang, Emmanuel
+     guage model based multi-agents: A survey of progress and challenges.                    Candès, and Tatsunori Hashimoto. 2025. s1: Simple test-time scaling.
+     arXiv preprint arXiv:2402.01680 (2024).                                                 arXiv preprint arXiv:2501.19393 (2025).
+[19] Shibo Hao, Yi Gu, Haotian Luo, Tianyang Liu, Xiyan Shao, Xinyuan                   [36] Soumen Pal, Manojit Bhattacharya, Md Aminul Islam, and Chiranjib
+     Wang, Shuhua Xie, Haodi Ma, Adithya Samavedhi, Qiyue Gao, et al.                        Chakraborty. 2023. ChatGPT or LLM in next-generation drug discovery
+     2024. Llm reasoners: New evaluation, library, and analysis of step-                     and development: pharmaceutical and biotechnology companies can
+     by-step reasoning with large language models. arXiv preprint                            make use of the artificial intelligence-based device for a faster way
+     arXiv:2404.05221 (2024).                                                                of drug discovery and development. International Journal of Surgery
+[20] Ke Hong, Guohao Dai, Jiaming Xu, Qiuli Mao, Xiuhong Li, Jun Liu,                        109, 12 (2023), 4382–4384.
+     Kangdi Chen, Yuhan Dong, and Yu Wang. 2024. Flashdecoding++:                       [37] Bowen Peng, Jeffrey Quesnelle, Honglu Fan, and Enrico Shippole.
+     Faster large language model inference with asynchronization, flat                       [n. d.]. YaRN: Efficient Context Window Extension of Large Lan-
+     gemm optimization, and heuristics. Proceedings of Machine Learning                      guage Models. In The Twelfth International Conference on Learning
+     and Systems 6 (2024), 148–161.                                                          Representations.
+[21] Alexander Kraskov, Harald Stögbauer, and Peter Grassberger. 2004.                  [38] Claude E Shannon. 1948. A mathematical theory of communication.
+     Estimating mutual information. Physical Review E—Statistical,                           The Bell system technical journal 27, 3 (1948), 379–423.
+     Nonlinear, and Soft Matter Physics 69, 6 (2004), 066138.                           [39] Hanshi Sun, Li-Wen Chang, Wenlei Bao, Size Zheng, Ningxin Zheng,
+[22] Solomon Kullback and Richard A Leibler. 1951. On information and                        Xin Liu, Harry Dong, Yuejie Chi, and Beidi Chen. 2024. Shadowkv:
+     sufficiency. The annals of mathematical statistics 22, 1 (1951), 79–86.                 Kv cache in shadows for high-throughput long-context llm inference.
+[23] Tom Kwiatkowski, Jennimaria Palomaki, Olivia Redfield, Michael                          arXiv preprint arXiv:2410.21465 (2024).
+     Collins, Ankur Parikh, Chris Alberti, Danielle Epstein, Illia Polosukhin,          [40] Jiaming Tang, Yilong Zhao, Kan Zhu, Guangxuan Xiao, Baris Kasikci,
+     Jacob Devlin, Kenton Lee, et al. 2019. Natural questions: a benchmark                   and Song Han. 2024. Quest: Query-aware sparsity for efficient long-
+     for question answering research. Transactions of the Association for                    context llm inference. arXiv preprint arXiv:2406.10774 (2024).
+     Computational Linguistics 7 (2019), 453–466.                                       [41] Gemma Team, Aishwarya Kamath, Johan Ferret, Shreya Pathak, Nino
+[24] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin                             Vieillard, Ramona Merhej, Sarah Perrin, Tatiana Matejovicova, Alexan-
+     Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.                         dre Ramé, Morgane Rivière, et al. 2025. Gemma 3 technical report.
+                                                                                             arXiv preprint arXiv:2503.19786 (2025).
+
+
+
+
+                                                                                 1845
+SpeContext                                                                                               ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+[42] Kimi Team, Yifan Bai, Yiping Bao, Guanduo Chen, Jiahao Chen,                         Qwen3 technical report. arXiv preprint arXiv:2505.09388 (2025).
+     Ningxin Chen, Ruijue Chen, Yanru Chen, Yuankun Chen, Yutian                     [50] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William W.
+     Chen, et al. 2025. Kimi k2: Open agentic intelligence. arXiv preprint                Cohen, Ruslan Salakhutdinov, and Christopher D. Manning. 2018.
+     arXiv:2507.20534 (2025).                                                             HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question
+[43] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Alma-                   Answering. In Conference on Empirical Methods in Natural Language
+     hairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal                     Processing (EMNLP).
+     Bhargava, Shruti Bhosale, et al. 2023. Llama 2: Open foundation and             [51] Zihao Ye, Lequn Chen, Ruihang Lai, Wuwei Lin, Yineng Zhang,
+     fine-tuned chat models. arXiv preprint arXiv:2307.09288 (2023).                      Stephanie Wang, Tianqi Chen, Baris Kasikci, Vinod Grover, Arvind
+[44] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion                    Krishnamurthy, et al. [n. d.]. FlashInfer: Efficient and Customizable
+     Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. At-                 Attention Engine for LLM Inference Serving. In Eighth Conference on
+     tention is all you need. Advances in neural information processing                   Machine Learning and Systems.
+     systems 30 (2017).                                                              [52] Weizhi Zhang, Yangning Li, Yuanchen Bei, Junyu Luo, Guancheng
+[45] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond,                           Wan, Liangwei Yang, Chenxuan Xie, Yuyao Yang, Wei-Chieh Huang,
+     Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Remi                       Chunyu Miao, et al. 2025. From Web Search towards Agentic Deep
+     Louf, Morgan Funtowicz, et al. 2020. Transformers: State-of-                         Research: Incentivizing Search with Reasoning Agents. arXiv preprint
+     the-art natural language processing. In Proceedings of the 2020                      arXiv:2506.18959 (2025).
+     conference on empirical methods in natural language processing:                 [53] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xu-
+     system demonstrations. 38–45.                                                        anzhe Liu, Xin Jin, and Hao Zhang. 2024. {DistServe}: Disaggregating
+[46] Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han, and Mike                        prefill and decoding for goodput-optimized large language model serv-
+     Lewis. 2023. Efficient streaming language models with attention sinks.               ing. In 18th USENIX Symposium on Operating Systems Design and
+     arXiv preprint arXiv:2309.17453 (2023).                                              Implementation (OSDI 24). 193–210.
+[47] Jiaming Xu, Jiayi Pan, Yongkang Zhou, Siming Chen, Jinhao Li,                   [54] Yongchao Zhou, Kaifeng Lyu, Ankit Singh Rawat, Aditya Krishna
+     Yaoxiu Lian, Junyi Wu, and Guohao Dai. 2025. Specee: Acceler-                        Menon, Afshin Rostamizadeh, Sanjiv Kumar, Jean-François Kagy, and
+     ating large language model inference with speculative early exit-                    Rishabh Agarwal. 2023. Distillspec: Improving speculative decoding
+     ing. In Proceedings of the 52nd Annual International Symposium on                    via knowledge distillation. arXiv preprint arXiv:2310.08461 (2023).
+     Computer Architecture. 467–481.
+[48] Xiaohan Xu, Ming Li, Chongyang Tao, Tao Shen, Reynold Cheng,
+     Jinyang Li, Can Xu, Dacheng Tao, and Tianyi Zhou. 2024. A survey
+                                                                                     A     LongWriter Benchmark
+     on knowledge distillation of large language models. arXiv preprint              We provide the detailed score on LongWriter Benchmark
+     arXiv:2402.13116 (2024).                                                        in Table 6 to support the description in Section 8.1.2, and
+[49] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo                provide the detailed score on ultrachat dataset in Table 7 to
+     Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et al. 2025.
+                                                                                     support the decription in Section 8.1.3.
+
+
+
+
+                                                                              1846
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                               Jiaming Xu et al.
+
+
+                                      Table 6. Detailed Accuracy Results on LongWriter Benchmark
+
+Metric         KV Budget     Relevance↑     Accuracy↑     Coherence↑     Clarity↑     Breadth and Depth↑     Reading Experience↑      Average↑
+ Llama3-8B
+Full                -            3.73           4.07         2.21           2.64             2.625                   1.77                2.84
+Quest                            3.69           3.98         2.22           2.51             2.59                    1.76                2.79
+ClusterKV                        3.71           4.02         2.20           2.61             2.61                    1.72                2.81
+                  1024
+ShadowKV                         3.65           3.98         2.18           2.59             2.54                    1.69                2.77
+Ours                             3.36           3.85          2.3           2.58             2.55                    1.79                2.74
+Quest                            3.69           3.98         2.22           2.51             2.59                    1.76                2.79
+ClusterKV                        3.71           4.02         2.20           2.61             2.61                    1.72                2.81
+                  2048
+ShadowKV                         3.65           3.98         2.18           2.59             2.54                    1.69                2.77
+Ours                             3.49           3.86         2.33           2.73             2.78                    1.94                2.86
+Quest                            3.69           3.98         2.22           2.51             2.59                    1.76                2.79
+ClusterKV                        3.71           4.02         2.20           2.61             2.61                    1.72                2.81
+                  4096
+ShadowKV                         3.65           3.98         2.18           2.59             2.54                    1.69                2.77
+Ours                             3.67           3.7          2.56           2.79             2.72                    2.25                2.95
+ DeepSeek-Distill-Llama-8B
+Full             -         4.02                 4.22         3.36           3.42             3.31                    3.02                3.55
+Quest                            3.82           3.91         3.43           3.51             3.19                     3.2                3.51
+ClusterKV                        4.02           3.95         3.33           3.55             3.18                    3.17                3.53
+                  1024
+ShadowKV                         3.82           3.88         3.20           3.31             3.09                    3.10                3.40
+Ours                             3.81           4.04         3.33           3.39             3.03                    3.02                3.43
+Quest                            3.82           3.91         3.43           3.51             3.19                     3.2                3.51
+ClusterKV                        4.02           3.95         3.33           3.55             3.18                    3.17                3.53
+                  2048
+ShadowKV                         3.82           3.88         3.20           3.31             3.09                    3.10                3.40
+Ours                             3.96           3.94         3.47           3.57             3.17                    3.23                3.54
+Quest                            3.82           3.91         3.43           3.51             3.19                     3.2                3.51
+ClusterKV                        4.02           3.95         3.33           3.55             3.18                    3.17                3.53
+                  4096
+ShadowKV                         3.82           3.88         3.20           3.31             3.09                    3.10                3.40
+Ours                             3.96           4.02         3.45           3.55             3.08                    3.17                3.54
+ Qwen3-8B
+Full                -            2.98           3.3          1.85           2.05             2.36                    1.58                2.35
+                  1024           2.67           2.61         1.67           1.78             2.02                    1.52                2.05
+Ours              2048           2.91           3.38         1.75           2.05             2.37                    1.63                2.35
+                  4096           3.01           3.01         2.18           2.33             2.83                    1.93                2.55
+ Llama3.1-70B
+Full                -            4.91           4.69         4.79           4.71             4.12                    4.48                4.62
+                  1024           5.00           4.78         4.66           4.64             3.60                    4.20                4.48
+Ours              2048           4.75           4.75         4.63           4.75             3.88                    4.38                4.52
+                  4096           5.00           5.00         4.66           4.67             3.88                    4.22                4.57
+
+                                        Table 7. Detailed Accuracy Results on Ultrachat Dataset
+  Metric    KV Budget      Relevance↑     Accuracy↑     Coherence↑     Clarity↑     Breadth and Depth↑     Reading Experience↑     Average↑
+   DeepSeek-Distill-Llama-8B
+  Full        -          4.76                4.60          4.24          4.00              4.35                   4.05                4.60
+                1024           4.21          4.05          3.75          3.79               4.0                   3.40                3.90
+  Ours          2048           4.75          4.35          4.03          3.75              4.22                   3.80                4.20
+                4096           5.00          4.19          4.21          4.25              4.55                   4.22                4.41
+
+
+
+
+                                                                     1847

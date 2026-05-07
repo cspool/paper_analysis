@@ -1,0 +1,1609 @@
+                                            RoMe: Row Granularity Access Memory System
+                                                    for Large Language Models
+                                                     Hwayong Nam†∗ , Seungmin Baek†∗ , Jumin Kim† , Michael Jaemin Kim‡ , and Jung Ho Ahn†
+                                                                                            Seoul National University† , Meta‡
+                                                                    †
+                                                                        {nhy4916, qortmdalss, tkfkaskan1, gajh}@snu.ac.kr, ‡ michael604@meta.com
+
+
+                                           Abstract—Modern HBM-based memory systems have evolved             of memory reads (RDs) target the same row-buffer, the
+                                        over generations while retaining cache line granularity accesses.    processor-side memory controller (MC) can issue back-to-back
+                                        Preserving this fine granularity necessitated the introduction       RDs to saturate the channel bandwidth without the bubbles
+                                        of bank groups and pseudo channels. These structures expand
+                                        timing parameters and control overhead, significantly increasing     induced by ACT/PRE.
+arXiv:2512.01541v1 [cs.AR] 1 Dec 2025
+
+
+
+
+                                        memory controller scheduling complexity. Large language models          Instead of issuing multiple consecutive read commands, we
+                                        (LLMs) now dominate deep learning workloads, streaming con-          ask: why can’t DRAM access granularity simply increase to
+                                        tiguous data blocks ranging from several kilobytes to megabytes      match the row-level granularity in this scenario? However,
+                                        per operation. In a conventional HBM-based memory system,            memory access patterns vary, and increasing the minimum
+                                        these transfers are fragmented into hundreds of 32B cache line
+                                        transactions. This forces the memory controller to employ un-        DRAM access granularity can cause overfetch problem by
+                                        necessarily intricate scheduling, leading to growing inefficiency.   reading unnecessary data, degrading effective bandwidth [59].
+                                           To address this problem, we propose RoMe. RoMe accesses           Thus, conventional DRAM access granularity is set to match
+                                        DRAM at row granularity and removes columns, bank groups,            the cache line size of a processor (e.g., 32 B or 64 B).
+                                        and pseudo channels from the memory interface. This design              Such a cache-line-sized access granularity complicates the
+                                        simplifies memory scheduling, thereby requiring fewer pins per
+                                        channel. The freed pins are aggregated to form additional            memory controller (MC) architecture. To support column-level
+                                        channels, increasing overall bandwidth by 12.5% with minimal         accesses (i.e., RDs/WRs), an MC must maintain bank states
+                                        extra pins. RoMe demonstrates how memory scheduling logic can        and timing parameters. Moreover, it must operate many banks
+                                        be significantly simplified for representative LLM workloads, and    in parallel to hide the latency overhead of ACT and PRE
+                                        presents an alternative approach for next-generation HBM-based       commands [3], [41], [60]. Further complexity arises from the
+                                        memory systems achieving increased bandwidth with minimal
+                                        hardware overhead.                                                   need to determine when to issue PRE after ACT based on
+                                                                                                             access patterns (i.e., the page policy [20], [60]).
+                                                                 I. I NTRODUCTION                               The HBM hierarchy also becomes increasingly complex due
+                                           High bandwidth memory (HBM) has emerged as a key com-             to the fine-grained access granularity. While HBM bandwidth
+                                        ponent of high-performance computing systems [28], [46]–             has improved steadily [8], [27], [33], [56], the bandwidth per
+                                        [48] driving the transformer-based artificial intelligence (AI)      bank has remained nearly unchanged. As each bank operates
+                                        proliferation [70]. The high bandwidth of HBM is required to         at the DRAM core frequency and transfers data at a fixed
+                                        keep pace with the compute capabilities of GPUs [48], [63],          access granularity, memory bandwidth can fundamentally be
+                                        TPUs [16], [28], and other AI accelerators [14], [30], and           increased in only two ways: 1) by enlarging the access
+                                        satisfy the bandwidth-bound nature of the generation stages of       granularity or 2) by increasing the DRAM core frequency.
+                                        the transformers [19], [55], [77]. A single cube of HBM4 [27]        However, the former is constrained by cache line size, and
+                                        feeds 64 pseudo channels, each of which has 32 8 Gbps data           physical limitations prevent significantly increasing the latter.
+                                        pins, constituting a total of 2 TB/s bandwidth.                         To overcome these limits, additional hierarchical structures,
+                                           Saturating the immense HBM channel bandwidth requires             such as bank group and pseudo channel (PC), were introduced
+                                        efficient row-buffer utilization. A DRAM bank is composed            to boost bandwidth [23], [24]. Bank groups combine multiple
+                                        of a 2-dimensional array of DRAM cells and indexed by row            banks and deliver data to the I/O at a higher frequency,
+                                        and column addresses. DRAM cell access latency is slow as it         allowing transfers from different bank groups to overlap while
+                                        requires preceding precharge (PRE) and activation (ACT). This        maintaining cache line granularity. PCs increase the number
+                                        latency is too high to saturate such a huge channel bandwidth.       of channels by reducing each channel’s width, improving
+                                        To amortize those overheads, the bank prefetches an entire row       bandwidth without increasing both DRAM core frequency
+                                        into the row-buffer, which is orders of magnitude wider              and access granularity. Unlike previous generations, HBM4
+                                        than the conventional DRAM access granularity. This strategy         doubles total bandwidth primarily by doubling I/Os (and thus
+                                        is highly effective in saturating the DRAM channel bandwidth         PCs) without modifying the per-channel width. While effec-
+                                        when there exists a large spatial locality in the memory access      tive in raising bandwidth, these mechanisms add significant
+                                        pattern (e.g., streaming access). For example, when a series         complexity to memory controller scheduling and timing.
+                                                                                                                We challenge the need for such a conventional DRAM
+                                          ∗ Both authors contributed equally to the paper.                   interface paradigm in the era of transformer-based Large
+                                                                                                                                                                                                                          RoMe MC maintains only three bank states and fewer timing
+                                                                                                                                                                                                                          parameters, as the DRAM row-access command sequence is
+                                                                                                                                                                                                                          internally handled by the command generator that manages
+ Data size (B)
+
+
+
+
+                                                                                                                                                                                                                          conventional timing parameters. Two or fewer VBAs operate
+                                                                                                                                                                                                                          and up to three undergo refresh simultaneously; thus, just five
+                                                                                                                                                                                                                          bank FSMs need to be maintained. This simplification enables
+                                                                                                                                                                                                                          a smaller request queue, as fewer in-flight requests need to be
+                                                                                                                                                                                                                          tracked. Finally, as one VBA can provide maximum bandwidth,
+                 Weight
+
+
+
+
+                                                   Weight
+
+
+
+
+                                                                                    Weight
+
+
+
+
+                                                                                                                      Weight
+
+
+
+
+                                                                                                                                                       Weight
+
+
+
+
+                                                                                                                                                                                         Weight
+                           Activation
+
+
+
+
+                                                            Activation
+
+
+
+
+                                                                                              Activation
+
+
+
+
+                                                                                                                               Activation
+
+
+
+
+                                                                                                                                                                 Activation
+
+
+
+
+                                                                                                                                                                                                  Activation
+                                                                                                                                                                                                                          the scheduling algorithm is greatly simplified, focusing solely
+                                        KV cache
+
+
+
+
+                                                                         KV cache
+
+
+
+
+                                                                                                           KV cache
+
+
+
+
+                                                                                                                                            KV cache
+
+
+
+
+                                                                                                                                                                              KV cache
+
+
+
+
+                                                                                                                                                                                                               KV cache
+                                                                                                                                                                                                                          on interleaving across VBAs.
+     Stage                Prefill                      Decode                                Prefill                      Decode                                Prefill                      Decode                          We evaluate RoMe using three representative LLMs: Grok
+     Model                      DeepSeek-V3                                                                Grok 1                                                             Llama 3                                     1 [73], DeepSeek-V3 [12], and Llama 3 [13]. When serving
+                                                                                                                                                                                                                          LLM workloads, RoMe delivers higher performance than
+Fig. 1. Distribution of weight, activation, and KV cache size of DeepSeek-                                                                                                                                                conventional HBM-based memory systems with significantly
+V3 [12], Grok 1 [73], and Llama 3 [13] in the prefill and decode stages.
+                                                                                                                                                                                                                          lower hardware overhead, while also providing modest gains in
+                                                                                                                                                                                                                          energy efficiency. This demonstrates that, under the sequential
+Language Models (LLMs). While traditional systems and                                                                                                                                                                     and bulk access characteristics of LLM workloads, adopt-
+data centers will persist, warehouse-scale systems running                                                                                                                                                                ing row-level memory access does not degrade performance.
+homogeneous applications of LLM inference (e.g., an AI                                                                                                                                                                    While minor overheads may arise from overfetch and load
+factory [49]) are becoming widespread. LLMs mostly consist                                                                                                                                                                imbalance, their impact is negligible.
+of simple general matrix-matrix or matrix-vector multipli-                                                                                                                                                                   The key contributions of this paper are as follows:
+cation (GEMM/GEMV) and element-wise operations [55].                                                                                                                                                                      • We leverage the sequential and bulky memory access pat-
+This is true even with state-of-the-art architectures, such as                                                                                                                                                               terns of LLMs to propose a memory interface based on row-
+multi-head latent attention (MLA), grouped query attention                                                                                                                                                                   level access granularity.
+(GQA), or mixture-of-experts (MoE) [37], [68], [73]. These                                                                                                                                                                • As the cache-line-sized access granularity is no longer
+models typically access tens of megabytes of data at once,                                                                                                                                                                   mandatory, we introduce a new bank architecture called
+far exceeding the size of conventional cache lines (Figure 1).                                                                                                                                                               virtual bank, which eliminates the need for bank groups
+Unlike the workloads with irregular or strided patterns, LLM                                                                                                                                                                 and pseudo channels.
+operations exhibit highly sequential memory access patterns.                                                                                                                                                              • A simplified memory controller optimized for the RoMe in-
+   By exploiting the memory access patterns of LLMs, we                                                                                                                                                                      terface is designed to minimize control overhead associated
+propose RoMe, a Row-granularity-access Memory system de-                                                                                                                                                                     with complex bank state tracking and scheduling, thereby
+signed to offer a simple and scalable memory system for LLM                                                                                                                                                                  reducing the area of the scheduling logic.
+serving. First, RoMe replaces a column-level access interface                                                                                                                                                             • RoMe presents a method for expanding memory channels
+with a row-level one. The sequence of DRAM commands                                                                                                                                                                          with minimal hardware overhead, thereby improving the
+required to access all data stored in a row is simplified into                                                                                                                                                               performance of LLM workloads.
+two commands: RD_row and WR_row. Second, we propose a
+new bank architecture, virtual bank (VBA), to further simplify                                                                                                                                                                      II. C ONVENTIONAL MEMORY SYSTEMS
+the interface by removing the bank group and PC in the MC-
+DRAM interface. Given that memory accesses now operate at                                                                                                                                                                 A. Cache-Line-Sized DRAM Access Granularity
+the row granularity, there is no longer a need to expose bank                                                                                                                                                                Main-memory technologies such as DDR5 [26] and HBM4,
+group and PC to the MC. Accordingly, we design a single                                                                                                                                                                   commonly integrated into modern CPUs and GPUs, are de-
+VBA to achieve maximum bandwidth without requiring any                                                                                                                                                                    signed with access granularities that align with or are smaller
+modification to the internal DRAM structure (§IV).                                                                                                                                                                        than processor cache line sizes. Specifically, HBM4 is opti-
+   Third, we introduce a command generator that decom-                                                                                                                                                                    mized for 32B accesses, aligning with the cache line size of
+poses each row-level command into a predefined sequence                                                                                                                                                                   GPUs, while DDR5 supports 64 B accesses, consistent with
+of conventional DRAM commands. This enables the integra-                                                                                                                                                                  CPU cache line sizes. Although DRAM rows are several
+tion of additional HBM channels, improving overall mem-                                                                                                                                                                   kilobytes in size, these architectures enable fine-grained access
+ory bandwidth. Finally, we demonstrate that the MC can                                                                                                                                                                    at the column level, significantly smaller than the row size.
+be significantly simplified (§V-A). While conventional MCs                                                                                                                                                                   The adoption of cache-line-sized access granularity in main-
+rely on numerous data structures related to bank states and                                                                                                                                                               memory systems serves two primary purposes. First, aligning
+scheduling mechanisms to efficiently manage column-level                                                                                                                                                                  the access granularity with the processor’s cache line size
+commands, RoMe enables a significantly simpler and more                                                                                                                                                                   minimizes data overfetch, thereby reducing unnecessary band-
+scalable memory system design.                                                                                                                                                                                            width usage and energy consumption by transferring only the
+   In a RoMe MC, five components are simplified: bank state,                                                                                                                                                              data required by the program it executes. Second, it enables
+timing parameter, the number of bank finite-state machines                                                                                                                                                                flexibility in handling diverse memory access patterns. This
+(FSMs), request queue size, and scheduling algorithm. The                                                                                                                                                                 design effectively supports both sequential access patterns with
+            Channel width
+            widthrate (Gbps)
+     ChannelData        Data rate (Gbps)                                              / DQDQ
+                                                                                  C/A per  pins
+                                                                                              pins    C/A bandwidth
+                                                                                                                                                                       TABLE I
+                  frequency(MHz)
+            Corefrequency
+          Core              (MHz)
+10                                140                                          0.30                           160
+                                                                                                                                                             S YMBOLS AND TERMINOLOGIES
+
+
+
+
+                                                                                                                    C/A bandwidth (GB/s)
+                                     Channel width (bit)
+
+                                                                    pinspins
+                                  120                                          0.25                           140
+ 8                                                                                                            120
+                                                                                                                                            Symbol          Description
+
+
+
+
+                                                                DQDQ
+                                  100                                          0.20
+ 6                                                                                                            100                           AGbank          Access granularity of a bank.
+                                  80
+
+
+
+
+                                                           C/A/ per
+                                                                               0.15                           80                            AGM C           Access granularity of a memory controller.
+ 4                                60
+                                                                               0.10                           60
+
+
+
+
+                                                           C/A
+                                  40                                                                          40
+ 2                                                                             0.05
+                                  20                                                                          20
+ 0                                0                                            0.00                           0                            which led to the evolution of HBM toward narrower and more
+        HBM2E
+
+
+
+        HBM3E
+     HBM1
+         HHBM2
+
+
+
+
+          HBM3
+
+
+
+                             HBM4
+
+
+
+
+                                                                                 HBM2E
+
+
+                                                                                 HBM3E
+                                                                                  HHBM1
+                                                                                  BHBM2
+
+
+
+                                                                                   HBM3
+
+
+                                                                                   HBM4
+                                                                                                                                           channels. Figure 2(a) illustrates this trend, showing a decrease
+             2E
+
+
+
+             3E
+       1
+
+              2
+
+
+
+              3
+
+
+
+              4
+
+
+
+
+                                                                                        1
+                                                                                 H M2
+
+
+                                                                                 H M3
+
+
+                                                                                        4
+                                                                                  H E
+
+
+                                                                                  H E
+   BM
+
+           BM
+
+
+
+           BM
+
+
+
+           BM
+
+
+
+
+                                                                                    BM
+
+
+
+
+                                                                                    BM
+                                                                                      2
+
+
+                                                                                      3
+          BM
+
+
+
+          BM
+
+
+
+
+                                                                                   M
+
+
+                                                                                  BM
+                                                                                    B
+
+
+                                                                                    B
+  H
+
+     H
+
+
+
+          H
+
+
+
+          H
+
+
+
+                                                                                                                                           in channel width and a corresponding increase in the number
+
+
+                                                                                H
+         H
+
+
+
+
+                (a)                                                                             (b)                                        of channels across successive HBM generations [22], [24],
+Fig. 2. (a) Trends in data rate, core frequency, and channel width, and (b)                                                                [25]. In particular, each new generation of HBM has halved
+growth of C/A pin overhead across HBM generations.                                                                                         the channel width while doubling the number of channels. As
+                                                                                                                                           the data rate increases, the bandwidth per channel remains
+high spatial locality, such as those LLMs, and random access                                                                               constant even with the narrower channel. Notably, HBM4
+patterns characterized by low spatial locality.                                                                                            scales the bandwidth by doubling the number of channels—
+   However, accessing memory at the cache line granularity                                                                                 therefore doubling the external I/O—without altering the
+introduces significant complexity in memory system design.                                                                                 channel width [27]. This approach enables bandwidth scaling
+To achieve high performance, memory controllers (MCs)                                                                                      by populating more channels while maintaining per-channel
+should implement sophisticated scheduling algorithms that                                                                                  bandwidth and preserving AGbank and AGM C .
+account for a wide range of timing parameters and dynamic                                                                                     However, these additional hierarchies exacerbate the
+bank states. Prior works have explored key components of                                                                                   scheduling complexity. To fully utilize DRAM bandwidth, an
+this design space—including address mapping [82], page                                                                                     MC must issue memory requests to different bank groups (i.e.,
+policies [20], [29], and scheduling policies [31], [32], [40],                                                                             bank group interleaving) and PCs. This requires the MC to
+[41], [44], [60]—which further contribute to the complexity                                                                                continuously track the state of all banks to identify those that
+of MC architecture.                                                                                                                        are ready to accept new DRAM commands. As a result, the
+                                                                                                                                           MC must employ more sophisticated scheduling mechanisms
+B. Bank Group & Pseudo Channel                                                                                                             to effectively leverage the complex DRAM hierarchy.
+   Maintaining cache-line-sized access granularity adds com-                                                                                  As the channel width narrows with each HBM generation,
+plexity to the DRAM hierarchy, which in turn further increases                                                                             the overhead associated with command/address (C/A) pins
+the scheduling burden on the MC. While DRAM bandwidth                                                                                      increases. HBM defines separate pins for row and column
+has steadily improved, maintaining fine-grained cache line                                                                                 commands; for example, in HBM4, each 64-bit data channel
+access necessitated additional internal structures, specifically                                                                           requires 10 row command pins and 8 column command
+bank groups and pseudo channels (PCs). As shown in Fig-                                                                                    pins. Moreover, populating more PCs proportionally increases
+ure 2(a), although the external data rate of DRAM devices has                                                                              independent C/A pins, raising the C/A-to-DQ pin ratio (see
+consistently increased, the DRAM core frequency has shown                                                                                  Figure 2(b)). From HBM1 and HBM2/2E to HBM3/3E and
+modest growth. This limited scalability of core frequency is                                                                               HBM4, this ratio has nearly doubled. Further, the bandwidth
+primarily due to the high energy and area overheads associated                                                                             requirements of C/A pins have steadily increased across gener-
+with its increase [51]. To meet the data rate demands under                                                                                ations, contributing to the rising overhead of the C/A interface.
+these constraints, a conventional approach has been to increase                                                                            Adopting these same techniques for future HBM generations
+the amount of data fetched internally in a single access.                                                                                  with higher pin rates and bandwidths may be unsustainable.
+   However, the increase in data rate leads to a mismatch
+between the access granularity and cache line size, prompting                                                                              C. HBM Architecture
+the introduction of the bank group structure [23]. Instead                                                                                    HBM stacks multiple DRAM dies with a logic die at the
+of doubling the amount of data fetched from a single bank                                                                                  bottom, which are connected by through silicon vias (TSVs),
+(AGbank ), bank groups enable bandwidth scaling by alternat-                                                                               as shown in Figure 3. Each HBM device is composed of mul-
+ing data fetches from banks in different bank groups at inter-                                                                             tiple channels—up to 32 channels in the case of HBM4 [27]—
+vals of tCCDS (typically equal to tCCDL/2), while preserving                                                                               and forms a Stack ID (SID, equivalent to rank in conventional
+the cache-line-sized access granularity (AGM C ). This access                                                                              DRAM standards) for every four DRAM dies, supporting up
+strategy is referred to as bank group interleaving. Each bank                                                                              to four SIDs per device. Each channel uses the SID to identify
+continues to operate at the DRAM core frequency (defined by                                                                                which group of DRAM dies it is accessing. Each channel
+tCCDL) and fetches data at the cache line granularity. Thus,                                                                               consists of two PCs, a design unique to HBM. Two PCs in
+this mechanism allows effective scaling of the DRAM data                                                                                   each channel share C/A pins but split the data pins evenly.
+rate without increasing AGbank or AGM C . Terminologies are                                                                                The two PCs can operate independently, enabling concurrent
+summarized in Table I.                                                                                                                     data transfers and maximizing throughput.
+   Despite the introduction of the bank group structure, the                                                                                  Data transfer from individual banks within the DRAM dies
+demand for even higher external bandwidth has persisted,                                                                                   to the logic die occurs as follows. Each bank fetches 256 bits
+                                                                                                                                                               Memory controller (MC)
+                                           Pseudo                     Pseudo
+                                          channel 0                  channel 1                                       RD req                     RD req queue           Command scheduler
+
+
+
+
+                                                                                           Interconnection network
+
+
+
+
+                                                                                                                              Address mapping
+                                           BA 0                                                                                                                       Timing         Refresh          DRAM
+                                                                           BK-BUS
+
+
+
+
+                                                                                                                                                                                                                  DRAM
+                                                                                                                                                                    parameters      scheduler        command
+                                           BA 1                            0.5GHz
+                     TSVs                 I/O ctrl                        BG 0
+                                                                                                                                                                        Request scheduler
+                                           BA 2                                                                  WR req                         WR req queue
+         DRAM die                          BA 3                    256b    256b
+  SID1
+
+
+
+
+                                           BA 4
+
+
+
+
+                                                      Peripheral
+
+
+
+
+                                                                                  BG-BUS
+                                                                                   1GHz
+                                           BA 5                                                                                                            Bank 0 state                          Bank N-1 state
+                                                                                                                                                            Bank FSM      (N = 16, 32, 48, 64)     Bank FSM
+                                          I/O ctrl                        BG 1
+  SID0
+
+
+
+
+                                           BA 6
+                                           BA 7
+                                         GBUS Ctrl                   GBUS Ctrl                                                Fig. 4. Conventional memory controller architecture.
+         Logic die
+                                          DWORD                    256b      GBUS
+                                                                                                                                                             TABLE II
+                                         GBUS Ctrl                   GBUS Ctrl                                                                  S UMMARY OF HBM TIMING PARAMETERS
+         Fig. 3. Overview of HBM architecture and internal organization.                                    Parameter                           Description
+                                                                                                            tRCDRD                              ACT to RD delay in a same bank
+of data, corresponding to AGbank , and delivers it to the I/O                                               tRCDWR                              ACT to WR delay in a same bank
+                                                                                                            tRAS                                ACT to PRE delay in a same bank
+control (ctrl) buffer via the bank data bus (BK-BUS). Since
+                                                                                                            tRP                                 PRE to ACT delay in a same bank
+all banks within a bank group share a single I/O control
+                                                                                                            tCCDS(L/R)                          RD/WR to RD/WR delay in diff BG (same BG/diff rank)
+buffer, only one bank can occupy the BK-BUS at a time.                                                      tFAW                                Time window for 4 ACTs
+The data stored in the I/O ctrl buffer is then transferred over                                             tRRDS(L)                            ACT to ACT delay in diff/same BG
+the bank group data bus (BG-BUS) to the global data bus                                                     tWTRS(L)                            WR to RD delay in diff/same BG
+(GBUS) controller and ultimately delivered to the logic die                                                 tRTW                                RD to WR delay in a same bank
+via the TSVs. BK-BUS runs at the frequency of 1/tCCDL                                                       tWR                                 WR to PRE delay in a same bank
+(e.g., 0.5 GHz), whereas BG-BUS runs at a faster frequency                                                  tRTP                                RD to PRE delay in a same bank
+of 1/tCCDS (e.g., 1 GHz). Therefore, a single bank group can
+utilize only half of the available bandwidth. To fully exploit                             while optionally postponing or pooling REFs based on each
+the maximum bandwidth, data must be transmitted in a time-                                 bank’s state [27].
+multiplexed manner across different bank groups.                                              Request scheduler determines which request to schedule
+                                                                                           based on multiple criteria. First, it exploits interleaving across
+D. Conventional Memory Controller Architecture                                             banks, bank groups, and PCs. Bank interleaving helps hide
+   While implementation details vary, the high-level architec-                             ACT and PRE latencies by overlapping operations across
+ture of a generic MC is depicted in Figure 4. MC generally                                 independent banks. Interleaving across bank groups and PCs
+includes four core components: address mapping, read/write                                 further increases bandwidth utilization. Second, the sched-
+request queue, per-bank state logic, and a command scheduler.                              uler aims to exploit row buffer locality by issuing as many
+The address mapping unit translates the physical address                                   RDs/WRs as possible to an open row while obeying fairness; it
+of each read/write request received from the host into a                                   pursues confining the overhead associated with ACT and PRE.
+corresponding DRAM address [6], [21], [42], [58], [71], [72]                               Third, it manages the page policy by determining the optimal
+(e.g., PC and bank group) and inserts the translated request                               time to precharge a row after activation, depending on memory
+into the request queue. Both the request queue and bank state                              access patterns. This policy balances latency with row buffer
+logic are commonly implemented using content-addressable                                   hit rate and is typically implemented using open, close, or
+memory (CAM), allowing a one-cycle lookup to identify ready                                adaptive page policies [29], [50]. Finally, to prevent starvation
+requests [5]. High bandwidth utilization requires a sufficiently                           caused by the aggressive scheduling strategies, the scheduler
+large CAM to accommodate numerous in-flight requests. As                                   incorporates Quality-of-Service (QoS [10]) mechanisms that
+banks operate independently, per-bank state logic tracks the                               prioritize long-waiting requests, ensuring fairness across all
+status of each bank. The command scheduler is responsible                                  memory transactions [40], [41].
+for issuing memory and refresh commands by evaluating all
+bank states while adhering to DRAM timing constraints. Each                                                          III. ACCESS PATTERN OF L ARGE L ANGUAGE M ODELS
+bank can be in one of seven states: Idle, Activating, Active,                                Widely adopted large language models (LLMs) are typically
+Precharging, Reading, Writing, and Refreshing. The command                                 built upon the transformer decoder architecture (see Figure 5).
+scheduler must manage a wide range of timing parameters,                                   Throughout this paper, the term LLM refers specifically to
+which are summarized in Table II.                                                          a transformer-based LLM. LLM inference can be broadly
+   Although the command scheduler performs various tasks,                                  divided into two stages: prefill and decode. In the
+its responsibilities can be broadly categorized into refresh                               prefill stage, the model ingests all input tokens (e.g.,
+and request scheduling. Refresh scheduler periodically issues                              words) in the request and generates the first output token. In
+refresh (REF) commands according to the tREFI interval,                                    the decode stage, it operates auto-regressively, taking the
+    Prefill stage                  Decode stage                                        Core                                      RoMe Memory Controller
+                                                                  RMS norm                Compute unit                                 4KB         RD_row/WR_row
+     Input tokens          Output token 1    Output token 2     Self Attention               unit
+                                                                                              x      =               RoMe              Command generator
+                                                                   QKV gen
+     Embedding
+                            Embedding         Embedding                                              32B             Logic die
+                                                                   QK RoPE                                                                         ACT/RD/WR/PRE
+                                                                                            Scratchpad         …
+                                                                     Score                                           RoMe DRAM die
+                                                               Mask+Scale+Softmax
+                                                                                                     32B                                         4KB
+                               1 * Demb           1 * Demb
+       Lin * Demb                                                                                                       Pseudo channel 0                 Pseudo channel 1
+                                                                    Context                On-chip cache
+                                                                                                                                 2KB                            2KB
+                                                                                                                                               Virtual
+    Decoder block 1        Decoder block 1   Decoder block 1       Projection                         4KB                BG 0           BG 1             BG 0         BG 1
+                                                                                                                         BA 0           BA 0   Bank 0    BA 0         BA 0
+
+    Decoder block 2        Decoder block 2   Decoder block 2      RMS norm                  DMA engine                   1KB            1KB    Virtual   1KB          1KB
+                                                                                                                         BG 0           BG 1             BG 0         BG 1
+                                                                     FFN                                                 BA 1           BA 1   Bank 1    BA 1         BA 1
+                                                                                                      4KB
+    Decoder block n        Decoder block n   Decoder block n                            RoMe
+                                                                  Gate & Up                                                                    Virtual
+                                                                                            RoMe MC                      BG 0
+                                                                                                                         BA 2
+                                                                                                                                        BG 1
+                                                                                                                                        BA 2   Bank 2
+                                                                                                                                                         BG 0
+                                                                                                                                                         BA 2
+                                                                                                                                                                      BG 1
+                                                                                                                                                                      BA 2
+
+      LM head                LM head           LM head               SiLU
+                                                                                       Channel        4KB                                      Virtual
+                                                                     Down                                                BG 0           BG 1
+                                                                                                                                               Bank 3
+                                                                                                                                                         BG 0         BG 1
+    Output token 1         Output token 2         <EOS>                                    RoMe DRAM
+                                                                                                                         BA 3           BA 3             BA 3         BA 3
+
+
+
+
+                    Fig. 5. Transformer-based LLM architecture.
+                                                                                                    Fig. 6. An overview of a RoMe-based system.
+
+output token from the previous step as input to produce the
+                                                                                    the hundreds [19], [55], [57], [76], [77], the activations can
+next output token.
+                                                                                    scale to a few megabytes, similar to the weights.
+   Each stage consists of a token embedding layer, multiple                            As GEMM and GEMV operations dominate LLM compu-
+decoder blocks, and a language model (LM) head. When an                             tations, these data are accessed with simple sequential mem-
+LLM processes an inference request containing a sequence                            ory access patterns. However, current HBM-based memory
+of tokens, the embedding layer maps the input tokens into                           systems are still designed for extremely fine-grained 32 B
+hidden vectors, which are then passed through the decoder                           accesses, introducing unnecessary complexity relative to ac-
+blocks. Each decoder block takes the hidden vectors from the                        cess characteristics of LLMs. Therefore, we propose a highly
+preceding decoder block and produces updated hidden vectors.                        simplified memory interface optimized for the sequential ac-
+Finally, the hidden vectors from the last decoder block are                         cess pattern of LLMs and provide an in-depth analysis of its
+transformed into tokens by the LM head. Here, we refer to                           benefits. We then present a co-optimization of DRAM and MC
+the pre-trained model parameters (e.g., the weight of the fully-                    based on this interface, demonstrating a memory system for
+connected layer) as weight and the intermediate results of the                      next-generation AI accelerators that scales more effectively.
+operations and layers as activation.
+   In addition to the weights and activations, LLMs have a                                                  IV. T HE R O M E INTERFACE
+third primary data type: the KV-cache. Each decoder block                           A. Memory Interface
+is mainly composed of a self-attention layer (attention) and                           Exploiting the sequential and coarse-grained memory access
+a feed-forward network (FFN). The attention layer takes the                         patterns of LLM workloads, we propose a Row granularity
+hidden vector as input and produces the Query (Q), Key (K),                         access Memory system, RoMe (Figure 6). For systems serv-
+and Value (V) matrices. Because K and V store sequence                              ing LLMs that sequentially access hundreds of megabytes
+context, the model requires K and V matrices for the entire                         of data at a time, the conventional cache-line-sized access
+sequence to generate each new token. To avoid repeating the                         granularity is excessively fine-grained. RoMe replaces the
+same computation at every generation step, the K and V                              traditional cache-line-level (column-level) interface with a
+matrices are stored in the KV-cache. Thus, the data used in                         row-level interface comprising RD_row and WR_row. This
+LLM computation can be broadly categorized into weights,                            increases AGM C from cache-line size to row size. Because
+activations, and the KV-cache.                                                      AGM C now corresponds to the row size, it is no longer
+   During LLM execution, tens of megabytes of data typically                        necessary to align AGbank with the cache-line size. Thus, we
+need to be accessed sequentially at a time. For all three                           can further streamline the MC-DRAM interface by eliminating
+LLMs in Figure 1, most weight and KV-cache accesses exceed                          the bank group and PC from the interface that were originally
+several hundred kilobytes. In Grok-1, only one weight matrix                        introduced to scale bandwidth while retaining cache-line-sized
+is exceptionally small (24 KB), but all other weight matrices                       AGbank . With this significantly simplified interface, the RoMe
+exceed 12 MB. The KV-cache also reaches several megabytes                           MC no longer requires complex scheduling logic, leading to
+in the decode stage; it grows even larger than in the                               a much simpler architecture.
+prefill stage because it must hold KV-cache for both the                               Moreover, we integrate command generators on the logic
+input and the already generated output tokens. For activations,                     die to translate row-level commands into conventional DRAM
+the prefill stage processes all input tokens as a single                            commands. This integration reduces the C/A pin count re-
+batch, resulting in activation sizes reaching tens of megabytes.                    quired per channel, allowing an HBM to add more channels
+In the decode stage, however, only one token per sequence is                        with only a slightly increased pin budget, providing additional
+processed, so the activation size is much smaller. Nevertheless,                    aggregate bandwidth. Through both the simplified MC and
+given that modern LLM services often run with batch sizes in                        the command generator, RoMe improves memory bandwidth
+                                                                                       BG-BUS         BK-BUS            Effective single row
+                                                                            I/O ctrl                                        I/O ctrl
+                       I/O ctrl                                              buffer                                          buffer                                    I/O ctrl
+                        buffer                                                                                                                                          buffer
+           GBUS ctrl                                     GBUS ctrl                        Coarse    Virtual   GBUS ctrl                                    GBUS ctrl
+
+
+
+
+                                                                              512b
+                         256b
+
+
+
+
+                                                                                                                              512b
+
+
+
+
+                                                                                                                                                                         256b
+            buffer                      Bank   Bank       buffer                           Bank                buffer                      Bank     Bank    buffer                      Bank   Bank
+                                                                                           bank      bank
+                                                                                                                                                                                    Virtual    Virtual
+             256b
+
+
+
+
+                                                                 256b
+
+
+
+
+                                                                                                                 256b
+
+
+
+
+                                                                                                                                                              256b
+                                                                                                                                                                                    bank        bank
+
+                                                                                          Virtual   Virtual                                   Virtual
+
+
+
+
+                                                                              512b
+
+
+
+
+                                                                                                                              512b
+                         256b
+
+
+
+
+                                                                                                                                                                         256b
+                                        Bank   Bank                                                                                        Bank     Bank                                Bank   Bank
+                                                                                           bank      bank                                      bank
+               256b         256b                                   256b           512b                             256b           256b                          256b       256b
+              1 GHz       0.5 GHz                                 1 GHz         0.5 GHz                           1 GHz         0.5 GHz                        1 GHz     0.5 GHz
+
+                                                                                                               BG 0
+            BG 0       256b                                     BA 0        512b                               BA 0       256b                               BG 0      256b
+            BG 1               256b                                                                            BG 0       256b                               BG 1           256b
+                                                                                                               BA 1
+
+            Data                              RD                Data                            RD             Data                           RD             Data                           RD
+                                         256b 256b                                             512b                                          512b                                          512b
+                                  (a)                                                   (b)                                          (c)                                          (d)
+Fig. 7. Three design approaches to eliminate the bank group from the MC-DRAM interface. (a) Conventional bank group architecture. (b) A single bank
+serves as a VBA by doubling AGbank . (c) Two banks operate in tandem to form a VBA. (d) Two banks from different bank groups form a VBA and fetch
+data in an interleaved manner.
+
+
+                                  : GBUS       : BG-BUS                 : Effective row size                    various design choices are possible for implementing VBA, and
+             GBUS ctrl
+                                                                   GBUS ctrl
+                                                                                                                this work seeks to analyze the trade-offs associated with each.
+              buffer
+                                                                    buffer
+                        512b
+
+
+
+
+                                                                               256b
+
+
+
+
+                                         Pseudo                                               Pseudo               There are three main design spaces for implementing a VBA
+             64b
+                                                     32b 32b
+
+
+
+
+                                         channel                                              channel
+ 64 TSVs
+
+
+
+
+                                                      64 TSVs
+
+
+
+
+            8 GHz               512b                                32b                256b                     that achieves maximum bandwidth from a single VBA. First,
+   64b
+
+
+
+
+                               1 GHz                               8 GHz              1 GHz
+                                                                                                                as illustrated in Figure 7(b), a single bank can serve as a VBA
+                        512b
+
+
+
+
+                                                                               256b
+
+
+
+
+                                         Pseudo                                               Pseudo
+                                         channel                                              channel           by increasing its AGbank , thereby enabling it to deliver the
+                                                                                                                maximum bandwidth. While it maintains the same number of
+                         (a)                                                    (b)
+                                                                                                                banks and effective row size, it requires doubling the bank’s
+Fig. 8. Two design approaches to eliminate PC from the MC-DRAM interface.                                       internal data path, the BK-BUS width, and the I/O ctrl buffer
+(a) A single PC operates as a full channel by fetching double the cache-line
+size. (b) Two PCs serve as a single channel and operate simultaneously, each                                    size, resulting in significant area overhead [51]. Second, as
+maintaining data fetch size.                                                                                    shown in Figure 7(c), a VBA consists of two banks within
+                                                                                                                the same bank group. By operating two banks in tandem,
+with low hardware overhead, demonstrating decent scalability.                                                   this approach fetches twice the amount of data, doubling the
+Their implications on area and energy are described in §VI-C.                                                   effective AGbank . Although this does not change the internal
+   RoMe is designed to interoperate smoothly with modern                                                        data path, BK-BUS width, and I/O ctrl buffer, it effectively
+AI accelerators. LLM inference must continuously process                                                        reduces the total number of banks by half and doubles the
+massive weight and activation data, demanding not only high                                                     effective row size. Finally, as shown in Figure 7(d), a VBA
+compute throughput, but also memory with both high band-                                                        consists of two banks from different bank groups, accessed in a
+width and high capacity. Consequently, HBM has emerged                                                          time-multiplexed manner. This approach leverages the existing
+as the standard memory for AI accelerators, and RoMe is                                                         DRAM structure without modification while still enabling a
+accordingly designed to utilize the latest generation, HBM4.                                                    single VBA to achieve maximum bandwidth. Similar to the
+Moreover, modern AI accelerators have adopted techniques                                                        second design, it reduces the number of banks by half and
+that issue bulky memory accesses to efficiently fetch the                                                       doubles the effective row size, but does so without requiring
+enormous data required by AI workloads [28], [47]. In line                                                      changes to the internal DRAM architecture.
+with this trend, we assume a system where memory requests                                                         There are two design approaches for eliminating the concept
+on the order of kilobytes are delivered to the MC.                                                              of PC. Figure 8(a) illustrates a method where the amount
+                                                                                                                of data fetched from each PC is doubled to enable a single
+B. Virtual Bank                                                                                                 PC to achieve maximum bandwidth. However, this approach
+   RoMe removes the concepts of bank group and PC, replac-                                                      necessitates an increase in BG-BUS width and the buffer size
+ing them with a new hierarchy, a virtual bank (VBA). The                                                        of the I/O ctrl buffer. Moreover, multiplexers are required
+key idea behind VBA is to deliver the full available bandwidth                                                  between two GBUS on each PC side. As a result, from the
+from a single VBA, eliminating the need for complex MC-side                                                     MC’s perspective, the two PCs are controlled as a single
+scheduling that accounts for bank group or PC interleaving.                                                     channel, with the effective row size remaining 1KB while
+Because row granularity access no longer requires matching                                                      doubling the number of banks. Figure 8(b) shows that both PCs
+AGbank and AGM C to the cache-line size, traditional bank                                                       operate simultaneously, similar to the legacy channel mode in
+group and PC interfaces are no longer essential. Accordingly,                                                   HBM1/2 [22], [24]. This configuration doubles the bandwidth
+                            tRRDS - tCCDS
+                        tRCDRD         tCCDL
+                                                                                    from both simultaneously. Because two PCs share the same
+                                                                                    C/A pins, we depict the command sequences for a single PC.
+             Bank A   ACT         RD           RD            RD         PRE
+Virtual                                                  …                             The command generator is designed to issue DRAM com-
+ bank        Bank B         ACT        RD           RD            RD          PRE
+                               tRCDRD                                               mands to two banks in a perfectly interleaved manner, ensuring
+                                                                                    that each RD/WR complies with tCCDS (e.g., 1 ns) between
+                       tRRDS      tCCDS                                tRTP
+                                                                                    consecutive RD/WR to a different bank. However, due to
+                                            (a)
+                                                                                    the tRRDS constraint (e.g., 2 ns), which must be satisfied
+                        tRCDWR         tCCDL
+                                                                                    between ACTs to different banks, maintaining this interleaving
+Virtual      Bank A   ACT         WR           WR            WR         PRE         necessitates additional delay. If both banks issue ACT followed
+                                                         …
+ bank
+             Bank B         ACT        WR           WR            WR          PRE   by RD after tRCDRD, the RDs to different banks would align
+                               tRCDWR
+                                                                        tWR         simultaneously rather than being interleaved. To resolve this,
+                       tRRDS      tCCDS                                             an intentional delay of tRRDS − tCCDS is inserted before the
+              Data                                       …                          ACT to the first bank (Figure 9). This allows the RDs/WRs
+                                                                                    to the two banks to be issued at tCCDS intervals.
+                                            (b)
+
+          Fig. 9. Command sequence of (a) RD_row and (b) WR_row.
+                                                                                       The command generator can be placed in one of three
+                                                                                    locations: 1) MC, 2) logic die, or 3) DRAM die. Placing the
+without requiring additional wiring and buffer, though the                          command generator in the MC has the benefit of minimizing
+effective row size increases to 2 KB. In LLM workloads that                         modifications to the existing memory system. However, this
+involve fetching several megabytes of data, this increase in                        configuration limits the structural advantages that can be
+effective row size is not a significant issue. Therefore, we                        gained from a simplified memory interface, such as reducing
+eliminate the PC from the MC-DRAM interface by enabling                             C/A pins. Integrating the command generator within the HBM
+the concurrent operation of two PCs (Figure 8(b)).                                  stack helps reduce the C/A pin count between the MC and
+   We conducted a comprehensive exploration of all combi-                           HBM. When placed in the logic die, the command generator
+nations within the VBA design space, with the methodology                           can reduce the C/A pin count between the MC and the logic
+and workloads detailed in §VI-A. Our experiments covered six                        die, though it does not reduce the number of TSVs between
+total configurations, generated by combining the design points                      the logic and DRAM dies. Placing it in the DRAM die can
+in Figure 7(b)/(c)/(d) with those in Figure 8(a)/(b). Across all                    reduce TSV usage between the logic and DRAM dies, but it
+six configurations, the performance deviation relative to the                       requires one command generator per channel for each DRAM
+baseline system remained within 3.6%.                                               die, increasing redundancy.
+   However, the designs exhibit significant differences from the                       Given these trade-offs, we adopt a middle-ground design
+perspective of area overhead. Using the configuration shown                         by placing the command generator in the logic die. First,
+in Figure 8(a) requires doubling the width of the BG-BUS.                           because the logic die of HBM4 is fabricated using a logic
+Similarly, the I/O ctrl buffer for Figure 7(b)/(c) must also                        process (rather than a DRAM process) [66], [67], placing one
+be doubled, which in turn necessitates doubling the BK-BUS                          command generator per channel incurs minimal area overhead
+width for Figure 7(b). When combined with the design in                             (quantified in §VI-C) while enabling effective reduction in
+Figure 7(b)—where the BK-BUS and internal bank datalines                            C/A pin count. Second, recent advances in die-stacking tech-
+are already doubled—the total dataline width becomes 4× that                        nologies, such as hybrid bonding [15], [45], help alleviate
+of traditional bank architecture, resulting in a substantial area                   the cost associated with inter-die TSVs, making the logic-die
+overhead up to 77% [51]. Thus, we adopt the configuration in                        placement a practical compromise.
+Figure 7(d) and Figure 8(b).
+                                                                                    D. Command/Address Pins
+C. Command Generator
+                                                                                       Row granularity access enables a drastic reduction in the
+   We add a command generator that accepts row-level com-                           number of C/A pins between the MC and DRAM. First,
+mands and streams data from the VBA. When the MC issues                             because separate RD and WR column C/A pins are no longer
+a RD_row or WR_row command, the command generator                                   required, eight column C/A pins can be removed. The mode
+translates it into a fixed sequence of DRAM commands: one                           register set (MRS), which is traditionally sent over a column
+ACT, a series of RD or WR commands, and a PRE. Unlike                               command, is now transmitted via row C/A pins. Out of the
+a conventional MC, our command generator does not issue                             ten row C/A pins, up to four pins are used for the opcode,
+commands dynamically based on bank states or timing con-                            leaving pins for the address. RoMe retains all four opcode
+straints. Instead, it issues predetermined DRAM commands at                         pins but reduces the number of address pins. Since RoMe does
+fixed intervals upon receiving a row-level command, operating                       not require PC bits and each VBA includes two banks, one of
+in a simplified and static manner. Figure 11 illustrates the                        the bank address bits is also unnecessary. Excluding ACT and
+detailed command sequences corresponding to RD_row and                              PRE, there are eight row commands. Adding MRS, RD_row,
+WR_row. In RoMe, as in the legacy channel mode of HBM1/2,                           and WR_row increases the total command count to eleven. In
+commands are sent to both PCs and data are also received                            a column-granularity interface, column C/A pins must support
+                             Access to REF                                                     : Command sequence            : Automatic sequence
+                             RD_row-to-RD_row/WR_row-to-WR_row
+          12
+          66
+                                      RD_row-to-RD_row / WR_row-to-WR_row                                                                     Writing
+          10                                                                                                                     _row
+                                                                                                                               WR
+Latency (ns)
+
+
+          64
+                                                                                                         REF
+               8                                                                                                     Idle
+                                                                                          Refresh                               RD_
+                                                                 2 x tRRDS                                                         row
+               6
+               4                                                                                                                             Reading
+               2
+                                                                                                                     (a)
+               0                                                                                RD_row / WR_row
+                     10     9         8          7         6        5          Current   ACT        Read / Write     PRE
+                                The number of command pins
+                                                                                                                                   tRTW / tWTRS
+Fig. 10. Latency between RD_row/WR_row and REF across various numbers                    tR2RS / tW2WS
+of C/A pins.                                                                                                 ACT      Read / Write          PRE
+
+                                                                                          tR2WS / tW2RS
+                                                                               Next                            ACT          Write / Read       PRE
+issuing RD and WR commands to both PCs every tCCDS, and
+                                                                                               tRD_row / tWR_row
+row C/A pins must support ACT commands every tRRDS.                                                                            ACT         Read / Write   PRE
+
+   However, with the row-level interface, the minimum interval                                                       (b)
+
+between commands is longer. The tightest timing occurs when                   Fig. 11. (a) Bank state diagram and (b) timing parameters of RoMe MC.
+a REF command is issued immediately after a RD_row
+                                                                                                               TABLE III
+or WR_row, requiring at least 2 × tRRDS . This is because                                            T IMING PARAMETERS OF R O M E
+one tRRDS delay is needed between the ACT commands
+                                                                                 Name               Description                 Destination
+to the first and second banks, and another tRRDS delay is                        tR2RS              Different VBA
+                                                                                                                                RD_row to RD_row
+needed before issuing the REF command to the second bank.                        tR2RR              Different SID
+Figure 10 shows the command issue latency as a function of                       tR2WS              Different VBA
+                                                                                                                                RD_row to WR_row
+                                                                                 tR2WR              Different SID
+the number of C/A pins. Even with just five pins, commands                       tW2RS              Different VBA
+can still be issued faster than 2 × tRRDS . Therefore, by                                                                       WR_row to RD_row
+                                                                                 tW2RR              Different SID
+reducing the number of C/A pins to five, RoMe is able to                         tW2WS              Different VBA
+                                                                                                                                WR_row to WR_row
+                                                                                 tW2WR              Different SID
+eliminate 72 % of the C/A pins.                                                  tRD_row            Same VBA                    RD_row delay
+                                                                                 tWR_row            Same VBA                    WR_row delay
+E. Additional Channels
+   We utilize the freed C/A pin margin to introduce additional
+channels. RoMe reduces the number of C/A pins from 18 to                     of bank-state tracking logic. Finally, the scheduler’s complex-
+5, saving 13 pins per channel. A channel of HBM4 requires                    ity for maximizing bandwidth is greatly reduced.
+120 pins [27], whereas RoMe requires only 107 pins due to the                Bank states: Row-level access drastically simplifies the bank
+13-pin reduction. Consequently, in a 32-channel configuration,               states related to data access. Figure 11(a) illustrates the bank
+416 pins remain available, which allows the addition of four                 states of RoMe, which are Idle, Writing, Reading, and Refresh-
+new channels with only 12 extra pins. Through these additional               ing. Idle means the VBA is ready to accept a DRAM command
+channels, we aim to increase the memory bandwidth.                           immediately. Refreshing indicates that a REF command is in
+   RoMe proposes to increase memory bandwidth by adding                      progress. Reading and Writing mean the bank is executing a
+one additional channel per DRAM die. As HBM generations                      RD_row or WR_row command, respectively. In conventional
+have evolved, the number of channels per die has increased                   DRAM, after a Reading or Writing state, the bank returns to an
+for channel expansion, necessitating a larger die area [8],                  Active state and can dynamically transition to additional reads
+[33], [34], [52], [56]. Following this trend, RoMe also adopts               or a precharge. Under RoMe, however, DRAM is accessed
+a design expanding the number of channels per DRAM die                       only via RD_row and WR_row commands. Upon completion,
+from eight to nine. As a result, RoMe-based HBM achieves                     the bank automatically returns to Idle. Thus, the Active,
+approximately a 12.5% increase in memory bandwidth merely                    Activating, and Precharging states are no longer needed.
+with a small number of additional pins at the processor                      Timing parameters: The RoMe MC considers only a minimal
+interface. The area overhead is estimated in §VI-C.                          set of timing constraints when performing memory accesses.
+                                                                             It issues only RD_row, WR_row, and REF commands, and
+                   V. M EMORY SYSTEM UNDER R O M E INTERFACE
+                                                                             each command returns its bank to the Idle state automatically.
+A. RoMe Memory Controller Architecture                                       Thus, it must track only the timing relationships between
+   As the memory interface is simplified, the MC can also be                 RD_row and WR_row commands. Rather than juggling the
+significantly simplified. The MC now issues only three row-                  full set of row C/A and column C/A timing parameters in a
+level commands (RD_row, WR_row, and REF), so the timing                      conventional interface, the MC needs to manage only a few
+constraints among ACT, PRE, and RD/WR typical of con-                        timing parameters. Table III lists the ten timing parameters
+ventional DRAM interfaces are eliminated. Row-granularity                    used in RoMe, categorized by Read-to-Read, Read-to-Write,
+operation also reduces the bank states in the bank FSM and                   Write-to-Read, and Write-to-Write for same-bank, different-
+timing parameters, and adopting VBA reduces the complexity                   bank, and different-stack-ID cases. Figure 11(b) illustrates
+                              TABLE IV                                                            TABLE V
+                S IMPLIFIED COMPONENTS OF R O M E MC                                T IMING PARAMETERS OF HBM4 AND R O M E
+                           Conventional MC           RoMe MC                                            HBM4                 RoMe
+   # of timing params.              15                  10              channels/cube                      32
+                                                                                                                              36
+                                                                          (PCs/cube)                     (64)
+     # of bank FSMs      # of total banks per PC         5
+                                                                        stacks                             4                    4
+     # of bank states                7                   4              banks/channels                    128                  32
+       Page policy                 Open                  -              row size                         1 KB                4 KB
+                           Row-buffer locality,                         data rate                       8 Gb/s               8 Gb/s
+       Scheduling        Bank group interleaving   VBA interleaving     bandwidth                       2 TB/s             2.25 TB/s
+                             PC interleaving                                                        tRC=45, tRP=16,    tR2RS/R=64/68
+                                                                                                   tRAS=29, tCL=16,   tR2WS/R=69/73
+                                                                                                tRCDRD=tRCDWR=16,     tW2RS/R=71/75
+                                                                        timing parameter (ns)
+                                                                                                  tWR=16, tFAW=12,    tW2WS/R=64/68
+when each timing parameter applies. For tR2RS and tW2WS,                                         tCCDL=2, tCCDS=1,       tRD row=95
+the next data transfer to the same row can begin immediately                                      tCCDR=2, tRRD=2       tWR row=115
+after the current one finishes. For tR2WS and tW2RS, the                AGM C                            32 B                4 KB
+bus direction must switch, so an additional tRTW or tWTRS
+delay is incurred. Accesses to different stack IDs (tR2RR,            herently matching LLM’s sequential access without requiring
+tR2WR, tW2WR, and tW2RR) incur a 1-2 nCK longer delay                 any additional policy logic.
+than different-bank accesses [27]. Finally, tRD_row and
+tWR_row simply chain within the same VBA, so the next                 B. Refresh and Write Operations
+operation can start as soon as the previous one completes.               We optimize refresh behavior to suit the simplified interface
+The number of bank FSMs: Because RoMe drives at most                  with VBA. For all-bank refresh (REFab), no bank in the target
+two VBA at any given time, the MC needs only two bank                 channel can operate during a refresh; thus, both the baseline
+FSM instances for scheduling. Since two VBAs can saturate             and the RoMe MC behave the same. By contrast, for per-
+the bandwidth, the MC needs only to track the currently               bank refresh (REFpb), triggering a REF command on any
+accessed VBA and the next VBA. Nevertheless, due to the use           single bank within a VBA blocks the entire VBA. Thus, it
+of per-bank refresh, additional bank FSMs are implemented             is important to minimize this overhead. Instead of issuing a
+to track the status of banks being refreshed for a duration of        REFpb every tREFIpb, MC issues one per-bank refresh every
+tRFCpb divided by tREFIpb. Memory requests are mapped                 2×tREFIpb. The command generator then sends two REFpb
+to whichever bank FSM instance is free, and once a request            commands (one to each bank in the VBA) with an interval
+completes, that FSM is deallocated.                                   defined by the REFpb-to-REFpb timing interval, tRREFD.
+Request queue size: The RoMe MC employing a highly                    This reduces the stall time per VBA from 2×tRFCpb (e.g., 2
+simplified scheduler treats each 4KB access as a single request,      × 280 ns) to tRFCpb+tRREFD (e.g., 280 ns + 8 ns).
+enabling it to saturate DRAM bandwidth with a significantly              Buffering multiple 4 KB write chunks in a write queue
+smaller request queue. In a cache-line access granularity, the        would require a large write buffer. To avoid this, RoMe
+ratio of tCCDS to tRC exceeds 40×, whereas with row                   processes write requests immediately upon arrival, keeping the
+granularity access, the ratio of tR2RS to tRD_row is less             queue size small. Since LLM workloads are heavily dominated
+than 2×. If the queue size is too small, it cannot look               by reads, the impact of immediate write handling is minimal.
+far enough ahead to exploit bank-level parallelism; thus, a           Additionally, by issuing large 4 KB write requests atomically,
+certain minimum size is still necessary. HBM4 requires a              RoMe reduces the frequency of read/write turnaround delays.
+queue depth of at least 45 entries, while RoMe achieves peak
+                                                                                                VI. E VALUATION
+throughput with only two entries. Thus, RoMe can saturate
+DRAM bandwidth with a depth of just two, allowing the MC              A. Methodology
+to reduce the request queue size.                                     System: We first describe the configuration of a single accel-
+Command scheduling: The command scheduler delivers high               erator and then extend the design to a multi-accelerator system
+performance and fairness with minimal complexity. It first            representative of real LLM deployments. Modern AI acceler-
+checks which VBA is active, then serves ready requests in             ators exhibit arithmetic intensities of 200–300 Op/B for BF16
+oldest-first order. As row-buffer locality is guaranteed by row       operations (e.g., 281 Op/B on B200 [48]) and attach up to
+granularity access, the scheduler needs only to avoid back-to-        eight HBM cubes per device [48]. Accordingly, we configure
+back commands to the same VBA to fully utilize bandwidth.             our target accelerator to sustain 280 Op/B and connect to eight
+An age-based mechanism ensures that the oldest pending                HBM4 cubes. Each HBM4 cube provides 32 GB capacity with
+request is served next, improving tail latency and fairness.          8 Gbps data rate and a 16-Hi configuration [27], yielding total
+   Row-level access removes the need for any page-policy              256 GB memory system with 16 TB/s bandwidth. To match
+mechanism. Conventional MCs dynamically switch between                our target arithmetic intensity, we scale BF16 throughput to
+open, close, and adaptive page policies by monitoring row-            4480 TFLOPS. Because real-world LLM deployments often
+buffer hits to adapt to varying access patterns [20]. In contrast,    span multiple devices to meet high capacity demands, we
+RoMe always precharges immediately after reading a row, in-           evaluate a system with eight accelerators operating in parallel,
+                                                                                                                                                                   FFN                Attention
+                                        * Execution time (ms)
+    Normalized execution time           * 5.7 7.8      10.3 12.6                             13.5              14.3      15.9              19.1          6.6           6.7           7.0                      7.5                8.6       10.7              14.8          9.5           10.0 10.7               12.1          14.9              20.5
+                                 1.0
+                                 0.9
+                                 0.8
+                                 0.7
+                                 0.6
+                                 0.5
+                                 0.4
+                                 0.0
+                                         HBM4
+
+
+                                                       HBM4
+
+
+                                                                     HBM4
+
+
+                                                                                   HBM4
+
+
+                                                                                                 HBM4
+
+
+                                                                                                               HBM4
+
+
+                                                                                                                             HBM4
+
+
+                                                                                                                                           HBM4
+
+
+                                                                                                                                                         HBM4
+
+
+                                                                                                                                                                       HBM4
+
+
+                                                                                                                                                                                     HBM4
+
+
+                                                                                                                                                                                                                   HBM4
+
+
+                                                                                                                                                                                                                                 HBM4
+
+
+                                                                                                                                                                                                                                               HBM4
+
+
+                                                                                                                                                                                                                                                             HBM4
+
+
+                                                                                                                                                                                                                                                                           HBM4
+
+
+                                                                                                                                                                                                                                                                                         HBM4
+
+
+                                                                                                                                                                                                                                                                                                       HBM4
+
+
+                                                                                                                                                                                                                                                                                                                     HBM4
+
+
+                                                                                                                                                                                                                                                                                                                                   HBM4
+
+
+                                                                                                                                                                                                                                                                                                                                                 HBM4
+                                                RoMe
+
+
+                                                              RoMe
+
+
+                                                                            RoMe
+
+
+                                                                                          RoMe
+
+
+                                                                                                        RoMe
+
+
+                                                                                                                      RoMe
+
+
+                                                                                                                                    RoMe
+
+
+                                                                                                                                                  RoMe
+
+
+                                                                                                                                                                RoMe
+
+
+                                                                                                                                                                              RoMe
+
+
+                                                                                                                                                                                               RoMe
+
+
+                                                                                                                                                                                                                          RoMe
+
+
+                                                                                                                                                                                                                                        RoMe
+
+
+                                                                                                                                                                                                                                                      RoMe
+
+
+                                                                                                                                                                                                                                                                    RoMe
+
+
+                                                                                                                                                                                                                                                                                  RoMe
+
+
+                                                                                                                                                                                                                                                                                                RoMe
+
+
+                                                                                                                                                                                                                                                                                                              RoMe
+
+
+                                                                                                                                                                                                                                                                                                                            RoMe
+
+
+                                                                                                                                                                                                                                                                                                                                          RoMe
+
+
+                                                                                                                                                                                                                                                                                                                                                        RoMe
+                                Batch       8            16            32            64           128            256          512           1024            8            16            32                            64           128           256            512            8            16            32            64           128            256
+                                Model                                              DeepSeek-V3                                                                                                                 Grok 1                                                                                         Llama 3
+
+Fig. 12. TPOT (time per output token) comparison between HBM4-based memory system and RoMe across various batch sizes for DeepSeek-V3, Grok 1,
+and Llama 3. The sequence length is 8K and the maximum batch size is constrained by memory capacity.
+
+
+each providing 560 TFLOPS of BF16, 256 GB of memory                                                                                                                                                                                                                               FFN            Attention
+
+
+
+
+                                                                                                                                                                                       Channel load balance rate
+                                                                                                                                                                                                                    1.05
+capacity, and 16 TB/s of memory bandwidth.                                                                                                                                                                          1.00
+                                                                                                                                                                                                                    0.95
+
+
+
+
+                                                                                                                                                                                                 (LBR)
+Simulation: We model the AI accelerator equipped with the
+                                                                                                                                                                                                                    0.90
+RoMe memory system, using LLMSimulator [77]. It allows
+                                                                                                                                                                                                                    0.85
+configuring both the accelerator and the memory subsys-
+
+
+
+
+                                                                                                                                                                                                                                  1024
+                                                                                                                                                                                                                                   128
+                                                                                                                                                                                                                                   256
+                                                                                                                                                                                                                                   512
+
+
+
+
+                                                                                                                                                                                                                                   128
+                                                                                                                                                                                                                                   256
+                                                                                                                                                                                                                                   512
+
+
+
+
+                                                                                                                                                                                                                                   128
+                                                                                                                                                                                                                                   256
+                                                                                                                                                                                                                                    16
+                                                                                                                                                                                                                                    32
+                                                                                                                                                                                                                                    64
+
+
+
+
+                                                                                                                                                                                                                                    16
+                                                                                                                                                                                                                                    32
+                                                                                                                                                                                                                                    64
+
+
+
+
+                                                                                                                                                                                                                                    16
+                                                                                                                                                                                                                                    32
+                                                                                                                                                                                                                                    64
+                                                                                                                                                                                                                                     8
+
+
+
+
+                                                                                                                                                                                                                                     8
+
+
+
+
+                                                                                                                                                                                                                                     8
+                                                                                                                                                                                                                    Batch
+tem, supports continuous batching, and integrates Ramulator
+2.0 [38] for cycle-accurate DRAM simulation. We implement                                                                                                                                                           Model                  DeepSeek-V3                                          Grok 1                                Llama 3
+
+RoMe in Ramulator 2.0, configuring both the accelerator and                                                                                                                          Fig. 13. Channel load balance ratio of RoMe across various batch sizes in
+RoMe to process 4 KB requests. From the simulator, we collect                                                                                                                        DeepSeek-V3, Grok 1, and Llama 3 when the sequence length is 8K.
+time per output token (TPOT) and DRAM energy.
+                                                                                                                                                                                     B. Performance Analysis of RoMe
+   To ensure fair comparison, we sweep address mappings for
+                                                                                                                                                                                        We measured the TPOT of the baseline (HBM4) and RoMe
+both the baseline and RoMe, selecting the configuration that
+                                                                                                                                                                                     during the decode stage with varying batch sizes when
+maximizes bandwidth utilization. We implement the MC for
+                                                                                                                                                                                     the sequence length is fixed at 8K. As shown in Figure 12,
+both systems using the FR-FCFS scheduling policy [60]. The
+                                                                                                                                                                                     RoMe reduces TPOT by 10.4%, 10.2%, and 9.0% of HBM4
+baseline MC adopts an open-page policy, while both systems
+                                                                                                                                                                                     for DeepSeek-V3, Grok 1, and Llama 3, respectively. This
+employ per-bank refresh commands to improve bandwidth
+                                                                                                                                                                                     improvement is largely attributed to RoMe’s 12.5% higher
+availability. Table V summarizes the timing parameters used
+                                                                                                                                                                                     memory bandwidth from its increased number of channels.
+in our experiments. Because JEDEC has not finalized HBM4
+                                                                                                                                                                                     However, the scaling does not fully align because several
+timings, we adopt values from prior studies [2], [51].
+                                                                                                                                                                                     layers (e.g., FFN layers) are not memory-bound.
+LLM: We evaluate three large-scale LLMs: Grok 1 [73],                                                                                                                                   Because RoMe operates at a 4 KB access granularity instead
+DeepSeek-V3 [12], and Llama 3-405B (Llama 3 here-                                                                                                                                    of the 32 B, load imbalance across memory channels becomes
+after) [13]. DeepSeek-V3 uses Multi-head Latent Attention                                                                                                                            a critical concern for effective bandwidth utilization. Figure 13
+(MLA) and Mixture of Experts (MoE) together, Grok 1 adopts                                                                                                                           shows channel load balance rate (LBR) of RoMe for attention
+Grouped Query Attention (GQA) and MoE together, and                                                                                                                                  (LBRAttn ) and FFN (LBRF F N ) layers across various batch
+Llama 3 adopts GQA but does not adopt MoE, instead using                                                                                                                             sizes. LBR quantifies how uniformly data is distributed across
+a fully-connected (FC) layer. For MoE, DeepSeek-V3 selects                                                                                                                           memory channels, with its values normalized to the HBM4
+8 of 256 experts per layer, while Grok 1 selects 2 of 8. All                                                                                                                         baseline, whose LBR is nearly 1. The value closer to 1
+weights are stored in BF16.                                                                                                                                                          indicates a more uniform data distribution across memory
+                                                                                                                                                                                     channels, enabling RoMe to fully utilize its available band-
+   During prefill, we apply tensor parallelism (TP) across                                                                                                                           width, while lower values reflect increasing imbalance.
+the eight accelerators. During decode, TP is applied to the                                                                                                                             LBR differences across models primarily arise from their
+attention layers with degrees of 1, 8, and 8 for DeepSeek-V3,                                                                                                                        parallelization strategies and the relative contribution of
+Grok 1, and Llama 3, respectively. It is because the com-                                                                                                                            weights and activations. In the attention layers, the hidden
+pressed KV cache of MLA favors data parallelism to avoid TP                                                                                                                          dimensions are 7,168 (DeepSeek-V3), 6,144 (Grok 1), and
+communication overhead [78]. GQA runs with TP of 8, which                                                                                                                            16,384 (Llama 3), which are proportional to weight sizes.
+our experiments and prior work have shown to be optimal [13].                                                                                                                        Given that data movement is dominated by weights at small
+For MoE, we use expert parallelism where each accelerator                                                                                                                            batch sizes, DeepSeek-V3 adopts data parallelism, resulting
+owns a distinct subset of experts, sending inputs to the target                                                                                                                      in relatively high LBRAttn even with a small KV-cache size
+accelerator when a given expert is required and then receiving                                                                                                                       due to MLA. In contrast, Grok 1 and Llama 3 employ TP and
+the output afterward.                                                                                                                                                                GQA, which reduces the data movement size of the weight per
+                          CAS         ACT   Command Generator         and energy consumption. Given that RoMe incorporates 36
+DeepSeek HBM4
+                                                                      legacy channels per cube, the total area overhead for the
+   -V3   .   RoMe                                                     command generator amounts to 4268.8 µm2 . This represents
+             HBM4                                                     negligible overhead, occupying 0.003% of the logic die area.
+  Grok 1
+         .
+
+
+             RoMe                                                         For RoMe MC, we compared the area of the scheduling
+             HBM4                                                     logic—including the command scheduler, bank FSM, and
+ Llama 3
+         .
+
+
+
+
+             RoMe                                                     request queue—between RoMe and conventional MC. The
+                    0.6         0.7          0.8         0.9    1     request queue depth was set to 64 entries for the conventional
+Fig. 14. Energy consumption of HBM4-based memory system and RoMe in   MC and 4 entries for RoMe MC, both evaluated under the
+DeepSeek-V3, Grok 1, and Llama 3 when the batch size is 256.          FR-FCFS scheduling policy [60]. Under these conditions,
+                                                                      the command scheduling logic in RoMe MC occupies only
+device, leading to lower LBRAttn at small batches. However,           9.1% of the area of a conventional MC, indicating that RoMe
+Llama 3 still maintains high LBRAttn because its large hidden         achieves a much simpler architecture.
+dimension size keeps the weight contribution significant even             Figure 14 shows the energy consumption of LLM work-
+under TP. As batch size increases, the KV-cache and activation        loads under HBM4 and RoMe. We comprehensively calcu-
+footprints grow, improving LBRAttn across all three models.           lated energy consumption by including the contributions of
+   LBRF F N is determined by their dimension size and archi-          data movement within the HBM, command generator, and
+tecture. DeepSeek-V3, with a small intermediate dimension             I/O interface. The underlying energy model for HBM4 is
+of 2,048, shows relatively low LBRF F N , while Grok 1                adopted from [2]. Compared to HBM4, RoMe reduces energy
+and Llama 3 have larger dimensions of 32,768 and 53,248,              consumption by 1.9%, 0.7%, and 0.7% for the three evaluated
+respectively. For the FFN layers, DeepSeek-V3 and Grok 1              LLMs, respectively. This improvement is primarily attributed
+employ an MoE architecture, while Llama 3 uses a dense                to the decreased number of ACTs and the reduced energy con-
+architecture. In MoE layers, only a subset of experts (top-k)         sumption within the interposer. Specifically, the ACT energy
+is activated, so LBRF F N improves only at large batch sizes          consumption is reduced to 55.5%, 86.0%, and 84.4%, respec-
+where more experts are selected. LBRF F N improves once all           tively. Because RoMe accesses DRAM via RD_row/WR_row,
+experts begin to be selected, occurring around a batch of 64 in       it requires only the minimal number of ACTs regardless of the
+DeepSeek-V3 and a batch of 8 in Grok 1 in our experiments.            amount of data accessed, thereby minimizing energy consump-
+   We omit results for the prefill stage, as its performance          tion from ACTs. Furthermore, interposer energy is reduced be-
+remains unchanged under both memory systems due to its                cause RoMe MC issues a single RD_row or WR_row instead
+compute-bound nature. This behavior stems from the charac-            of 32 RDs or WRs. Although overfetch may slightly increase
+teristics of the prefill stage. Unlike the decode stage,              the number of RDs and WRs, the overall overhead remains
+which typically processes a single input token at a time, the         marginal. Notably, the energy consumed by the command
+prefill stage handles thousands of input tokens simulta-              generator is negligible, contributing on average 0.06% relative
+neously. As a result, the workload is dominated by GEMM               to the total energy consumption. Overall, these results indicate
+operations. Moreover, the large number of input tokens leads          that RoMe achieves slight improvements in energy efficiency
+to significantly higher access volume to activations, weights,        while providing noticeable performance gains.
+and KV-cache compared to the decode stage. Across all three
+evaluated LLMs, we observe that the performance difference                                  VII. D ISCUSSION
+in the prefill stage remains within 0.1%, confirming its              Larger ECC codeword: RoMe may employ a larger ECC
+insensitivity to the underlying memory system.                        codeword by leveraging row access granularity (4 KB). HBM4
+                                                                      introduces two additional ECC pins per 32 DQ pins, building
+C. Area & Energy Overhead                                             on the on-die ECC that has been available since HBM2E [61].
+   First, we calculated the area overhead incurred by the four        Using a larger ECC codeword can reduce parity-bit overhead
+additional channels based on HBM3E specifications [34]. The           while maintaining comparable error correction and detection
+µbump pitch was assumed to be 22 µm [62], which applies               capabilities [36], [74]. This approach expands the design space
+to both the DRAM and logic die. The number of µbumps                  for ECC, enabling the use of either conventional ECC schemes
+per channel was conservatively scaled by increasing it to             or more robust low-overhead alternatives.
+four times the number required per channel [62], [77]. This           Hybrid architecture for fine-grained access: RoMe is op-
+configuration requires 48 additional µbumps for additional            timized for LLMs with coarse access granularity, but per-
+TSVs, corresponding to an area of approximately 0.14 mm2 .            formance may degrade under workloads with frequent fine-
+Considering the edge margin, the DRAM die area increases              grained accesses, such as sparse attention in gpt-oss [54] and
+by about 12%, and the logic die area grows proportionally,            DeepSeek-V3.2 [11]. While gpt-oss maintains sequential ac-
+resulting in a total area overhead of only 0.10%.                     cess using sliding windows, DeepSeek Sparse Attention (DSA)
+   We implemented the RoMe MC command scheduler and the               selects top-2048 tokens from history, causing unpredictable
+command generator in Verilog, and utilized Synopsys Design            and irregular access patterns when the sequence length exceeds
+Compiler with a 7nm process technology [9] to measure area            2048. This unpredictability can result in performance loss in
+RoMe due to overfetch. To mitigate this, RoMe can adopt a het-      Fine-grained access granularity: A body of work [2], [4],
+erogeneous system combining RoMe and conventional HBM4,             [7], [17], [35], [53], [64], [65], [69], [79], [80], [83] has
+assigning fine-grained requests to the latter. However, this        proposed energy-efficient fine-grained DRAM architectures.
+may remain underutilized when processing fine-grained ac-           [4], [83] enable DRAM chips within a DRAM module, which
+cesses, potentially leading to a reduction in overall bandwidth     originally operate in lock-step, to function independently.
+utilization. Another approach is enhancing RoMe’s memory            Fine-grained DRAM architectures [7], [17], [35], [51], [64],
+controller and command generator to support selective column        [69], [79], [80] divide the DRAM bank into independently op-
+access via mask bits, though this introduces latency variation      erating fine-grained memory arrays. They primarily lower row
+and added design complexity.                                        activation energy by reducing the row size or saving access
+Processor-RoMe co-design: The effectiveness of RoMe crit-           energy from data overfetch through finer access granularity,
+ically depends on the processor’s computational unit. RoMe          especially for applications with low spatial locality. In contrast
+is optimized for row-granularity data movement, making it           to prior work, RoMe focuses on the highly sequential memory
+highly synergistic with processors that integrate a few large       access pattern of LLM inference, which both minimizes the
+compute cores. A key example is the Google TPU, which em-           overfetch overhead and fully exploits channel- and bank-
+ploys a limited number of brawny cores (e.g., 2 in TPUv7 [16])      level parallelism. Through this approach, RoMe achieves a
+with large shared on-chip buffers. Such a design naturally ben-     simplified memory interface, greater scalability, improved per-
+efits from RoMe’s row access granularity by facilitating bulky      formance, and higher energy efficiency—even while increasing
+and sequential data transfer. Moreover, systems supporting          the row size and access granularity.
+explicit data management to and from the on-chip memory
+are preferred. This programmability enables the processor                                 IX. C ONCLUSION
+to fully exploit RoMe’s row access mechanism, maximizing
+                                                                       Motivated by the sequential and large memory traffic ex-
+throughput while efficiently controlling data movement.
+                                                                    hibited by large language models (LLMs), this paper proposes
+RoMe for training: RoMe can be applied seamlessly to
+                                                                    RoMe, a DRAM subsystem that adopts a row-granularity inter-
+LLM training workloads. Typically, LLM training operates
+                                                                    face. RoMe supports only row-level read and write commands,
+on microbatches, where individual sequences are processed,
+                                                                    eliminating column, bank group, and pseudo channel layers
+each containing 8,192 tokens [39], [43]. During the training
+                                                                    required by conventional HBM and dispensing with cache
+process, multiple tokens are processed in parallel to maximize
+                                                                    line transfers entirely. Freed from cache line granularity, we
+computational throughput. This high degree of parallelism en-
+                                                                    introduce the VBA organization, which efficiently supports
+sures that the memory access granularity is sufficiently large.
+                                                                    row-level access. We also present a command generator on
+Consequently, RoMe is highly feasible in training scenarios.
+                                                                    the logic die that reduces the C/A pin requirements between
+Other types of DRAM: The RoMe approach can be applied to
+                                                                    the memory controller and HBM. The freed pins are re-
+other DRAM types [18] besides HBM. First, the simplification
+                                                                    purposed as additional channel interfaces, enabling efficient
+of the MC architecture remains applicable, allowing a reduc-
+                                                                    HBM channel expansion with minimal cost. By simplifying
+tion in the area overhead associated with scheduling. However,
+                                                                    the HBM hierarchy, RoMe lightens both the scheduling logic
+because only HBM incorporates a logic die, the placement
+                                                                    and hardware overhead of the memory controller. Experiments
+of the command generator may differ, which could impose
+                                                                    on representative LLM workloads demonstrate that RoMe
+limitations on bandwidth expansion enabled by C/A pin reuse.
+                                                                    achieves higher performance and energy efficiency than HBM4
+In addition, unlike HBM, conventional DRAM devices have
+                                                                    with minimal additional hardware overhead. Any overfetch
+a limited number of connectable pins. Therefore, rather than
+                                                                    or load imbalance side effects introduced by row-granularity
+aggregating the saved pins to construct additional channels as
+                                                                    access remain negligible.
+in RoMe, increasing the number of data pins could be a more
+effective approach for bandwidth expansion.
+                                                                                        ACKNOWLEDGEMENTS
+                   VIII. R ELATED W ORK                                We appreciate the input from Gunjun Lee at Seoul Na-
+Coarse-grained access locality: Prior work has extensively          tional University (SNU) regarding sparse attention. This re-
+documented the issue of memory access granularity arising           search was in part supported by Institute of Information &
+from diverse application access patterns [1], [3], [36], [59],      communications Technology Planning & Evaluation (IITP)
+[74], [75], [81]. Specifically, [36], [59], [74], [75] identified   grant funded by the Korea government (MSIT) [RS-2021-
+problems regarding error correction, row buffer conflicts,          II211343, RS-2024-00456287, RS-2024-00402898, RS-2025-
+and unnecessary data overfetch in systems that support a            02304125], and by the National Research Foundation of Ko-
+static granularity. They proposed memory systems that support       rea (NRF) grant funded by MSIT [RS-2024-00405857]. The
+adaptive memory access granularity for different applications.      EDA tool was supported by the IC Design Education Center
+However, these designs do not take the memory access patterns       (IDEC), Korea. This work was done when Michael Jaemin
+specific to LLMs into account. Further, because they keep           Kim was at SNU. Jung Ho Ahn, the corresponding author, is
+the conventional memory interface unchanged, they still incur       with the Department of Intelligence and Information and the
+complex scheduling overhead.                                        Interdisciplinary Program in Artificial Intelligence, SNU.
+                              R EFERENCES                                        G. Nail, G. Mialon, G. Pang, G. Cucurell, H. Nguyen, H. Korevaar,
+                                                                                 H. Xu, H. Touvron, I. Zarov, I. Ibarra, Arrieta, I. Kloumann, I. Misra,
+ [1] A. Abulila, V. S. Mailthody, Z. Qureshi, J. Huang, N. S. Kim, J. Xiong,     I. Evtimov, J. Copet, J. Lee, J. Geffert, J. Vranes, J. Park, J. Mahadeokar,
+     and W.-m. Hwu, “FlatFlash: Exploiting the Byte-Accessibility of SSDs        J. Shah, J. v. d. Linde, J. Billock, J. Hong, J. Lee, J. Fu, J. Chi,
+     within a Unified Memory-Storage Hierarchy,” in ASPLOS, 2019.                J. Huang, J. Liu, J. Wang, J. Yu, J. Bitton, J. Spisak, J. Park, J. Rocca,
+ [2] V. Adhinarayanan, B. M. Beckmann, W. Li, M. Seyedzadeh, S. Blago-           J. Johnstun, J. Saxe, J. Jia, K. Alwala, Vasuden, K. Upasani, K. Plawiak,
+     durov, D. Aguren, and H. H. Lee, “Folded Banks: 3D-Stacked HBM              K. Li, K. Heafield, K. Stone, K. El-Arini, K. Iyer, K. Malik, K. Chiu,
+     Design for Fine-Grained Random-Access Bandwidth,” in ISCA, 2025.            K. Bhalla, L. Rantala-Yeary, L. v. d. Maaten, L. Chen, L. Tan, L. Jenkins,
+ [3] J. Ahn, M. Erez, and W. J. Dally, “The Design Space of Data-Parallel        L. Martin, L. Madaan, L. Malo, L. Blecher, L. Landzaat, L. Oliveira, de,
+     Memory Systems,” in SC, 2006.                                               M. Muzzi, M. Pasupuleti, M. Singh, M. Paluri, M. Kardas, M. Oldham,
+ [4] J. Ahn, N. P. Jouppi, C. Kozyrakis, J. Leverich, and R. S. Schreiber,       M. Rita, M. Pavlova, M. Kambadur, M. Lewis, M. Si, M. Singh,
+     “Future Scaling of Processor-Memory Interfaces,” in SC, 2009.               Kumar, M. Hassan, N. Goyal, N. Torabi, N. Bashlykov, N. Bogoychev,
+ [5] R. Ausavarungnirun, K. K.-W. Chang, L. Subramanian, G. H. Loh, and          N. Chatterji, O. Duchenne, O. Çelebi, P. Alrassy, P. Zhang, P. Li, P. Vasic,
+     O. Mutlu, “Staged Memory Scheduling: Achieving High Performance             P. Weng, P. Bhargava, P. Dubal, P. Krishnan, P. Koura, Singh, P. Xu,
+     and Scalability in Heterogeneous Systems,” in ISCA, 2012.                   Q. He, Q. Dong, R. Srinivasan, R. Ganapathy, R. Calderer, R. Cabral,
+ [6] S. Baek, M. Wi, S. Park, H. Nam, M. J. Kim, N. S. Kim, and J. Ahn,          Silveira, R. Stojnic, R. Raileanu, R. Girdhar, R. Patel, R. Sauvestre,
+     “Marionette: A RowHammer Attack via Row Coupling,” in ASPLOS,               R. Polidoro, R. Sumbaly, R. Taylor, R. Silva, R. Hou, R. Wang,
+     2025.                                                                       S. Hosseini, S. Chennabasappa, S. Singh, S. Bell, S. Kim, Sonia,
+ [7] N. Chatterjee, M. O’Connor, D. Lee, D. R. Johnson, S. W. Keckler,           S. Edunov, S. Nie, S. Narang, S. Raparthy, S. Shen, S. Wan, S. Bhosale,
+     M. Rhu, and W. J. Dally, “Architecting an Energy-Efficient DRAM             S. Zhang, S. Vandenhende, S. Batra, S. Whitman, S. Sootla, S. Collot,
+     System for GPUs,” in HPCA, 2017.                                            S. Gururangan, S. Borodinsky, T. Herman, T. Fowler, T. Sheasha,
+ [8] J. H. Cho, J. Kim, W. Y. Lee, D. U. Lee, T. K. Kim, H. B. Park,             T. Georgiou, T. Scialom, T. Speckbacher, T. Mihaylov, T. Xiao, U. Karn,
+     C. Jeong, M.-J. Park, S. G. Baek, S. Choi, B. K. Yoon, Y. J. Choi, K. Y.    V. Goswami, V. Gupta, V. Ramanathan, V. Kerkez, V. Gonguet, V. Do,
+     Lee, D. Shim, J. Oh, J. Kim, and S.-H. Lee, “A 1.2V 64Gb 341GB/s            V. Vogeti, V. Petrovic, W. Chu, W. Xiong, W. Fu, W. Meers, X. Martinet,
+     HBM2 Stacked DRAM with Spiral Point-to-Point TSV Structure and              X. Wang, X. Tan, Ellen, X. Xie, X. Jia, X. Wang, Y. Goldschlag, Y. Gaur,
+     Improved Bank Group Data Control,” in 2018 IEEE International Solid-        Y. Babaei, Y. Wen, Y. Song, Y. Zhang, Y. Li, Y. Mao, Z. Coudert,
+     State Circuits Conference (ISSCC), 2018.                                    Delpierre, Z. Yan, Z. Chen, Z. Papakipos, A. Singh, A. Grattafiori,
+ [9] L. T. Clark, V. Vashishtha, L. Shifren, A. Gujja, S. Sinha,                 A. Jain, A. Kelsey, A. Shajnfeld, A. Gangidi, A. Victoria, A. Goldstand,
+     B. Cline, C. Ramamurthy, and G. Yeric, “ASAP7: A 7-nm finFET                A. Menon, A. Sharma, A. Boesenberg, A. Vaughan, A. Baevski, A. Fein-
+     Predictive Process Design Kit,” Microelectronics Journal, 2016.             stein, A. Kallet, A. Sangani, A. Yunus, A. Lupu, A. Alvarado, A. Caples,
+     [Online]. Available: https://www.sciencedirect.com/science/article/pii/     A. Gu, A. Ho, A. Poulton, A. Ryan, A. Ramchandani, A. Franco,
+     S002626921630026X                                                           A. Saraf, A. Chowdhury, A. Gabriel, A. Bharambe, A. Eisenman,
+[10] W. J. Dally and B. P. Towles, Principles and Practices of Interconnection   A. Yazdan, B. James, B. Maurer, B. Leonhardi, B. Huang, B. Loyd,
+     Networks. Morgan Kaufmann Publishers Inc., 2004.                            B. Paola, De, B. Paranjape, B. Liu, B. Wu, B. Ni, B. Hancock, B. Wasti,
+[11] DeepSeek-AI, “DeepSeek-V3.2-Exp: Boosting Long-Context Efficiency           B. Spence, B. Stojkovic, B. Gamido, B. Montalvo, C. Parker, C. Burton,
+     with DeepSeek Sparse Attention,” 2025. [Online]. Available: https:          C. Mejia, C. Wang, C. Kim, C. Zhou, C. Hu, C.-H. Chu, C. Cai,
+     //github.com/deepseek-ai/DeepSeek-V3.2-Exp                                  C. Tindal, C. Feichtenhofer, D. Civin, D. Beaty, D. Kreymer, D. Li,
+[12] DeepSeek-AI, A. Liu, B. Feng, B. Xue, B. Wang, B. Wu, C. Lu,                D. Wyatt, D. Adkins, D. Xu, D. Testuggine, D. David, D. Parikh,
+     C. Zhao, C. Deng, C. Zhang, C. Ruan, D. Dai, D. Guo, D. Yang,               D. Liskovich, D. Foss, D. Wang, D. Le, D. Holland, E. Dowling,
+     D. Chen, D. Ji, E. Li, F. Lin, F. Dai, F. Luo, G. Hao, G. Chen, G. Li,      E. Jamil, E. Montgomery, E. Presani, E. Hahn, E. Wood, E. Brinkman,
+     H. Zhang, H. Bao, H. Xu, H. Wang, H. Zhang, H. Ding, H. Xin,                E. Arcaute, E. Dunbar, E. Smothers, F. Sun, F. Kreuk, F. Tian, F. Oz-
+     H. Gao, H. Li, H. Qu, J. Cai, J. Liang, J. Guo, J. Ni, J. Li, J. Wang,      genel, F. Caggioni, F. Guzmán, F. Kanayet, F. Seide, G. Florez, Medina,
+     J. Chen, J. Chen, J. Yuan, J. Qiu, J. Li, J. Song, K. Dong, K. Hu,          G. Schwarz, G. Badeer, G. Swee, G. Halpern, G. Thattai, G. Herman,
+     K. Gao, K. Guan, K. Huang, K. Yu, L. Wang, L. Zhang, L. Xu, L. Xia,         G. Sizov, Guangyi, Zhang, G. Lakshminarayanan, H. Shojanazeri,
+     L. Zhao, L. Wang, L. Zhang, M. Li, M. Wang, M. Zhang, M. Zhang,             H. Zou, H. Wang, H. Zha, H. Habeeb, H. Rudolph, H. Suk, H. Aspegren,
+     M. Tang, M. Li, N. Tian, P. Huang, P. Wang, P. Zhang, Q. Wang,              H. Goldman, I. Damlaj, I. Molybog, I. Tufanov, I.-E. Veliche, I. Gat,
+     Q. Zhu, Q. Chen, Q. Du, R. Chen, R. Jin, R. Ge, R. Zhang, R. Pan,           J. Weissman, J. Geboski, J. Kohli, J. Asher, J.-B. Gaya, J. Marcus,
+     R. Wang, R. Xu, R. Zhang, R. Chen, S. Li, S. Lu, S. Zhou, S. Chen,          J. Tang, J. Chan, J. Zhen, J. Reizenstein, J. Teboul, J. Zhong, J. Jin,
+     S. Wu, S. Ye, S. Ye, S. Ma, S. Wang, S. Zhou, S. Yu, S. Zhou, S. Pan,       J. Yang, J. Cummings, J. Carvill, J. Shepard, J. McPhie, J. Torres,
+     T. Wang, T. Yun, T. Pei, T. Sun, W. Xiao, W. Zeng, W. Zhao, W. An,          J. Ginsburg, J. Wang, K. Wu, K. U, Hou, K. Saxena, K. Prasad,
+     W. Liu, W. Liang, W. Gao, W. Yu, W. Zhang, X. Li, X. Jin, X. Wang,          K. Khandelwal, K. Zand, K. Matosich, K. Veeraraghavan, K. Michelena,
+     X. Bi, X. Liu, X. Wang, X. Shen, X. Chen, X. Zhang, X. Chen,                K. Li, K. Huang, K. Chawla, K. Lakhotia, K. Huang, L. Chen, L. Garg,
+     X. Nie, X. Sun, X. Wang, X. Cheng, X. Liu, X. Xie, X. Liu, X. Yu,           L. A, L. Silva, L. Bell, L. Zhang, L. Guo, L. Yu, L. Moshkovich,
+     X. Song, X. Shan, X. Zhou, X. Yang, X. Li, X. Su, X. Lin, Y. Li,            L. Wehrstedt, M. Khabsa, M. Avalani, M. Bhatt, M. Tsimpoukelli,
+     Y. Wang, Y. Wei, Y. Zhu, Y. Zhang, Y. Xu, Y. Xu, Y. Huang, Y. Li,           M. Mankus, M. Hasson, M. Lennie, M. Reso, M. Groshev, M. Naumov,
+     Y. Zhao, Y. Sun, Y. Li, Y. Wang, Y. Yu, Y. Zheng, Y. Zhang, Y. Shi,         M. Lathi, M. Keneally, M. Seltzer, L., M. Valko, M. Restrepo, M. Patel,
+     Y. Xiong, Y. He, Y. Tang, Y. Piao, Y. Wang, Y. Tan, Y. Ma, Y. Liu,          M. Vyatskov, M. Samvelyan, M. Clark, M. Macey, M. Wang, M. Her-
+     Y. Guo, Y. Wu, Y. Ou, Y. Zhu, Y. Wang, Y. Gong, Y. Zou, Y. He,              moso, Jubert, M. Metanat, M. Rastegari, M. Bansal, N. Santhanam,
+     Y. Zha, Y. Xiong, Y. Ma, Y. Yan, Y. Luo, Y. You, Y. Liu, Y. Zhou,           N. Parks, N. White, N. Bawa, N. Singhal, N. Egebo, N. Usunier,
+     Z. Wu, Z. Ren, Z. Ren, Z. Sha, Z. Fu, Z. Xu, Z. Huang, Z. Zhang,            N. Laptev, Pavlovich, N. Dong, N. Zhang, N. Cheng, O. Chernoguz,
+     Z. Xie, Z. Zhang, Z. Hao, Z. Gou, Z. Ma, Z. Yan, Z. Shao, Z. Xu,            O. Hart, O. Salpekar, O. Kalinli, P. Kent, P. Parekh, P. Saab, P. Balaji,
+     Z. Wu, Z. Zhang, Z. Li, Z. Gu, Z. Zhu, Z. Liu, Z. Li, Z. Xie, Z. Song,      P. Rittner, P. Bontrager, P. Roux, P. Dollar, P. Zvyagina, P. Ratanchan-
+     Z. Gao, and Z. Pan, “DeepSeek-V3 Technical Report,” 2024. [Online].         dani, P. Yuvraj, Q. Liang, R. Alao, R. Rodriguez, R. Ayub, R. Murthy,
+     Available: https://arxiv.org/abs/2412.19437                                 R. Nayani, R. Mitra, R. Li, R. Hogan, R. Battey, R. Wang, R. Maheswari,
+[13] A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-Dahle, A. Letman,          R. Howes, R. Rinott, S. Bondu, Jayesh, S. Datta, S. Chugh, S. Hunt,
+     A. Mathur, A. Schelten, A. Yang, A. Fan, A. Goyal, A. Hartshorn,            S. Dhillon, S. Sidorov, S. Pan, S. Verma, S. Yamamoto, S. Ramaswamy,
+     A. Yang, A. Mitra, A. Sravankumar, A. Korenev, A. Hinsvark, A. Rao,         S. Lindsay, S. Lindsay, S. Feng, S. Lin, S. Zha, Cindy, S. Shankar,
+     A. Zhang, A. Rodriguez, A. Gregerson, A. Spataru, B. Roziere, B. Biron,     S. Zhang, S. Zhang, S. Wang, S. Agarwal, S. Sajuyigbe, S. Chintala,
+     B. Tang, B. Chern, C. Caucheteux, C. Nayak, C. Bi, C. Marra,                S. Max, S. Chen, S. Kehoe, S. Satterfield, S. Govindaprasad, S. Gupta,
+     C. McConnell, C. Keller, C. Touret, C. Wu, C. Wong, C. Ferrer, Canton,      S. Cho, S. Virk, S. Subramanian, S. Choudhury, S. Goldman, T. Remez,
+     C. Nikolaidis, D. Allonsius, D. Song, D. Pintz, D. Livshits, D. Esiobu,     T. Glaser, T. Best, T. Kohler, T. Robinson, T. Li, T. Zhang, T. Matthews,
+     D. Choudhary, D. Mahajan, D. Garcia-Olano, D. Perino, D. Hupkes,            T. Chou, T. Shaked, V. Vontimitta, V. Ajayi, V. Montanez, V. Mohan,
+     E. Lakomkin, E. AlBadawy, E. Lobanova, E. Dinan, E. Smith, Michael,         V. Kumar, Satish, V. Mangla, V. Albiero, V. Ionescu, V. Poenaru, V. Mi-
+     F. Radenovic, F. Zhang, G. Synnaeve, G. Lee, G. Anderson, Lewis,            hailescu, Tiberiu, V. Ivanov, W. Li, W. Wang, W. Jiang, W. Bouaziz,
+                                                                                 W. Constable, X. Tang, X. Wang, X. Wu, X. Wang, X. Xia, X. Wu,
+     X. Gao, Y. Chen, Y. Hu, Y. Jia, Y. Qi, Y. Li, Y. Zhang, Y. Zhang,                S. Choi, I.-K. Kim, S. M. Yang, S.-Y. Kim, J. Jang, J. Kim, S.-H. Lee,
+     Y. Adi, Y. Nam, Yu, Wang, Y. Hao, Y. Qian, Y. He, Z. Rait, Z. DeVito,            Y. Jeon, J. Park, T.-K. Kim, D. Ka, S. Oh, J. Kim, J. Jeon, S. Kim, K. T.
+     Z. Rosnbrick, Z. Wen, Z. Yang, and Z. Zhao, “The Llama 3 Herd of                 Kim, T. Kim, H. Yang, D. Yang, M. Lee, H. Song, D. Jang, J. Shin,
+     Models,” 2024.                                                                   H. Kim, C. Baek, H. Jeong, J. Yoon, S.-K. Lim, K. Y. Lee, Y. J. Koo, M.-
+[14] X. Fu, Z. Zhang, H. Fan, G. Huang, M. El-Shabani, R. Huang,                      J. Park, J. Cho, and J. Kim, “13.4 A 48GB 16-High 1280GB/s HBM3E
+     R. Solanki, F. Wu, R. Diamant, and Y. Wang, “Distributed Training                DRAM with All-Around Power TSV and a 6-Phase RDQS Scheme
+     of Large Language Models on AWS Trainium,” in Proceedings of the                 for TSV Area Optimization,” in IEEE International Solid-State Circuits
+     2024 ACM Symposium on Cloud Computing (SoCC), 2024.                              Conference (ISSCC), 2024.
+[15] B. Fujun, J. Xiping, W. Song, Y. Bing, T. Jie, Z. Fengguo, W. Chunjuan,     [35] Y. Lee, H. Kim, S. Hong, and S. Kim, “Partial Row Activation for
+     W. Fan, L. Xiaodong, Y. Guoqing, F. Ni, L. Qiannan, L. Hua, W. Kexin,            Low-Power DRAM System,” in HPCA, 2017.
+     D. Huifu, B. Liang, J. Xuerong, L. Jin, L. Mei, W. Zhengwen, H. Sheng,      [36] S. Li, D. H. Yoon, K. Chen, J. Zhao, J. Ahn, J. B. Brockman, Y. Xie,
+     Z. Jun, Z. Qiong, S. Peng, Y. Daohong, C. Kau, D. Yang, C.-S. Ho,                and N. P. Jouppi, “MAGE: Adaptive Granularity and ECC for Resilient
+     S. Hongbin, L. Hangbing, L. Ming, K. Yi, and R. Qiwei, “A Stacked                and Power Efficient Memory Systems,” in SC, 2012.
+     Embedded DRAM Array for LPDDR4/4X using Hybrid Bonding 3D                   [37] A. Liu, B. Feng, B. Wang, B. Wang, B. Liu, C. Zhao, C. Dengr,
+     Integration with 34GB/s/1Gb 0.88pJ/b Logic-to-Memory Interface,” in              C. Ruan, D. Dai, D. Guo, D. Yang, D. Chen, D. Ji, E. Li, F. Lin,
+     IEEE International Electron Devices Meeting (IEDM), 2020.                        F. Luo, G. Hao, G. Chen, G. Li, H. Zhang, H. Xu, H. Yang, H. Zhang,
+[16] Google, “Ironwood: The First Google TPU for the Age of Inference,”               H. Ding, H. Xin, H. Gao, H. Li, H. Qu, J. Cai, J. Liang, J. Guo,
+     2025. [Online]. Available: https://blog.google/products/google-cloud/            J. Ni, J. Li, J. Chen, J. Yuan, J. Qiu, J. Song, K. Dong, K. Gao,
+     ironwood-tpu-age-of-inference/                                                   K. Guan, L. Wang, L. Zhang, L. Xu, L. Xia, L. Zhao, L. Zhang, M. Li,
+[17] H. Ha, A. Pedram, S. Richardson, S. Kvatinsky, and M. Horowitz,                  M. Wang, M. Zhang, M. Zhang, M. Tang, M. Li, N. Tian, P. Huang,
+     “Improving Energy Efficiency of DRAM by Exploiting Half Page Row                 P. Wang, P. Zhang, Q. Zhu, Q. Chen, Q. Du, R. Chen, R. Jin, R. Ge,
+     Access,” in MICRO, 2016.                                                         R. Pan, R. Xu, R. Chen, S. Li, S. Lu, S. Zhou, S. Chen, S. Wu, S. Ye,
+[18] H. Hassan, A. Olgun, A. G. Yağlıkçı, H. Luo, O. Mutlu, and E. Zurich,          S. Ma, S. Wang, S. Zhou, S. Yu, S. Zhou, S. Zheng, T. Wang, T. Pei,
+     “Self-Managing DRAM: A Low-Cost Framework for Enabling Au-                       T. Yuan, T. Sun, W. Xiao, W. Zeng, W. An, W. Liu, W. Liang, W. Gao,
+     tonomous and Efficient DRAM Maintenance Operations,” in MICRO,                   W. Zhang, X. Li, X. Jin, X. Wang, X. Bi, X. Liu, X. Wang, X. Shen,
+     2024.                                                                            X. Chen, X. Chen, X. Nie, X. Sun, X. Wang, X. Liu, X. Xie, X. Yu,
+[19] G. Heo, S. Lee, J. Cho, H. Choi, S. Lee, H. Ham, G. Kim, D. Mahajan,             X. Song, X. Zhou, X. Yang, X. Lu, X. Su, Y. Wu, Y. Li, Y. Wei,
+     and J. Park, “NeuPIMs: NPU-PIM Heterogeneous Acceleration for                    Y. Zhu, Y. Xu, Y. Huang, Y. Li, Y. Zhao, Y. Sun, Y. Li, Y. Wang,
+     Batched LLM Inferencing,” in ASPLOS, 2024.                                       Y. Zheng, Y. Zhang, Y. Xiong, Y. Zhao, Y. He, Y. Tang, Y. Piao,
+[20] Intel, “Performance Differences for Open-Page/Close-Page Pol-                    Y. Dong, Y. Tan, Y. Liu, Y. Wang, Y. Guo, Y. Zhu, Y. Wang, Y. Zou,
+     icy,” https://www.intel.com/content/www/us/en/content-details/826015/            Y. Zha, Y. Ma, Y. Yan, Y. You, Y. Liu, Z. Ren, Z. Ren, Z. Sha, Z. Fu,
+     performance-differences-for-open-page-close-page-policy.html, 2024.              Z. Huang, Z. Zhang, Z. Xie, Z. Hao, Z. Shao, Z. Wen, Z. Xu, Z. Zhang,
+[21] P. Jattke, M. Wipfli, F. Solt, M. Marazzi, M. Bölcskei, and K. Razavi,          Z. Li, Z. Wang, Z. Gu, Z. Li, and Z. Xie, “DeepSeek-V2: A Strong,
+     “ZenHammer: Rowhammer Attacks on AMD Zen-based Platforms,” in                    Economical, and Efficient Mixture-of-Experts Language Model,” 2024.
+     USENIX Security Symposium, 2024.                                                 [Online]. Available: https://arxiv.org/abs/2405.04434
+[22] JEDEC, “High Bandwidth Memory (HBM) DRAM,” 2013.                            [38] H. Luo, Y. C. Tuğrul, F. N. Bostancı, A. Olgun, A. G. Yağlıkçı,
+[23] JEDEC, “DDR4 SDRAM Standard,” 2017.                                              and O. Mutlu, “Ramulator 2.0: A Modern, Modular, and Extensible
+[24] JEDEC, “High Bandwidth Memory DRAM (HBM1, HBM2) Standard,”                       DRAM Simulator,” 2023. [Online]. Available: https://github.com/CMU-
+     2018.                                                                            SAFARI/ramulator2.git
+[25] JEDEC, “High Bandwidth Memory DRAM (HBM3) Standard,” 2022.                  [39] MLPerf, “Training Policies,” accessed in Oct 2025. [Online]. Available:
+[26] JEDEC, “DDR5 SDRAM Standard,” 2024.                                              https://github.com/mlcommons/training policies/tree/master
+[27] JEDEC, “High Bandwidth Memory (HBM4) DRAM,” 2025.                           [40] O. Mutlu and T. Moscibroda, “Stall-Time Fair Memory Access Schedul-
+[28] N. Jouppi, G. Kurian, S. Li, P. Ma, R. Nagarajan, L. Nai, N. Patil,              ing for Chip Multiprocessors,” in MICRO, 2007, pp. 146–160.
+     S. Subramanian, A. Swing, B. Towles, C. Young, X. Zhou, Z. Zhou, and        [41] O. Mutlu and T. Moscibroda, “Parallelism-Aware Batch Scheduling:
+     D. A. Patterson, “TPU v4: An Optically Reconfigurable Supercomputer              Enhancing both Performance and Fairness of Shared DRAM Systems,”
+     for Machine Learning with Hardware Support for Embeddings,” in ISCA,             in ISCA, 2008.
+     2023.                                                                       [42] H. Nam, S. Baek, M. Wi, M. J. Kim, J. Park, C. Song, N. S. Kim,
+[29] D. Kaseridis, J. Stuecheli, and L. K. John, “Minimalist Open-page:               and J. Ahn, “DRAMScope: Uncovering DRAM Microarchitecture and
+     A DRAM Page-mode Scheduling Policy for the Many-core Era,” in                    Characteristics by Issuing Memory Commands,” in ISCA, 2024.
+     MICRO, 2011.                                                                [43] D. Narayanan, M. Shoeybi, J. Casper, P. LeGresley, M. Patwary,
+[30] H. Kim, Y. Choi, J. Park, B. Bae, H. Jeong, S. M. Lee, J. Yeon, M. Kim,          V. Korthikanti, D. Vainbrand, P. Kashinkunti, J. Bernauer, B. Catanzaro,
+     C. Park, B. Gu, C. Lee, J. Bae, S. Bae, Y. Cha, W. Choe, J. Choi, J. Ha,         A. Phanishayee, and M. Zaharia, “Efficient Large-Scale Language Model
+     H. Han, N. Hwang, S. Hwang, K. Jang, H. Je, H. Jeon, J. Jeon, H. Jeong,          Training on GPU Clusters Using Megatron-LM,” in SC, 2021.
+     Y. Jung, D. Kang, H. Kim, M. Kim, M. Kim, S. Kim, S. Kim, W. Kim,           [44] K. J. Nesbit, N. Aggarwal, J. Laudon, and J. E. Smith, “Fair Queuing
+     Y. Kim, Y. Kim, Y. Ku, J. K. Lee, J. Lee, K. Lee, S. Lee, M. Noh,                Memory Systems,” in MICRO, 2006, pp. 208–222.
+     H. Oh, G. Park, S. Park, J. Seo, J. Seong, J. Paik, N. P. Lopes, and        [45] D. Niu, S. Li, Y. Wang, W. Han, Z. Zhang, Y. Guan, T. Guan, F. Sun,
+     S. Yoo, “TCP: A Tensor Contraction Processor for AI Workloads,” in               F. Xue, L. Duan, Y. Fang, H. Zheng, X. Jiang, S. Wang, F. Zuo,
+     ISCA, 2024.                                                                      Y. Wang, B. Yu, Q. Ren, and Y. Xie, “184QPS/W 64Mb/mm23D
+[31] Y. Kim, D. Han, O. Mutlu, and M. Harchol-Balter, “ATLAS: A Scalable              Logic-to-DRAM Hybrid Bonding with Process-Near-Memory Engine
+     and High-Performance Scheduling Algorithm for Multiple Memory                    for Recommendation System,” in IEEE International Solid-State Circuits
+     Controllers,” in HPCA, 2010.                                                     Conference (ISSCC), 2022.
+[32] Y. Kim, M. Papamichael, O. Mutlu, and M. Harchol-Balter, “Thread            [46] NVIDIA, “NVIDIA A100 Tensor Core GPU Architecture,”
+     Cluster Memory Scheduling: Exploiting Differences in Memory Access               2020. [Online]. Available: https://images.nvidia.com/aem-dam/en-
+     Behavior,” in HPCA, 2010.                                                        zz/Solutions/data-center/nvidia-ampere-architecture-whitepaper.pdf
+[33] D. U. Lee, K. W. Kim, K. W. Kim, H. Kim, J. Y. Kim, Y. J. Park, J. H.       [47] NVIDIA, “NVIDIA H100 GPU,” 2024. [Online]. Avail-
+     Kim, D. S. Kim, H. B. Park, J. W. Shin, J. H. Cho, K. H. Kwon, M. J.             able:      https://resources.nvidia.com/en-us-hopper-architecture/nvidia-
+     Kim, J. Lee, K. W. Park, B. Chung, and S. Hong, “25.2 A 1.2V 8Gb                 tensor-core-gpu-datasheet
+     8-Channel 128GB/s High-Bandwidth Memory (HBM) Stacked DRAM                  [48] NVIDIA, “NVIDIA Blackwell Architecture Technical Brief,”
+     with Effective Microbump I/O Test Methods Using 29nm Process and                 2025. [Online]. Available: https://resources.nvidia.com/en-us-blackwell-
+     TSV,” in IEEE International Solid-State Circuits Conference Digest of            architecture
+     Technical Papers (ISSCC), 2014.                                             [49] NVIDIA, “NVIDIA Blackwell Architecture Technical Brief,” 2025.
+[34] J. Lee, K. Cho, C. K. Lee, Y. Lee, J.-H. Park, S.-H. Oh, Y. Ju, C. Jeong,        [Online]. Available: https://www.nvidia.com/en-us/solutions/ai-factories
+     H. S. Cho, J. Lee, T.-S. Yun, J. H. Cho, S. Oh, J. Moon, Y.-J. Park, H.-    [50] S. O, Y. H. Son, N. S. Kim, and J. Ahn, “Row-buffer decoupling: A
+                                                                                      case for low-latency dram microarchitecture,” in ISCA, 2014.
+[51] M. O’Connor, N. Chatterjee, D. Lee, J. Wilson, A. Agrawal, S. W. Keck-      [65] K. Sudan, N. Chatterjee, D. Nellans, M. Awasthi, R. Balasubramo-
+     ler, and W. J. Dally, “Fine-Grained DRAM: Energy-Efficient DRAM for              nian, and A. Davis, “Micro-pages: Increasing DRAM Efficiency with
+     Extreme Bandwidth Systems,” in MICRO, 2017.                                      Locality-aware Data Placement,” in ASPLOS, 2010.
+[52] C.-S. Oh, K. C. Chun, Y.-Y. Byun, Y.-K. Kim, S.-Y. Kim, Y. Ryu,             [66] The Korea Economic Daily Global Edition, “SK Hynix Ships World’s
+     J. Park, S. Kim, S. Cha, D. Shin, J. Lee, J.-P. Son, B.-K. Ho, S.-J.             First 12-Layer HBM4 Samples Early,” 2025. [Online]. Available: https:
+     Cho, B. Kil, S. Ahn, B. Lim, Y. Park, K. Lee, M.-K. Lee, S. Baek,                //www.kedglobal.com/korean-chipmakers/newsView/ked202503190006
+     J. Noh, J.-W. Lee, S. Lee, S. Kim, B. Lim, S.-K. Choi, J.-G. Kim, H.-I.     [67] The Korean Economic Daily, “Samsung to Mass-Produce HBM4
+     Choi, H.-J. Kwon, J. J. Kong, K. Sohn, N. S. Kim, K.-I. Park, and J.-B.          on 4 nm Foundry Process,” 2024. [Online]. Available: https:
+     Lee, “22.1 A 1.1V 16GB 640GB/s HBM2E DRAM with a Data-Bus                        //www.kedglobal.com/korean-chipmakers/newsView/ked202407150016
+     Window-Extension Technique and a Synergetic On-Die ECC Scheme,”             [68] H. Touvron, L. Martin, K. Stone, P. Albert, A. Almahairi, Y. Babaei,
+     in IEEE International Solid-State Circuits Conference (ISSCC), 2020.             N. Bashlykov, S. Batra, P. Bhargava, S. Bhosale et al., “Llama 2: Open
+[53] A. Olgun, F. N. Bostanci, G. Francisco de Oliveira Junior, Y. C.                 Foundation and Fine-Tuned Chat Models,” 2023. [Online]. Available:
+     Tugrul, R. Bera, A. G. Yaglikci, H. Hassan, O. Ergin, and O. Mutlu,              https://arxiv.org/abs/2307.09288
+     “Sectored DRAM: A Practical Energy-Efficient and High-Performance           [69] A. N. Udipi, N. Muralimanohar, N. Chatterjee, R. Balasubramonian,
+     Fine-Grained DRAM Architecture,” TACO, 2024.                                     A. Davis, and N. P. Jouppi, “Rethinking DRAM Design and Organiza-
+[54] OpenAI, “gpt-oss-120b & gpt-oss-20b Model Card,” 2025. [Online].                 tion for Energy-Constrained Multi-Cores,” in ISCA, 2010.
+     Available: https://arxiv.org/abs/2508.10925                                 [70] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+[55] J. Park, J. Choi, K. Kyung, M. J. Kim, Y. Kwon, N. S. Kim, and J. Ahn,           L. u. Kaiser, and I. Polosukhin, “Attention is All You Need,” in NeurIPS,
+     “AttAcc! Unleashing the Power of PIM for Batched Transformer-based               2017.
+     Generative Model Inference,” in ASPLOS, 2024.                               [71] M. Wang, Z. Zhang, Y. Cheng, and S. Nepal, “DRAMDig: A
+[56] M.-J. Park, H. S. Cho, T.-S. Yun, S. Byeon, Y. J. Koo, S. Yoon, D. U.            Knowledge-assisted Tool to Uncover DRAM Address Mapping,” in
+     Lee, S. Choi, J. Park, J. Lee, K. Cho, J. Moon, B.-K. Yoon, Y.-J. Park,          Design Automation Conference (DAC), 2020.
+     S.-m. Oh, C. K. Lee, T.-K. Kim, S.-H. Lee, H.-W. Kim, Y. Ju, S.-K.          [72] M. Wi, S. Baek, S. Park, M. Erez, and J. H. Ahn, “Sudoku: Decomposing
+     Lim, S. G. Baek, K. Y. Lee, S. H. Lee, W. S. We, S. Kim, Y. Choi,                DRAM Address Mapping into Component Functions,” arXiv preprint
+     S.-H. Lee, S. M. Yang, G. Lee, I.-K. Kim, Y. Jeon, J.-H. Park, J. C. Yun,        arXiv:2506.15918, 2025.
+     C. Park, S.-Y. Kim, S. Kim, D.-Y. Lee, S.-H. Oh, T. Hwang, J. Shin,         [73] xAI, “grok1,” 2024. [Online]. Available: https://github.com/xai-org/
+     Y. Lee, H. Kim, J. Lee, Y. Hur, S. Lee, J. Jang, J. Chun, and J. Cho, “A         grok-1
+     192-Gb 12-High 896-GB/s HBM3 DRAM with a TSV Auto-Calibration               [74] D. H. Yoon, M. K. Jeong, and M. Erez, “Adaptive Granularity Memory
+     Scheme and Machine-Learning-Based Layout Optimization,” in IEEE                  Systems: A Tradeoff between Storage Efficiency and Throughput,” in
+     International Solid-State Circuits Conference (ISSCC), 2022.                     ISCA, 2011.
+[57] P. Patel, E. Choukse, C. Zhang, A. Shah, Goiri, S. Maleki, and              [75] D. H. Yoon, M. K. Jeong, M. Sullivan, and M. Erez, “The Dynamic
+     R. Bianchini, “Splitwise: Efficient Generative LLM Inference Using               Granularity Memory System,” in ISCA, 2012.
+     Phase Splitting,” in ISCA, 2024.                                            [76] G.-I. Yu, J. S. Jeong, G.-W. Kim, S. Kim, and B.-G. Chun, “Orca: A Dis-
+[58] P. Pessl, D. Gruss, C. Maurice, M. Schwarz, and S. Mangard, “DRAMA:              tributed Serving System for Transformer-Based Generative Models,” in
+     Exploiting DRAM Addressing for Cross-CPU Attacks,” in 25th USENIX                USENIX Symposium on Operating Systems Design and Implementation
+     Security Symposium (USENIX Security 16), 2016.                                   (OSDI 22), 2022.
+[59] M. Rhu, M. Sullivan, J. Leng, and M. Erez, “A Locality-Aware Memory         [77] S. Yun, K. Kyung, J. Cho, J. Choi, J. Kim, B. Kim, S. Lee, K. Sohn, and
+     Hierarchy for Energy-Efficient GPU Architectures,” in MICRO, 2013.               J. Ahn, “Duplex: A Device for Large Language Models with Mixture
+[60] S. Rixner, W. J. Dally, U. J. Kapasi, P. Mattson, and J. D. Owens,               of Experts, Grouped Query Attention, and Continuous Batching,” in
+     “Memory Access Scheduling,” in ISCA, 2000.                                       MICRO, 2024.
+[61] Y. Ryu, S.-G. Ahn, J. H. Lee, J. Park, Y. K. Kim, H. Kim, Y. G. Song,       [78] S. Yun, S. Park, H. Nam, Y. Lee, G. Lee, K. Kyung, S. Kim, N. S.
+     H.-W. Cho, S. Cho, S. H. Song, H. Lee, U. Shin, J. Ahn, J.-M. Ryu,               Kim, J. Kim, H. Kim, J. Cho, S. Baek, and J. Ahn, “The New LLM
+     S. Lee, K.-H. Lim, J. Lee, J. H. Park, J.-S. Jeong, S. Joo, D. Cho, S. Y.        Bottleneck: A Systems Perspective on Latent Attention and Mixture-
+     Kim, M. Lee, H. Kim, M. Kim, J.-S. Kim, J. Kim, H. G. Kang, M.-K.                of-Experts,” 2025. [Online]. Available: https://arxiv.org/abs/2507.15465
+     Lee, S.-R. Kim, Y.-C. Kwon, Y. Y. Byun, K. Lee, S. Park, J. Youn,           [79] C. Zhang and X. Guo, “Enabling Efficient Fine-Grained DRAM Acti-
+     M.-O. Kim, K. Sohn, S.-J. Hwang, and J. Lee, “A 16 GB 1024 GB/s                  vations with Interleaved I/O,” in ISLPED, 2017.
+     HBM3 DRAM With Source-Synchronized Bus Design and On-Die Error              [80] T. Zhang, K. Chen, C. Xu, G. Sun, T. Wang, and Y. Xie, “Half-
+     Control Scheme for Enhanced RAS Features,” IEEE Journal of Solid-                DRAM: A High-bandwidth and Low-power DRAM Architecture from
+     State Circuits, 2023.                                                            the Rethinking of Fine-grained Activation,” in ISCA, 2014.
+[62] SK hynix, “Advanced Packaging Technology for Beyond                         [81] X. Zhang, T. Lu, Y. Chang, K. Zhang, and M. Chen, “Morpheus: An
+     Memory,” 2023. [Online]. Available: https://www.theise.org/wp-                   Adaptive DRAM Cache with Online Granularity Adjustment for Dis-
+     content/uploads/2023/10/Tutorial1-4 %EC%86%90%ED%98%B8%                          aggregated Memory,” in International Conference on Computer Design
+     EC%98%81%EC%88%98%EC%84%9D%EB%8B%98 SK%ED%                                       (ICCD), 2023.
+     95%98%EC%9D%B4%EB%8B%89%EC%8A%A4.pdf                                        [82] Z. Zhang, Z. Zhu, and X. Zhang, “A Permutation-based Page Interleav-
+[63] A. Smith, G. H. Loh, M. J. Schulte, M. Ignatowski, S. Naffziger,                 ing Scheme to Reduce Row-buffer Conflicts and Exploit Data Locality,”
+     M. Mantor, M. Fowler, N. Kalyanasundharam, V. Alla, N. Malaya, J. L.             in MICRO, 2000.
+     Greathouse, E. Chapman, and R. Swaminathan, “Realizing the AMD              [83] H. Zheng, J. Lin, Z. Zhang, E. Gorbatov, H. David, and Z. Zhu, “Mini-
+     Exascale Heterogeneous Processor Vision,” in ISCA, 2024.                         Rank: Adaptive DRAM Architecture for Improving Memory Power
+[64] Y. H. Son, O. Seongil, H. Yang, D. Jung, J. Ahn, J. Kim, J. Kim, and             Efficiency,” in MICRO, 2008.
+     J. W. Lee, “Microbank: Architecting Through-Silicon Interposer-Based
+     Main Memory Systems,” in SC, 2014.
+

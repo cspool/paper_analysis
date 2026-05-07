@@ -1,0 +1,894 @@
+    JanusQuant: Accurate and Efficient 2-bit KV Cache
+        Quantization for Long-Context Inference
+                Chengyu Sun                                         Yaqi Xia                                     Hulin Wang
+    School of Computer Science, Wuhan               School of Computer Science, Wuhan                School of Computer Science, Wuhan
+                University                                      University                                       University
+               Wuhan, China                                    Wuhan, China                                     Wuhan, China
+        chengyusun@whu.edu.cn                              yaqixia@whu.edu.cn                             wonghulin@whu.edu.cn
+
+                Donglin Yang                                    Xiaobo Zhou                                    Dazhao Cheng∗
+              Nvidia Corporation                         IOTSC & Department of CIS,                  School of Computer Science, Wuhan
+               Santa Clara, USA                             University of Macau                                  University
+             dongliny@nvidia.com                               Macau, China                                     Wuhan, China
+                                                          waynexzhou@um.edu.mo                              dcheng@whu.edu.cn
+
+Abstract                                                                        Keywords: Long-context Inference, KV Cache Quantization
+Long-context large language models (LLMs) have seen wide-                       ACM Reference Format:
+spread adoption in recent years. However, during inference,                     Chengyu Sun, Yaqi Xia, Hulin Wang, Donglin Yang, Xiaobo Zhou,
+the key-value (KV) cache—which stores intermediate acti-                        and Dazhao Cheng. 2026. JanusQuant: Accurate and Efficient 2-bit
+vations—consumes significant memory, particularly as se-                        KV Cache Quantization for Long-Context Inference. In Proceedings
+quence lengths grow. Quantization offers a promising path to                    of the 31st ACM SIGPLAN Annual Symposium on Principles and
+compress KV cache, but existing 2-bit approaches fall short                     Practice of Parallel Programming (PPoPP ’26), January 31 – February
+of achieving optimal inference efficiency due to hardware-                      4, 2026, Sydney, NSW, Australia. ACM, New York, NY, USA, 14 pages.
+unfriendly algorithms and system implementations.                               https://doi.org/10.1145/3774934.3786428
+   We present JanusQuant, a 2-bit KV cache quantization
+system that achieves both high accuracy and end-to-end                          1    Introduction
+efficiency through algorithm–system co-design for long-
+context generation tasks. At its core is RtSmooth, a novel                      Large language models (LLMs) [1, 8, 38] have demonstrated
+runtime smoothing quantization algorithm that mitigates                         exceptional performance across a wide range of advanced ap-
+outlier-induced accuracy loss via adaptive transformation.                      plications, significantly impacting our daily lives [22, 29, 31,
+Building on RtSmooth, JanusQuant further enhances quan-                         45, 49]. With the growing demand for tasks such as document
+tized inference with a series of optimizations: a fast abs-                     summarization and code assistance, LLMs are increasingly
+max positioning technique for lightweight quantization, a                       expected to handle longer input contexts. Recent models like
+memory-efficient data structure for managing recent tokens,                     Deepseek-R1 [9] and Llama-3.3 [28], for example, support se-
+and a custom mixed-precision attention kernel to acceler-                       quences up to 128K tokens. However, this extended context
+ate computation. Across representative LLMs, JanusQuant                         capability introduces significant deployment challenges. As
+preserves 99% of FP16 accuracy, reduces KV cache memory                         sequence lengths grow, the key-value (KV) cache—a transient
+usage by up to 5.3×, and delivers up to 4.45× faster decod-                     structure generated during autoregressive inference—begins
+ing throughput compared to state-of-the-art methods, while                      to dominate memory usage. For instance, while the Llama2-
+scaling efficiently to long-context inference.                                  13B model has a fixed weight size of 24.5GB, serving a sin-
+                                                                                gle request with 128K tokens in FP16 requires over 100GB
+CCS Concepts: • Computing methodologies → Parallel                              of KV cache—far exceeding the capacity of a typical A100-
+algorithms; Natural language processing.                                        40GB GPU. Moreover, the attention mechanism must access
+                                                                                all stored KV pairs during decoding, making the process
+∗ Corresponding author.
+                                                                                highly memory-bound. As KV cache memory consumption
+                                                                                increases, this memory bottleneck becomes a dominant lim-
+                                                                                iter of inference performance.
+                                                                                   Quantization is a direct and effective technique for re-
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         ducing the memory footprint of the KV cache. By convert-
+tional License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                ing FP16 activations into lower-precision formats, signif-
+© 2026 Copyright held by the owner/author(s).                                   icant memory savings can be achieved. Prior works such
+ACM ISBN 979-8-4007-2310-0/2026/01                                              as FlexGen [35] and Atom [53] have incorporated 4-bit KV
+https://doi.org/10.1145/3774934.3786428                                         cache quantization into inference optimization pipelines,
+
+
+
+                                                                          301
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia   Chengyu Sun, Yaqi Xia, Hulin Wang, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng
+
+
+                                                                              and efficiency, thereby realizing the practical potential of
+                                                                              2-bit quantization in LLM inference.
+                                                                                 On the algorithmic front, JanusQuant introduces
+                                                                              RtSmooth, a runtime per-token smoothing transformation
+                                                                              that mitigates the impact of outliers. RtSmooth narrows
+                                                                              intra-channel value gaps, enabling a more balanced repre-
+                                                                              sentation across tokens. Unlike static calibration methods,
+                                                                              RtSmooth dynamically adapts to KV cache variations across
+                                                                              requests and sequence lengths, improving accuracy under
+                                                                              diverse workloads. From a system perspective, JanusQuant
+                                                                              builds on a key observation: the channel holding the
+                                                                              absolute maximum (absmax) value per token is typically
+Figure 1. Efficiency and accuracy of quantization methods.
+                                                                              sparse and predictable. Leveraging this, we propose a fast
+                                                                              absmax positioning technique that accesses fewer than
+demonstrating promising gains in efficiency. As serving sys-                  2% of channels to compute smoothing factors at runtime,
+tems strive for even higher compression ratios to support                     significantly lowering outlier handling overhead. To further
+longer context lengths on resource-constrained GPUs, 2-bit                    enhance memory efficiency, we design a new data structure
+KV cache quantization emerges as a compelling alternative.                    for recent token reservation, which minimizes memory
+However, our analysis reveals a critical limitation: existing                 concatenation overhead during decoding. We also develop
+2-bit quantization methods struggle to achieve an effective                   a custom mixed-precision attention kernel that fuses
+balance between accuracy and inference efficiency.                            dequantization and attention computation, reducing kernel
+    Several efficiency-oriented quantization systems, such as                 launch and memory access overhead.
+Atom [53] and QServe [24], aim to enhance inference effi-                        We implement JanusQuant on top of PyTorch [32] and
+ciency by using offline calibration to determine quantization                 Transformers [41], supporting LLMs such as the Llama, Mis-
+parameters and integrating these parameters with weights                      tral, Vicuna and Qwen families. JanusQuant is lightweight
+to minimize runtime overhead. However, these methods ex-                      and easy to integrate into other models. To our knowledge,
+hibit unacceptable accuracy degradation when applied at                       JanusQuant is the first system to fully leverage 2-bit KV
+2-bit precision. We attribute this to two key factors. First,                 cache quantization to achieve both high accuracy and effi-
+while per-token quantization is straightforward and efficient,                cient inference in practical long-context LLM deployment.
+it leads to interference between channels: outlier values in                     Our contributions are summarized as follows:
+one channel can significantly distort the quantization of
+                                                                                  • Characterization of design limitations: We analyze the
+neighboring values. Second, offline calibration is unable to
+                                                                                    limitations of existing 2-bit KV cache quantization sys-
+adapt to dynamic runtime variations across different input
+                                                                                    tems and identify key sources of overhead, including
+requests and sequence lengths, making it ill-suited for man-
+                                                                                    inefficient token caching, hardware-unfriendly outlier
+aging outliers during generation.
+                                                                                    handling, and separate dequantization operations.
+    To preserve model quality, accuracy-oriented quantization
+                                                                                  • Quantization algorithm: We propose RtSmooth, a run-
+systems—SKVQ [12], KVQuant [15], and KIVI [27]—adopt
+                                                                                    time per-token smoothing algorithm that adaptively
+advanced techniques including channel reordering, dense-
+                                                                                    mitigates outliers to reduce quantization difficulty. To
+and-sparse quantization, and recent token reservation. How-
+                                                                                    minimize overhead, we introduce a fast absmax posi-
+ever, our analysis shows that these methods often incur
+                                                                                    tioning technique that exploits the sparsity and regu-
+higher latency than FP16 baselines without quantization.
+                                                                                    larity of per-token maxima.
+We attribute this inefficiency to three key sources of over-
+                                                                                  • System-level optimizations: We design a memory-
+head. First, these systems require explicit outlier detection
+                                                                                    efficient token cache and a custom mixed-precision
+and extraction prior to quantization, introducing additional
+                                                                                    attention kernel to address overheads in KV to-
+computation and global memory access overhead. Second,
+                                                                                    ken management and computation. These system
+the caching strategies used for recent token reservation are
+                                                                                    components co-optimize with RtSmooth to deliver
+costly, introducing memory concatenation overhead during
+                                                                                    high-speed inference.
+the decoding process. Third, they rely on a separate dequanti-
+zation kernel prior to attention computation, adding further                    Experimental results on several representative
+latency due to dequantization overhead.                                       LLMs—across varying model sizes and context lengths—show
+    To this end, we propose JanusQuant, a 2-bit KV cache                      that JanusQuant delivers decoding speedups of 5.64× over
+quantization system tailored for long-context LLM inference.                  FP16, 5.84× over KIVI, 4.45× over QServe, and 2.50×
+As shown in Figure 1, JanusQuant leverages a co-design of                     over DuoAttention. Additionally, JanusQuant reduces
+algorithm and system to simultaneously improve accuracy                       long-context KV cache memory consumption by 5.3×
+
+
+
+                                                                        302
+JanusQuant                                                                       PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+compared to FP16, enabling more efficient deployment on                   Table 1. Existing efficiency-oriented quantization systems
+resource-constrained hardware.                                            fail to maintain models’ accuracy when extending their so-
+                                                                          lutions to 2-bit precision.
+2     Background and Motivation
+2.1   Generative Inference and KV Cache                                          Methods         Accuracy (Llama2-7B perplexity) ↓
+                                                                                   FP16                          5.47
+LLMs typically adopt a decoder-only transformer architec-
+                                                                                Atom [53]            4-bit: 5.93 / 2-bit: 103.05
+ture optimized for next-token prediction. The inference pro-
+                                                                                QServe [24]           4-bit: 5.70 / 2-bit: 11.36
+cess consists of two stages: prefill and decoding. In the prefill
+stage, the model processes the entire input prompt to com-
+pute contextual representations and generate the first output
+token. In the decoding stage, LLMs iteratively generate one
+token at a time, using the most recent token along with pre-
+viously generated tokens as input. Central to this process is
+the self-attention mechanism, which enables each token to
+incorporate contextual information from preceding tokens.
+The core computation is multi-head attention, defined as:
+                                        𝑄 × 𝐾𝑇
+       𝐴𝑡𝑡𝑒𝑛𝑡𝑖𝑜𝑛(𝑄, 𝐾, 𝑉 ) = 𝑆𝑜 𝑓 𝑡𝑚𝑎𝑥 (   √    ) ×𝑉       (1)
+                                            ℎ
+                                                                            Figure 2. Magnitude of the KV cache on Llama2-13B.
+where the Query (𝑄), Key (𝐾), and Value (𝑉 ) matrices are
+computed by projecting input tokens through correspond-
+ing learned weight matrices, and ℎ denotes the number of                  and zero point for the entire tensor. Per-channel quantiza-
+attention heads. During the prefill stage, 𝑄, 𝐾, and 𝑉 have               tion assigns distinct parameters to each column, while per-
+the same dimensions, proportional to the prompt length.                   token quantization does so for each row. A more fine-grained
+In the decoding stage, however, the attention computation                 approach, per-group quantization, further subdivides each
+involves only a single 𝑄 (from the current token) and all pre-            channel or token into groups, applying separate quantization
+viously computed 𝐾 and 𝑉 matrices. To avoid recomputing                   parameters per group. We denote the group size as 𝑔.
+𝐾 and 𝑉 at each decoding step, these matrices are cached in
+memory—known as the KV cache. This cache significantly                    2.3   Challenges in 2-bit KV Cache Quantization
+accelerates inference but introduces memory and bandwidth                 Numerous studies [3, 24, 35, 53] have employed 4-bit KV
+challenges, especially for long sequences.                                cache quantization as part of inference optimization strate-
+                                                                          gies. However, as LLMs scale to longer context lengths, 4-bit
+2.2   Quantization Technique
+                                                                          quantization increasingly falls short on resource-constrained
+While the KV cache reduces computation during decoding,                   GPUs. For example, applying 4-bit group quantization with
+its memory usage grows linearly with sequence length,                     a group size of 𝑔 = 128 to a 128K-token sequence results
+becoming a major bottleneck for deploying LLMs on                         in 26.6GB of KV cache memory usage—still exceeding the
+resource-constrained hardware. Quantization is an effec-                  capacity of an A100-40GB GPU when serving the Llama2-7B
+tive technique to compress the KV cache by mapping                        model, which already occupies 14GB of weights.
+high-precision floating-point values to 𝑛-bit low-precision                  To achieve higher compression, 2-bit quantization
+discrete integers. A typical quantization process involves                presents a compelling alternative. It not only enables sup-
+the following steps:                                                      port for longer contexts, but also offers greater theoretical
+1. Compute quantization parameters—specifically, the scaling              speedups due to the memory-bound nature of attention
+factor 𝑠 and the zero point 𝑧:                                            operations. However, existing 2-bit KV cache quantization
+                 𝑚𝑎𝑥 (𝑋 ) − 𝑚𝑖𝑛(𝑋 )                                       systems struggle to balance accuracy and efficiency, thereby
+            𝑠=                        , 𝑧 = 𝑚𝑖𝑛(𝑋 )        (2)            hindering their practical deployment.
+                        2𝑛 − 1
+2. Quantize the original tensor 𝑋 to a low-precision 𝑄 𝑥 :                2.3.1 Accuracy Limitations of Prior Efficiency-
+                              𝑋 −𝑧                                        oriented Methods. Efficiency-oriented methods such
+                𝑄 𝑥 = 𝑐𝑙𝑎𝑚𝑝 (        , 0, 2𝑛 − 1)          (3)
+                                 𝑠                                        as Atom [53] and QServe [24] apply per-token group
+3. Dequantize 𝑄 𝑥 to an approximate high-precision 𝑋ˆ :                   quantization to the KV cache, leveraging row-major
+                                                                          memory access patterns for faster execution. To reduce
+                       𝑋ˆ = (𝑄 𝑥 × 𝑠) + 𝑧                  (4)            accuracy degradation caused by outliers, QServe introduces
+   Quantization can be applied at different levels of granu-              a per-channel smoothing transformation for the 𝐾 cache,
+larity. Per-tensor quantization uses a single scaling factor              adapted from SmoothQuant [43]. Specifically, channels in
+
+
+
+                                                                    303
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia   Chengyu Sun, Yaqi Xia, Hulin Wang, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng
+
+
+
+
+                                                                              Figure 4. Workflow of accuracy-oriented 2-bit KV cache
+                                                                              quantization methods.
+Figure 3. The absmax value per channel varies with different
+requests and different sequence lengths.                                      across requests and sequence lengths. Because the smooth-
+                                                                              ing factors are fixed at calibration time, they fail to reflect
+                                                                              these runtime shifts, resulting in reduced quantization ac-
+the 𝐾 cache are scaled using smoothing factors 𝛾, such that
+                                                                              curacy, especially at 2-bit precision. Notably, although our
+𝑄 × 𝐾 𝑇 = (𝑄 × Δ) × (𝐾 × Δ −1 )𝑇 , where Δ = 𝑑𝑖𝑎𝑔(𝛾) and
+                                                                              results are shown for fixed-length sequences, this mismatch
+𝛾 𝑗 = 𝑚𝑎𝑥 (|𝐾 𝑗 |) 𝛼 , 0 ≤ 𝑗 < ℎ𝑖𝑑𝑑𝑒𝑛_𝑠𝑖𝑧𝑒. To reduce runtime
+                                                                              becomes more severe with increasing context lengths, where
+overhead, QServe precomputes Δ via offline calibration and
+                                                                              KV cache variance is even more pronounced.
+integrates it into the preceding layer’s weights, modifying
+them as 𝑊𝑄 = Δ𝑊𝑄 and 𝑊𝐾 = Δ −1𝑊𝐾 . While these methods                        2.3.2 Efficiency Limitations of Prior Accuracy-
+maintain reasonable accuracy under 4-bit quantization, they                   oriented Methods. Several studies have explored strategies
+fail to generalize to 2-bit precision. As shown in Table 1,                   to preserve accuracy in 2-bit KV cache quantization. For
+the perplexity of Atom on Llama2-7B rises from 5.93 (4-bit)                   example, SKVQ [12] uses channel reordering to group
+to 103.05 (2-bit). Although QServe performs better than                       channels with similar distributions. KVQuant [15] adopts a
+Atom, its accuracy at 2-bit precision remains insufficient                    dense-and-sparse quantization approach, isolating outliers
+for practical use. Through further analysis, we identify two                  for separate sparse attention computation. KIVI [27], on the
+primary causes of accuracy loss in these systems under 2-bit                  other hand, stores a fixed number of recent tokens in FP16
+quantization, as discussed next.                                              precision. As illustrated in Figure 4, these systems generally
+    (1) Outlier channels amplify quantization error                           follow a similar multi-step pipeline: (1) retain recent tokens
+in grouped quantization. As shown in Figure 2, the                            in FP16; (2) detect and extract outliers; (3) quantize the
+𝐾 cache exhibits strong outliers concentrated in some                         remaining KV cache; (4) dequantize before attention; and
+channels, whereas the 𝑉 cache does not. In per-token group                    (5) perform attention computation. Despite their accuracy
+quantization, outliers in one channel can significantly                       benefits, these methods suffer significant performance
+increase the quantization error of neighboring values. To                     bottlenecks, which we attribute to three sources.
+quantify this effect, we compute the mean square error                           (1) Outlier handling overhead. Outliers must be
+(MSE) of the 𝐾 cache under 2-bit quantization in three                        detected and handled prior to quantization. Systems like
+settings: (a) Atom, (b) QServe, and (c) an ideal case where                   SKVQ [12] and KVQuant [15] first identify outliers among
+the most extreme outlier channel in each group is replaced                    generated tokens, then reorder channels to group them by
+with a non-outlier channel before applying QServe. On                         value range into variable-sized segments. These operations
+randomly selected WikiText2 sentences, the MSEs are 1.0352                    introduce non-trivial overhead—and because these steps
+(Atom), 0.5552 (QServe), and 0.3734 (ideal case). These                       are memory-bound, the cost grows linearly with sequence
+results show that while QServe’s smoothing transformation                     length.
+reduces the error gap caused by outliers compared to Atom,                       (2) Caching overhead. Reserving recent tokens in FP16 is
+it does not fully mitigate the interference—outlier channels                  critical for preserving accuracy, especially in long-context in-
+continue to inflate the quantization error of other values in                 ference where attention prioritizes recent information. Prior
+the same group.                                                               works such as SKVQ [12] and KIVI [27] adopt a sliding-
+    (2) Offline calibration fails to adapt to runtime dy-                     window caching strategy that appends new tokens to the
+namics of the KV cache. QServe relies on offline calibration                  end and removes the oldest from the front. The evicted token
+to compute per-channel smoothing factors using a prede-                       is then quantized and added to the low-precision KV cache.
+fined dataset. However, because these factors are derived                     However, this approach incurs extra memory overhead, as
+solely from static channel-wise absmax values, they can-                      each append and remove operation during decoding requires
+not adapt to variations across input requests or sequence                     tensor concatenation, which is costly and frequent.
+lengths. To evaluate this, we sample random sentences of                         (3) Dequantization overhead. SKVQ [12] performs out-
+varying lengths and measure the per-channel absmax val-                       lier extraction and rearrangement across hidden dimensions,
+ues, as shown in Figure 3. It is observed that these absmax                   which conflicts with the multi-head attention mechanism.
+values fluctuate significantly—sometimes by more than 4×                      Since attention heads are computed independently but may
+
+
+
+                                                                        304
+JanusQuant                                                                    PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+
+
+Figure 5. Runtime breakdown of Llama2-7B attention layer.
+                                                                        Figure 6. An example of RtSmooth algorithm, suppose 𝑔 = 4.
+share quantization groups, the dequantization kernel cannot
+be fused with attention computation. This results in a sepa-
+                                                                        three key insights: (1) Using per-channel quantization for
+rate dequantization step and adds memory-bound overhead
+                                                                        the 𝐾 cache helps localize outlier effects, since outliers are
+that scales linearly with sequence length.
+                                                                        typically concentrated in some channels—unlike per-token
+   To further illustrate the overhead, we analyze the atten-
+                                                                        quantization, where grouped values from different channels
+tion layer kernels of the SKVQ baseline [12]. Figure 5 shows
+                                                                        are affected. (2) To adapt to dynamic runtime conditions
+the runtime breakdown for the Llama2-7B attention layer.
+                                                                        (e.g., different requests or sequence lengths), outlier han-
+The results reveal that the combined overhead from outlier
+                                                                        dling must occur at runtime. (3) Due to the locality bias in
+handling, recent token reservation and separate dequanti-
+                                                                        the attention mechanism, preserving a small number of re-
+zation accounts for over 85% of total runtime in the prefill
+                                                                        cent KV tokens in FP16 is important during decoding. Based
+stage (20% / 20% / 45%) and over 97% in the decoding stage
+                                                                        on these observations, we propose RtSmooth, an outlier-
+(2% / 15% / 80%). These costs significantly limit end-to-end
+                                                                        aware quantization algorithm. Specifically, RtSmooth applies
+inference efficiency, especially during decoding.
+                                                                        per-token smoothing transformation alongside per-channel
+   Summary. Previous attempts at 2-bit KV cache quantiza-
+                                                                        group quantization for the 𝐾 cache, and uses per-token group
+tion face fundamental trade-offs. Efficiency-oriented meth-
+                                                                        quantization for the 𝑉 cache. During decoding, it maintains
+ods avoid runtime outlier handling through offline calibra-
+                                                                        FP16 precision for newly generated KV tokens and performs
+tion but suffer significant accuracy loss, while accuracy-
+                                                                        quantization on the buffered FP16 tokens every 𝑔 steps.
+oriented methods rely on recent token reservation and com-
+                                                                           RtSmooth dynamically determines smoothing factors at
+plex outlier handling to preserve accuracy but remain less ef-
+                                                                        runtime for each request to improve accuracy. As illustrated
+ficient than FP16 inference. These challenges call for runtime-
+                                                                        in Figure 6, it first computes the smoothing factor for each
+aware approaches that mitigate outlier effects across diverse
+                                                                        token as 𝑚𝑎𝑥 (|𝐾𝑖 |) 𝜆 , where 𝜆 = 0.5 is selected empirically
+requests. Moreover, advancing end-to-end performance re-
+                                                                        based on experimental results. The computed factors are then
+quires lightweight outlier detection, memory-efficient data
+                                                                        applied to scale each token’s values. This runtime smoothing
+structures for the cache, and fused mixed-precision attention
+                                                                        transformation reduces the value range within each quanti-
+kernel to reduce deployment costs.
+                                                                        zation group, narrowing the gap between the maximum and
+3     JanusQuant Design and Implementation                              minimum values, thereby reducing quantization error. Let
+                                                                        𝜖𝑔𝑝 denote the quantization error for values in a group 𝑔𝑝.
+We introduce JanusQuant, a system that unifies an outlier-              Its upper bound is defined by the quantization scale:
+aware quantization algorithm with a set of system-level op-
+timizations to enable accurate and efficient 2-bit KV cache                                    𝑠𝑔𝑝         𝑚𝑎𝑥𝑔𝑝 − 𝑚𝑖𝑛𝑔𝑝
+                                                                                       𝜖𝑔𝑝 ≤       , 𝑠𝑔𝑝 =                                 (5)
+quantization. JanusQuant is co-designed across algorithm                                        2             2𝑛 − 1
+and system: its core component, RtSmooth, dynamically                   Reducing the quantization scale 𝑠𝑔𝑝 leads to smaller quantiza-
+adapts to outlier patterns at runtime, while the support-               tion error, meaning dequantized values more closely approx-
+ing architecture minimizes memory and compute overhead                  imate their original floating-point values. After smoothing,
+through lightweight data structures and fused computation.              the value range shrinks, resulting in a lower error bound:
+Together, these components enable JanusQuant to deliver
+                                                                                                         𝑠𝑠𝑚𝑜𝑜𝑡ℎ (𝑔𝑝 )   𝑠𝑔𝑝
+both high compression and high accuracy, with practical                                𝜖𝑠𝑚𝑜𝑜𝑡ℎ (𝑔𝑝 ) ≤                 <                   (6)
+performance gains for long-context LLM inference.                                                             2           2
+                                                                        While RtSmooth maintains high accuracy in 2-bit quanti-
+3.1   RtSmooth: An Outlier-Aware Algorithm                              zation, it introduces additional processing overhead during
+As discussed in our motivation analysis, accurate outlier               both quantization and dequantization. The JanusQuant sys-
+handling in the 𝐾 cache is essential for maintaining model              tem integrates lightweight architectural optimizations to
+accuracy under 2-bit quantization. Our design is based on               hide this overhead and enable efficient deployment.
+
+
+
+                                                                  305
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia        Chengyu Sun, Yaqi Xia, Hulin Wang, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng
+
+
+
+
+               Figure 7. Workflow of JanusQuant.
+
+                                                                                       Figure 9. Two methods of recent token reservation (𝑔 = 4).
+
+
+                                                                                          At runtime, we restrict the smoothing factor computation
+                                                                                       to only these channels, dramatically reducing memory ac-
+                                                                                       cess. Without this technique, computing the absmax across
+                                                                                       all channels incurs substantial overhead. In fact, as shown
+Figure 8. Left: the absmax value and outlier value distribu-                           in Figure 15a, more than 80% of the quantization kernel’s
+tion of the 2-nd layer 𝐾 cache of Llama2-13B model. Right:                             overhead stems from absmax calculation. Our technique
+the ratio of the calibrated channel set size relative to the total                     significantly mitigates this bottleneck. To further improve
+number of channels. The input data comes from WikiText2.                               efficiency, we implement a fused quantization operator that
+                                                                                       integrates the smoothing transformation with quantization
+                                                                                       parameter (scaling factor and zero point) computation and
+3.2    System-level Optimizations                                                      reorganization, and KV cache quantization. Note that the
+Leveraging the RtSmooth algorithm, JanusQuant synergizes                               parameter reorganization—an optimization for attention cal-
+three key attention-layer optimizations (Figure 7). For quan-                          culation—is detailed in Section 3.2.3.
+tization, it introduces a fast absmax positioning technique to
+                                                                                       3.2.2 Token Reservation via Memory-efficient Data
+reduce the overhead of runtime outlier handling. For caching,
+                                                                                       Structure. While prior works such as KIVI [27] preserve
+it employs a memory-efficient data structure that transitions
+                                                                                       model accuracy by reserving several recent tokens in FP16
+seamlessly from FP16 KV buffering to low-bit quantization.
+                                                                                       precision, they often rely on inefficient caching mechanisms
+For dequantization, it implements a custom mixed-precision
+                                                                                       that degrade inference speed. As illustrated in Figure 9, these
+attention kernel that fuses dequantization and attention com-
+                                                                                       implementations use memory-intensive tensor concatena-
+putation to minimize processing overhead.
+                                                                                       tion to sequentially store recent tokens, quantizing the entire
+3.2.1 Lightweight Quantization via Fast Absmax                                         group once a fixed size 𝑔 is reached 2 . This approach incurs
+Value Positioning. Figure 8 (left) presents the distribution                           global memory movement at each decoding step, as concate-
+of absmax and outlier 1 values. Outliers exhibit dynamic                               nation triggers memory reallocation and data copying.
+variation across requests and decoding steps, incurring                                   To mitigate the associated overhead, a straightforward ap-
+substantial overhead for direct identification. In contrast,                           proach involves maintaining a fixed cache capable of accom-
+the absmax values exhibit a layer-wise pattern of sparsity                             modating 𝑔 tokens, thereby reducing the frequency of mem-
+and regular concentration: a small subset of channels                                  ory allocation and copying. While this approach improves
+consistently accounts for the absmax values across tokens.                             efficiency, it may not adequately account for the effects on
+This insight motivates our fast absmax value positioning                               accuracy. In the current implementation, not all decoding
+technique (FAVP), which combines offline calibration with                              steps benefit from the accuracy improvements associated
+lightweight runtime computation to reduce overhead.                                    with recent token reservation. For example, the cached re-
+With a one-time calibration (only a few minutes) before                                cent tokens are reset to zero after each quantization, means
+deployment, we identify the most likely absmax channels                                that the next decoding will only have one newly generated
+for each layer. Figure 8 (right) shows that these channels                             token with FP16 precision; while ideally, reserving at least
+remain stable and sparse across 128 random 8K-length                                   32 tokens for each decoding would improve accuracy [14].
+WikiText2 samples, with over 90% of layers involving fewer                                The above observations motivate the development of a
+than 2% of all channels.                                                               novel data structure that optimizes the trade-off between
+1 Following prior works [6], values greater than 6 are identified as outliers.         2 Following prior works [12, 27], we set 𝑔 = 32 for 2-bit quantization.
+
+
+
+
+                                                                                 306
+JanusQuant                                                                    PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                                                        attention kernel that hides dequantization overhead by pro-
+                                                                        cessing both quantized and FP16 KV entries in a single pass.
+                                                                        As illustrated in Figure 10a, the kernel leverages task par-
+                                                                        allelism, assigning different workloads to separate CUDA
+                                                                        thread blocks. We incorporate asynchronous execution to
+                                                                        overlap computation and memory access, improving runtime
+                                                                        efficiency. Additionally, we apply two levels of optimization
+                                                                        to reduce compute intensity and increase memory bandwidth
+                                                                        utilization in the fused kernel.
+                                                                           First, using the Roofline model generated by Nsight
+                                                                        Compute, we observe that the attention kernel—typically
+                                                                        memory-bound during decoding—becomes compute-bound
+                                                                        due to the high arithmetic intensity of dequantization.
+                                                                        Addressing this requires reducing the computational cost
+                                                                        of integer-to-floating-point conversion. Inspired by prior
+                                                                        work on 8-bit and 4-bit dequantization [17], we implement
+                                                                        an efficient INT2-to-FP16 unpacking and type-casting
+                                                                        method. The approach leverages a key insight: FP16 values
+                                                                        between 1024 and 2047 share an exponent of 1024, while
+  Figure 10. Kernel timeline and optimization strategies.
+                                                                        their mantissa encodes the integer offset by 1024. Thus,
+                                                                        for integers in the range [0, 1023], we can synthesize
+memory usage and accuracy by appropriately increasing                   FP16 representations by placing the integer directly in the
+memory allocation. The design centers on piecewise quan-                mantissa and setting the exponent to 1024. As shown in
+tization, which separates the tokens involved in the quan-              Figure 10b, we use two 32-bit registers, R1 and R2, where R1
+tization process from at least the most recent 𝑔 tokens. As             holds 16 2-bit quantized values. Each unpacking operation
+shown in Figure 9, in this example, the cache is fixed to hold          processes two 2-bit values, which are extracted into R2 and
+2𝑔 tokens, with newly generated tokens alternately assigned             interpreted as INT16. A bitwise OR operation is applied:
+to the first or second half of the cache. Upon reaching full            𝑅2 = 𝑅2|0𝑥64006400. This operation sets the exponent
+capacity, the system automatically quantizes the older half             field to 1024, effectively treating the INT16 values as FP16
+and transfers them to the quantized KV cache.                           numbers. Finally, subtracting 1024 from each number yields
+   Despite this cache size being sufficient to improve ac-              the final FP16 values. Repeating this process across all data
+curacy in experiments, JanusQuant implements efficient                  in R1 completes the conversion. This method uses only three
+caching based on a ring buffer data structure, enhanced with            instructions—lop3, or, and sub—to unpack and type-cast
+pointers to manage critical information, such as the location           two values. By contrast, a naive implementation requires at
+of the next token, the decision to perform quantization, and            least four instructions per value.
+the identification of the next segment to be quantized. This               Second, we identify that parameter loading during de-
+approach facilitates user-defined cache size as any integer             quantization suffers from inefficient memory bandwidth uti-
+multiples of 𝑔, thereby accommodating diverse accuracy re-              lization. As illustrated in Figure 10c, a naive layout stores
+quirements. Specifically, when the cache accommodates 𝑛𝑔                different parameter types (e.g., scaling factor and zero point)
+tokens, each decoding process retains at least (𝑛 − 1)𝑔 tokens.         separately, with varying shapes determined by the quantiza-
+   Furthermore, the cache introduces no additional overhead             tion dimensions of the KV cache. This fragmentation leads
+since it is pre-allocated prior to inference, and the extra             to redundant memory transactions. For example, loading 64
+memory consumption remains negligible, especially in long-              bytes (32 × 𝑠𝑖𝑧𝑒𝑜 𝑓 (𝐹 𝑃16)) of scaling factors for the 𝑉 cache
+context reasoning scenarios. For example, when processing               may require up to eight memory transactions, despite only
+128K tokens, the additional memory reserved for full preci-             8 bytes being valid in each. Given the minimum transaction
+sion (assuming the cache holds 2𝑔 tokens) amounts to only               width of 32 bytes, this results in 75% bandwidth waste. To ad-
+0.05% of the total token count.                                         dress this, JanusQuant introduces a unified parameter block
+                                                                        layout, in which four types of parameters are coalesced into
+3.2.3 Mixed-Precision Attention Kernel Adapted for                      a single structure aligned with the memory access patterns
+RtSmooth. The RtSmooth algorithm preserves the posi-                    of each CUDA thread block. The size of each parameter block
+tional alignment of outliers, facilitating the fusion of de-            is matched to the KV cache segment processed by the thread
+quantization and attention for the 2-bit KV cache, while                block. This reorganization significantly improves bandwidth
+maintaining full-precision attention for recent KV tokens.              efficiency; in the example shown, the number of memory
+To exploit this property, we design a custom mixed-precision            transactions is reduced from 20 to 8.
+
+
+
+                                                                  307
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia   Chengyu Sun, Yaqi Xia, Hulin Wang, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng
+
+
+    Table 2. Accuracy results on LongBench long-context multitasks for LLMs. Higher values indicate better performance.
+
+                                                                                     Task
+    Model        Method
+                               LCC       TriviaQA      RepoBench-P        QMSum       SAMSum        MultiNews      Qasper     TREC      Avg
+                  FP16         51.75       86.21          51.78            22.02        45.18         27.42         29.04     72.00     48.18
+               Atom-4bit       50.29       84.74          50.13            23.34        44.89         26.77         29.52     70.50     47.52
+    Llama
+               Atom-2bit        4.09        0.00           3.58            0.17         0.00          0.07          0.01       0.00     0.99
+     2-7B
+                 SKVQ          50.28       85.99          50.05            23.97        43.88         24.73         24.94     71.00     46.86
+     -32K
+                  KIVI         50.25       83.21          49.40            19.75        45.59         26.85         25.15     72.00     46.53
+              JanusQuant       51.66       85.32          51.20            23.43        44.75         26.79         27.08     71.50     47.72
+                  FP16         38.06       87.70          38.25            25.18        42.49         28.34         27.90     71.00     44.87
+     Llama     Atom-4bit       36.72       86.43          38.60            24.49        41.83         27.75         27.96     70.00     44.22
+      3-8B     Atom-2bit        2.43        0.00           2.91            0.00         0.00          0.00          0.00       0.00     0.67
+    -1048K       SKVQ          34.06       85.88          36.24            25.55        40.26         27.69         26.28     70.76     43.34
+                  KIVI         34.96       87.43          36.78            24.95        42.47         27.78         27.67     71.50     44.19
+              JanusQuant       35.32       87.23          39.23            25.34        42.19         28.31         27.44     71.50     44.57
+
+  By combining these architectural optimizations,                             including KIVI [27], SKVQ [12], KVQuant [15], Atom [53]
+JanusQuant effectively hides system-level overhead and                        and QServe [24]—as well as DuoAttention [44], a leading KV
+enables efficient inference, addressing the challenges in our                 cache selection method, to comprehensively assess perfor-
+analysis.                                                                     mance improvements by JanusQuant.
+                                                                              Models, datasets and metrics. We evaluate on a variety
+3.3   Implementation                                                          of models, including Llama, Mistral, Vicuna and Qwen fami-
+JanusQuant is implemented with approximately 3,500 lines                      lies [16, 28, 37]. Throughout our experiments, we adhere to
+of CUDA/ C++ and 2,500 lines of Python, supporting practi-                    the native data types defined in each model’s official release.
+cal LLM inference. Specialized CUDA kernels are developed                     Specifically, we use torch.float16 for models such as Llama-
+for: (1) processing the memory-efficient token cache, (2) per-                30B, Llama-2-7B/13B, and Vicuna-7B/13B, while employing
+forming fused smoothing and quantization, and (3) executing                   torch.bfloat16 for Llama-3-8B, Mistral-7B, and Qwen-2.5-
+the fused dequantization-attention operation. These kernels                   32B. The evaluation datasets include WikiText2 and C4, and
+can be compiled into a standalone shared library (.so), and                   the KV tokens are generated through actual model infer-
+are also wrapped as Python extensions using Pybind and                        ence using these datasets. Following established methodolo-
+FlashInfer [7, 46], enabling compatibility with Python-based                  gies from prior studies [3, 12, 23, 27, 53], we evaluate model
+serving frameworks such as PyTorch and Transformers. The                      accuracy using the perplexity metric and the LongBench
+Python interface includes a custom attention module that                      benchmark [4]. For efficiency, we assess both kernel-level
+inherits from the PyTorch neural network API. This design                     performance and end-to-end model execution. Our primary
+supports mainstream LLMs—including Llama, Mistral, Vi-                        metrics are kernel runtime and serving latency. For kernel-
+cuna and Qwen—and allows seamless integration of addi-                        level experiments, results are averaged over 10,000 runs after
+tional models. By exposing a PyTorch-compatible attention                     100 warm-up runs. For end-to-end evaluation, results are
+module, JanusQuant integrate seamlessly into multi-stream                     averaged over 100 runs following 10 warm-up runs. Note
+inference engines, improving GPU utilization and decod-                       that we select baselines based on the primary focus of each
+ing throughput. The artifact will be released as open-source                  metric. For accuracy evaluations, we compare against SKVQ,
+repository to support further research and adoption.                          KVQuant, and KIVI to cover state-of-the-art 2-bit schemes.
+                                                                              However, for latency benchmarks, we exclude SKVQ and
+4     Evaluation                                                              KVQuant as their current implementations prioritize theo-
+4.1   Experimental Setup                                                      retical algorithm over end-to-end inference speed. Instead,
+                                                                              we compare against KIVI and the 4-bit optimized system,
+Testbed. All experiments are conducted on a machine                           QServe, to demonstrate our method’s practical efficiency.
+equipped with four NVIDIA A100-PCIE-40GB GPUs. Note
+all efficiency-related experiments, including both end-to-end
+and kernel-level evaluations, are performed on a single
+A100 GPU. The software stack includes PyTorch 2.4.0 and                       4.2   Accuracy Evaluation
+CUDA 12.6.                                                                    Settings. We compare our method against KIVI and SKVQ
+Baselines. We compare JanusQuant against several open-                        on LongBench tasks. Note that KVQuant is evaluated only
+sourced, state-of-the-art KV cache quantization methods,                      on perplexity benchmarks, as its official implementation is
+
+
+
+                                                                        308
+JanusQuant                                                                   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+Table 3. Perplexity results on WikiText2 with sequence                      Table 5. Average bit-width of different methods.
+length 2048. Lower values indicate better performance.
+                                                                           Method (2-bit)      KVQuant        SKVQ           KIVI
+             Method                                                        Avg. Num. Bits       2.320          3.000         3.000
+                      FP16     RTN     KVQuant     JanusQuant
+ Model                                                                     Method (2-bit)       Atom          QServe      JanusQuant
+   Llama-30B           4.10   4.88       OOM          4.27                 Avg. Num. Bits       3.000          3.001         3.008
+   Llama2-7B           5.47   8.31       5.99         5.80                 Method (4-bit)       Atom          QServe           -
+   Llama2-13B          4.88   6.43       5.31         5.12                 Avg. Num. Bits       4.250          4.251           -
+   Llama3-8B           6.14   17.14      7.42         6.93
+   Mistral-7B          5.94   7.55       6.32         6.21
+                                                                             Table 6. Memory usage (GB) of the KV cache.
+
+Table 4. Perplexity on WikiText2 with sequence length 2048                       Method
+under different methods at 2-bit precision.                                                     FP16     DuoAttention        JanusQuant
+                                                                        Model
+                                                                          Llama2-7B
+            Method               Llama2-7B      Llama2-13B                                      62.50         15.74              11.75
+                                                                            L=128K
+            QServe                  11.36          7.08                   Llama3-8B
+     RtSmooth w/o. FAVP                                                                         54.69         13.70              10.29
+                                      7.41         6.21                     L=448K
+      Offline calibration                                                 Llama2-13B
+     RtSmooth w/o. FAVP                                                                         48.83         12.39              9.20
+                                      5.85         5.16                      L=64K
+     Runtime calculation
+     RtSmooth w/. FAVP                5.85         5.16
+     RtSmooth w/. FAVP
+                                      5.80         5.12                FP16, JanusQuant incurs only minor accuracy loss (0.95%
+  + Recent token reservation
+                                                                       on Llama2-7B-32K and 0.66% on Llama3-8B-1048K). For the
+                                                                       Llama2-7B-32K model, JanusQuant delivers a 0.2 increase in
+                                                                       average scores compared to the 4-bit Atom, while Atom’s 2-
+                                                                       bit variant incurs unacceptable accuracy degradation. These
+                                                                       results indicate that JanusQuant can maintain over 99% of the
+                                                                       accuracy achieved compared to FP16. Table 3 presents a com-
+                                                                       parison of perplexity across JanusQuant and other baselines.
+                                                                       Note that OOM (out-of-memory) indicates that the KVQuant
+Figure 11. Evaluation of predicted-to-actual absmax ratios             method exceeds available GPU memory during quantization.
+on 8K decoded C4 tokens.                                               JanusQuant consistently outperforms KVQuant, achieving
+                                                                       perplexity reductions of up to 0.49.
+                                                                          Breakdown analysis. We conduct a breakdown anal-
+designed for fixed-length contexts (requiring consistent cali-         ysis to evaluate the contribution of different quantization
+bration and testing lengths), which is incompatible with the           techniques to model accuracy. As shown in Table 4, we re-
+dynamic sequence lengths characteristic of LongBench. To               port perplexity on the WikiText2 dataset at each analysis
+enable a fairer comparison, we implement a 2-bit fake quan-            stage. QServe is included as a reference baseline. Our findings
+tization variant of Atom, adapted from its original KV cache           show that combining offline per-token smoothing transfor-
+quantization strategy. We also include a Round-To-Nearest              mation with per-channel quantization significantly improves
+(RTN) baseline, which applies per-token group quantization             model accuracy, reducing perplexity by 3.95 on the Llama2-
+to the KV cache, to assess the incremental gains from our              7B model. Applying smoothing transformation at runtime
+outlier-aware design. The group size parameter 𝑔 is set to             yields further gains. Moreover, introducing FAVP technique
+128 for 4-bit quantization and 32 for 2-bit quantization. The          maintains accuracy comparable to full runtime computation.
+cache size of recent tokens is fixed to hold 2𝑔 tokens while           Finally, when combined with recent token reservation, the
+this size is user-customizable. For calibration, we use 128            approach achieves an additional perplexity improvement.
+samples of 8K-length sequences drawn from the WikiText2                   We further assess the effect of FAVP on accuracy with
+training set.                                                          different types of LLMs. Figure 11 shows the ratio between
+   Main results. To evaluate long-context understanding                the predicted and actual absmax values per token using the
+and reasoning, we report LongBench results on eight com-               fast positioning technique. Although exact matches are not
+monsense tasks (Table 2). JanusQuant outperforms all 2-bit             always achieved, deviations occur in only a minimal frac-
+baselines; for example, it improves Qasper accuracy by 6.65%           tion of tokens. As reflected in end-to-end perplexity, this
+and 7.37% over KIVI and SKVQ, respectively. Relative to                deviation has no negative impact on overall model accuracy.
+
+
+
+                                                                 309
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia   Chengyu Sun, Yaqi Xia, Hulin Wang, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng
+
+
+
+
+Figure 12. The latency under different sequence lengths with different models. Dotted lines represent OOM (out-of-memory),
+and the results are linearly extrapolated from measured data.
+
+                                                                              achieves up to 5.64× decoding speedups over FA2, with ad-
+                                                                              ditional gains of 5.84×, 4.45×, and 2.50× over KIVI, QServe,
+                                                                              and DuoAttention, respectively.
+                                                                                 GPU time. Figure 13 reports the end-to-end GPU time
+                                                                              for completing all real inference requests on LongBench. In
+                                                                              this experiment, we employ Vicuna-7B and Vicuna-13B to
+                                                                              demonstrate the versatility of JanusQuant across different
+Figure 13. The end-to-end GPU time to finish all inference                    models. Given that the model sizes are comparable to those in
+requests in the workload.                                                     our previous experiments, we anticipate consistent speedup
+                                                                              trends. Unlike the comprehensive benchmarks in Figure 12,
+                                                                              this experiment serves as a supplementary study illustrating
+                                                                              JanusQuant’s seamless integration into the serving engine
+4.3   End-to-end Evaluation                                                   (Transformers) and the resulting throughput improvements
+End-to-end latency. We evaluate the latency of five meth-                     for real-world requests. As such, several baselines lack im-
+ods: Transformers baseline with FP16 FlashAttention-2 (FA2)                   plementation support for such serving scenarios and are
+backend, KIVI (2-bit), QServe (4-bit), DuoAttention (KV se-                   consequently omitted.
+lection), and JanusQuant (proposed 2-bit), across models                         The evaluation covers multi-doc QA, single-doc QA, sum-
+with 7B, 8B, and 13B parameters. To highlight the perfor-                     marization, and synthetic tasks. Each task consists of 200
+mance advantages of JanusQuant, we report latencies for the                   requests with input lengths ranging from 2K to 44K and out-
+prefill and decoding stages separately. Note that during the                  put lengths up to 128, where both methods are controlled
+decoding stage, we preallocate the KV cache to eliminate the                  to generate outputs of the same length. JanusQuant deliv-
+overhead associated with dynamic memory allocations.                          ers notable speedups of 1.52× and 1.70× on Vicuna-7B and
+    As shown in the top row of Figure 12, JanusQuant does                     Vicuna-13B, respectively, over FA2, demonstrating substan-
+not achieve significant speedup over FA2 during the pre-                      tial practical benefits.
+fill stage. This is expected, as JanusQuant utilizes original                    Memory usage. Table 5 summarizes the average bit-
+full-precision KV tokens for attention in this phase to pre-                  width of each quantization scheme. Note that the group size
+serve accuracy. In contrast, QServe benefits from weight-                     is set to 128 for 4-bit quantization and 32 for 2-bit quantiza-
+activation quantization in the linear layers, and DuoAtten-                   tion. KVQuant exhibits an advantage in memory efficiency by
+tion avoids quantization entirely. Nonetheless, JanusQuant                    employing a sophisticated non-uniform quantization scheme
+delivers speedups of 1.11×, 1.38×, and 1.17× over KIVI during                 that reduces quantization parameters via table lookups. In
+prefill across the three model sizes.                                         contrast, our method, JanusQuant, incurs a slight storage
+    In the bottom row of Figure 12, we present the total latency              overhead compared to other uniform integer quantization
+for decoding 100 tokens. JanusQuant consistently outper-                      methods due to the additional smoothing factors stored by
+forms all baselines in this stage. Importantly, as sequence                   RtSmooth. Nevertheless, JanusQuant still achieves a 1.41×
+length increases, FA2 and QServe encounter out-of-memory                      memory reduction compared to 4-bit schemes.
+(OOM) errors, while JanusQuant continues to operate reli-                        To further evaluate the benefits of 2-bit quantization over
+ably on memory-constrained hardware. Overall, JanusQuant                      token selection methods, Table 6 presents the total KV cache
+
+
+
+                                                                        310
+JanusQuant                                                                   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+memory usage. JanusQuant reduces memory consumption
+by 5.30× relative to FP16, facilitating longer sequence infer-
+ence within the same GPU memory budget. By comparison,
+DuoAttention achieves a 3.95× memory reduction relative
+to FP16, but pushing beyond that limit results in significant
+accuracy loss. These results highlight JanusQuant’s ability to
+achieve substantial memory savings without compromising
+accuracy, making it well-suited for long-context inference
+on resource-constrained hardware.                                               Figure 14. Attention kernel performance.
+
+4.4   Kernel Evaluation
+Kernel performance. We evaluate the performance of at-
+tention kernels during decoding across various methods, in-
+cluding SKVQ, KIVI, QServe, FA2, and our proposed method,
+JanusQuant. Figure 14 shows the relative performance of
+each kernel, normalized to JanusQuant. The results show that
+JanusQuant consistently outperforms all baselines across a
+                                                                               (a) Quantization                    (b) Attention
+range of settings. For example, with a sequence length of
+128K, hidden size of 4096, and 32 KV heads, JanusQuant
+                                                                       Figure 15. Breakdown analysis of the quantization and at-
+achieves speedups of 6.17× and 1.69× over the KIVI and
+                                                                       tention kernels on Llama2-7B model.
+QServe kernels, respectively. Compared to FA2, JanusQuant
+demonstrates an average improvement of 1.99×. SKVQ, in
+contrast, shows limited gains due to its reorganization of
+KV channels, which prevents fusing dequantization into the             Prior works such as Atom [53], FlexGen [35], QuaRot [3],
+attention kernel—thereby introducing inefficiencies.                   and QServe [24] demonstrate effective 4-bit quantization,
+   Breakdown analysis. For the quantization kernel, we                 but suffer severe accuracy degradation at sub-4-bit pre-
+evaluate the performance improvement introduced by the                 cision. Recent efforts, including KIVI [27], SKVQ [12],
+                                                                       KVQuant [15], and WKVQuant [48], investigate 2-bit
+fast positioning technique. A naive quantization kernel with-
+                                                                       quantization to achieve higher compression, yet remain
+out smoothing is used as a baseline for comparison. For the
+attention kernel, we assess the impact of two optimizations:           inefficient compared to FP16, limiting practical deployment.
+(1) efficient unpacking and INT2-to-FP16 type-casting, and             In contrast, JanusQuant achieves both high accuracy
+(2) parameter reorganization. We include FA2 and a naive               and efficiency, while remaining compatible with other
+mixed-precision kernel as baselines.                                   optimizations such as weight quantization [10, 13, 23, 52]
+                                                                       and weight–activation quantization [6, 25, 40, 42, 47, 51] in
+   Figure 15a reports the runtime of three quantization ker-
+                                                                       linear layers for efficient inference.
+nels, highlighting that adding runtime smoothing introduces
+significant overhead. For instance, at a sequence length of               KV cache selection reduces memory usage by identify-
+64K, it increases the quantization kernel’s runtime by 4.43×.          ing and evicting or offloading less important tokens. Meth-
+However, the optimized RtSmooth kernel, equipped with the              ods such as H2 O [50] and Scissorhands [26] rely on atten-
+FAVP technique, effectively mitigates this overhead while              tion scores to retain a fixed set of critical tokens while dis-
+                                                                       carding others. FastGen [14], SnapKV [21], and DuoAtten-
+maintaining accuracy.
+                                                                       tion [44] exploit head-specific attention patterns to statically
+   Figure 15b presents the runtime of the naive mixed-
+precision attention kernel alongside two optimized variants.           prune unused cache segments. More recently, InfiniGen [20]
+The unoptimized version shows no performance gain                      adopts a dynamic strategy, offloading the cache to DRAM and
+over FA2. In contrast, integrating efficient unpacking and             prefetching tokens to the GPU as needed during decoding.
+INT2-to-FP16 type-casting (to reduce compute intensity),                  KV cache management has been a central focus of serv-
+                                                                       ing systems for transformer architectures [2, 5, 11, 19, 30, 36,
+along with parameter reorganization (to improve memory
+                                                                       39], aiming to reduce memory usage. vLLM [18] alleviates
+bandwidth utilization), yields substantial speedups. These
+two optimizations achieve average improvements of 1.99×                fragmentation via PagedAttention, while vAttention [33]
+and 3.05×, respectively, relative to the naive baseline.               offers a simpler alternative using CUDA virtual memory
+                                                                       for coherence. Mooncake [34] expands cache management
+                                                                       with a global scheduler spanning CPU, DRAM, SSD, and NIC
+5     Related Work                                                     resources. Yet token capacity remains limited by physical
+KV cache quantization has been explored to reduce                      memory. We plan to explore integrating JanusQuant into
+memory consumption and improve inference throughput.                   these systems to mitigate this constraint.
+
+
+
+                                                                 311
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia    Chengyu Sun, Yaqi Xia, Hulin Wang, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng
+
+
+6    Conclusion                                                                    [10] Tim Dettmers, Ruslan A Svirschevski, Vage Egiazarian, Denis
+                                                                                        Kuznedelev, Elias Frantar, Saleh Ashkboos, Alexander Borzunov,
+We present JanusQuant, an accurate and efficient 2-bit KV                               Torsten Hoefler, and Dan Alistarh. 2024. SpQR: A Sparse-Quantized
+cache quantization system for long-context LLMs. Our                                    Representation for Near-Lossless LLM Weight Compression. In The
+approach combines the RtSmooth runtime smoothing                                        Twelfth International Conference on Learning Representations (ICLR).
+algorithm with three system-level optimizations—a fast                             [11] Jiangsu Du, Jinhui Wei, Jiazhi Jiang, Shenggan Cheng, Dan Huang,
+absmax positioning method, a memory-efficient token cache                               Zhiguang Chen, and Yutong Lu. 2024. Liger: Interleaving intra-and
+                                                                                        inter-operator parallelism for distributed large model inference. In
+structure, and a custom mixed-precision attention kernel.
+                                                                                        Proceedings of the 29th ACM SIGPLAN Annual Symposium on Principles
+Through this algorithm–system co-design, JanusQuant                                     and Practice of Parallel Programming (PPoPP). 42–54.
+delivers up to 5.3× KV cache compression and outperforms                           [12] Haojie Duanmu, Zhihang Yuan, Xiuhong Li, Jiangfei Duan, Xingcheng
+FP16, KIVI, QServe, and DuoAttention in decoding speed,                                 Zhang, and Dahua Lin. 2024. Skvq: Sliding-window key and value
+while preserving long-context accuracy.                                                 cache quantization for large language models. Conference on Language
+                                                                                        Modeling (COLM) (2024).
+                                                                                   [13] Elias Frantar, Roberto L Castro, Jiale Chen, Torsten Hoefler, and Dan Al-
+Acknowledgments                                                                         istarh. 2025. Marlin: Mixed-precision auto-regressive parallel inference
+                                                                                        on large language models. In Proceedings of the 30th ACM SIGPLAN
+We would like to thank the anonymous reviewers and our                                  Annual Symposium on Principles and Practice of Parallel Programming
+shepherd, Tim Harris, for their constructive comments and                               (PPoPP). 239–251.
+guidance which significantly improved the quality of this pa-                      [14] Suyu Ge, Yunan Zhang, Liyuan Liu, Minjia Zhang, Jiawei Han, and
+                                                                                        Jianfeng Gao. 2024. MODEL TELLS YOU WHAT TO DISCARD: ADAP-
+per. This work was supported by National Key Research and
+                                                                                        TIVE KV CACHE COMPRESSION FOR LLMS. In 12th International
+Development Program of China (2023YFE0205700), National                                 Conference on Learning Representations (ICLR).
+Natural Science Foundation of China (62341410), and the                            [15] Coleman Hooper, Sehoon Kim, Hiva Mohammadzadeh, Michael W Ma-
+Science and Technology Development Fund, Macao S.A.R                                    honey, Sophia Shao, Kurt Keutzer, and Amir Gholami. 2025. Kvquant:
+(FDCT) projects 0078/2023/AMJ and 001/2024/SKL.                                         Towards 10 million context length llm inference with kv cache quanti-
+                                                                                        zation. Advances in Neural Information Processing Systems (NeurIPS)
+                                                                                        37 (2025), 1270–1303.
+References                                                                         [16] Albert Q Jiang, Alexandre Sablayrolles, Antoine Roux, Arthur Mensch,
+                                                                                        Blanche Savary, Chris Bamford, Devendra Singh Chaplot, Diego de las
+ [1] OpenAI (2023). 2023. Gpt-4 technical report. arXiv preprint                        Casas, Emma Bou Hanna, Florian Bressand, Gianna Lengyel, Guil-
+     arXiv:2303.08774 (2023).                                                           laume Bour, Guillaume Lample, Lélio Renard Lavaud, Lucile Saulnier,
+ [2] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun                   Marie-Anne Lachaux, Pierre Stock, Sandeep Subramanian, Sophia
+     Kwatra, Bhargav Gulavani, Alexey Tumanov, and Ramachandran Ram-                    Yang, Szymon Antoniak, Teven Le Scao, Théophile Gervet, Thibaut
+     jee. 2024. Taming Throughput-Latency tradeoff in LLM inference with                Lavril, Thomas Wang, Timothée Lacroix, and William El Sayed. 2024.
+     Sarathi-Serve. In 18th USENIX Symposium on Operating Systems Design                Mixtral of experts. arXiv preprint arXiv:2401.04088 (2024).
+     and Implementation (OSDI). 117–134.                                           [17] Young Jin Kim, Rawn Henry, Raffy Fahim, and Hany Hassan Awadalla.
+ [3] Saleh Ashkboos, Amirkeivan Mohtashami, Maximilian Croci, Bo Li,                    2022. Who Says Elephants Can’t Run: Bringing Large Scale MoE
+     Pashmina Cameron, Martin Jaggi, Dan Alistarh, Torsten Hoefler, and                 Models into Cloud Scale Production. In Proceedings of The Third Work-
+     James Hensman. 2025. Quarot: Outlier-free 4-bit inference in rotated               shop on Simple and Efficient Natural Language Processing (SustaiNLP).
+     llms. Advances in Neural Information Processing Systems (NeurIPS) 37               36–43.
+     (2025), 100213–100240.                                                        [18] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+ [4] Yushi Bai, Xin Lv, Jiajie Zhang, Hongchang Lyu, Jiankai Tang, Zhidian
+                                                                                        Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+     Huang, Zhengxiao Du, Xiao Liu, Aohan Zeng, Lei Hou, Yuxiao Dong,                   2023. Efficient memory management for large language model serving
+     Jie Tang, and Juanzi Li. 2024. LongBench: A Bilingual, Multitask                   with pagedattention. In Proceedings of the 29th Symposium on Operating
+     Benchmark for Long Context Understanding. In Proceedings of the                    Systems Principles (SOSP). 611–626.
+     62nd Annual Meeting of the Association for Computational Linguistics          [19] Malgorzata Lazuka, Andreea Anghel, and Thomas Parnell. 2024. LLM-
+     (ACL) (Volume 1: Long Papers). 3119–3137.                                          Pilot: Characterize and Optimize Performance of your LLM Inference
+ [5] Branden Butler, Sixing Yu, Arya Mazaheri, and Ali Jannesari. 2024.                 Services. In International Conference for High Performance Computing,
+     PipeInfer: Accelerating LLM Inference using Asynchronous Pipelined                 Networking, Storage and Analysis (SC). IEEE, 1–18.
+     Speculation. In International Conference for High Performance Comput-         [20] Wonbeom Lee, Jungi Lee, Junghwan Seo, and Jaewoong Sim. 2024.
+     ing, Networking, Storage and Analysis (SC). IEEE, 1–19.                            InfiniGen: Efficient generative inference of large language models
+ [6] Yidong Chen, Chen Zhang, Rongchao Dong, Haoyuan Zhang, Yonghua                     with dynamic KV cache management. In 18th USENIX Symposium on
+     Zhang, Zhonghua Lu, and Jidong Zhai. 2024. MixQ: Taming Dynamic                    Operating Systems Design and Implementation (OSDI). 155–172.
+     Outliers in Mixed-Precision Quantization by Online Prediction. In             [21] Yuhong Li, Yingbing Huang, Bowen Yang, Bharat Venkitesh, Acyr
+     International Conference for High Performance Computing, Networking,               Locatelli, Hanchen Ye, Tianle Cai, Patrick Lewis, and Deming Chen.
+     Storage and Analysis (SC). IEEE, 1–15.                                             2024. Snapkv: Llm knows what you are looking for before generation.
+ [7] Tri Dao. 2024. FlashAttention-2: Faster Attention with Better Paral-               Advances in Neural Information Processing Systems (NeurIPS) 37 (2024),
+     lelism and Work Partitioning. In The Twelfth International Conference              22947–22970.
+     on Learning Representations (ICLR).                                           [22] Bin Lin, Yang Ye, Bin Zhu, Jiaxi Cui, Munan Ning, Peng Jin, and Li
+ [8] DeepSeek-AI. 2024. Deepseek-v3 technical report. arXiv preprint                    Yuan. 2024. Video-LLaVA: Learning United Visual Representation by
+     arXiv:2412.19437 (2024).                                                           Alignment Before Projection. In Proceedings of the 2024 Conference
+ [9] DeepSeek-AI. 2025. Deepseek-r1: Incentivizing reasoning capability                 on Empirical Methods in Natural Language Processing (EMNLP). 5971–
+     in llms via reinforcement learning. arXiv preprint arXiv:2501.12948                5984.
+     (2025).
+
+
+
+
+                                                                             312
+JanusQuant                                                                                   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+[23] Ji Lin, Jiaming Tang, Haotian Tang, Shang Yang, Wei-Ming Chen, Wei-                   Learning (ICML). PMLR, 31094–31116.
+     Chen Wang, Guangxuan Xiao, Xingyu Dang, Chuang Gan, and Song                     [36] Yixin Song, Zeyu Mi, Haotong Xie, and Haibo Chen. 2024. Powerinfer:
+     Han. 2024. Awq: Activation-aware weight quantization for on-device                    Fast large language model serving with a consumer-grade gpu. In
+     llm compression and acceleration. Proceedings of Machine Learning                     Proceedings of the ACM SIGOPS 30th Symposium on Operating Systems
+     and Systems (MLSys) 6 (2024), 87–100.                                                 Principles (SOSP). 590–606.
+[24] Yujun Lin, Haotian Tang, Shang Yang, Zhekai Zhang, Guangxuan Xiao,               [37] Qwen Team. 2024.         Qwen2 technical report. arXiv preprint
+     Chuang Gan, and Song Han. 2025. Qserve: W4a8kv4 quantization                          arXiv:2407.10671 (2024).
+     and system co-design for efficient llm serving. Proceedings of Machine           [38] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-
+     Learning and Systems (MLSys) (2025).                                                  Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric
+[25] Lian Liu, Haimeng Ren, Long Cheng, Zhaohui Xu, Yudong Pan, Mengdi                     Hambro, Faisal Azhar, Aurelien Rodriguez, Armand Joulin, Edouard
+     Wang, Xiaowei Li, Yinhe Han, and Ying Wang. 2025. COMET: Towards                      Grave, and Guillaume Lample. 2023. Llama: Open and efficient foun-
+     Partical W4A4KV4 LLMs Serving. In Proceedings of the 29th ACM                         dation language models. arXiv preprint arXiv:2302.13971 (2023).
+     International Conference on Architectural Support for Programming                [39] Hulin Wang, Yaqi Xia, Donglin Yang, Xiaobo Zhou, and Dazhao
+     Languages and Operating Systems (ASPLOS), Volume 2. 131–146.                          Cheng. 2025. Harnessing inter-gpu shared memory for seamless moe
+[26] Zichang Liu, Aditya Desai, Fangshuo Liao, Weitao Wang, Victor Xie,                    communication-computation fusion. In Proceedings of the 30th ACM
+     Zhaozhuo Xu, Anastasios Kyrillidis, and Anshumali Shrivastava. 2023.                  SIGPLAN Annual Symposium on Principles and Practice of Parallel Pro-
+     Scissorhands: Exploiting the persistence of importance hypothesis for                 gramming (PPoPP). 170–182.
+     llm kv cache compression at test time. Advances in Neural Information            [40] Weihu Wang, Yaqi Xia, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng.
+     Processing Systems (NeurIPS) 36 (2023), 52342–52364.                                  2025. MXBLAS: Accelerating 8-bit Deep Learning with a Unified Micro-
+[27] Zirui Liu, Jiayi Yuan, Hongye Jin, Shaochen Zhong, Zhaozhuo Xu,                       Scaled GEMM Library. In Proceedings of the International Conference
+     Vladimir Braverman, Beidi Chen, and Xia Hu. 2024. KIVI: A Tuning-                     for High Performance Computing, Networking, Storage and Analysis
+     Free Asymmetric 2bit Quantization for KV Cache. In International                      (SC). 1590–1603.
+     Conference on Machine Learning (ICML). PMLR, 32332–32344.                        [41] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond,
+[28] AI@Meta Llama Team. 2024. The llama 3 herd of models. arXiv                           Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Rémi Louf,
+     preprint arXiv:2407.21783 (2024).                                                     Morgan Funtowicz, Joe Davison, Sam Shleifer, Patrick von Platen,
+[29] Pierre-Emmanuel Mazare, Samuel Humeau, Martin Raison, and An-                         Clara Ma, Yacine Jernite, Julien Plu, Canwen Xu, Teven Le Scao, Syl-
+     toine Bordes. 2018. Training Millions of Personalized Dialogue Agents.                vain Gugger, Mariama Drame, Quentin Lhoest, and Alexander M Rush.
+     In Proceedings of the 2018 Conference on Empirical Methods in Natural                 2020. Transformers: State-of-the-art natural language processing. In
+     Language Processing (EMNLP). 2775–2779.                                               Proceedings of the 2020 conference on empirical methods in natural
+[30] Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu                        language processing: system demonstrations (EMNLP). 38–45.
+     Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang, Xi-               [42] Haojun Xia, Zhen Zheng, Xiaoxia Wu, Shiyang Chen, Zhewei Yao,
+     aoxiang Shi, Chunan Shi, Zhuoming Chen, Daiyaan Arfeen, Reyna Ab-                     Stephen Youn, Arash Bakhtiari, Michael Wyatt, Donglin Zhuang,
+     hyankar, and Zhihao Jia. 2024. Specinfer: Accelerating large language                 Zhongzhu Zhou, Olatunji Ruwase, Yuxiong He, and Shuaiwen Leon
+     model serving with tree-based speculative inference and verification.                 Song. 2024. Quant-LLM: Accelerating the Serving of Large Language
+     In Proceedings of the 29th ACM International Conference on Architectural              Models via FP6-Centric Algorithm-System Co-Design on Modern
+     Support for Programming Languages and Operating Systems (ASPLOS),                     GPUs. In 2024 USENIX Annual Technical Conference (USENIX ATC).
+     Volume 3. 932–949.                                                                    699–713.
+[31] Erik Nijkamp, Bo Pang, Hiroaki Hayashi, Lifu Tu, Huan Wang, Yingbo               [43] Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and
+     Zhou, Silvio Savarese, and Caiming Xiong. 2022. CodeGen: An Open                      Song Han. 2023. Smoothquant: Accurate and efficient post-training
+     Large Language Model for Code with Multi-Turn Program Synthesis.                      quantization for large language models. In International Conference on
+     In The Eleventh International Conference on Learning Representations                  Machine Learning (ICML). PMLR, 38087–38099.
+     (ICLR).                                                                          [44] Guangxuan Xiao, Jiaming Tang, Jingwei Zuo, Junxian Guo, Shang Yang,
+[32] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Brad-                      Haotian Tang, Yao Fu, and Song Han. 2025. Duoattention: Efficient
+     bury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein,                 long-context llm inference with retrieval and streaming heads. In The
+     Luca Antiga, Alban Desmaison, Andreas Köpf, Edward Yang, Zach                         Thirteenth International Conference on Learning Representations (ICLR).
+     DeVito, Martin Raison, Alykhan Tejani, Sasank Chilamkurthy, Benoit               [45] Haoran Xu, Young Jin Kim, Amr Sharaf, and Hany Hassan Awadalla.
+     Steiner, Lu Fang, Junjie Bai, and Soumith Chintala. 2019. Pytorch: An                 2024. A Paradigm Shift in Machine Translation: Boosting Translation
+     imperative style, high-performance deep learning library. Advances in                 Performance of Large Language Models. In The Twelfth International
+     neural information processing systems (NeurIPS) 32 (2019).                            Conference on Learning Representations (ICLR).
+[33] Ramya Prabhu, Ajay Nayak, Jayashree Mohan, Ramachandran Ramjee,                  [46] Zihao Ye, Lequn Chen, Ruihang Lai, Wuwei Lin, Yineng Zhang,
+     and Ashish Panwar. 2025. vAttention: Dynamic Memory Manage-                           Stephanie Wang, Tianqi Chen, Baris Kasikci, Vinod Grover, Arvind
+     ment for Serving LLMs without PagedAttention. In Proceedings of                       Krishnamurthy, and Ceze Luis. 2025. Flashinfer: Efficient and cus-
+     the 30th ACM International Conference on Architectural Support for                    tomizable attention engine for llm inference serving. Proceedings of
+     Programming Languages and Operating Systems (ASPLOS), Volume 1.                       Machine Learning and Systems (MLSys) (2025).
+     1133–1150.                                                                       [47] Jeffrey Yu, Kartik Prabhu, Yonatan Urman, Robert M Radway, Eric Han,
+[34] Ruoyu Qin, Zheming Li, Weiran He, Jialei Cui, Feng Ren, Mingxing                      and Priyanka Raina. 2024. 8-bit Transformer Inference and Fine-tuning
+     Zhang, Yongwei Wu, Weimin Zheng, and Xinran Xu. 2025. Mooncake:                       for Edge Accelerators. In Proceedings of the 29th ACM International
+     Trading More Storage for Less Computation—A KVCache-centric Ar-                       Conference on Architectural Support for Programming Languages and
+     chitecture for Serving LLM Chatbot. In 23rd USENIX Conference on File                 Operating Systems (ASPLOS), Volume 3. 5–21.
+     and Storage Technologies (FAST). 155–170.                                        [48] Yuxuan Yue, Zhihang Yuan, Haojie Duanmu, Sifan Zhou, Jianlong
+[35] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan Li, Max Ryabinin,                    Wu, and Liqiang Nie. 2024. Wkvquant: Quantizing weight and
+     Beidi Chen, Percy Liang, Christopher Ré, Ion Stoica, and Ce Zhang.                    key/value cache for large language models gains more. arXiv preprint
+     2023. Flexgen: High-throughput generative inference of large language                 arXiv:2402.12065 (2024).
+     models with a single gpu. In International Conference on Machine
+
+
+
+
+                                                                                313
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia     Chengyu Sun, Yaqi Xia, Hulin Wang, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng
+
+
+[49] Boyuan Zhang, Luanzheng Guo, Jiannan Tian, Jinyang Liu, Daoce                       GPU GEMM with Enhanced Wave Utilization and Cache Locality.
+     Wang, Fanjiang Ye, Chengming Zhang, Jan Strube, Nathan R Tallent,                   In Proceedings of the International Conference for High Performance
+     and Dingwen Tao. 2025. High-performance Visual Semantics Compres-                   Computing, Networking, Storage and Analysis (SC). 1604–1618.
+     sion for AI-Driven Science. In Proceedings of the 30th ACM SIGPLAN             [52] Juntao Zhao, Borui Wan, Chuan Wu, Yanghua Peng, and Haibin Lin.
+     Annual Symposium on Principles and Practice of Parallel Programming                 2024. LLM-PQ: Serving LLM on Heterogeneous Clusters with Phase-
+     (PPoPP). 557–559.                                                                   Aware Partition and Adaptive Quantization. In Proceedings of the 29th
+[50] Zhenyu Zhang, Ying Sheng, Tianyi Zhou, Tianlong Chen, Lianmin                       ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel
+     Zheng, Ruisi Cai, Zhao Song, Yuandong Tian, Christopher Ré, Clark                   Programming (PPoPP). 460–462.
+     Barrett, Zhangyang Wang, and Beidi Chen. 2023. H2o: Heavy-hitter               [53] Yilong Zhao, Chien-Yu Lin, Kan Zhu, Zihao Ye, Lequn Chen, Size
+     oracle for efficient generative inference of large language models.                 Zheng, Luis Ceze, Arvind Krishnamurthy, Tianqi Chen, and Baris
+     Advances in Neural Information Processing Systems (NeurIPS) 36 (2023),              Kasikci. 2024. Atom: Low-bit quantization for efficient and accurate
+     34661–34710.                                                                        llm serving. Proceedings of Machine Learning and Systems (MLSys) 6
+[51] Zheng Zhang, Hulin Wang, Hongming Xu, Donglin Yang, Xiaobo                          (2024), 196–209.
+     Zhou, and Dazhao Cheng. 2025. HyTiS: Hybrid Tile Scheduling for
+                                                                                    Received 2025-08-29; accepted 2025-11-10
+
+
+
+
+                                                                              314
+

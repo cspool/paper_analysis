@@ -1,0 +1,1212 @@
+ ChituDiffusion: A Data-Characteristic-Aware Serving
+             System for Diffusion Models
+              Chengzhang Wu∗                                    Liyan Zheng∗                                     Haojie Wang
+            Tsinghua University                              Tsinghua University                            Tsinghua University
+               Beijing, China                                   Beijing, China                                 Beijing, China
+        wcz24@mails.tsinghua.edu.cn                    zhengly20@mails.tsinghua.edu.cn                   wanghaojie@tsinghua.edu.cn
+
+                Kezhao Huang                                      Zixuan Ma                                       Dong Dong
+             Tsinghua University                            Tsinghua University                               Tsinghua University
+                Beijing, China                                 Beijing, China                                    Beijing, China
+            hkz20@tsinghua.org.cn                       mzx22@mails.tsinghua.edu.cn                         dongd@tsinghua.edu.cn
+
+                                                                 Jidong Zhai
+                                                             Tsinghua University
+                                                                Beijing, China
+                                                         zhaijidong@tsinghua.edu.cn
+
+Abstract                                                                        Keywords: Deep learining serving system, Diffusion models,
+Diffusion models have become the dominant approach for                          Data-characteristic-aware optimization, Compiler
+generative tasks in images, videos, and other domains. How-                     ACM Reference Format:
+ever, diverse data properties in generation requests, which                     Chengzhang Wu, Liyan Zheng, Haojie Wang, Kezhao Huang, Zix-
+are critical for efficient serving, remain underexploited.                      uan Ma, Dong Dong, and Jidong Zhai. 2026. ChituDiffusion: A
+   To address this issue, we propose a diffusion model serving                  Data-Characteristic-Aware Serving System for Diffusion Models.
+system ChituDiffusion. ChituDiffusion leverages the                             In Proceedings of the 31st ACM SIGPLAN Annual Symposium on
+locality of data properties to recompose a diffusion pipeline                   Principles and Practice of Parallel Programming (PPoPP ’26), January
+into subgraphs with shared optimization opportunities, en-                      31 – February 4, 2026, Sydney, NSW, Australia. ACM, New York, NY,
+abling thorough compile-time and runtime co-optimizations.                      USA, 14 pages. https://doi.org/10.1145/3774934.3786424
+During compilation, ChituDiffusion compiles each sub-
+graph into multiple execution engines optimized for specific
+                                                                                1    Introduction
+data properties. At runtime, heterogeneous requests are
+elaborately reorganized into fine-grained batching tasks with                   Diffusion models have become a versatile class of generative
+similar properties and then efficiently executed by matched                     algorithms across domains, including images [29, 51, 52, 67],
+engines. Evaluation on five diffusion applications shows that                   videos [11, 16, 28, 30], 3D objects [32, 49], music [27, 43],
+ChituDiffusion improves the throughput by up to 2.13×                           and proteins [63]. Their flexibility supports applications
+(1.58× on average) on A100 and 2.19× (1.51× on average)                         from text-to-image [51] and text-to-video [11] generation
+on H100 compared with existing frameworks. The code for                         to controllable editing [67], powering products like DALL·E
+ChituDiffusion and the production traces have been made                         3 [20], Sora [6], and Firefly [2]. To meet application demands,
+open-source at https://github.com/thu-pacman/chitu/tree/                        diffusion pipelines integrate diverse input data and multiple
+Diffusion.                                                                      DNNs, leading to high computational cost. Real-world re-
+                                                                                quests further exhibit heterogeneous data properties—such
+CCS Concepts: • Computer systems organization →                                 as shared and partially duplicate inputs with varying genera-
+Real-time systems; Parallel architectures; • Computing                          tion shapes (Figure 1(a))—arising from both applications and
+methodologies → Machine learning; Computer vision.                              user behaviors [62, 64]. Exploiting these properties offers
+∗ Both authors contributed equally to this research.                            acceleration opportunities beyond the scope of general ML
+                                                                                frameworks [7, 48, 58].
+                                                                                   Dedicated diffusion model frameworks, e.g., Diffusers [61],
+                                                                                offer manually optimized pipelines designed for specific data
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         properties, such as batched requests with identical prompts
+tional License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                shown in Figure 1(b). Users can select the corresponding
+© 2026 Copyright held by the owner/author(s).                                   optimized pipeline for efficient executions. However, these
+ACM ISBN 979-8-4007-2310-0/2026/01                                              manual optimizations address only a narrow subset of po-
+https://doi.org/10.1145/3774934.3786424                                         tential scenarios due to two challenges.
+
+
+
+                                                                          537
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                           C. Wu, L. Zheng, H. Wang, K. Huang, Z. Ma, D. Dong, and J. Zhai
+
+
+                                         Prompt                                        During static compilation, ChituDiffusion decomposes
+R1) (“A dog is walking”,           )      Image                                     the pipeline into dGraphs using symbolic variables to rep-
+                                         Prompt                                     resent and propagate input data properties. Each dGraph is
+R2) (“A dog is walking”,           )      Image
+                                                                                    compiled into multiple dEngines, each specialized for a uni-
+R3) (“A cat is walking”,           )     Prompt                                     form property configuration. By reusing dEngines across re-
+                                          Image
+                                                                                    quests with different properties, ChituDiffusion performs
+              Requests                       Computation   Generated images         optimizations for diverse input properties while incurring
+                                       (a)                                          only a small compilation overhead.
+      Original pipeline                            Optimized pipelines                 At runtime, heterogeneous requests are decomposed into
+       Prompt
+       Prompt
+      Prompt                                                                        fine-grained dTask (dGraph-level tasks). A dynamic program-
+         Image
+        Image
+                                 Manual
+       Image                   optimization                                         ming based scheduler identifies and batches dTasks with the
+     Otherinputs
+    Other
+    Other   inputs
+           inputs                                                  …
+                                                                                    same properties. These dTasks batches are efficiently pro-
+                        Request data properties
+       Uniform properties             Heterogeneous properties
+                                                                                    cessed by corresponding dEngines that have been optimized
+     Same     Same     Ragged            R1 & R2 with the same prompt               for uniform data properties. Input and output properties are
+                              …                                          …
+    prompt    shape     shape             R2 & R3 with the same shape               inferred asynchronously, enabling the overlap of scheduling
+                                       (b)                                          and execution processes to mitigate scheduling overhead.
+                                                                                       Specifically, ChituDiffusion implements two key data-
+Figure 1. (a) Image generation requests with different data                         property optimizations to accelerate diffusion pipelines (§2.2):
+properties. Yellow and blue circles represent identical com-                        redundancy and dynamic shapes. Redundancy propagation
+putations and computations with the same generation shape,                          and elimination rules are designed to detect and remove
+respectively. (b) Existing diffusion frameworks with manual                         dimension-level redundant computations and memory ac-
+optimizations for uniform properties but lack support for                           cesses in tensor algebra. To support batched requests with
+heterogeneous properties.                                                           dynamic shapes (hereafter referred to as raggedness), Chi-
+                                                                                    tuDiffusion applies raggedness regularization, transform-
+   1) Diverse input data properties. The complexity of diffusion
+                                                                                    ing dynamic-shape operations into kernel-compatible forms
+models means each generation request may involve tens of
+                                                                                    without requiring new ragged kernels.
+inputs with independent properties. Since these properties
+                                                                                       We evaluate ChituDiffusion on five diverse diffusion
+can interact, existing methods must enumerate all possible
+                                                                                    applications, covering image and video generation with sev-
+combinations for optimization. However, the combinatorial
+                                                                                    eral widely used model extensions. The evaluation shows
+explosion across inputs makes exhaustive optimization in-
+                                                                                    that ChituDiffusion achieves a throughput up to 2.13×
+tractable.
+                                                                                    (1.58× on average) higher than widely-used DNN optimizers
+   2) Heterogeneous requests. When batching for efficiency,
+                                                                                    and diffusion-specific systems, showing the effectiveness of
+requests often contain heterogeneous and dynamic data
+                                                                                    ChituDiffusion’s data-property-aware optimizations on
+properties. As shown in Figure 1(b), different requests may
+                                                                                    diffusion models.
+share prompts or generation shapes, creating optimization
+                                                                                       This paper makes the following contributions:
+opportunities. However, existing methods assume uniform
+                                                                                        • We observe the key data characteristics of diffusion
+properties within a batch, making it difficult to exploit such
+                                                                                           model requests for optimizations, which exhibit local-
+heterogeneity.
+                                                                                           ity in pipelines.
+   We present ChituDiffusion, a diffusion service system
+                                                                                        • We propose recomposed optimizations for pipelines
+that leverages the data properties exhibiting locality across
+                                                                                           and requests, orchestrating compile-time and runtime
+computations. Consecutive operators often share optimiza-
+                                                                                           optimizations to exploit complex data properties.
+tion opportunities induced by these properties—e.g., circles
+                                                                                        • We implement ChituDiffusion, a system for diffusion
+with the same color in Figure 1(a). ChituDiffusion decom-
+                                                                                           pipeline optimization, which outperforms the through-
+poses the pipeline into dGraphs1 , which explicitly capture
+                                                                                           put of state-of-the-art frameworks by up to 2.13×.
+data properties, enabling decoupled handling through code-
+signed compilation and runtime optimizations. As a result,
+ChituDiffusion enables a wide range of data-property-                               2     Background and Motivation
+aware optimizations beyond existing frameworks, while                               2.1   Diffusion Models
+maintaining a reasonable optimization cost.
+                                                                                    Diffusion models generate data by simulating a denoising
+   In ChituDiffusion, we make the following design deci-
+                                                                                    process that transforms random noise into a target distribu-
+sions.
+                                                                                    tion. Figure 3 illustrates the pipeline of diffusion-based appli-
+                                                                                    cations such as text-to-image and image-to-image generation.
+                                                                                    Prompts are first embedded by CLIP [50], then used to guide
+1 The prefix “d” signifies diffusion, data properties, and decomposition.           a U-Net [16] base model that iteratively denoises a latent
+
+
+
+                                                                              538
+  ChituDiffusion: A Data-Characteristic-Aware Serving System for Diffusion Models                                                                                PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+                                                                                                                                                                 1e6
+                                                                                      1.0                                                                                                              80%
+
+
+
+
+                                                                                                                                                                                                             Proportion of requests
+                                           Data                                                                                                                          Prompts
+                                                                                                                                                           1.0
+Number of inputs
+
+
+
+
+                                           Control                                    0.8                                                                                                                                             512×768
+                                                                                                                                                                                                       60%
+
+
+
+
+                                                                                                                                           Prompt counts
+                               40          Others                                                                                                                        Requests                                                                  32.7%
+                                                                                      0.6
+                                                                                                                                                                                                       40%
+                                                                                      0.4                                                                  0.5
+                               20                                                                                                                                                                                                                   7.7%
+                                                                                      0.2
+                                                                                                                                                                                                       20%                                             .. ..
+                                                                                                                                                                                                                                                               ..
+                                                                                                                                                                                                                                      512×512
+                               0                                                      0.0                                                                  0.0                                         0%
+                                    T2I      T2I with       I2I    Inpaint               0.0     0.2     0.4         0.6     0.8    1.0                          1(unique)  2-4       6-10       >10
+                                            ControlNet               (I2I)                                                                                          Number of duplicate occurrences                                             Distribution of shapes
+                                                     (a)                                                       (b)                                                                (c)                                                                     (d)
+
+
+  Figure 2. (a) The count of inputs of SDXL-based diffusion pipelines. T2I and I2I represent the text-to-image and image-to-
+  image tasks, respectively. Inpainting means image partial repaint in the selected area. Control inputs influence the pipeline
+  control flow, such as iteration counts. (b) Consecutive text-to-image requests in DiffusionDB [62], a request database of an
+  online text-to-image service. (c) Duplicate prompt occurrences in DiffusionDB counting by prompts and requests. (d) Shape
+  distribution of the top 300 popular generative images in Civitai [17], which contain 112 different shapes. Only images with
+  generation settings attached are included.
+Image-to-image Text-to-image
+
+
+
+
+                                                                              Denoising iterations                                           To meet the requirements of different applications, diffu-
+                                    Random Noise
+                                                                                                                                          sion pipelines are extensively customized to achieve flexible
+                                       Input                   CLIP
+                                                             Language
+                                                                              U-Net            U-Net              Post-                   functionalities. For example, the image-to-image pipeline in
+                                    prompts 1 🔤                               base             refiner          processing
+                                                              model                                                                       Figure 3 extends the basic text-to-image pipeline by incor-
+                                       Input                   CLIP                                                                       porating a VAE encoder model to encode input images into
+                                                             Language
+                                    prompts 2 🔤               model                                                  Image                latent space. Additionally, application designers and users
+                                                                                                                      🖼
+                                      Image 🖼
+                                                                VAE                                                                       can apply various extensions, such as ControlNet [67] and
+                                                              encoder                                                                     LoRA [31], to generate results in different visual effects and
+                                          Data
+                                                                                                                                          artistic styles. Consequently, varied input data across ap-
+                                                            Extensions
+                                                                             Controlling                        Controlling               plications offers unique optimization chances, necessitating
+                                                           (ControlNet,                        Extensions
+                                          Model                              parameters                         parameters
+                                                             LoRA, ...)                                                                   effective application-specific optimization strategies.
+                                                                                                                                          Diverse Data Characteristics in Requests Diffusion model
+     Figure 3. Application pipelines based on the SDXL model.                                                                             serving systems must accommodate requests with diverse
+  image initialized from random noise or an input image. A                                                                                data characteristics. These mainly manifest as correlative
+  U-Net refiner further enhances the result through additional                                                                            requests with partial redundancy and variability in generation
+  denoising rounds, and the final latent is decoded into a visible                                                                        shapes, arising from both application and user sides.
+  image, optionally followed by super-resolution [24, 25, 54].                                                                               On the application side, diffusion models are inherently
+     While U-Net architectures dominate traditional diffusion                                                                             flexible with numerous input parameters, but deployments
+  models, transformer-based designs are gaining traction. Mod-                                                                            often fix certain values for specific use cases. In addition,
+  els such as DiT [46], SD3 [9], Hunyuan series models[40, 57]                                                                            generation shapes strongly affect output quality [47], such
+  and FLUX [34, 35] leverage self-attention for improved gener-                                                                           as the posture of individuals in generated images.
+  ation quality, and extensions like DiT-3D [44], DiT-MoE [69],                                                                              From the user side, correlative requests with varied gen-
+  RFDiffusion [63] and TerDiT [42] further adapt this paradigm                                                                            eration shapes are common, as users cannot anticipate in-
+  to 3D modeling, efficient scaling, protein structure prediction                                                                         put effects without execution. They often submit multiple
+  and resource-constrained deployment.                                                                                                    related requests for grid searches, producing several corre-
+                                                                                                                                          lated inputs and manually selecting the best results. Unlike
+                                                                                                                                          conventional vision tasks, diffusion models cannot simply
+  2.2                               Motivation
+                                                                                                                                          crop or pad inputs for batching. This workflow, supported
+  Resulting from the distinct computation patterns of diffusion                                                                           by mainstream frameworks [3–5], improves productivity.
+  models, their complex structures and unique data properties                                                                             Figure 2(b–c) shows that most prompts generate more than
+  provide new optimization opportunities.                                                                                                 five correlated requests in a public text-to-image trace.
+  Complex pipelines with flexible customization. Diffu-                                                                                      Figure 2(d) shows that generation shapes are highly di-
+  sion models exhibit high flexibility, necessitating numerous                                                                            verse: over 30% of requests use 512×768, yet more than
+  configurable inputs such as positive and negative prompts,                                                                              100 distinct shapes appear among the 300 most popular
+  one or more reference images, guidance strength, plug-and-                                                                              images. Naive batching by identical shapes leaves many
+  play extensions, etc. As shown in Figure 2(a), a single diffu-                                                                          requests unbatchable, reducing efficiency. While requests
+  sion pipeline based on the SDXL model is able to take more
+  than 20 inputs for a generation request.
+
+
+
+                                                                                                                                   539
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                        C. Wu, L. Zheng, H. Wang, K. Huang, Z. Ma, D. Dong, and J. Zhai
+
+
+                      Compiler                                                                   3. dTask scheduling (§5.1): To efficiently execute requests
+APP Pipelines
+                      Application characteristic                                                 with heterogeneous data properties, ChituDiffusion lever-
+                       Prompt: different or identical       dGraph recompose
+    SDXL+Refine
+                        Image: uniform or ragged                                                 ages dynamic programming to pack dTasks with conforming
+SD15+ControlNet                                            dGraph 2
+                                               Diffusion pipeline
+                      Diffusion pipeline    1 dGraph                   dGraph 3                  data properties into a batch, which is dispatched to the
+ SVD+ControlNet                                Prompts
+                      Prompts             identification dGraph 1                                matched dEngines for efficient execution. In Figure 4, Chi-
+        …                                           Images
+                      Images
+                                                                        Property-aware
+                                                                                                 tuDiffusion packs four dTasks into two batches to exploit
+                                                                        2 compilation            the same prompt and the uniform generation shape.
+                      Scheduler                                                                  4. Asynchronous property inference (§5.2): ChituDif-
+                                                                  dEngine library
+User requests                 dTask pool
+                                                       Redundant Ragged Redundant                fusion infers the data properties of dTask outputs with-
+                        𝑇 𝑃1, 512 × 768                                  Iteration
+                                                        Prompts Images Prompts
+                                                       Prompts               ID                  out actual execution. Therefore, ChituDiffusion is able to
+A dog/cat               𝑇 𝑃1, 512 × 512
+                                                 3 dTask                                         overlap dTask scheduling with actual execution, avoiding
+is walking              𝑇 𝑃1, 768 × 768          scheduling             Redundant
+        …                                               Prompts Images
+                                                       Prompts
+                                                                         Iteration
+                                                                 Images Prompts
+                                                                             ID
+                                                                                                 scheduling overhead.
+                        𝑇 𝑃2, 512 × 512
+                                   …
+                                  Async property
+                                  4 inference                                                    4     Compile-Time Optimizations
+                      Request outputs         Executor
+                                                                                                 Due to the large number of inputs associated with diffusion
+                        P1                                                     Iteration         models, directly optimizing a pipeline for all possible sce-
+                                       P1   …           Prompts
+                                                       Prompts       Images   Prompts
+                                                                                   ID
+                       P1     P2                                                                 narios leads to an impractically large number of optimized
+                                                                                                 execution engines. Taking a pipeline with 𝑛 inputs for ex-
+     Redundant computation             dGraph
+                                                                                                 ample, merely accounting for the presence or absence of
+    Redundant memory access            dEngine                                                   tensor dimensional redundancy can yield up to 2𝑛 execution
+                                                                              Iteration          engines, incurring prohibitive optimization costs.
+             Compile-time process                       Prompts
+                                                         mpts        Images
+                                                                      ages     ompts
+                                                                                  ID
+             Runtime process                                            …                           ChituDiffusion’s compiler recomposes a pipeline into
+                                                                                                 a set of dGraphs to enable fine-grained optimizations (§4.1)
+             Figure 4. Overview of ChituDiffusion.                                               and then compiles each dGraph into multiple dEngines via
+                                                                                                 property-aware optimizations (§4.2).
+often share inputs and intermediate results—creating opti-
+mization opportunities—batching strategies face inherent
+                                                                                                 4.1   Symbolic dGraph Identification
+trade-offs: kernels for varied shapes enable parallelism but
+incur overhead for uniform shapes. Consequently, neither                                         To infer how properties are propagated within the dGraph
+approach alone achieves ideal performance.                                                       structure, ChituDiffusion is equipped with a set of sym-
+                                                                                                 bolic data property propagation rules tailored for tensor
+                                                                                                 operations. For conciseness, this section takes dimensional
+                                                                                                 redundancy as a running example(§2.2). Examples include
+3      Overview                                                                                  a batch of requests with partially duplicate inputs (redun-
+Figure 4 illustrates the workflow of ChituDiffusion on an                                        dancy in the batch dimension) and identical data in gray-
+image generation pipeline. ChituDiffusion accelerates it                                         scale images (redundancy in the color channel dimension).
+in four steps. At compile time, ChituDiffusion optimizes                                         The method can also be extended to deal with other data
+pipelines with the knowledge of application characteristics,                                     properties as well, such as dynamic tensor shapes.
+i.e., requests probably have identical prompts but varied                                        Symbolic property propagation. ChituDiffusion uti-
+image resolutions.                                                                               lizes application characteristics to initialize propagation. Dif-
+1. dGraph identification (§4.1): ChituDiffusion per-                                             fusion pipelines are usually tailored to a specific usages, de-
+forms symbolic data property analysis to infer potential op-                                     velopers have prior knowledge about pipeline inputs. Some
+timization opportunities, taking application characteristics                                     inputs usually vary between requests, while certain inputs
+as the initial input properties. According to the propagating                                    are intended to be the same for all requests (e.g., a fixed
+results, diffusion pipelines are recomposed into dGraphs                                         prompt in style transfer or a shared backbone in protein gen-
+which share the same optimization enabling conditions.                                           eration ). Additionally, there are inputs that may potentially
+2. Data-property-specialized compilation (§4.2): By                                              be the same but can only be determined by the incoming
+inferring possible input data properties for each dGraph,                                        request. To deal with the dynamics and complexity of data
+ChituDiffusion compiles it into a series of dEngines, each                                       in diffusion models, ChituDiffusion leverages symbolic
+of which is specially optimized for certain data properties.                                     data properties to perform analysis. Figure 5(a) shows a
+For example, dEngine 1 is optimized for the scenario where                                       simplified example of a image generation task with gray
+inputs are redundant (§4.2) and ragged (§6.1).                                                   scale image controlnet and LoRAs. ChituDiffusion assigns
+   At runtime, ChituDiffusion recomposes user requests                                           symbolic variables to the data properties of inputs, notated
+into dTasks according to the dGraph-level pipeline.                                              as 𝛼, 𝛽, and 𝛾. For inputs with a fixed property determined
+
+
+
+                                                                                           540
+ChituDiffusion: A Data-Characteristic-Aware Serving System for Diffusion Models                            PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+              latent
+             latent             controlnet       LoRA          operator       dEngine              Figure 5(a) can be optimized if 𝛼 ∧ 𝛽 or 𝛽 are redundant,
+        AA         B   C         D     E     dGraph (d-e)                 Property of (B)          but the condition does not extend beyond this operator.
+𝛼                 𝛽 𝑇           𝛾 𝛽                𝛽=𝑇                          𝑇                  ChituDiffusion considers these fine-grained optimization
+        a
+                     d                                         Compile
+    b
+                                                    𝛽=𝐹                         𝐹                  opportunities during dGraph compilations in §4.2. To avoid
+              c             e                                                                      scheduling overhead, small dGraphs —such as the single-
+             𝛼              𝛽
+                                             dGraph (g-h)          Properties of (f, D, E)         node f—are merged into subsequent dGraphs during post-
+                       f
+                                             𝛼 ∧ 𝛽 = 𝑇, 𝛽 = 𝑇, 𝛾 = 𝑇        𝑇, 𝑇, 𝑇
+    𝛼∧𝛽
+                       g
+                                                                                                   processing.
+                       …                     𝛼 ∧ 𝛽 = 𝑇, 𝛾 = 𝑇, 𝛽 = 𝐹         Pruned
+𝛼∧𝛽∧𝛾
+                       h                     𝛼 ∧ 𝛽 = 𝑇, 𝛽 = 𝐹, 𝛾 = 𝑇          𝑇, 𝑇, 𝑇              Table 1. Tensor redundancy propagation rules. 𝑎𝑖 and 𝑏𝑖
+𝛼∧𝛽∧𝛾
+                                                          …
+                       AA                                                                          represent the redundancy properties of 𝑖-th dimensions
+    (a) dGraph recomposition                 (b) Property conditions      (c) dEngines             (starting from 1) of the first and second inputs, respectively.
+                                                                                                   ∧ means logical AND.
+Figure 5. (a) Partitioning a DFG into dGraphs according
+to property expressions. 𝛼, 𝛽, and 𝛾 are symbolic property                                               Category          Operators [Layout]         Output redundancy
+variables. 𝑇 and 𝐹 are true and false. ∧ means logical AND. (b)                                     Unary elementwise       ReLU, Tanh [2D]                     [𝑎 1, 𝑎 2 ]
+                                                                                                    Binary elementwise        +, −, ×, ÷ [2D]            [𝑎 1 ∧ 𝑏 1, 𝑎 2 ∧ 𝑏 2 ]
+Property condition expressions of dGraph (g-h). (c) dEngines                                              Linear          Batch Matmul [NHW]              [𝑎 1 ∧ 𝑏 1, 𝑎 2, 𝑏 3 ]
+with input property requirements of dGraph (d-e).                                                                                                  [𝑎 1, 𝑏 1, 𝑎 3 ∧ 𝑎 4 ∧ 𝑏 3 ∧ 𝑏 4,
+                                                                                                                          Conv2D    w/o padding
+                                                                                                         Convolution                                   𝑎3 ∧ 𝑎4 ∧ 𝑏3 ∧ 𝑏4 ]
+by application characteristics, actual values are provided. In                                                           [NCHW]
+                                                                                                                                     w/ padding             [𝑎 1, 𝑏 1, 𝑁 , 𝑁 ]
+the tensor redundancy propagation, we use a boolean value
+to represent if a dimension is duplicate, such as 𝑇 (i.e., true)
+for input 𝐶 in Figure 5(a).
+   To identify various forms of data properties propagated                                         4.2    Data-Property-Specialized Compilation
+by tensor algebra, ChituDiffusion utilizes symbolic propa-                                         By analyzing property expressions, ChituDiffusion selec-
+gation rules. Table 1 presents typical dimension redundancy                                        tively compiles a dGraph into several execution engines,
+rules derived from boolean algebra. Due to the complexity                                          which are named dEngines. Each dEngine is specially opti-
+of tensor operators, both input and output are represented                                         mized for one specific input data property.
+as vectors, with each element denoting a per-dimension                                             Selective dEngine generation. For each dGraph, Chi-
+propery. For example, in 2D convolution, if both input ten-                                        tuDiffusion optimizes dEngines by enumerating potential
+sors exhibit redundant length and width dimensions, the                                            property expressions of the dGraph inputs. For example,
+redundancy propagates to the output. To accommodate new                                            dGraph (d-e) in Figure 5(a) can be optimized when its in-
+operators, ChituDiffusion also supports user-defined prop-                                         puts are redundant. ChituDiffusion identifies its property
+agation rules.                                                                                     condition is 𝛽, which have two possible values, as shown
+   During the propagation, ChituDiffusion maintains sym-                                           in Figure 5(b). By optimizing a dGraph under two prop-
+bolic expressions for tensor properties. As illustrated in in                                      erty conditions, ChituDiffusion generates two dEngines
+Figure 5(a), nodes (a-c) generate outputs with redundancy if                                       covering all optimization scenarios, and combining suitable
+tensor 𝐴 is redundant.                                                                             dEngines achieves the same effect as monolithic pipeline-
+   ChituDiffusion takes a whole pipeline as a single data                                          level optimization.
+flow graph (DFG) for effective recomposition.In diffusion                                             Furthermore, as a single dEngine can be reused across
+pipelines, denoising loops enable later updates to affect ear-                                     diffusion model requests with different data properties, it
+lier tensors. To avoid conflicting expressions, ChituDif-                                          avoids the expensive cost of monolithic optimization of
+fusion unrolls initial iterations until loop inputs stabilize,                                     entire pipelines. However, not all dEngines are necessary,
+which converges within a few steps since such loops are                                            as certain condition combinations are rare or yield limited
+neither nested nor overlapping.                                                                    performance benefits. For instance, the third condition of
+dGraph identification. Based on symbolic propagation,                                              dGraph (f-h) in Figure 5(c), 𝛼 ∧ 𝛽 = 𝑇 , 𝛾 = 𝑇 , 𝛽 = 𝐹 , is unsatis-
+ChituDiffusion partitions the pipeline into dGraphs by                                             fiable since 𝛽 can not be both redundant and not redundant.
+grouping consecutive operators with identical output prop-                                         ChituDiffusion prunes two categories of dEngines. For
+erty expressions, as common properties indicate shared opti-                                       conciseness, we discuss a dEngine with condition expres-
+mization opportunities. As shown in Figure 5(a), each opera-                                       sions 𝑒 1 ∧ 𝑒 2 .
+tor belongs to a dGraph delineated by red lines.                                                      The first is conflicting conditions. If 𝑒 1 ∧ 𝑒 2 is unsatisfiable
+   ChituDiffusion employs output properties as the re-                                             for all input properties, the dEngine is never used and thus
+compose criterion, since input properties usually enable                                           pruned. Naive enumeration of tensor properties often gener-
+only operator-specific optimization. For example, node g in                                        ates such cases by ignoring constraints from pipeline inputs
+                                                                                                   and application semantics. For example, tensors 𝐵 and 𝐸 in
+
+
+
+                                                                                             541
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                     C. Wu, L. Zheng, H. Wang, K. Huang, Z. Ma, D. Dong, and J. Zhai
+
+
+         𝐾𝐾                        𝑉𝑉                 𝐾                       𝑉              Algorithm 1 Data-aware execution plan generation.
+                                                                                              1: Input: dGraph g, dTask pool D, dEngine library L
+𝑄𝑄00   𝑄𝑄00𝐾𝐾𝑇𝑇 σσ 𝑄𝑄10𝐾𝐾𝑇𝑇   σσ 𝑄𝑄00𝐾𝐾𝑇𝑇 𝑉𝑉   𝑄0   𝑄0 𝑇        𝑄0 𝑇         𝑄0 𝑇             2: Output: Execution plan E
+                                                       𝐾    σ      𝐾     σ      𝐾 𝑉
+                                               𝑄1   𝑄1          𝑄1           𝑄1
+                                                                                              3: T = {∅ : 0}           ⊲ Initialize the map of execution time
+(a) Original with redundant K and V            (b) Eliminate redundant memory access          4: E = {∅ : ∅}          ⊲ Initialize the map of execution plans
+                                                                                              5: R = Uniqe(D [g]) ⊲ Unique dTasks of the given dGraph
+                                                                                              6: Search(G, R)
+Figure 6. Eliminating redundant memory access for the                                         7: return E [R]
+attention operation. 𝜎 denotes Softmax. Element-wise oper-                                    8:
+ations are omitted.                                                                           9: procedure Search(g, R)          ⊲ R is the remaining dTasks
+Figure 5(a) always share the same property, so optimizations                                 10:    if R ∈ T then
+assuming them to differ are invalid.                                                         11:        return T [R]                      ⊲ Memorized results
+    The second is inessential conditions. If a condition 𝑒 1 ∧                               12:      𝑡𝑚𝑖𝑛 = ∞
+𝑒 2 enables only marginal optimizations, ChituDiffusion                                      13:      for S ∈ L [g] do                  ⊲ Enumerate dEngines
+prunes it to reduce both optimization overhead and run-                                      14:          B = GetLargestBatch(R, S)
+time scheduling cost. The importance of each condition is                                    15:          𝑡𝑛𝑒𝑤 = Search(g, R − B)+EstTime(g, S)
+determined by its optimization speedup, and those below a                                    16:          if 𝑡𝑛𝑒𝑤 < 𝑡𝑚𝑖𝑛 then
+threshold (5% in the current implementation) are discarded.                                  17:              𝑡𝑚𝑖𝑛 = 𝑡𝑛𝑒𝑤
+For example, the condition 𝛼 ∧ 𝛽 = 𝑇 , 𝛾 = 𝐹, 𝛽 = 𝐹 is pruned                                18:               P = E [R − B] ∪ {(B, S)}        ⊲ Partial plan
+in dGraph (f–h) because it affects only a single operator.                                   19:      T [R] = 𝑡𝑚𝑖𝑛                           ⊲ Memorization
+Users may also define more sophisticated pruning criteria,                                   20:      E [R] = P
+such as leveraging performance models to estimate dEngine                                    21:      return 𝑡𝑚𝑖𝑛
+speedup.
+Redundancy elimination. To optimize dGraphs under dif-
+                                                                                                               Scheduler                                           Executor
+ferent inputs automatically, ChituDiffusion adopts the rule-                                                         Property inference                         dEngines library
+                                                                                                   dTask pool                                        Async
+based optimization method.ChituDiffusion is equipped                                          𝑇1 𝑃1, 512 × 768         Schedule plans                      𝐸
+                                                                                                                                                      task 1              Uniform
+with dimension-level redundant elimination rules tailored for                                 𝑇 𝑃1, 512 × 512
+                                                                                               2
+                                                                                                                      𝐸 2 : 𝑇1 , 𝑇2 , 𝑇3 , 𝑇4        queue 𝐸2             Ragged
+each tensor operator. To eliminates redundant computations                                    𝑇3 𝑃1, 768 × 768         𝐸1 : 𝑇4 | 𝐸4 : 𝑇1 , 𝑇2 , 𝑇3         𝐸3 Redundant   Uniform
+by analyzing operator inputs in execution order and apply-                                    𝑇4 𝑃2, 512 × 512         𝐸4 : 𝑇1 , 𝑇3 | 𝐸1 : 𝑇2 , 𝑇4         𝐸4 Redundant   Ragged
+ing optimization rules. Redundant dimensions are marked
+and later restored through broadcasting, ensuring maximal
+elimination while preserving equivalence.                                                    Figure 7. Scheduling on dTasks and dEngines of a dGraph.
+    For redundant memory access, ChituDiffusion utilizes                                     dEngine inputs are non-redundant with uniform shapes at
+the equivalent transformations of linear algebra to transform                                default without annotation.
+them into redundancy-free computations based on existing
+kernels. Figure 6(a) shows an attention operation with re-                                   (parameterized by window size), decomposes them into fine-
+dundant K and V tensors. To optimize it, ChituDiffusion                                      grained dTasks, and stores them in a shared task pool (Fig-
+compresses the K and V tensors along the redundant batch                                     ure 7). It then schedules dTasks from different dGraphs in-
+dimension and concatenates the Q tensors from different                                      dependently, following their execution order in the dGraph-
+requests into a single one.                                                                  level pipelines.
+                                                                                                For dTasks based on the same dGraph, the heterogeneity
+                                                                                             of data properties carried by user requests provides a large
+                                                                                             scheduling space. For example, Figure 7 shows four dTasks
+5      Runtime Design                                                                        of the same dGraph, each taking two inputs. We can batch
+At runtime, ChituDiffusion ’s scheduler dynamically groups                                   all dTasks and run dEngine 𝐸 2 , which is most general but
+dTasks with uniform data properties into batches, dispatches                                 less efficient since data properties are not used. Alternatively,
+the corresponding pre-compiled dEngines to the executor,                                     we can execute 𝑇1,𝑇2 , and 𝑇3 with 𝐸 4 to exploit the identical
+and asynchronously infers data properties to overlap sched-                                  prompt, or execute 𝑇2 and 𝑇4 with 𝐸 1 to create a batch of
+uling with execution (§5.1, §5.2).                                                           uniform shape. Similar trade-offs exist for dTasks with more
+                                                                                             inputs and diverse data properties.
+                                                                                                To determine an efficient batching plan for dTasks, Chi-
+                                                                                             tuDiffusion employs a dynamic programming approach.
+5.1     Heterogeneous dTask Scheduling                                                       Algorithm 1 details this workflow. For each dGraph, Chi-
+To handle heterogeneous requests efficiently, ChituDif-                                      tuDiffusion merges dTasks with identical inputs into a
+fusion aggregates requests within a scheduling window                                        single dTask (Algorithm 1) and broadcasts the results after
+
+
+
+                                                                                       542
+ChituDiffusion: A Data-Characteristic-Aware Serving System for Diffusion Models                       PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+   Data               Data with redundancy         Operation             Operation with redundant                    Operation with redundant              Ragged data or operations
+                                                                          computation eliminated                     memory access eliminated
+
+  Latent                     Fine-tuning
+                              Finetuning      Latent                  Fine-tuning
+                                                                       Finetuning          Latent                      Fine-tuning
+                                                                                                                        Finetuning         Latent                          Fine-tuning
+                                                                                                                                                                            Finetuning
+   Inputs      Prompts
+                Prompts                        Inputs    Prompts
+                                                          Prompts       weights             Inputs     Prompts
+                                                                                                        Prompts          weights            Inputs          Prompts
+                                                                                                                                                             Prompts         weights
+ images                        weights
+                                weights      images                      weights          images                          weights         images                              weights
+                                                                                          Concat
+MM LoRA          MM LoRA MM LoRA             MM LoRA       MM LoRA MM LoRA            MM LoRA             MM LoRA MM LoRA
+                                                                                                                                                          …
+                                                                                                                                                                          dGraph 2
+      Add             Add         Add           Add             Add        Add               Add               Add          Add                                        (loop invariant)
+
+
+
+
+                                                                                                                                            dGraph 1
+                                                                                                                                                         Cross
+                                                                                                                                                       Attention
+       Batch Matmul                              Batch Matmul                                        Matmul`
+                                                                                                                                                          …
+            Softmax                                   Softmax                                      Softmax                                               Cross
+                                                                                                                                                       Attention
+                  Batch Matmul                              Batch Matmul                                       Matmul
+
+      (a) dGraph decomposition                 (b) Redundancy elimination                 (c) Ragged operation regularization              (d) Invariant tensor optimization
+
+Figure 8. Optimizations on the core structure of a SDXL layer. The blue circle in (d) shows the entry of the denoising loop.
+
+execution. Then, ChituDiffusion explores different com-                                    dTask. By evaluating output property expressions with real
+binations of batches by enumerating properties required by                                 input properties, ChituDiffusion efficiently infers data
+dEngines (Algorithm 1).For a given property requirement,                                   properties of each dTask output separately.
+ChituDiffusion finds the largest batch satisfying it (Algo-                                   To infer redundancy across multiple requests, ChituDif-
+rithm 1).                                                                                  fusion develops a tensor fingerprint technique to recognize
+   To avoid duplicate searches, ChituDiffusion always in-                                  redundant tensors without real execution. For request inputs,
+cludes the first remaining dTask in the current batch. Since                               ChituDiffusion uses a lightweight hash function to calcu-
+a plain dEngine with the most general requirements always                                  late their fingerprint in a time complexity that is linear to
+exists, legal plans are guaranteed. Each batch’s execution                                 the number of elements in tensors. Additionally, applications
+time is estimated using a performance model tailored to its                                and users are also able to directly mark duplicate inputs in
+dEngine, and the remaining dTasks are recursively combined                                 correlative requests, in which case ChituDiffusion assigns
+into batches in the same manner. After enumerating all                                     the same unique values to them as fingerprints without
+dEngines for a given search state, ChituDiffusion records                                  hashing.
+the estimated optimal execution time and batching plan to                                     ChituDiffusion calculates fingerprints on each dGraph
+accelerate subsequent scheduling (Algorithm 1).                                            in the execution order. Calculating fingerprints operator-by-
+   ChituDiffusion adopts a lightweight performance model                                   operator can be time-consuming for complex dGraphs. Since
+tailored for diffusion models to achieve both efficiency and                               dGraphs perform deterministic computation, their outputs
+accuracy. Since compute-intensive operations dominate exe-                                 are only dependent on inputs. According to the DFG of
+cution, their costs scale either linearly with input size (e.g.,                           a dGraph, ChituDiffusion records which inputs impose
+convolution, linear layers) or quadratically (e.g., attention).                            influence on outputs for each operator and propagate this
+To capture this behavior, ChituDiffusion applies ordinary                                  information through the data-flow equation. This enables
+least squares regression between input-related metrics and                                 us to directly derive output fingerprints from the input fin-
+execution time, using a dataset constructed from example                                   gerprints. To calculate output fingerprints, ChituDiffusion
+inputs of varying sizes and their batch prefixes. For models                               uses
+that involve complex computations such as temporal and                                       FP[𝑜𝑢𝑡𝑝𝑢𝑡𝑖 ] = Φ(FP𝑔 , FP[𝑖𝑛𝑝𝑢𝑡𝑑𝑒𝑝𝑖,0 ], . . . , FP[𝑖𝑛𝑝𝑢𝑡𝑑𝑒𝑝𝑖,𝑛 ])
+spatial attentions in video generation models, ChituDiffu-
+sion replaces the total tensor size in the performance model                               , where Φ is an operand-commutative hash function, FP𝑔 is a
+with the corresponding dimension sizes, allowing for a more                                unique identifier of the current dGraph to distinguish compu-
+precise estimation of the execution time.                                                  tations of different dGraphs, and 𝑖𝑛𝑝𝑢𝑡𝑑𝑒𝑝𝑖,0 , . . . , 𝑖𝑛𝑝𝑢𝑡𝑑𝑒𝑝𝑖,𝑛
+                                                                                           have influence on 𝑜𝑢𝑡𝑝𝑢𝑡𝑖 . Thus, ChituDiffusion can iden-
+                                                                                           tify redundant dTask inputs by simple fingerprint compari-
+5.2     Asynchronous Data Property Inference                                               son without actual tensor comparisons.
+In ChituDiffusion, the scheduler and executor operate
+asynchronously to hide decomposition and scheduling over-                                  6       Implementation
+head, but the absence of data properties for unexecuted dTask                              Figure 8 illustrates how ChituDiffusion applies data-proper-
+inputs poses a key challenge.                                                              ty-aware optimizations to the core SDXL layer. Given re-
+   To address this problem, ChituDiffusion uses data prop-                                 quests with ragged image shapes but identical prompts and
+erty expressions in §4.1 to infer data properties for each                                 fine-tuning weights, ChituDiffusion firstly detects two
+
+
+
+                                                                                    543
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                     C. Wu, L. Zheng, H. Wang, K. Huang, Z. Ma, D. Dong, and J. Zhai
+
+
+ Regular Ragged Regular Ragged data-sharing Ragged data-independent                            a ragged Matmul can be regularized by fusing the batch
+  Data    data operation    operation              operation
+                                                                                               dimension 𝑏 and ragged dimension 𝑚ˆ via transpose and
+     ෝ 𝑘
+  𝑏, 𝑚,              𝑘, 𝑛         ෠ 𝑤
+                            𝑛, 𝑐, ℎ, ෝ         𝑐, 1, 1         ෠ 𝑤
+                                                         𝑛, 𝑐, ℎ, ෝ         𝑓, 𝑐, 𝑟, 𝑠         reshape, similar to concatenating matrix heights (Figure 6(b)).
+            Matmul                    Add                          Conv                        Other operations, such as ragged elementwise ops and con-
+                                                                                               volutions, can be handled with transpose and image to col-
+  𝑏, 𝑚
+     ෝ ,𝑘                         ෠ 𝑤
+                            𝑛, 𝑐, ℎ, ෝ         𝑐, 1, 1         ෠ 𝑤
+                                                         𝑛, 𝑐, ℎ, ෝ         𝑓, 𝑐, 𝑟, 𝑠         umn [60] (Figure 9(bc)). These transformations are feasible
+                  Ragged
+      T/R         Regular      T/R              T/R       Im2col              T/R              because shared weights have fixed dimensions, allowing
+                                                                                               ragged inputs to be flattened across shared data. ChituDif-
+       ෝ ,𝑘
+      𝑏𝑚             𝑘, 𝑛   𝑛ℎ෠ 𝑤,
+                                ෝ 𝑐              𝑐       𝑛ℎ෠ 𝑤,
+                                                             ෝ 𝑐𝑟𝑠           𝑐𝑟𝑠, 𝑓
+                                                                                               fusion thus applies a set of graph transformation rules to
+             Matmul                   Add                        Matmul                        regularize ragged data-sharing operations, supplemented
+               T/R                       T/R                          T/R                      with a few ragged data-independent operations, and can
+            (a) Linear       (b) Elementwise                (c) Convolution                    flexibly extend this rule set for new models.
+Figure 9. Ragged operation regularization. 𝑥ˆ denote a ragged                                  6.2   Invariant Tensor Elimination
+dimension 𝑥. If dimension 𝑥ˆ is merged with the batch
+                                                                                               Diffusion models contain two types of invariant tensors: con-
+dimension, the new merged dimension is a regular dimension.
+                                                                                               stants, predetermined by applications, and loop-invariants
+T/R represents transpose and reshape operators.
+                                                                                               resulting from iterative denoising.
+dGraphs and optimizes them independently, eliminating                                             ChituDiffusion employs a lightweight four-state de-
+redundant computation and memory accesses from shared                                          tection algorithm (constant, loop-invariant, loop-variant,
+inputs (Figure 8b). It then applies ragged operation regular-                                  unknown) to identify them. Properties are initialized from
+ization (§6.1) to transform irregular operations into kernel-                                  tensor definitions and iteratively propagated along operators
+compatible equivalents (Figure 8c). Finally, ChituDiffusion                                    with a priority hierarchy.
+identifies invariant tensors within the pipeline (§6.2).                                          Detected constants are precomputed at compile time, while
+                                                                                               loop-invariants are hoisted outside loops. ChituDiffusion
+                                                                                               further supports multi-value constants, allowing selective
+6.1     Ragged Operation Regularization                                                        input fixing to trade off performance and generation diver-
+To enable data-property-aware optimizations for ragged                                         sity.
+requests(input with various shapes), ChituDiffusion must
+both identify dGraphs with common raggedness patterns for                                      6.3   Extensibility and Architecture Agnosticism
+compile-time dEngine construction and infer output shapes                                      ChituDiffusion achieves architecture-agnostic support for
+efficiently at runtime. Building on the symbolic shape prop-                                   diverse diffusion models—spanning from pure Transformers
+agation, ChituDiffusion represents ragged dimensions as                                        to mixed Transformer-Convolutional structures—through
+symbolic variables and substitutes actual inputs at runtime                                    two core mechanisms:
+to obtain final output shapes. Since Handcrafting ragged                                           • Universal Intermediate Representation: By utiliz-
+kernels for all operators is costly and challenging for existing                                     ing Data Flow Graphs (DFGs) as a universal IR, Chi-
+automatic kernel generators [19, 66], ChituDiffusion em-                                             tuDiffusion expresses arbitrary pipelines uniformly.
+ploys ragged operation regularization. Operations are classi-                                        This approach decouples optimization logic from spe-
+fied as data-sharing operations with shared inputs or weights                                        cific neural network layouts, enabling the system to
+(e.g., convolution, linear layers) and data-independent op-                                          exploit broad optimization opportunities derived from
+erations without shared weights (e.g., transpose, reduce).                                           high-level application requirements (§2.2) rather than
+Ragged operations are opportunistically transformed into                                             being limited by architectural specifics.
+standard operators and ragged data-independent operations,                                         • Operator-Centric Optimization: ChituDiffusion
+enabling efficient execution using existing kernel libraries                                         performs analysis and transformations at the operator
+with minimal effort.                                                                                 level. Its optimization rules target individual compu-
+   Since data-independent operations do not share data across                                        tational steps rather than monolithic network blocks.
+requests in a batch, embarrassingly parallel execution is                                            Integrating novel operators requires only minimal, lo-
+efficient for each request. Based on existing tiling plans and                                       calized effort: (1) defining symbolic propagation rules
+computing microkernels for regular (non-ragged) operators,                                           for data properties, and (2) providing corresponding
+ChituDiffusion partitions each request into a set of tiles,                                          optimized kernels.
+which are mapped to GPU thread blocks with a round-robin                                       Once these definitions are provided, the ChituDiffusion
+policy during batched execution.                                                               scheduler automatically orchestrates the rest of the work-
+   ChituDiffusion supports ragged data-sharing operations                                      flow—applying existing optimization rules and compiling
+by transforming them into equivalent regular operators with                                    the DFG into high-performance 𝑑𝐸𝑛𝑔𝑖𝑛𝑒𝑠 without further
+the help of ragged data-independent operations. For instance,                                  manual intervention.
+
+
+
+                                                                                         544
+ChituDiffusion: A Data-Characteristic-Aware Serving System for Diffusion Models                                                                                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                                    (A) PyTorch        (B) PyTorch + Inductor                    (C) TensorRT                          (D) Stable Fast                    (K) Katz(per GPU)             (E) Chitu-Diffusion
+
+                     0.4 A100                              2.1×                                      1.9×                                                     1.4×                                          1.4×                                      1.1×
+Throughput (req/s)
+
+
+
+
+                                                                  20                                            0.02                                                   0.75                                           1.0
+
+                     0.2                                                                                                                                               0.50
+
+
+
+
+                                                                                                                                     Out of range
+                                                                  10                                            0.01                                                                                                  0.5
+                                                                                                                                                                       0.25
+
+                     0.0                                          0                                             0.00                                                   0.00                                           0.0
+                            A   B     C                D    E            A       B    C      K        D     E           A       B     C                D        E                     A     B    C     D      E               A      B    C    D       E
+                     0.6 H100                              2.2×   30                                 1.6×                                                     1.5×                                          1.3×                                      1.0×
+Throughput (req/s)
+
+
+
+
+                                                                                                                                                                                                                      1.5
+                                                                                                                0.06
+                                                                  20                                                                                                       1.0
+                     0.4                                                                                                                                                                                              1.0
+                                                                                                                0.04
+                                     Out of range
+
+
+
+
+                                                                                                                                     Out of range
+                     0.2                                          10                                                                                                       0.5                                        0.5
+                                                                                                                0.02
+
+                     0.0                                          0                                             0.00                                                       0.0                                        0.0
+                            A   B     C    D                E            A   B       C K         D     E                A       B     C   D                     E                     A     B    C    D       E               A      B     C    D      E
+                                    refine                                            edit                                          video                                                       venti                                    grande
+
+                                                             Figure 10. Throughput improvement on multiple diffusion model applications.
+7                      Evaluation                                                                                                                   Table 2. Evaluated applications and shapes of generation
+7.1                        Experiment Setup                                                                                                         results. T, I, and V in the type column represent text, image,
+                                                                                                                                                    and video, respectively. The shapes indicate the height and
+ChituDiffusion implementation. We implement Chi-                                                                                                    width of the generated images, as well as the frames, height,
+tuDiffusion based on both C++ and Python, and reuse some                                                                                            and width of the generated videos.
+components from Diffusers [61], Triton [59], Stable Fast [1],
+and FlashAttention [21, 22]. Users are able to customize diffu-                                                                                       Name           Type              Brief description             Model and extention             Shape
+sion model pipelines in ChituDiffusion to support various                                                                                             refine         T2I
+                                                                                                                                                                                 Generate images refined
+                                                                                                                                                                                                                   SDXL, SDXL refiner           [1024,1024]
+                                                                                                                                                                                 by different prompts
+applications. To support ragged batching, we implement four
+                                                                                                                                                                                 Transfer images into              SDXL, LoRA,
+ragged data-independent operation kernels based on Triton                                                                                              edit          I2I
+                                                                                                                                                                                 multiple styles                   ControlNet
+                                                                                                                                                                                                                                                    [512,512]
+
+and CUDA.                                                                                                                                             video          I2V
+                                                                                                                                                                                 Generate videos from images
+                                                                                                                                                                                                                   SVD, ControlNet             [14,576,1024]
+                                                                                                                                                                                 with different control effects
+Platform. The evaluation was conducted across two server                                                                                              venti          T2I         Generate images from texts        SDXL                             Ragged
+configurations: one equipped with an NVIDIA A100 40GB                                                                                                grande          T2I         Generate images from texts        SD1.5                            Ragged
+
+PCIe GPU and another with an NVIDIA H100 80GB PCIe                                                                                                                               Generate images refined
+                                                                                                                                                    refine-mix       T2I                                           FLUX.1 S, SDXL refiner       [1024,1024]
+                                                                                                                                                                                 by different prompts
+GPU. Experiments involving UNet-structured models were                                                                                                                           Generate images refined           Hunyuanimage,
+                                                                                                                                                    refine-dit       T2I                                                                        [1024,1024]
+evaluated using CUDA 12.1. For the DiT series models, the                                                                                                                        by different prompts              Hunyuanimage refiner
+
+evaluation utilized CUDA 12.8. The open-source release                                                                                               edit-dit        T2I
+                                                                                                                                                                                 Generate images with              Hunyuan-DiT,
+                                                                                                                                                                                                                                                [1024,1024]
+                                                                                                                                                                                 different control stages          Hunyuan-DiT ControlNet
+features a comprehensive infrastructure upgrade, now fully
+supporting and leveraging PyTorch 2.9 for enhanced perfor-                                                                                          requests and standard text-to-image services. As shown in
+mance and compatibility.                                                                                                                            Figure 10, ChituDiffusion delivers up to 2.13× speedup
+Workloads. We evaluate ChituDiffusion on 5 UNet-based                                                                                               (1.58× on average) over the best baseline. For refine, edit,
+diffusion model applications (Table 2) built upon SD1.5 [51],                                                                                       and video, where users issue correlative requests and man-
+SDXL [47], and SVD [11]. We also conduct the three evalua-                                                                                          ually select the best generations for efficient image and
+tions on DiT structure diffusion generation scenarios built                                                                                         video creation [3–5].(e.g., prompt grid search or varying
+upon Hunyuan series modelsl[40, 57] and FLUX[34, 35].                                                                                               ControlNet periods), baselines process each request indepen-
+   The applications cover image and video synthesis, with or                                                                                        dently, missing the awareness of redundancies. TensorRT
+without controlled generation extensions. To emulate real-                                                                                          fails on video due to oversized tensors. By detecting shared
+world usage, we synthesize non-correlated request traces                                                                                            inputs, ChituDiffusion eliminates redundant computation,
+using default settings unless otherwise noted. Prompt dis-                                                                                          yielding up to 2.2× on H100 and 2.1× on A100.
+tributions and ragged input shapes follow DiffusionDB [62]                                                                                             For venti (SD1.5) and grande (SDXL), which provide
+and Civitai [17] (Figure 2c–d). Each application adopts its                                                                                         standard text-to-image services, redundancy is minimal since
+default denoising steps, and random seeds are uniformly                                                                                             requests are independent. Nevertheless, ChituDiffusion
+sampled.                                                                                                                                            still captures optimizations from shared prompts and iter-
+                                                                                                                                                    ation IDs and the potentially same prompt shown in Fig-
+                                                                                                                                                    ure 4, while effectively batching ragged requests that existing
+7.2                        Throughput Improvement                                                                                                   frameworks cannot. The scheduler balancing the efficiency
+We evaluate ChituDiffusion against PyTorch v2.1, PyTorch-                                                                                           of the uniform-shape dEngines and the larger batch size
+Inductor v2.1, TensorRT v8.6, and the diffusion-specific frame-                                                                                     enabled by the ragged-shape dEngines, which will be further
+work Stable Fast v1.0 [1], all tuned to saturate GPU through-                                                                                       studied in §7.7, yielding 1.4× speedup on venti and 1.1× on
+put. The applications in Table 2 include both correlative
+
+
+
+                                                                                                                                545
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                       C. Wu, L. Zheng, H. Wang, K. Huang, Z. Ma, D. Dong, and J. Zhai
+
+                              (A) Torch            (B) Torch+Inductor                   (C) Stable Fast           (E) Chitu-Diffusion
+                                                                                                                                                         Data                           Computation                      dGraph                              dTask
+                                                  2.16×                                       2.97×   0.125                   1.40×
+                                                                                                                                                                𝑑𝐺𝑟𝑎𝑝ℎ1
+   Throughput (req/s)
+
+
+
+                                                           0.15
+                        1.5
+                                                                                                      0.100
+                                                                                                                                                     Input                                              𝐼1 , 𝑳, 𝑪        𝑑𝐺𝑟𝑎𝑝ℎ3
+                                                           0.10                                       0.075                                                      ControlNet
+                                                                                                                                                    image
+
+
+
+
+                                                                              Compile\ Fail
+                        1.0
+                                                                                                                                                                                                         𝐼2 , 𝑳, 𝑪     𝑅1 𝐼1 , 𝐿, 𝐶, 𝑆1
+                                                                                                      0.050
+                                                           0.05
+                                                                                                                                                                                                                       𝑅2 𝐼1 , 𝐿, 𝐶, 𝑆2
+                        0.5
+                                                                                                      0.025                                                     𝑑𝐺𝑟𝑎𝑝ℎ2                                                𝑅3 𝐼1 , 𝐿, 𝐶, 𝑆3
+                                                                                                                                                                                                      𝑳, 𝑪, 𝑆1
+
+
+
+
+                                                                                                                                                                 U-Net layer
+
+                                                                                                                                                                                        U-Net layer
+
+
+
+
+                                                                                                                                                                                                                                          U-Net layer
+
+
+
+                                                                                                                                                                                                                                                                 U-Net layer
+
+
+
+                                                                                                                                                                                                                                                                               processing
+                        0.0                                0.00                                       0.000                                                                                                            𝑅4 𝐼2 , 𝐿, 𝐶, 𝑆1
+
+
+
+
+                                                                                                                                                                                                                                                        ······
+                                A     B    C       E              A       B      C             E              A     B     C      E                                                                    𝑳, 𝑪, 𝑆2
+                                                                                                                                                    Latent                                                             𝑅5 𝐼2 , 𝐿, 𝐶, 𝑆2
+
+
+
+
+                                                                                                                                                                               ······
+
+
+
+
+                                                                                                                                                                                                                                                                                  Post
+                                    Refiner-mix                         Refiner-DiT                                Edit-DiT
+                                                                                                                                                    image                                             𝑳, 𝑪, 𝑆3         𝑅6 𝐼2 , 𝐿, 𝐶, 𝑆2
+
+Figure 11. Throughput improvement on DiT based diffusion                                                                                            Condi-
+model applications.                                                                                                                                 tioning                                                      Style LoRA
+
+grande since SDXL is a much larger model and gains less
+                                                                                                                                              Figure 12. Optimizations of application edit. Data 𝐼, 𝐿, 𝐶, 𝑆
+speedup from batching.
+                                                                                                                                              in dTasks represent input image, latent image, U-Net condi-
+   We further evaluate Katz [37], a state-of-the-art diffusion
+                                                                                                                                              tioning, and style LoRA, respectively. The data marked in
+serving system that supports ControlNet-as-a-service, in
+                                                                                                                                              bold is redundant across requests.
+the edit application. For fairness, we only test ControlNet
+(since Katz’s LoRA serving is mathematically inequivalent).                                                                                   DiT models introduce complex pipelines and evolving Con-
+In contrast to ChituDiffusion’s single-GPU deployment,                                                                                        trolNet support, ChituDiffusion’s flexible design allows it
+we evaluate Katz with 4 H100 GPUs, which is the minimal                                                                                       to adapt to these new challenges effectively.
+hardware requirement for Katz to serve a single ControlNet.
+To fairly compare these two works we normalized the metric
+as throughput per GPU. As shown in the table, Katz achieves
+∼0.03s latency per request by serving sequentially, but its                                                                                   7.4     Ablation Study
+throughput per GPU is significantly lower than ChituDiffu-                                                                                    Application edit provides style transfer services by gener-
+sion. In the edit scenario, which involves only one iteration                                                                                 ating multiple candidate images for each user-input image,
+with SDXL-Turbo, Katz’s multi-GPU communication over-                                                                                         preserving object positions but varying visual styles. It lever-
+head severely limits its end-to-end throughput.                                                                                               ages SDXL Turbo [55], a variant of SDXL requiring only
+                                                                                                                                              one denoising step, along with two fine-tuning extensions:
+                                                                                                                                              ControlNet [67] for spatial control via Canny edges [12], and
+                                                                                                                                              LoRA for diverse styles. To produce multiple stylized outputs,
+7.3                       Generalization on DiT-based Models                                                                                  the application fixes latent noise and U-Net conditioning
+To demonstrate the generality of ChituDiffusion, we ex-                                                                                       while applying 16 different LoRA weights.
+tend our data-aware optimization to Diffusion Transformer                                                                                        As shown in Figure 12, ChituDiffusion exploits these
+(DiT) architectures. As ChituDiffusion operates at the op-                                                                                    characteristics by recomposing the pipeline into 3 dGraphs
+erator level rather than relying on specific model topologies,                                                                                at compile time, which are then compiled into dEngines.
+it is inherently architecture-agnostic. DiT components—such                                                                                   For example, U-Net is partitioned into input-dependent and
+as QKV projections, MHSA, and MLPs—are naturally identi-                                                                                      input-independent layers, where 𝑑𝐺𝑟𝑎𝑝ℎ 2 encapsulates the
+fied as dGraphs within our DFG, allowing the system to de-                                                                                    input-independent computations, enabling reuse across dif-
+compose and execute common computations across requests                                                                                       ferent images and styles.
+efficiently. Figure 12 illustrates the performance on DiT-                                                                                       At compile time, ChituDiffusion decomposes the pipeline
+based applications. ChituDiffusion achieves a 2.2–3.0×                                                                                        into three dGraphs, compiled into dEngines. U-Net is split
+speedup in refine scenarios and a 1.4× speedup in edit sce-                                                                                   into input-dependent and input-independent parts, with
+narios.                                                                                                                                       𝑑𝐺𝑟𝑎𝑝ℎ 2 containing the latter. At runtime, ChituDiffu-
+    Specifically, in refine scenarios, while static compilation                                                                               sion detects only 2 unique dTasks for 𝑑𝐺𝑟𝑎𝑝ℎ 1 and 3 for
+baselines like stable-fast failed to support the HunyuanImage                                                                                 𝑑𝐺𝑟𝑎𝑝ℎ 2 , and executes them with data-aware batching to
+refiner pipeline due to inflexible compilation rules, Chi-                                                                                    exploit shared inputs (Figure 12). Moreover, invariant tensor
+tuDiffusion leveraged the torch.compile backend, gaining                                                                                      elimination identifies 𝑑𝐺𝑟𝑎𝑝ℎ 2 outputs as constant, enabling
+a 3.0× speedup through our data-aware dGraph schedul-                                                                                         compile-time caching with multi-value support(§6.2).
+ing. In edit scenarios, dealing with DiT-based ControlNets                                                                                       Figure 13(a) shows the results of an ablation study. We
+presents challenges due to varying architectural implemen-                                                                                    create a baseline named ChituDiffusion-base by disabling
+tations (e.g., FLUX vs. Hunyuan). We evaluated a dynamic                                                                                      all data-aware optimizations in ChituDiffusion, which
+scenario where ControlNet is active only during specific                                                                                      achieves comparable performance to the other baseline sys-
+iteration stages (controlled by control_guidance_start/end in                                                                                 tem. By progressively enabling dTask scheduling, multi-
+diffusers). Unlike static approaches, ChituDiffusion ef-                                                                                      version dEngine compilation, and invariant tensor elimi-
+fectively handles these ragged control flows. While emerging                                                                                  nation, the throughput is improved to 1.29×, 1.56×, and
+
+
+
+                                                                                                                                        546
+ChituDiffusion: A Data-Characteristic-Aware Serving System for Diffusion Models                                                                         PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+Throughput (req/s)
+
+
+
+
+                                                                                                                                                                                             Count of dEngine executions
+                                                                                                                                                                                                                                       5
+                     30                                                            100                                                        60
+                                                                                                                                                                                         3
+                                                                                                                                                                              Run time                                                                               Schedule
+
+
+
+
+                                                                    Latency (ms)
+                                                                                                                                                                                                                                                                                   20
+                                                    20.95 22.99                            73.25    72.57
+
+
+
+
+                                                                                                                                                                                                                                                                                        GPU idle ratio (%)
+                                                                                                                                                                                                                                       4
+                     20                    17.31                                                               57.56                                                          dEngine                                                                                GPU idle
+                                                                                                                                                                                                                                                                                   15
+
+
+
+
+                                                                                                                             Time (ms)
+
+
+
+
+                                                                                                                                                                                                                           Time (ms)
+                             12.34 13.41                                           50                                                         40                                         2                                             3
+                     10                                                                                                                                                                                                                                                            10
+                                                                                                                                                                                                                                       2
+                                                                                                                                              20                                         1
+                      0                                                             0                                                                                                                                                                                              5
+                             Stable C.-Diff. +SCH +COMP +IRE                               Stable   C.-Diff.   +IRE                                                                                                                    1
+                              Fast   base                                                   Fast     base
+                                                                                                                                               0                                         0                                             0                                           0
+                                   (a) Batch execution                                    (b) Sequential execution                                  0           5        10         15                                                     0          5        10            15
+                                                                                                                                                             Schedule window Size                                                                  Schedule window Size
+
+
+Figure 13. Ablation study of application edit. SCH, COMP,                                                                    Figure 14. Performance of an edit request under different
+and IRE mean dGraph scheduling, dEngine property-aware                                                                       scheduling window sizes.
+compilation, and invariant redundancy elimination optimiza-
+tions, respectively.
+1.71×. Figure 13(b) presents the request latency when se-                                                                                               Chitu-Diffusion-uniform                Chitu-Diffusion-ragged                                               Chitu-Diffusion
+quentially serving requests without batching, which dis-                                                                                      2.0
+                                                                                                                                                                                                                                 1.5
+ables inter-request optimizations in scheduling and multi-
+
+
+
+
+                                                                                                                             Normalized QPS
+                                                                                                                                              1.5
+versioned dEngines. ChituDiffusion achieves a speedup of                                                                                                                                                                         1.0
+                                                                                                                                              1.0
+1.3× compared to the best baseline with the help of invariant                                                                                                                                                                    0.5
+                                                                                                                                              0.5
+tensor elimination. This demonstrates that while ChituDif-
+                                                                                                                                              0.0                                                                                0.0
+fusion primarily focuses on throughput optimization, its                                                                                                 0          25   50      75      100                                                   0          25   50       75        100
+
+techniques also provide benefits in latency-critical scenarios.                                                                                                Raggedness ratio (%)                                                                  Raggedness ratio (%)
+                                                                                                                                                                    (a) SD1.5                                                                             (b) SDXL
+ChituDiffusion is also able to achieve consistent speedup
+over baselines with different batch sizes (§7.6).
+                                                                                                                             Figure 15. Throughput under requests of different ragged-
+                                                                                                                             ness ratios on text-to-image diffusion pipelines.
+7.5                       dGraph Recomposition Analysis
+To demonstrate dGraph decomposition, Table 3 reports re-                                                                     7.6 Scheduling Window Size and Overhead
+dundancy optimization for SDXL U-Net. Without decompo-                                                                       Figure 14(a) shows that ChituDiffusion achieves higher
+sition, the monolithic strategy produces numerous engines                                                                    performance with larger scheduling windows, as more dTasks
+for all input property combinations, incurring high compila-                                                                 are batched into fewer dEngine executions, exposing greater
+tion cost. By symbolic property analysis, ChituDiffusion                                                                     inter-request optimization. Figure 14(b) shows that sched-
+identifies inputs such as time embeddings and prompt condi-                                                                  uling cost is under 10% of dEngine runtime due to efficient
+tions to form dGraphs, then optimizes them separately while                                                                  dynamic programming, and further hidden with larger win-
+pruning unsatisfiable cases, significantly reducing overhead.                                                                dows by improved batching and overlap, leaving less than
+Fine-tuning extensions further exacerbate the problem. As                                                                    5% GPU idle time including cold start.
+
+                                                                                                                             7.7                        Data-Aware Batching
+Table 3. Compilation statistics for SDXL U-Net. The mono-
+                                                                                                                             To show the effectiveness of data-aware batching, we create
+lithic strategy treats U-Net as a whole with dGraph recom-
+                                                                                                                             two baselines without it for ragged requests. ChituDif-
+position disabled.
+                                                                                                                             fusion-uniform only batches uniform-shape requests with
+                                                                                                                             uniform dEngines, while ChituDiffusion-ragged always
+                                                                                                       Estimated
+                     Model          Strategy       # Inputs   # dGraphs             # Engines
+                                                                                                    compilation time         batches all requests with ragged dEngines. Figure 15 shows
+                                   Monolithic         4        1 (N/A)                    16              16 min
+                                                                                                                             the evaluation results. At raggedness ratio 0%, ChituDiffu-
+   SDXL UNet
+                                    dGraph            4           3                       4               4 min              sion-uniform outperforms ChituDiffusion-ragged since
+ SDXL UNet                         Monolithic        14        1 (N/A)                   16384               11 d            ragged dEngines have more overhead than regular ones,
+w\ ControlNet                       dGraph           14           4                        7                7 min            such as index computation. As raggedness increases, Chi-
+                                                                                                                             tuDiffusion-ragged achieves up to 1.5× higher throughput,
+                                                                                                                             benefiting from increased parallelism and reduced redundant
+Table 3 shows, enabling ControlNet adds ten inputs to U-Net.                                                                 memory access to model weights.
+The monolithic strategy must enumerate 214 input property                                                                      The baselines are not always optimal. In contrast, Chi-
+combinations, leading to prohibitive compilation time. In                                                                    tuDiffusion uses data-aware scheduling to select appro-
+contrast, ChituDiffusion leverages symbolic analysis to                                                                      priate dEngines, achieving the best performance across all
+verify that ControlNet inputs share identical optimization                                                                   raggedness ratios. For raggedness from 25% to 50%, Chi-
+conditions, treating them as one and exponentially reducing                                                                  tuDiffusion combines regular and ragged dEngines, yield-
+specialized dEngines, thus mitigating overhead.                                                                              ing up to 10% higher throughput.
+
+
+
+                                                                                                                       547
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                 C. Wu, L. Zheng, H. Wang, K. Huang, Z. Ma, D. Dong, and J. Zhai
+
+
+Performance model. We evaluate the model on SDXL                         9    Conclusion
+U-Net dEngines with varied batch sizes between 1 to 16                   We propose ChituDiffusion, a diffusion model serving
+and shapes between 256 to 768. By profiling 16 samples                   system recomposing pipelines and requests to exploit data
+as inputs for the performance model, it achieves a 0.998                 properties. By leveraging the locality of data properties,
+coefficient of determination. A 96-sample evaluation set                 ChituDiffusion orchestrates compile-time and runtime
+generated in the same method yields a 0.996 coefficient and              techniques, ChituDiffusion outperforms existing frame-
+an RMSE less than 3𝜇𝑠, showing high prediction accuracy.                 works by up to 2.19×.
+As ChituDiffusion usually batches requests to fully utilize
+hardware, the performance model presents enough ability                  Acknowledgments
+to estimate execution time for diffusion models, which are
+                                                                         We would like to thank the anonymous reviewers and our
+majorly composed of compute-intensive DNNs.
+                                                                         shepherd Baolin Li for their insightful comments. We are
+                                                                         grateful to Yuyang Chen and Chengyu Shi for their signifi-
+                                                                         cant contributions to the implementation and maintenance
+                                                                         of the ChituDiffusion system. This work is supported
+                                                                         by the National Key R&D Program of China under Grant
+8    Related Work                                                        2023YFB3002002, NSFC for Distinguished Young Scholar
+Diffusion models and acceleration. Significant advance-                  under Grant 62225206, National Natural Science Foundation
+ments in image synthesis like Imagen [53] and Stable Dif-                of China under Grants 62532006, U23A6007, Beijing Natural
+fusion [51], as well as in other domains [11, 27], appear                Science Foundation under Grant L242017, and the Strategic
+since the denoising diffusion probabilistic model [29]. Op-              Priority Research Program of Chinese Academy of Sciences
+timizations such as distillation [55], quantization [39], and            under Grant XDB0500103. Jidong Zhai is the corresponding
+caching similar intermediate results [8, 36], and parallelism            author of this paper.
+techniques [36, 37] are widely explored. Different from these
+nonequivalent approximate accelerations, ChituDiffusion                  References
+focuses on equivalent optimizations and is promising to work              [1] 2023. Stable Fast. https://github.com/chengzeyi/stable-fast.
+with nonequivalent methods simultaneously.                                [2] (Accessed on 05/06/2024). Adobe firefly. https://www.adobe.com/
+                                                                              products/firefly.html.
+Batching. Efficient batching is widely studied [14, 41, 56,               [3] (Accessed on 05/06/2024).             ComfyUI community manual.
+56, 70]. VELTAIR [41] avoids resource interference in batch                   https://blenderneko.github.io/ComfyUI-docs/Interface/Textprompts/
+requests. DVABatch [19] flexibly reorganizes requests to                      #adding-random-choices.
+process requests with the best batch sizes. Different from                [4] (Accessed on 05/06/2024). Stable Diffusion Dynamic Prompts exten-
+the above work, ChituDiffusion focuses on exploiting                          sion. https://github.com/adieyal/sd-dynamic-prompts/tree/main.
+                                                                          [5] (Accessed on 05/06/2024). Stable Diffusion WebUI documenta-
+dynamic data properties, such as redundancy and raggedness,                   tion. https://github.com/AUTOMATIC1111/stable-diffusion-webui/
+for diffusion models, which can be combined with these                        wiki/Features#prompts-from-file-or-textbox.
+techniques.                                                               [6] (Accessed on 05/06/2024). Video generation models as world simula-
+                                                                              tors. https://openai.com/index/video-generation-models-as-world-
+Data-Property-Aware Optimization Existing work has
+                                                                              simulators/.
+explored optimization techniques that leverage data proper-               [7] Martín Abadi, Paul Barham, Jianmin Chen, Zhifeng Chen, Andy Davis,
+ties at different granularities. Redundancy elimination has                   Jeffrey Dean, Matthieu Devin, Sanjay Ghemawat, Geoffrey Irving,
+been extensively studied in general-purpose compilers [10,                    Michael Isard, et al. 2016. Tensorflow: A system for large-scale machine
+15, 23, 45, 65], primarily for scalar computations. Modern                    learning. In 12th USENIX symposium on operating systems design and
+DNN frameworks such as TensorFlow [7], PyTorch [48],                          implementation (OSDI 16). 265–283.
+                                                                          [8] Shubham Agarwal, Subrata Mitra, Sarthak Chakraborty, Srikrishna
+TensorRT [58], Stable Fast [1], and TVM [13] provide perfor-                  Karanam, Koyel Mukherjee, and Shiv Kumar Saini. 2024. Approximate
+mance optimizations for diffusion models but do not exploit                   Caching for Efficiently Serving Text-to-Image Diffusion Models. In 21st
+fine-grained subrequest-level redundancies. Request-level                     USENIX Symposium on Networked Systems Design and Implementation
+caching approaches like Clipper [18] cannot handle partial                    (NSDI 24). USENIX Association, Santa Clara, CA, 1173–1189. https://
+redundancies, and KV-cache techniques [33, 68] designed for                   www.usenix.org/conference/nsdi24/presentation/agarwal-shubham
+                                                                          [9] Stability AI. [n. d.]. Stable Diffusion 3: Multimodal Diffusion with
+auto-regressive models are ineffective for diffusion models                   Transformer Architecture. Technical report published by Stability
+using bidirectional attention over full latent tensors.                       AI, March 2024. https://stability.ai/news/stable-diffusion-3-research-
+   For ragged computations, specialized kernels for irregular-                paper.
+shaped data have been developed, including optimized ragged              [10] Joel Auslander, Matthai Philipose, Craig Chambers, Susan J Eggers,
+matrix multiplication on GPUs [38] and CoRa, which extends                    and Brian N Bershad. 1996. Fast, effective dynamic compilation. ACM
+                                                                              SIGPLAN Notices 31, 5 (1996), 149–159.
+TVM to support ragged Transformers [26]. These approaches                [11] Andreas Blattmann, Tim Dockhorn, Sumith Kulal, Daniel Mendele-
+focus on improving execution efficiency for inputs with                       vitch, Maciej Kilian, Dominik Lorenz, Yam Levi, Zion English, Vikram
+dynamic or non-uniform shapes.                                                Voleti, Adam Letts, et al. 2023. Stable video diffusion: Scaling latent
+
+
+
+
+                                                                   548
+ChituDiffusion: A Data-Characteristic-Aware Serving System for Diffusion Models               PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+     video diffusion models to large datasets. arXiv preprint arXiv:2311.15127              33 (2020), 6840–6851.
+     (2023).                                                                           [30] Tobias Höppe, Arash Mehrjou, Stefan Bauer, Didrik Nielsen, and
+[12] John Canny. 1986. A computational approach to edge detection. IEEE                     Andrea Dittadi. 2022. Diffusion models for video prediction and
+     Transactions on pattern analysis and machine intelligence 6 (1986), 679–               infilling. arXiv preprint arXiv:2206.07696 (2022).
+     698.                                                                              [31] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi
+[13] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie Q.                     Li, Shean Wang, Lu Wang, and Weizhu Chen. 2021. Lora: Low-rank
+     Yan, Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis                           adaptation of large language models. arXiv preprint arXiv:2106.09685
+     Ceze, Carlos Guestrin, and Arvind Krishnamurthy. 2018. TVM: An Au-                     (2021).
+     tomated End-to-End Optimizing Compiler for Deep Learning. In 13th                 [32] Animesh Karnewar, Andrea Vedaldi, David Novotny, and Niloy J Mitra.
+     USENIX Symposium on Operating Systems Design and Implementation,                       2023. Holodiffusion: Training a 3D diffusion model using 2D images. In
+     OSDI 2018, Carlsbad, CA, USA, October 8-10, 2018, Andrea C. Arpaci-                    Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+     Dusseau and Geoff Voelker (Eds.). USENIX Association, 578–594.                         Recognition. 18423–18433.
+[14] Seungbeom Choi, Sunho Lee, Yeonjae Kim, Jongse Park, Youngjin                     [33] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+     Kwon, and Jaehyuk Huh. 2022. Serving heterogeneous machine                             Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+     learning models on Multi-GPU servers with Spatio-Temporal sharing.                     2023. Efficient memory management for large language model serving
+     In 2022 USENIX Annual Technical Conference (USENIX ATC 22). 199–                       with pagedattention. In Proceedings of the 29th Symposium on Operating
+     216.                                                                                   Systems Principles. 611–626.
+[15] Fred Chow, Sun Chan, Robert Kennedy, Shin-Ming Liu, Raymond Lo,                   [34] Black Forest Labs. 2024. FLUX. https://github.com/black-forest-labs/
+     and Peng Tu. 1997. A new algorithm for partial redundancy elimination                  flux.
+     based on SSA form. ACM Sigplan Notices 32, 5 (1997), 273–286.                     [35] Black Forest Labs, Stephen Batifol, Andreas Blattmann, Frederic Boesel,
+[16] Özgün Çiçek, Ahmed Abdulkadir, Soeren S Lienkamp, Thomas Brox,                         Saksham Consul, Cyril Diagne, Tim Dockhorn, Jack English, Zion
+     and Olaf Ronneberger. 2016. 3D U-Net: learning dense volumetric                        English, Patrick Esser, Sumith Kulal, Kyle Lacey, Yam Levi, Cheng
+     segmentation from sparse annotation. In Medical Image Computing                        Li, Dominik Lorenz, Jonas Müller, Dustin Podell, Robin Rombach,
+     and Computer-Assisted Intervention–MICCAI 2016: 19th International                     Harry Saini, Axel Sauer, and Luke Smith. 2025. FLUX.1 Kontext: Flow
+     Conference, Athens, Greece, October 17-21, 2016, Proceedings, Part II 19.              Matching for In-Context Image Generation and Editing in Latent Space.
+     Springer, 424–432.                                                                     arXiv:2506.15742 [cs.GR] https://arxiv.org/abs/2506.15742
+[17] civitai 2022. Civitai. https://github.com/civitai/civitai.                        [36] Muyang Li, Tianle Cai, Jiaxin Cao, Qinsheng Zhang, Han Cai, Junjie Bai,
+[18] Daniel Crankshaw, Xin Wang, Guilio Zhou, Michael J Franklin,                           Yangqing Jia, Ming-Yu Liu, Kai Li, and Song Han. 2024. DistriFusion:
+     Joseph E Gonzalez, and Ion Stoica. 2017. Clipper: A Low-Latency online                 Distributed Parallel Inference for High-Resolution Diffusion Models.
+     prediction serving system. In 14th USENIX Symposium on Networked                       In Proceedings of the IEEE/CVF Conference on Computer Vision and
+     Systems Design and Implementation (NSDI 17). 613–627.                                  Pattern Recognition (CVPR).
+[19] Weihao Cui, Han Zhao, Quan Chen, Hao Wei, Zirui Li, Deze Zeng,                    [37] Suyi Li, Lingyun Yang, Xiaoxiao Jiang, Hanfeng Lu, Dakai An, Zhipeng
+     Chao Li, and Minyi Guo. 2022. DVABatch: Diversity-aware Multi-                         Di, Weiyi Lu, Jiawei Chen, Kan Liu, Yinghao Yu, Tao Lan, Guodong
+     Entry Multi-Exit Batching for Efficient Processing of DNN Services                     Yang, Lin Qu, Liping Zhang, and Wei Wang. 2025. Katz: Efficient
+     on GPUs. In 2022 USENIX Annual Technical Conference. 183–198.                          Workflow Serving for Diffusion Models with Many Adapters. In Proc.
+[20] DALL-e-3 2023. Improving Image Generation with Better Captions.                        USENIX ATC.
+     https://cdn.openai.com/papers/dall-e-3.pdf.                                       [38] Xiuhong Li, Yun Liang, Shengen Yan, Liancheng Jia, and Yinghan
+[21] Tri Dao. 2023. Flashattention-2: Faster attention with better parallelism              Li. 2019. A coordinated tiling and batching framework for efficient
+     and work partitioning. arXiv preprint arXiv:2307.08691 (2023).                         GEMM on GPUs. In Proceedings of the 24th symposium on principles
+[22] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, and Christopher Ré.                  and practice of parallel programming. 229–241.
+     2022. FlashAttention: Fast and Memory-Efficient Exact Attention with              [39] Xiuyu Li, Yijiang Liu, Long Lian, Huanrui Yang, Zhen Dong, Daniel
+     IO-Awareness. In Advances in Neural Information Processing Systems.                    Kang, Shanghang Zhang, and Kurt Keutzer. 2023. Q-diffusion: Quan-
+[23] Yufei Ding and Xipeng Shen. 2017. Glore: Generalized loop redundancy                   tizing diffusion models. In Proceedings of the IEEE/CVF International
+     elimination upon ler-notation. Proceedings of the ACM on Programming                   Conference on Computer Vision. 17535–17545.
+     Languages 1, OOPSLA (2017), 1–28.                                                 [40] Zhimin Li, Jianwei Zhang, Qin Lin, Jiangfeng Xiong, Yanxin Long,
+[24] Chao Dong, Chen Change Loy, Kaiming He, and Xiaoou Tang. 2014.                         Xinchi Deng, Yingfang Zhang, Xingchao Liu, Minbin Huang, Zedong
+     Learning a deep convolutional network for image super-resolution. In                   Xiao, Dayou Chen, Jiajun He, Jiahao Li, Wenyue Li, Chen Zhang,
+     European conference on computer vision. Springer, 184–199.                             Rongwei Quan, Jianxiang Lu, Jiabin Huang, Xiaoyan Yuan, Xiaoxiao
+[25] Chao Dong, Chen Change Loy, and Xiaoou Tang. 2016. Accelerat-                          Zheng, Yixuan Li, Jihong Zhang, Chao Zhang, Meng Chen, Jie Liu,
+     ing the super-resolution convolutional neural network. In European                     Zheng Fang, Weiyan Wang, Jinbao Xue, Yangyu Tao, Jianchen Zhu,
+     conference on computer vision. Springer, 391–407.                                      Kai Liu, Sihuan Lin, Yifu Sun, Yun Li, Dongdong Wang, Mingtao Chen,
+[26] Pratik Fegade, Tianqi Chen, Phillip Gibbons, and Todd Mowry. 2022.                     Zhichao Hu, Xiao Xiao, Yan Chen, Yuhong Liu, Wei Liu, Di Wang,
+     The CoRa tensor compiler: Compilation for ragged tensors with                          Yong Yang, Jie Jiang, and Qinglin Lu. 2024. Hunyuan-DiT: A Powerful
+     minimal padding. Proceedings of Machine Learning and Systems 4                         Multi-Resolution Diffusion Transformer with Fine-Grained Chinese
+     (2022), 721–747.                                                                       Understanding. arXiv:2405.08748 [cs.CV]
+[27] Seth Forsgren and Hayk Martiros. 2022. Riffusion - Stable diffusion               [41] Zihan Liu, Jingwen Leng, Zhihui Zhang, Quan Chen, Chao Li, and
+     for real-time music generation. (2022). https://riffusion.com/about                    Minyi Guo. 2022. VELTAIR: towards high-performance multi-tenant
+[28] Jonathan Ho, William Chan, Chitwan Saharia, Jay Whang, Ruiqi                           deep learning services via adaptive compilation and scheduling. In
+     Gao, Alexey Gritsenko, Diederik P Kingma, Ben Poole, Mohammad                          Proceedings of the 27th ACM International Conference on Architectural
+     Norouzi, David J Fleet, et al. 2022. Imagen video: High definition video               Support for Programming Languages and Operating Systems. 388–401.
+     generation with diffusion models. arXiv preprint arXiv:2210.02303                 [42] Xudong Lu, Aojun Zhou, Ziyi Lin, Qi Liu, Yuhui Xu, Renrui Zhang,
+     (2022).                                                                                Yafei Wen, Shuai Ren, Peng Gao, Junchi Yan, and Hongsheng
+[29] Jonathan Ho, Ajay Jain, and Pieter Abbeel. 2020. Denoising diffusion                   Li. 2024. TerDiT: Ternary Diffusion Models with Transformers.
+     probabilistic models. Advances in neural information processing systems                arXiv:2405.14854 [cs.CV]
+
+
+
+
+                                                                                 549
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                               C. Wu, L. Zheng, H. Wang, K. Huang, Z. Ma, D. Dong, and J. Zhai
+
+
+[43] Gautam Mittal, Jesse Engel, Curtis Hawthorne, and Ian Simon. 2021.                     Systems Principles. 322–337.
+     Symbolic music generation with diffusion models. arXiv preprint                   [57] Tencent Hunyuan Team. 2025. HunyuanImage 2.1: An Efficient
+     arXiv:2103.16091 (2021).                                                               Diffusion Model for High-Resolution (2K) Text-to-Image Generation.
+[44] Shentong Mo, Enze Xie, Ruihang Chu, Lewei Yao, Lanqing Hong,                           https://github.com/Tencent-Hunyuan/HunyuanImage-2.1.
+     Matthias Nießner, and Zhenguo Li. 2023. DiT-3D: Exploring Plain                   [58] TensorRT 2017. NVIDIA TensorRT: Programmable Inference Acceler-
+     Diffusion Transformers for 3D Shape Generation. arXiv preprint arXiv:                  ator. https://developer.nvidia.com/tensorrt.
+     2307.01831 (2023).                                                                [59] triton 2021. Introducing Triton: Open-source GPU programming for
+[45] Etienne Morel and Claude Renvoise. 1979. Global optimization by                        neural networks. https://openai.com/research/triton.
+     suppression of partial redundancies. Commun. ACM 22, 2 (1979),                    [60] Aravind Vasudevan, Andrew Anderson, and David Gregg. 2017. Paral-
+     96–103.                                                                                lel Multi Channel Convolution using General Matrix Multiplication.
+[46] William Peebles and Saining Xie. 2022. Scalable Diffusion Models with                  arXiv:1704.04428 [cs.CV]
+     Transformers. arXiv preprint arXiv:2212.09748 (2022).                             [61] Patrick von Platen, Suraj Patil, Anton Lozhkov, Pedro Cuenca, Nathan
+[47] Dustin Podell, Zion English, Kyle Lacey, Andreas Blattmann, Tim                        Lambert, Kashif Rasul, Mishig Davaadorj, and Thomas Wolf. 2022.
+     Dockhorn, Jonas Müller, Joe Penna, and Robin Rombach. 2024. SDXL:                      Diffusers: State-of-the-art diffusion models. https://github.com/
+     Improving Latent Diffusion Models for High-Resolution Image Synthe-                    huggingface/diffusers.
+     sis. In The Twelfth International Conference on Learning Representations.         [62] Zijie J. Wang, Evan Montoya, David Munechika, Haoyang Yang,
+     https://openreview.net/forum?id=di52zR8xgf                                             Benjamin Hoover, and Duen Horng Chau. 2022. DiffusionDB: A Large-
+[48] PyTorch 2017. Tensors and Dynamic neural networks in Python with                       Scale Prompt Gallery Dataset for Text-to-Image Generative Models.
+     strong GPU acceleration. https://pytorch.org.                                          arXiv:2210.14896 [cs] (2022). https://arxiv.org/abs/2210.14896
+[49] Guocheng Qian, Jinjie Mai, Abdullah Hamdi, Jian Ren, Aliaksandr                   [63] Joseph L. Watson, David Juergens, Nathaniel R. Bennett, Brian L.
+     Siarohin, Bing Li, Hsin-Ying Lee, Ivan Skorokhodov, Peter Wonka,                       Trippe, Jason Yim, Helen E. Eisenach, Woody Ahern, Andrew J.
+     Sergey Tulyakov, et al. 2023. Magic123: One image to high-quality 3d                   Borst, Robert J. Ragotte, Lukas F. Milles, Basile I. M. Wicky, Nikita
+     object generation using both 2d and 3d diffusion priors. arXiv preprint                Hanikel, Samuel J. Pellock, Alexis Courbet, William Sheffler, Jue Wang,
+     arXiv:2306.17843 (2023).                                                               Preetham Venkatesh, Isaac Sappington, Susana Vázquez Torres, Anna
+[50] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel                     Lauko, Valentin De Bortoli, Emile Mathieu, Regina Barzilay, Tommi S.
+     Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin,                   Jaakkola, Frank DiMaio, Minkyung Baek, and David Baker. 2022.
+     Jack Clark, Gretchen Krueger, and Ilya Sutskever. 2021. Learning                       Broadly applicable and accurate protein design by integrating structure
+     Transferable Visual Models From Natural Language Supervision.                          prediction networks and diffusion generative models. doi:10.1101/2022.
+     arXiv:2103.00020 [cs.CV]                                                               12.09.519842 Pages: 2022.12.09.519842 Section: New Results.
+[51] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser,                  [64] Yutong Xie, Zhaoying Pan, Jinge Ma, Luo Jie, and Qiaozhu Mei.
+     and Björn Ommer. 2022. High-resolution image synthesis with latent                     2023. A prompt log analysis of text-to-image generation systems.
+     diffusion models. In Proceedings of the IEEE/CVF conference on computer                In Proceedings of the ACM Web Conference 2023. 3892–3902.
+     vision and pattern recognition. 10684–10695.                                      [65] Jingling Xue and Qiong Cai. 2006. A lifetime optimal algorithm
+[52] Chitwan Saharia, William Chan, Huiwen Chang, Chris Lee, Jonathan                       for speculative PRE. ACM Transactions on Architecture and Code
+     Ho, Tim Salimans, David Fleet, and Mohammad Norouzi. 2022. Palette:                    Optimization (TACO) 3, 2 (2006), 115–155.
+     Image-to-image diffusion models. In ACM SIGGRAPH 2022 conference                  [66] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and
+     proceedings. 1–10.                                                                     Byung-Gon Chun. 2022. Orca: A distributed serving system for
+[53] Chitwan Saharia, William Chan, Saurabh Saxena, Lala Li, Jay Whang,                     Transformer-Based generative models. In 16th USENIX Symposium on
+     Emily L Denton, Kamyar Ghasemipour, Raphael Gontijo Lopes, Burcu                       Operating Systems Design and Implementation (OSDI 22). 521–538.
+     Karagol Ayan, Tim Salimans, et al. 2022. Photorealistic text-to-image             [67] Lvmin Zhang, Anyi Rao, and Maneesh Agrawala. 2023. Adding
+     diffusion models with deep language understanding. Advances in                         conditional control to text-to-image diffusion models. In Proceedings of
+     Neural Information Processing Systems 35 (2022), 36479–36494.                          the IEEE/CVF International Conference on Computer Vision. 3836–3847.
+[54] Chitwan Saharia, Jonathan Ho, William Chan, Tim Salimans, David J                 [68] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Jeff Huang, Chuyue
+     Fleet, and Mohammad Norouzi. 2022. Image super-resolution via                          Sun, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion Stoica, Joseph E
+     iterative refinement. IEEE Transactions on Pattern Analysis and Machine                Gonzalez, et al. 2023. Efficiently Programming Large Language Models
+     Intelligence 45, 4 (2022), 4713–4726.                                                  using SGLang. arXiv preprint arXiv:2312.07104 (2023).
+[55] Axel Sauer, Dominik Lorenz, Andreas Blattmann, and Robin Rombach.                 [69] Changqian Yu Debang Li Jusnshi Huang Zhengcong Fei, Mingyuan Fan.
+     2023. Adversarial diffusion distillation. arXiv preprint arXiv:2311.17042              2024. Scaling Diffusion Transformers to 16 Billion Parameters. arXiv
+     (2023).                                                                                preprint (2024).
+[56] Haichen Shen, Lequn Chen, Yuchen Jin, Liangyu Zhao, Bingyu Kong,                  [70] Zhe Zhou, Xuechao Wei, Jiejing Zhang, and Guangyu Sun. 2022. PetS:
+     Matthai Philipose, Arvind Krishnamurthy, and Ravi Sundaram. 2019.                      A Unified Framework for Parameter-Efficient Transformers Serving. In
+     Nexus: A GPU cluster engine for accelerating DNN-based video                           2022 USENIX Annual Technical Conference (USENIX ATC 22). 489–504.
+     analysis. In Proceedings of the 27th ACM Symposium on Operating
+                                                                                       Received 2025-09-01; accepted 2025-11-10
+
+
+
+
+                                                                                 550
+

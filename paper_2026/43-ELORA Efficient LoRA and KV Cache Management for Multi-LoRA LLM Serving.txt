@@ -1,0 +1,1515 @@
+                                                                                                                                                                                 ELORA: Efficient LoRA and KV Cache
+                                                                                                                                                                                Management for Multi-LoRA LLM Serving
+                                                                                                                                                                      Jiuchen Shi1,2 , Hang Zhang1 , Yixiao Wang1 , Quan Chen1 , Yizhou Shan3 , Kaihua Fu4 , Wei Wang4 , Minyi Guo1
+                                                                                                                                                                                                   1
+                                                                                                                                                                                                  Shanghai Jiao Tong University, 2 The Hong Kong Polytechnic University,
+                                                                                                                                                                                                    3
+                                                                                                                                                                                                      Huawei Cloud, 4 Hong Kong University of Science and Technology
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408492
+
+
+
+
+                                                                                                                                                                                  shijiuchen@sjtu.edu.cn, morninglory@sjtu.edu.cn, yixiaowang@sjtu.edu.cn, chen-quan@cs.sjtu.edu.cn,
+                                                                                                                                                                                          shanyizhou@huawei.com, fukaihua@ust.hk, weiwa@cse.ust.hk, guo-my@cs.sjtu.edu.cn
+
+
+                                                                                                                                                                        Abstract—Multiple Low-Rank Adapters (Multi-LoRA) are                            LoRAs        History KV Caches                  Usage Dependencies
+                                                                                                                                                                     gaining popularity for task-specific Large Language Model                           LoRA-1           KV1-1              KV1-2
+                                                                                                                                                                                                                                                                                                                                           Query-1
+                                                                                                                                                                     (LLM) applications. For Multi-LoRA serving, caching hot LoRAs                      Not in GPU            Prefix
+                                                                                                                                                                                                                                                                                             KV1-3      LoRA-1     KV1-1       KV1-2       NewKV
+                                                                                                                                                                     and KV caches in the GPU memory can improve inference                                                                                   Miss LoRA
+                                                                                                                                                                                                                                                         LoRA-2           KV2-1              KV2-2
+                                                                                                                                                                     performance. However, existing Multi-LoRA inference systems                           ...                         ...                        Swap-in
+                                                                                                                                                                     fail to optimize serving performance like Time-To-First-Token                       LoRA-x           KVx-x              ...... 🔥
+                                                                                                                                                                                                                                                                                                                 LoRA-1            KV2-2
+                                                                                                                                                                     (TTFT), neglecting usage dependencies when caching LoRAs                                        Resident Base Model                                  ......
+                                                                                                                                                                     and KV caches. We therefore propose ELORA, a Multi-LoRA                                          GPU memory                                 Main memory
+                                                                                                                                                                     caching system to optimize the serving performance. ELORA
+                                                                                                                                                                     comprises a dependency-aware cache manager and a performance-                  Fig. 1: An example caching state to show the Usage Depen-
+                                                                                                                                                                     driven cache swapper. The cache manager maintains the usage
+                                                                                                                                                                     dependencies between LoRAs and KV caches during inference                      dencies between LoRAs and KV caches.
+                                                                                                                                                                     with a unified caching pool. The cache swapper determines the
+                                                                                                                                                                     swap-in or swap-out of LoRAs and KV caches based on a unified                     When a user query is received, the serving system checks
+                                                                                                                                                                     cost model, when the GPU memory is idle or busy, respectively.                 whether the required LoRA and KVs are already in the GPU
+                                                                                                                                                                     Experimental results show that ELORA reduces the TTFT by
+                                                                                                                                                                     45.7% on average, compared to state-of-the-art works.                          memory. If the required LoRAs and/or KVs are not cached,
+                                                                                                                                                                                                                                                    they are swapped in from the main memory. If the cache space
+                                                                                                                                                                                            I. I NTRODUCTION                                        for the LoRAs or KVs is full, some of them are swapped
+                                                                                                                                                                        Large Language Models (LLMs) are now widely used to                         out with various caching policies. When queries use different
+                                                                                                                                                                     understand and generate human-like text [6], [11]. While it is                 LoRAs following stable distributions, this solution performs
+                                                                                                                                                                     cost-inefficient to train LLMs for different tasks, parameter-                 well because the optimal GPU memory space partition can
+                                                                                                                                                                     efficient fine-tuning [20], [50] that freezes the large-scale base             be identified in a “brute-force” way. However, production
+                                                                                                                                                                     model and finetunes multiple Low-Rank Adapters (LoRAs) for                     traces [40], [60], [63] show that the distributions are dynamic.
+                                                                                                                                                                     various tasks is increasingly popular [13], [3]. For instance, in              In this scenario, we observe that static GPU memory partition
+                                                                                                                                                                     chatbot [37], [18], [12], multi-language translation [57], [56],               and independent cache management suffer from low efficien-
+                                                                                                                                                                     and personal agents [4], [31], [49], multiple LoRA adapters                    cies in intra-LoRA and inter-LoRA aspects.
+                                                                                                                                                                     (LoRA for short) can be tuned for different user demands                          In the intra-LoRA aspect, a query’s KVs may remain cached
+                                                                                                                                                                     and application scenarios. For these LLMs, Key-Value (KV)                      while its required LoRA is swapped out. As shown in Fig. 1,
+                                                                                                                                                                     caches that store input context are often used to maintain                     when “Query-1” relying on LoRA-1 arrives, it can run only if
+                                                                                                                                                                     coherence and speed up responses during extended interactions                  LoRA-1 and its prefixed KV1-1 and KV1-2 are in the GPU
+                                                                                                                                                                     by avoiding repetitive computations [25], [1]. Researchers also                memory. However, LoRA-1 is swapped out earlier due to the
+                                                                                                                                                                     reused history KV caches for queries with the same prefix [64],                limited GPU memory space. In this case, the cached KVs are
+                                                                                                                                                                     [16], [53], [55], boosting performance in iterative tasks.                     actually “invalid”, because the query cannot run without the
+                                                                                                                                                                        To improve the serving performance of such Multi-LoRA                       required LoRA, showing their inherent usage dependencies.
+                                                                                                                                                                     applications, many works have investigated caching the base                    If the GPU memory space of invalid KVs (e.g., KV1-3) were
+                                                                                                                                                                     model, the KVs [55], [15], [39], [64] or “hot” LoRAs [52],                     used to cache LoRA-1, Query-1 could run immediately. Invalid
+                                                                                                                                                                     [22], [29] in the GPU memory. vLLM [25] proposed to                            KVs of a LoRA may also prevent useful KVs of other LoRAs
+                                                                                                                                                                     cache both LoRAs and history KV caches to improve in-                          from being cached. For instance, KV2-2 is not cached while
+                                                                                                                                                                     ference performance. Fig. 1 shows an example of caching                        LoRA-1’s KVs are invalid, preventing queries of LoRA-2 from
+                                                                                                                                                                     base model, LoRAs, and KVs. Different LoRAs have separate                      running. Our experiments show that vLLM [25] suffers from
+                                                                                                                                                                     KV caches (e.g., LoRA-1 and LoRA-2). Moreover, vLLM                            42.4% invalid KV caches on average.
+                                                                                                                                                                     statically partitioned the GPU memory for LoRAs and KVs,                          In the inter-LoRA aspect, the required number of LoRAs
+                                                                                                                                                                     and managed their swap-in or out separately. This is because                   and the hotness of KVs for different LoRAs change dynam-
+                                                                                                                                                                     vLLM allocated different sizes of memory blocks for LoRAs                      ically, due to the varying loads of different LoRAs. For the
+                                                                                                                                                                     and KVs, preventing their sharing with each other [48].                        example in Fig. 1, more LoRAs (e.g., LoRA-x) need to be used
+
+
+
+                                                                                                                                                                                                                                                1
+                                                                                                                                                                             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+at the next time interval, and the KVs of LoRA-x become hot,                  TABLE I: Comparisons between ELORA and other works.
+but other LoRAs’ KVs have occupied the GPU memory, which                                         Multi-LoRA Online LoRA History Dynamic manage
+                                                                                                  serving    (un)loading KV reuse KVs and LoRAs
+prevents them from being swapped in. However, with static
+                                                                               TensorRT-LLM [36]     "                     "
+GPU memory partitioning of LoRAs and KVs, their swap-                             S-LoRA [42]        "            "
+in or out can only be managed separately, making it hard to                        vLLM [48]         "            "        "
+uniformly balance their usage in the GPU memory.                                    ELORA            "            "        "            "
+
+   To address the above problems, a scheme is required to
+integrate the usage dependency for each LoRA and its cor-                                            II. R ELATED W ORK
+responding KV caches with the unified management of GPU
+memory. We observe that the usage dependencies between a                         LLM Fine-tuning. Recent studies have proposed efficient
+LoRA and its KV caches can be delicately denoted by a tree                    methods for fine-tuning LLMs [20], [30], [27], with LoRA
+structure. We therefore introduce a tree-based scheme to main-                adapters being among the most widely used. LoRA achieves
+tain the usage dependencies during inference, where nodes are                 fine-tuning with low costs by adding a low-rank branch [20].
+KVs or LoRAs and edges are their dependencies. This can                       Evolved models like DoRA [33] and AdaLoRA [59] that were
+keep more valid KVs in GPU memory to improve efficiency,                      developed based on LoRA, enhance fine-tuning efficiency by
+and thus help in reducing the Time-To-First-Token (TTFT)                      introducing flexible updates through weight decomposition and
+and Time-Per-Output-Token (TPOT) of queries. Moreover, it                     efficient trimming of insignificant singular values. These mod-
+is also challenging to balance the GPU memory usage for                       els share the same features as LoRA for the LLM inference,
+LoRAs and KVs under varying loads. A cost model is also                       thus ELORA can adapt to them with minimal modifications.
+required to assess the most beneficial LoRAs and KV caches                       KV Cache Management. Some engines like Orca [54] and
+to swap in or out during the Multi-LoRA serving.                              FastTransformer [41] simply discarded requested KV caches
+   We therefore propose ELORA, a Multi-LoRA caching sys-                      after query processing, which forces recomputations for each
+tem that appropriately manages the swap-in or out of LoRAs                    new query. To reduce recomputations, FlexGen [43] offloaded
+and KV caches at the scheduling level. ELORA aims to reduce                   the KV caches to host memory and disk for the reuse of
+the TTFT and TPOT, and maximize the supported peak load                       subsequent queries. SGLang [64] introduced RadixAttention
+of Multi-LoRA applications. It comprises a dependency-aware                   to handle various KV cache reuse via a global prefix tree
+cache manager and a performance-driven cache swapper. The                     and a Least Recently Used (LRU) policy, which is utilized as
+cache manager maintains the usage dependencies between KV                     the underlying operator for ELORA’s usage dependency tree
+caches and LoRAs based on the tree-based scheme with a                        implementation. ChunkAttention [64] improved GPU mem-
+unified caching pool, where LoRAs or KV caches are inserted                   ory utilization by sharing KV caches for common prefixes
+or removed from leaves in the GPU memory to keep the tree                     across different queries. For multi-round dialogues, Attention-
+connected. Based on usage dependencies, the cache swapper                     Store [15] and Pensieve [55] maintained a multi-level KV
+periodically determines the swap-in or out of LoRAs and KVs                   caching to store and manage all requested history KV caches to
+by using a cost model, which precisely assesses the benefits                  eliminate recomputations. Despite reusing history KV caches,
+of swap-in or out LoRAs and KVs to the serving performance                    these prior works failed to unify the management of KVs and
+of future queries. This paper makes three major contributions.                LoRAs in a manner that accounts for their usage dependencies.
+                                                                                 Multi-LoRA Serving Systems. TensorRT-LLM [36] sup-
+  • Investigating caching management of LoRAs and KVs                         ported Multi-LoRA serving with the reuse of history KVs, but
+    for the Multi-LoRA inference. The analysis motivates                      required all LoRAs to be pre-compiled with the base model
+    us to maintain usage dependencies between LoRAs and                       under its static graph compilation. This cannot support online
+    KV caches, and to unify the management of their swap-in                   loading or unloading during the Multi-LoRA serving.
+    or out based on their impact on inference performance.                       To enable online LoRA loading into the GPU memory,
+  • The design of a scheme that maintains the usage
+                                                                              Punica [9] introduced the operator to separate the base model
+    dependencies between LoRAs and KV caches. Consid-                         from the task-specific adapter. S-LoRA [42] introduced a
+    ering the usage dependencies, more valid KVs are cached                   unified caching operator for LoRAs and running KV caches,
+    in GPU memory, eliminating the intra-LoRA inefficiency.                   which is utilized as ELORA’s underlying operator. It did not
+  • The design of a cost model that guides the swap-
+                                                                              reuse history KVs and swapped in LoRAs on demand. Punica
+    in or out of LoRAs and KVs. The model enables the                         and S-LoRA also realized that queries with various LoRAs
+    unified swap-in or out of LoRAs and KVs, eliminating                      can be batched to improve inference efficiency. Moreover,
+    the inefficiency due to the inter-LoRA interference.                      dLoRA [52] dynamically merged and unmerged adapters with
+   We evaluated ELORA with Llama3-8B, Llama2-34B, and                         the base model and migrated queries and adapters across repli-
+Llama3-70B [46], [34] on 8 NVIDIA H800s with chatbot [35],                    cas, which is orthogonal to our work. The above works did not
+[10], multi-language translation [56], and personal agents [7]                consider reusing history KV caches to avoid recomputations.
+scenarios. Compared to the state-of-the-art work, results show                   SGLang [64] integrated the operator of S-LoRA [42] to
+that ELORA reduces TTFT and TPOT by 45.7% and 37.8%,                          support Multi-LoRA serving. However, it does not support
+respectively, and improves the supported peak load by 78.9%.                  reusing history KV caches when Multi-LoRA functionality
+
+
+
+                                                                          2
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+is enabled due to unresolved compatibility issues in imple-                    full, this query needs to queue to wait for other KV caches or
+mentations [19]. Moreover, vLLM [48] integrated the operator                   LoRAs swapped out from the GPU memory, and then load the
+of Punica for Multi-LoRA serving while reusing history KV                      required LoRA. Similarly, if the required KV caches are not in
+caches. It utilized the LRU for LoRAs and KV caches.                           GPU memory, they will be swapped in from the main memory.
+However, vLLM managed LoRAs and KVs in separate GPU                            Once the required LoRA and KVs are properly loaded and
+memory spaces, failing to account for their usage dependencies                 matched, the inference begins to generate the next token.
+and balance the GPU memory usage under dynamic scenarios.                         LLM inference typically has prefill and decode stages [54],
+   Table I compares ELORA with representative works.                           [1], [8], corresponding to two performance metrics, i.e., TTFT
+                                                                               and TPOT. The above Multi-LoRA serving workflow can
+           III. BACKGROUND AND M OTIVATION                                     introduce overheads due to the queue waiting for the GPU
+  In this section, we first introduce the background of Multi-                 memory space, LoRA cold-starts, and KV cache cold-starts,
+LoRAs, then investigate the inefficiency of current systems.                   affecting both the TTFT and TPOT.
+A. Multi-LoRA Serving with Caching                                             B. Application Scenarios for Investigations
+   Multi-LoRA. LoRA [20] is a popular method for efficiently                      We built three commonly-used Multi-LoRA LLM inference
+fine-tuning pre-trained LLMs by adding lightweight adapters                    applications based on real-world traces for investigations.
+to original weights. Instead of updating all parameters, LoRA                     Chatbots. In each dialogue round, chatbots generate re-
+only learns a pair of low-rank matrices that modify the original               sponses using full user history. Online services often let users
+weights. These matrices are much smaller than the original                     choose specific scenarios (e.g., business analysis [47]), and ap-
+weight matrix, reducing computational and memory costs.                        ply Multi-LoRA inference to improve efficiency. We construct
+   For the Multi-LoRA scenario, the pre-trained base model                     queries using LMSYS-33k dataset [63], which has 33,000
+is loaded once, and multiple pairs of low-rank matrices are                    dialogues with model names, texts, and timestamps. Based
+introduced, each corresponding to a specific task [21], [62].                  on model names, we assign the target LoRA of each query
+For each task t, a unique pair of low-rank matrices At and Bt                  and retain the original query distribution for different models.
+is learned, and the original weight matrix W is updated as:                    To form different query sending rates, we proportionally scale
+                 Wt′ = W + ∆Wt = W + At Bt                           (1)       this dataset while preserving its original pattern [42], [52].
+                                                                                  Multi-language Translations. This service uses Multi-
+   For Multi-LoRA serving, based on the query’s task, the                      LoRAs to dynamically select optimal models to enhance
+corresponding LoRA matrices are loaded into the GPU mem-                       translation results [66]. We construct queries from the OPUS-
+ory before inferring. Queries using different LoRAs can be                     100 dataset [56], which contains 55 million sentence pairs
+processed in a single batch using Segmented Gather Matrix-                     in 100 languages. We map each language translation pair
+Vector multiplication (SGMV) [42], [9].                                        to a specific LoRA, e.g., French to English. As the OPUS-
+   KV Caches for Multi-LoRAs. The LoRAs need to be                             100 dataset lacks timestamps, we adopt query arrival patterns
+loaded into the GPU memory during the inference [20], [42].                    from the Microsoft Azure function trace (MAFT) [40], [60],
+Moreover, most LLMs use a decoder-only transformer to                          following previous works [52], [22]. We rank MAFT functions
+predict the next token with KV caches computed from previous                   by invocation frequency, select the top-n query types, and map
+tokens [14], [11]. When a query matches an existing prefix, the                them to the n LoRAs to maintain query distribution.
+stored history KV caches can be reused to eliminate redundant                     Personal Agents. LLMs are widely used in this scenario,
+computations and reduce GPU memory usage.                                      e.g., mobile assistants and home assistants, with Multi-LoRA
+   Each LoRA adds a low-rank branch to the original weights,                   enabling efficient multi-task support [31], [62]. We construct
+which affects the computations of the KV cache. For a hidden                   queries using the Google Taskmaster dataset [7], which fea-
+state h at a specific layer, the Key and Value matrices using                  tures multi-turn, task-oriented dialogues that mirror real-world
+LoRA t with original weights WK and WV are computed as:                        assistant interactions. We apply the same sampling based on
+   Kt = (WK + At,K Bt,K )h,         Vt = (WV + At,V Bt,V )h          (2)
+                                                                               MAFT as in the translation.
+                                                                                  To adapt various LoRA numbers (n) to the above scenarios,
+Thus, the KV cache for each LoRA differs due to task-specific                  we randomly choose the query patterns from n models, trans-
+modifications in the matrices, which require separate storage                  lation pairs, or task scenes in corresponding datasets and map
+of the KV caches for different LoRA adapters [13].                             to n LoRAs. Like other works [42], [52], we randomly select
+   The separate storage increases contention for limited GPU                   LoRAs from the HuggingFace repository of the corresponding
+memory space, and thus the KV caches and LoRAs are                             LLMs, and this does not affect the serving performance [9].
+usually offloaded to main memory and swapped in or out on                      The ranks of LoRAs in our evaluations are either 32 or 64.
+demand [15], [42]. This can cause cold starts when loading                        The traces we utilized [63], [40], [56], [7] can capture the
+them back into GPU memory. To reduce this overhead, we can                     dynamics of queries accessing various LoRAs. As statistics,
+pre-cache “hot” KV caches and LoRAs into GPU memory.                           the required GPU memory for LoRAs (with corresponding KV
+   Multi-LoRA Serving. For a new query, if the required                        caches) varies by 48.1% on average every 1 second, in which
+LoRA is not in the GPU memory while the GPU memory is                          73.9% variations are beyond 20% and others are below 20%.
+
+
+
+                                                                           3
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+                                             TABLE II: Experiment specifications
+                                                                                                               /        Swap-in               /           Swap-out                    Inference              Queue
+                            Specifications
+                                                                                                                                          Hit LoRA-1      Hit KV-1-1
+          Intel Xeon Platinum 8480CL CPU, 256GB memory                                                       GPU memory                                             Q1 end
+ Hardware NVIDIA H800 (each of 80GB GPU memory) ×8                                                        LoRAs   History KVs        Q1           KV1-1 KV1-2 LoRA-1 KV1-1
+                                                                                                                       No space           Queue Swap-in Infer          Swap-out
+             PCIe 5.0, 128GB/s interconnection bandwidth
+                 Llama3-8B, Llama2-34B, Llama3-70B,
+                                                                                                           LoRA-1            ×
+                                                                                                                         KV1-1                                                            Hit LoRA-2 Hit KV-2-1
+                                                                                                                                                                                                              Q2 end
+
+ Software LMSYS-33K [63], OPUS-100 [56], Taskmaster [7],                                                   LoRA-2  ×     KV2-1       Q2 KV2-1                                         LoRA-2 KV2-1 KV2-2
+
+                                                                                                                        Invalid           Swap-out             Queue                    Swap-in      Infer
+                Microsoft Azure Function trace [40], [60]
+                                                                                                                                  (a) Without Usage Dependencies                                   Timeline
+
+                                      8000
+      TTFT (ms) TTFT (ms) TTFT (ms)
+
+
+
+
+                                            Chatbots             KVs' memory exhausted
+                                      6000
+                                                                                                                                          Hit LoRA-1 & KV1-1
+                                      4000                                                                   GPU memory                              Q1 end
+                                      2000                                                                LoRAs   History KVs        Q1 KV1-2 LoRA-1 KV1-1
+                                         0                                                                 LoRA-1        KV1-1            Infer      Swap-out            Hit LoRA-2     Hit KV-2-1
+                                          0    200 400     600   800    1000 1200 1400 1600 1800
+                                                                                                                                                                                                 Q2 end
+                                      9000
+                                            Translations          KVs' memory
+                                                                   exhausted
+                                                                                    LoRAs' memory
+                                                                                      exhausted
+                                                                                                           LoRA-2  ×     KV2-1×
+                                                                                                                       No space
+                                                                                                                                    Q2                            LoRA-2 KV2-1        KV2-2
+                                      6000                                                                                                        Queue                 Swap-in        Infer
+
+                                      3000                                                                                                                                                        Timeline
+                                                                                                                                   (b) Maintain Usage Dependencies
+                                         0
+                                          0     200 400 600      800    1000 1200 1400 1600 1800
+                                      8000                                                              Fig. 3: Examples of serving two queries under: (a) without
+                                            Personal Agents         KVs' memory
+                                      6000                           exhausted                          usage dependencies, and (b) maintaining usage dependencies.
+                                      4000
+                                      2000
+                                         0                                                              2339.6ms on average, respectively. This is because the static
+                                          0     200 400 600      800    1000 1200 1400 1600 1800
+                                                                  Time(s)                               GPU memory allocation of vLLM cannot dynamically adapt to
+                                                                                                        the varying loads in Multi-LoRA serving. The GPU memory
+   Fig. 2: The TTFT of the vLLM for different scenarios.                                                allocation is static because vLLM allocates memory blocks
+                                                                                                        with different sizes for LoRAs and KVs according to their
+C. Low Multi-LoRA Serving Performance                                                                   respective requirements [48]. Memory blocks in the GPU
+   In this subsection, three application scenarios described in                                         memory area of KV caches cannot be used for LoRAs, making
+Section III-B are used as benchmarks. We use the Llama3-8B,                                             it impossible to dynamically adjust the pool sizes.
+Llama2-34B, and Llama3-70B as base models, and evaluate                                                    While redeployment can change the GPU memory partition,
+them on eight NVIDIA H800 GPUs. We construct various                                                    it results in large overheads that can block normal inference
+LoRA numbers (20, 50, and 100) for each base model. Table II                                            for tens of seconds [5], [2]. Moreover, even if dynamic
+shows the hardware and software configurations.                                                         GPU memory allocation is achieved with fine-grained memory
+   We have tried to use the latest version of SGLang [61] that                                          blocks [9], [42], [22], it is still hard to define an appropriate
+supported the Multi-LoRA serving but cannot reuse the history                                           allocation policy with varying loads of LoRAs.
+KV caches. However, evaluation results show the average
+TTFT of SGLang can be as high as 9568.9ms. This extremely                                               D. Diving into Underlying Reasons
+low performance is similar to observations from others [19]. It                                            Our investigations show that the poor performance is caused
+has prevented us from further investigations, as we suspect it                                          by 1) inefficient GPU memory usage without considering intra-
+may be caused by poor Multi-LoRA compatibility of SGLang.                                               LoRA usage dependencies, and 2) inappropriate swap-in or out
+   We therefore choose to use vLLM [48] that caches both                                                of KVs and LoRAs under the inter-LoRA varying loads.
+LoRAs and history KVs as the representative serving sys-                                                   1) Inefficient GPU memory Usage: Fig. 3 shows an exam-
+tem. vLLM integrates the Multi-LoRA serving kernels of                                                  ple of serving two queries (Q1 and Q2) of two LoRA adapters
+Punica [9], [48], with more optimizations like prefix-caching                                           (LoRA-1 and LoRA-2) under this kind of method.
+to reuse history KV caches. It allocates fixed GPU memory                                                  As shown in Fig. 3(a), it is possible that KV2-1 is cached
+space for LoRAs and KVs, and utilizes the LRU strategy to                                               while the corresponding LoRA-2 is not in the GPU memory,
+swap in or out LoRAs or KVs in the respective GPU memory                                                without considering usage dependencies between LoRA and
+area. vLLM sets a predefined allocation ratio of GPU memory                                             its KVs. Prior work like vLLM [25] allocated static GPU
+space for LoRAs (empirically to be 0.2) and the memory block                                            memory for LoRAs and KV caches, respectively, and managed
+size to 32, referring to the vLLM latest version [48].                                                  their swap-in/out separately, which can lead to this situation.
+   Fig. 2 shows the TTFT over time of vLLM for the three                                                This occurs because, when queries access more LoRAs, the
+benchmarks with the Llama2-34B base model under the LoRA                                                GPU memory allocated for LoRAs becomes insufficient, forc-
+number of 50. Experiments with other base models show                                                   ing most LoRAs (including those “hot” ones) to be swapped
+similar observations, as shown in Section VIII. With varying                                            out. By contrast, the GPU memory for KV caches is excessive,
+loads, we observe that vLLM experiences significantly high                                              thus some evicted LoRAs’ KV caches reside in the GPU.
+TTFT at certain periods, due to insufficient GPU memory                                                    Under this case, KV2-1 is “invalid”, since Q2 cannot run
+space allocation for KV caches or LoRAs. As statistics, the                                             without the LoRA. At the same time, Q1 is also blocked
+TTFT of the three benchmarks are 1353.4ms, 2548.9ms, and                                                although its required LoRA is cached, because it needs to wait
+
+
+
+                                                                                                    4
+                          Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                                                          Dependency-aware Cache Manager                            Cache Swapper
+                                                                               KV Caches              LoRAs                                                                                            Full
+    Utilization rate
+                       100%                                                                                                                                 GPU Memory                                 GPU               Cost Model
+                                                                                                                                                                                 Root
+                        80%                                                                                                                                                                                                LRU       Frequency
+                                                                                                                                                                                                               INPUT:
+                        60%                                                                                                                                     LoRA-1
+                                                                                                                                                                             Usage
+                                                                                                                                                                                             LoRA-2
+                                                                                                                                                                                                                           LoRA Quantity       ...
+                                                                                                                                                            ③
+                        40%                                                                                                                                                Dependency
+                                                                                    KVs' memory                        LoRAs' memory                             KV1-1                       KV2-1             OUTPUT:      Benefits to TTFT
+                        20%
+                                                                                     exhausted                           exhausted
+                         0%                                                                                                                                 ④
+                               0         150    300    450               600       750    900 1050 1200 1350 1500 1650 1800                                      NewKV                             ②               ①
+                                                                                     Times(s)
+                                                                                                                                                            Main Memory
+                                                                                                                                                                    …     KV1-2               …                    Swap-out            Swap-in
+Fig. 4: The utilization rate of the GPU memory space allocated
+to LoRAs and KV caches over time in the translation scenario.                                                                                                         Required               Hit                                           Insert
+                                                                                                                                                          Example                                         LLM
+                                                                                                                                                           Query LoRA-1 KV1-1           LoRA-1 KV1-1                   LoRA-1 KV1-1 New Token
+Frequency Rank
+
+
+
+
+                                                                                                                                                                                                       Inference
+
+
+
+
+                                                                                                      Swap Cost Rank
+                                                        Swap Cost Rank
+
+
+
+
+                 800                                                     800                                           800
+
+                 600                                                     600                                           600
+                                                                                                                                                                     Fig. 6: Design overview of ELORA.
+                 400                                                     400                                           400
+
+                 200                                                     200                                           200
+                                                                                                                                                          We should dynamically balance the GPU memory usage of
+                       0                                                   0                                             0
+                           0       250    500    750                           0    250   500   750                          0   250   500   750       LoRAs and KVs. However, even if the GPU memory space of
+                                   LRU Rank                                         LRU Rank                                 Frequency Rank
+                                                                                                                                                       LoRAs and KVs is dynamically managed through fine-grained
+Fig. 5: The relationships among the visited frequency, swap                                                                                            memory blocks, relying on LRU for the swap-in or out is not
+costs, and LRU of the KV caches or LoRAs.                                                                                                              efficient. This is because TTFT is related to many factors,
+                                                                                                                                                       like the swap cost and visited frequency. Fig. 5 shows the
+for the required KV1-1 to be swapped in, before which KV2-1                                                                                            relationship between the visited frequency, LRU, and swap
+should be swapped out to free some GPU memory space. After                                                                                             cost of each KV cache and LoRA. In the figure, each point
+Q1 returns, Q2 needs to swap in LoRA-2 and KV2-1 again                                                                                                 represents a LoRA or KV cache, and its x or y-axis represents
+to perform the inference. Neglecting the usage dependency,                                                                                             its corresponding ranks of LRU/Frequency/Swap Cost. As
+the system causes redundant swap-in/out, greatly increasing                                                                                            observed, the points are randomly distributed, which means
+queuing overhead. From our evaluations in Section VIII,                                                                                                that there is no clear correlation among these factors. There-
+vLLM results in 42.4% invalid KV caches on average.                                                                                                    fore, only considering the LRU strategy cannot represent the
+   Fig. 3(b) shows a better caching case where LoRAs and KVs                                                                                           situations of other important metrics for serving performance.
+are managed based on the usage dependency. In this case, Q1                                                                                               Relying on the LRU to manage the GPU memory space for
+runs directly because both LoRA-1 and the KV1-1 are in the                                                                                             LoRAs and KV caches is not efficient to minimize the TTFT,
+GPU memory. After Q1 returns, Q2 runs after LoRA-1 and                                                                                                 even if dynamic GPU memory usage is enabled.
+KV1-1 are swapped out, and the required LoRA-2 and KV2-1
+                                                                                                                                                                          IV. ELORA M ETHODOLOGY
+are swapped in. In this way, the redundant swap-in or out is
+eliminated, and the response time of both Q1 and Q2 reduces.                                                                                              Fig. 6 shows the design overview of ELORA. It mainly
+   While prior work does not consider the usage dependency                                                                                             comprises two parts: a dependency-aware cache manager and
+between LoRA and its KV caches, the limited GPU memory                                                                                                 a performance-driven cache swapper.
+space is not efficiently used.                                                                                                                            The most challenging part of ELORA is managing LoRAs
+   2) Inappropriate Swap-in or out of KV caches and LoRAs:                                                                                             and KV caches based on the usage dependencies to eliminate
+Previous works [48], [64] manage LoRAs and KVs in GPU                                                                                                  invalid KV caches. Thus, ELORA’s cache manager introduces
+memory separately, and adopt caching strategies like LRU for                                                                                           a tree-based scheme to address this problem, where nodes
+swap-in or out. They cannot balance GPU memory usage for                                                                                               represent LoRAs or KV caches, and edges represent the usage
+LoRAs and KVs when loads of different LoRAs change.                                                                                                    dependencies among them. To maintain usage dependencies,
+   Take benchmark translation in Fig. 2 as an example. TTFT                                                                                            this scheme places LoRAs on the second layer, and swaps out
+increases up to 6729.7ms and 8962.9ms during the period of                                                                                             leaf nodes in the GPU memory and swaps in root nodes in
+650s-1200s and 1200s-1800s, respectively. Correspondingly,                                                                                             the main memory during Multi-LoRA serving (Section V).
+Fig. 4 shows the GPU memory utilization rates of the LoRA                                                                                                 When the loads of queries using different LoRAs change,
+and the KV parts. After looking into detailed serving trace,                                                                                           the used LoRA number can increase and the hotness of some
+we find that the long TTFT originates from different reasons.                                                                                          KV caches of some LoRAs changes. ELORA’s cache swapper
+During the 650s-1200s, the GPU memory space for KVs is                                                                                                 periodically decides the swap-in or out of different LoRAs and
+exhausted while the utilization rate of GPU memory space for                                                                                           KV caches based on metrics like LRU, visit frequency, and the
+LoRAs is 59.2% on average. In this case, the frequent swap-in                                                                                          LoRA quantity. The challenging part here is to build the cost
+or out of KVs results in the long TTFT. During the 1200s-                                                                                              model to directly evaluate the benefits to TTFT for swapping
+1800s, the GPU memory space for LoRAs is exhausted in                                                                                                  in or out each LoRA or KV cache (Section VI).
+contrast, because queries of more LoRAs are received during                                                                                               Specifically, ELORA works as follows. Firstly, the cache
+that period. According to the trace, queries of 29 LoRAs are                                                                                           manager constructs the usage dependencies between LoRAs
+received before 1200s, while that value is 48 after 1200s.                                                                                             and KV caches into a tree-based structure. Secondly, during
+
+
+
+                                                                                                                                                   5
+                               Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+             LoRA node               KV cache node   Dependency                Virtual node                    LoRA node        KV cache node   Dependency             Virtual node
+
+                Usage Dependencies                                   Root                            GPU Memory                                 GPU Memory
+                                                                                                                Root        Query                         Root
+    LoRA-1                  LoRA-N                        LoRA-1   ... LoRA-N      2nd Layer
+                                                                                                      LoRA-1   ... LoRA-N DFS                    LoRA-1   ... LoRA-N    LoRA-M
+                     ...
+                                                                                                        ...                 Leaf                                           Swap-out
+       ...                     ...           ...           ...           ...          ...                                  NewKV                                            Leaves
+    Subtree 1                   Subtree N                          Unified tree                                                                     Swap-in
+                                                                                                       Swap-in
+       (a) Subtrees for each LoRA                         (b) Merge the sub-trees                                                                    Roots
+                                                                                                     Main Memory                    ...         Main Memory      ...     ...
+Fig. 7: The construction process of the usage dependencies                                                (a) Match and Update                    (b) Swap-in and Swap-out
+
+among LoRAs and KV caches.                                                                         Fig. 8: Maintaining the usage dependencies among LoRAs and
+                                                                                                   KV caches during the query inference.
+serving, it inserts newly loaded LoRAs into the second layer of
+the tree and inserts or deletes KV caches at the leaves of their                                   sentence “To be” can be “or not to be” or “the best”. Thus,
+corresponding LoRA branches. Thirdly, after each monitor                                           the LoRA and its subsequent KV caches can also construct a
+interval, the cache swapper retrieves the states of nodes from                                     subtree like the branch of LoRA-N in this figure.
+the cache manager and decides the swapped-in or out KV                                                Since these subtrees constructed above are still separate, we
+caches and LoRAs when the GPU memory is idle or busy,                                              need to merge these subtrees into a unified one, as shown in
+respectively. The swap-in or out decisions are sent back to the                                    Fig. 7(b). We use a virtual root node to connect the subtrees for
+cache manager to perform memory operations.                                                        different LoRAs to form a unified tree, with all LoRA nodes
+   We use an example for better explanations as shown in                                           placed on the second layer of the tree. In this way, newly
+Fig. 6. ➀ As the GPU memory is full at the start, the cache                                        arrived queries can first match the required LoRA node in this
+swapper gets the states of the tree and utilizes the cost model to                                 tree, and then match the KV cache nodes in this LoRA branch.
+evaluate the nodes in this tree, and determine the most “cold”                                     Through the construction of usage dependencies described
+one “KV2-1”. ➁ The cache manager swaps out the “KV2-                                               above, the usage dependencies among LoRAs and KV caches
+1” from the GPU memory. ➂ When a new query arrives, the                                            within the same LoRA branch are established, while KV
+cache manager fits its required LoRA and KV caches “LoRA-                                          caches in different LoRA branches remain independent.
+1” and “KV1-1” in the dependency tree. ➃ This query then                                              In the dependency tree, ELORA divides each LoRA or KV
+proceeds to generate the next new token, and lastly, the cache                                     cache into the same fixed-size memory blocks, and a LoRA or
+manager inserts its KV cache “NewKV” in the leaf of the                                            KV cache block is represented by a node in the dependency
+corresponding LoRA branch in the tree.                                                             tree. Thus, the specific LoRA rank or KV cache size does not
+                                                                                                   impact ELORA’s caching strategy. The node label for each
+             V. D EPENDENCY- AWARE C ACHE M ANAGER
+                                                                                                   KV cache node is the hash value of the token sequence, and for
+   In this section, we first analyze how to construct the usage                                    each LoRA node is the LoRA ID. For the swapping decisions
+dependencies among LoRAs and KV caches, then introduce                                             in Section VI, we also record the related data for each node.
+their maintenance during serving the queries.                                                      Each node retains its corresponding information, i.e., the visit
+                                                                                                   frequency, the last recent usage time, and the node size. These
+A. Usage Dependency Constructing
+                                                                                                   data will be updated when each node is generated, matched,
+   As we analyzed in Section III-D1, a LoRA and its corre-                                         or swapped in or out during the inference.
+sponding KV caches have their inherent usage dependencies.
+When ignoring these dependencies, invalid KV caches will                                           B. Dependency Maintaining During Inference
+occupy the GPU memory space, leading to low performance                                               To maintain the usage dependencies among LoRAs and KV
+for Multi-LoRA serving. We adopt a tree-based scheme to                                            caches during the query inference, we need to correctly match
+construct the usage dependencies. as shown in Fig. 7.                                              and update the LoRAs and KV caches in the dependency
+   For each specific query, it will first match the required                                       tree. Moreover, we need to swap in or swap out appropriate
+LoRA and then its corresponding KV caches. The KV caches                                           nodes in the dependency tree according to the cache swapper’s
+corresponding to different tokens also have their matching                                         decisions (Section VI) when the GPU memory is idle or busy.
+orders. For instance, in the sentence “To be or not to be”,                                           For the matching and updating, as shown in Fig. 8(a), when
+the KV cache for the token “To” should be matched in front                                         a query arrives, it needs to match the required LoRAs and
+of “be”. Therefore, as shown in Fig. 7(a), the LoRAs and                                           KV caches. This query will first match the LoRA node in
+subsequent KVs can be intuitively connected by a chain like                                        the second layer. If the LoRA resides in the main memory,
+the branch of LoRA-1, where nodes represent LoRAs or KV                                            this node is swapped in the GPU memory asynchronously.
+caches and edges represent the usage dependencies. Moreover,                                       Then, within the subtree of this LoRA branch, this query
+a KV cache for a token may have several possible subsequent                                        begins to match history KV caches according to Depth-First-
+KV caches. For instance, the subsequent tokens for the prefix                                      Search (DFS) of the tree until the leaf node is reached or no
+
+
+
+                                                                                               6
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+corresponding node can be found. During the KV matching                                                         LoRA number=20              LoRA number=50
+process, if the required KV cache resides in the main memory,                                    1600
+                                                                                                                                                 Target Ratio
+it will first be swapped into the GPU memory. Through the                                        1200
+
+
+
+
+                                                                                     TTFT (ms)
+above prefix matching process, we can maximize the reuse of                                       800
+KV caches that have already been computed according to the                                        400
+usage dependencies. At last, this query generates a new token
+                                                                                                   0
+with a new KV cache, and we will insert it below the last                                                0.05      0.1         0.15   0.2      0.25      0.3
+                                                                                                                               LoRA Ratio
+matched node of its corresponding LoRA subtree. Also, during
+the decoding process, the new KV cache will be continuously                    Fig. 9: The TTFT of vLLM in the chatbot scenario under
+inserted into the leaves of this LoRA branch.                                  different GPU memory allocation ratios for LoRAs.
+   When the GPU memory is idle or busy, some LoRAs or KV
+caches need to be swapped in or swapped out to fully utilize                   the required loaded LoRA quantity using the following estima-
+the GPU memory and main memory resources. As shown in                          tion methods. The current required LoRA quantity is estimated
+Fig. 8(b), the cache manager will control the swapping-out                     based on two factors: the usage frequency probability probi
+to start from the leaf nodes in the GPU memory, as well as                     of LoRA i, which is obtained from the recorded data in the
+control the swapping-in to start from the root nodes of each                   dependency tree, and the recent inference batch size BS from
+subtree in the main memory. This is because, during the node                   the last 5 seconds. Using these data, we calculate the expected
+matching process in the dependency tree, the nodes higher up                   number of LoRAs required for inference (Lowlora ) as follows:
+                                                                                                                n              n 
+will always be prioritized for matching, and all their children                                                 X              X                     
+nodes depend on them. In this way, the usage dependencies                                        Lowlora =            f ei =      1 − (1 − probi )BS            (3)
+                                                                                                                i=1             i=1
+among LoRAs and KV caches can be maintained during the
+inference, and all KV caches in the GPU memory are valid                         In this equation, f ei represents the probability that the
+ones, thus the GPU memory space can be fully utilized.                         LoRA i is present in the recent batch, i.e., 1 minus the
+   It is worth noting that ELORA’s usage dependency tree is                    probability that no queries in this batch use this LoRA. With
+different from the RadixAttention tree of SGLang [64], which                   the Lowlora , our cost model will encourage the loaded number
+only handles various KV reuse patterns without considering                     of LoRAs in GPU to approach it in Section VI-B.
+LoRAs. Moreover, based on the design of the usage depen-                       B. Cost Model to Access Benefits to TTFT
+dency tree, ELORA further introduces a cost model tailored                        When performing swap-in or out for LoRAs and KV caches,
+for comprehensively deciding the swap-in/out of both LoRAs                     the goal is to retain the most valuable KVs and LoRAs in GPU
+and KV caches in Section VI.                                                   memory as much as possible, thereby optimizing the TTFT
+                                                                               for incoming queries. To achieve this goal, our key idea is to
+       VI. P ERFORMANCE - DRIVEN C ACHE S WAPPER                               design a cost model to evaluate the expected benefits to TTFT
+   In this section, we first analyze how the quantity of LoRAs                 of retaining a KV cache or LoRA in GPU memory. Our cost
+in the GPU memory affects TTFT. Then, we introduce a cost                      model is carefully built with following two parts.
+model to assess benefits to TTFT of swapping in or out LoRAs                      Firstly, we should address the issues of high TTFT caused
+and KVs. Lastly, we introduce the workflow of cache swapper.                   by pre-caching insufficient LoRAs, as analyzed in Sec-
+                                                                               tion VI-A. The cost model needs to try to load a sufficient
+A. Considering the LoRA Quantity on TTFT                                       quantity of LoRAs. Thus, we first define LoRA Evali as
+                                                                               the reward coefficient that encourages the loaded quantity of
+   As the LoRA quantity used changes dynamically over time,
+                                                                               LoRAs to be close to Lowlora (Eq. 3) as:
+the LoRA quantity in the GPU memory can impact the TTFT.
+                                                                                                                                      N owLoRAi
+   Fig. 9 shows the TTFT under the chatbot scenario with                                                LoRA Evali =min(1,                      )               (4)
+                                                                                                                                       Lowlora
+different static GPU memory allocation ratios for LoRAs in
+the vLLM. In this experiment, the used LoRA number in the                      In this formula, N owLoRAi represents the number of LoRAs
+traces is set at 20 and 50, as well as the average sending rate is             after the swap operation of node i. This formula encourages
+5 queries per second. We can observe that the TTFT reduces                     the number of LoRAs loaded in GPU to approach the expected
+significantly before reaching a target ratio, and the target ratio             LoRA number (Lowlora ). In our evaluations, for 94.8% of the
+increases when the required LoRA number changes from 20                        time, ELORA can ensure the loaded LoRA number is within
+to 50. This is because the query inference can only start once                 +-5% error relative to the Lowlora .
+the required LoRA is matched in GPU memory, otherwise,                            Secondly, we should estimate the expected cold-start latency
+the query is queued. An insufficient LoRA loading quantity in                  reduction to TTFT for future queries when retaining each
+GPU memory can cause a large amount of LoRA cold-starts,                       LoRA or KV cache in the GPU memory. As we analyzed
+leading to a significant increase in TTFT. Therefore, sufficient               in Section III-D2, we consider the performance metrics that
+LoRA quantity is needed under different dynamic scenarios.                     include the visited frequency, the LRU, and the cost of swap-in
+   In realistic execution scenarios, ELORA does not need to                    or out of nodes. Therefore, we define Retain Evali as:
+utilize Fig. 9 to determine the ’”target ratio”, but determines                        Retain Evali = costi × visiti × (1 − sigmoid(ti ))                       (5)
+
+
+
+                                                                           7
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+ Cache Manager                                         Cache Swapper                           node swapping could change, ELORA updates the evaluation
+         State
+                   GPU full                                                                    function after each LoRA swapping.
+                               Swap-out                     ③        Every 100ms
+
+                    Used
+                              instruction
+
+                                  ②
+                                                   c        ...
+
+                                            Leaf nodes in GPU
+                                                                  ① Cost model:
+                                                                  𝑬𝒗𝒂𝒍𝒊 = 𝑳𝒐𝑹𝑨_𝑬𝒗𝒂𝒍𝒊
+                                                                                                  Similarly, if GPU memory is idle (e.g., below 70% utilized),
+                                                                                               the cache manager sends the swap-in instruction to the cache
+ ...   ...   ...                                                    ×𝑹𝒆𝒕𝒂𝒊𝒏_𝑬𝒗𝒂𝒍𝒊
+                              Nodes to be                   ④
+                                                            ...
+                                                                                               swapper. The root nodes of each path in the main memory
+                                             1    2     3
+                               swapped                             Access benefits
+  Swap-out operations                       Increasing order         of all nodes              will be the candidate nodes. The decision process is the same,
+                                  ⑤
+                                                                                               and just change the sorting orders of nodes to descending.
+Fig. 10: The execution workflow of the cache swapper with                                         ELORA naturally supports both small and large GPU mem-
+the swap-out instruction as examples.                                                          ory changes, since it updates Evali (Eq. 6) for each LoRA
+                                                                                               or KV and decides their swap-in or outs at every fine-grained
+In this formula, the first item transfer costi is computed                                     100ms. If a few LoRAs/KVs are required for inference with
+using the PCIe bandwidth and size of the KV or LoRA, and                                       small changes, and GPU memory has space, ELORA is capa-
+the second item visit frequency probability visiti is obtained                                 ble of directly loading them. Above methods are supported by
+based on the recorded data on the dependency tree. The third                                   the minimal Evali updating overhead of up to 3.1us, as well
+item is a time decay function similar to the forget-gates in                                   as ELORA’s asynchronous swap-in/out implementations with
+the LSTM, whose ti represents the time difference between                                      the swapping overhead only up to 0.47ms in our evaluations.
+the current time and the last recent usage time. The inclu-
+sion of visit frequency follows prior KV cache management                                                   VII. I MPLEMENTATION OF ELORA
+studies [39], [58]. The sigmoid-based item considers the LRU,
+                                                                                                  ELORA can be adapted to popular LLM engines [64],
+which ensures that less recently used KVs or LoRAs get higher
+                                                                                               [54], [1] by replacing their memory management module with
+eviction priority, as commonly used in prior work [45], [28].
+                                                                                               few modifications. It applies to LLMs based on decoder-only
+   Combining the formulas of the LoRA reward coefficient
+                                                                                               transformer [46], [14], [11] that cover most practical scenarios.
+and the expected TTFT benefits of future queries, we finally
+                                                                                               ELORA is implemented based on vLLM [48] with an extra
+design the cost model to access a KV cache or LoRA i as:
+                                                                                               7856 and 1766 lines of Python and C++ codes. It uses Tensor
+                   Evali = LoRA Evali × Retain Evali                                 (6)       Parallelism [42], [48] for distributed inference of LLMs. For
+                                                                                               serving queries that use LoRAs with various ranks, ELORA
+As for the definition, a KV cache or LoRA with a higher                                        employs the SGMV operator [42], [9] to enable their batching.
+Evali has more benefits to be stored in GPU memory, also                                          Unified Caching Pool for LoRAs and KVs: We extend
+meaning it incurs higher costs if it is swapped in GPU memory                                  the BlockManager of vLLM [25], [64] to achieve this. During
+from the main memory. This cost model evaluates the relative                                   the initialization, both GPU and main memory are partitioned
+relationship between each KV cache or each LoRA in terms of                                    into memory blocks of the same size, which is similar to S-
+benefits to the TTFT when retaining them in the GPU memory.                                    LoRA [42], but we also extend this pool to store history KV
+Then, we can use these relationships to decide their swap-in or                                caches. We also perform block-wise partitioning of LoRAs
+out orders when the GPU memory is full or idle, respectively.                                  along the rank dimension, while other dimensions of LoRAs
+   The cost model can handle varying KV block sizes across                                     align with those of the KV caches.
+LoRA branches. This is because it conducts swap-in/out for                                        Usage Dependency Tree: Built on top of the unified
+each node in the usage dependency tree that represents a fixed-                                memory, it is a data structure that merely logically records the
+size memory block, which naturally accounts for the storage                                    memory addresses of different LoRA and KV cache memory
+differences across branches (i.e., different numbers of nodes).                                blocks, while the actual data resides in their respective physical
+                                                                                               locations across GPU and main memory. We utilize an efficient
+C. Workflow of the Cache Swapper                                                               trie tree [51] that is similar to SGLang [64] to implement this
+   Fig. 10 shows the operation workflow of the cache swapper.                                  tree, whose node matching and updating are less than 1ms.
+   After each 100ms interval, the cache swapper first updates                                  Moreover, since operations (like search, insert, and delete) for
+the accessing of benefits (Evali ) of all nodes in the tree                                    this tree are executed by the CPU, it is stored in the main
+based on the cost model in Eq. 6 (➀). At the same time, the                                    memory with a maximum 676.5KB memory usage. When the
+cache manager calculates the GPU memory usage based on the                                     GPU and host memory are both exhausted, cold KV blocks are
+storage state of the usage dependency tree. If the GPU memory                                  evicted, and their entries on the dependency tree are deleted.
+is full, the cache manager will send the swap-out instruction                                     Asynchronous Swapping: To further mitigate the cold start
+to the cache swapper (➁). According to Section V-B, the leaf                                   overhead, we adopt the asynchronous swap-in or out similar
+nodes in the GPU memory will be sent as candidate nodes to                                     to other work [15], by using the Stream library in Torch [38].
+the cache swapper (➂). With the candidate nodes, the cache                                     After a query arrives, if its required LoRA or KV caches are
+swapper sorts them in increasing order of Evali for the swap-                                  not in GPU memory, we swap in the corresponding memory
+out (➃). The cache manager continuously swaps out the nodes                                    blocks and just let this query wait without blocking other
+one by one according to the sorting result (➄). Moreover,                                      queries’ inference. This realizes the overlap of inference and
+since the number of LoRAs in the GPU after each LoRA                                           data transferring with no extra swapping overhead.
+
+
+
+                                                                                           8
+             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                    vLLM                  S-LoRA             ELORA
+                                                                      Chatbots                                                        Translations                                          Personal Agents
+       Peak Load TPOT (ms) TTFT (ms)
+                                       1000                                                                  1000                                                    1000
+                                         800                                                                  800                                                     800
+                                         600                                                                  600                                                     600
+                                         400                                                                  400                                                     400
+                                         200                                                                  200                                                     200
+                                            0                                                                   0                                                       0
+                                         400                                                                  600                                                     600
+                                         320                                                                  500                                                     500
+                                         240                                                                  400                                                     400
+                                                                                                              300                                                     300
+                                         160                                                                  200                                                     200
+                                           80                                                                 100                                                     100
+                                            0                                                                   0                                                       0
+                                        15.0                                                                   40                                                       5
+                                        12.5                                                                   32                                                       4
+                                        10.0                                                                   24                                                       3
+                                          7.5
+                                          5.0                                                                  16                                                       2
+                                          2.5                                                                   8                                                       1
+                                          0.0                                                                   0                                                       0
+                                                 0
+
+                                                       0
+
+                                                            00
+
+                                                                      0
+
+                                                                            0
+
+                                                                                   00
+
+                                                                                          0
+
+                                                                                                 0
+
+                                                                                                        00
+
+
+
+
+                                                                                                                     0
+
+                                                                                                                           0
+
+                                                                                                                                00
+
+                                                                                                                                          0
+
+                                                                                                                                                0
+
+                                                                                                                                                              00
+
+                                                                                                                                                              20
+
+                                                                                                                                                       70 0
+
+                                                                                                                                                                0
+
+
+
+
+                                                                                                                                                                             0
+
+                                                                                                                                                                                   0
+
+                                                                                                                                                                                        00
+
+                                                                                                                                                                                                  0
+
+                                                                                                                                                                                                        0
+
+                                                                                                                                                                                                               00
+
+                                                                                                                                                                                                                      0
+
+                                                                                                                                                                                                                             0
+
+                                                                                                                                                                                                                                    00
+                                                 -2
+
+                                                       -5
+
+
+
+                                                                    2
+
+                                                                             5
+
+
+
+                                                                                           2
+
+                                                                                                  5
+
+
+
+
+                                                                                                                     -2
+
+                                                                                                                           -5
+
+
+
+                                                                                                                                        2
+
+                                                                                                                                                 5
+
+
+
+
+                                                                                                                                                              5
+
+                                                                                                                                                            10
+
+
+
+
+                                                                                                                                                                             -2
+
+                                                                                                                                                                                   -5
+
+
+
+                                                                                                                                                                                                2
+
+                                                                                                                                                                                                         5
+
+
+
+                                                                                                                                                                                                                       2
+
+                                                                                                                                                                                                                              5
+                                                            -1
+
+                                                                 B-
+
+                                                                          B-
+
+                                                                                    1
+                                                                                        B-
+
+                                                                                               B-
+
+                                                                                                         1
+
+
+
+
+                                                                                                                                -1
+
+                                                                                                                                     B-
+
+                                                                                                                                              B-
+
+                                                                                                                                                        1
+                                                                                                                                                           B-
+
+                                                                                                                                                           B-
+
+
+
+
+                                                                                                                                                                                        -1
+
+                                                                                                                                                                                             B-
+
+                                                                                                                                                                                                      B-
+
+                                                                                                                                                                                                                1
+                                                                                                                                                                                                                    B-
+
+                                                                                                                                                                                                                           B-
+
+                                                                                                                                                                                                                                     1
+                                                8B
+
+                                                      8B
+
+
+
+
+                                                                                                                    8B
+
+                                                                                                                          8B
+
+
+
+
+                                                                                                                                                                            8B
+
+                                                                                                                                                                                  8B
+                                                                                 B-
+
+
+
+
+                                                                                                      B-
+
+
+
+
+                                                                                                                                                     B-
+
+
+
+
+                                                                                                                                                         B-
+
+
+
+
+                                                                                                                                                                                                             B-
+
+
+
+
+                                                                                                                                                                                                                                  B-
+                                                           8B
+
+
+
+
+                                                                                                                               8B
+
+
+
+
+                                                                                                                                                                                       8B
+                                                                 34
+
+                                                                      34
+
+
+
+                                                                                    70
+
+                                                                                           70
+
+
+
+
+                                                                                                                                     34
+
+                                                                                                                                          34
+
+
+
+                                                                                                                                                        70
+
+                                                                                                                                                        70
+
+
+
+
+                                                                                                                                                                                             34
+
+                                                                                                                                                                                                  34
+
+
+
+                                                                                                                                                                                                                70
+
+                                                                                                                                                                                                                       70
+                                                                             34
+
+
+
+
+                                                                                                  70
+
+
+
+
+                                                                                                                                                 34
+
+
+
+
+                                                                                                                                                                                                         34
+
+
+
+
+                                                                                                                                                                                                                              70
+Fig. 11: The average TTFT, TPOT, and supported peak load of ELORA, vLLM, and S-LoRA in various scenarios. The x-axis
+represents the model size and LoRA number, e.g., 8B-20 represents Llama3-8B model with the LoRA number of 20.
+
+                VIII. E VALUATION OF ELORA                                                                                                     TTFT and TPOT data in this paper are the average values
+   In this section, we first show the performance of ELORA                                                                                     for queries. The supported peak load is set as the supported
+under various Multi-LoRA applications. Then, we investigate                                                                                    maximum queries per second when the TTFT is below 500ms.
+the effectiveness of each module and scalability of ELORA.                                                                                     B. Latency and Supported Peak Load
+A. Evaluation Setup                                                                                                                               We first evaluate ELORA on the inference latency and
+   Table II has shown our experimental platform. The chatbot,                                                                                  the supported peak load. For each application scenario, the
+translation, and personal agent are described in Section III-B.                                                                                evaluations are conducted under various models and LoRA
+We use Llama3-8B, Llama2-34B, and Llama3-70B (8B, 34B,                                                                                         numbers. For each model with a specific LoRA number, we
+and 70B for short) as base models. Based on the parameter                                                                                      conduct 10 sets of sending rates from 0 to the supported peak
+size, we use 1, 4, and 8 NVIDIA H800 GPUs to deploy them,                                                                                      load of ELORA. Fig. 11 shows the average TTFT, TPOT, and
+respectively. Each H800 has 80GB GPU memory, which is the                                                                                      supported peak load of ELORA and baselines.
+same as NVIDIA A100 or H100. Moreover, we use various                                                                                             As observed, ELORA reduces the TTFT and TPOT, as
+LoRA numbers (20, 50, and 100) for each base model.                                                                                            well as improves the supported peak load in all test cases.
+   We use the state-of-the-art Multi-LoRA serving systems                                                                                      The average reduction of TTFT and TPOT is 45.7% and
+vLLM [25] and S-LoRA [42] as baselines. vLLM integrates                                                                                        37.8% compared to vLLM, and 43.3% and 31.4% compared
+the Multi-LoRA serving kernels of Punica [9], [48], with more                                                                                  to S-LoRA. The average supported peak load of ELORA
+optimizations like prefix-caching to reuse history KV caches.                                                                                  is increased by 78.9% and 49.9% compared to vLLM and
+It partitions GPU memory and allocates static GPU memory                                                                                       S-LoRA, respectively. For each case, we also repeat it 20
+space for LoRAs and KV caches, and uses the LRU to swap                                                                                        times, and the standard error in all cases of ELORA is 1.7%
+out the KV caches or LoRAs when GPU memory is full.                                                                                            on average. For the P99/P95, ELORA decreases the TTFT
+Refer to vLLM’s latest version [48], we set the GPU memory                                                                                     and TPOT by 73.8%/76.1% and 61.2%/62.1% compared to
+allocation ratio for LoRAs to 0.2. Moreover, S-LoRA utilizes                                                                                   vLLM, respectively, while those values are 66.1%/68.7% and
+a unified caching pool for LoRAs and KV caches. It does not                                                                                    57.3%/58.9% compared to S-LoRA. The Multi-LoRA serving
+reuse history KV caches and swaps in LoRAs on demand.                                                                                          performance increase of ELORA originates from maintaining
+   We do not select TensorRT-LLM [36] and SGLang [61]                                                                                          the usage dependencies between LoRAs and KV caches and
+as baselines due to the following reasons. First, TensorRT-                                                                                    retaining the most beneficial LoRAs and KV caches in GPU
+LLM requires all LoRAs to be pre-compiled with the base                                                                                        memory to eliminate cold-starts.
+model, preventing dynamic loading at runtime under Multi-                                                                                         The reasons for ELORA decreasing the TPOT are as fol-
+LoRA serving. Second, although SGLang integrates the kernel                                                                                    lows. ELORA efficiently retains hot KV caches in GPU to ac-
+of S-LoRA [42], it cannot reuse history KV caches when                                                                                         celerate prefill and reduce corresponding computations, while
+the Multi-LoRA functionality is enabled. As we discussed in                                                                                    baselines with suboptimal caching discard certain KVs which
+Section III-C, the TTFT of SGLang is as high as 9568.9ms on                                                                                    requires recomputation of prefill with increased computations.
+average. These may be caused by implementation issues [19].                                                                                    Like other works [1], [17], [32], ELORA serves numerous
+   All the experiments are conducted under continuous batch-                                                                                   queries simultaneously with prefill and decode using the time-
+ing, which is the most popular LLM batching strategy [54].                                                                                     sharing GPU. Thus, the increased prefill computations block
+ELORA focuses on optimizing the caching replacement,                                                                                           the decode of other queries in baselines, thereby increasing
+which is compatible with different batching strategies.                                                                                        the TPOT compared to ELORA. In our evaluations, vLLM
+   Following prior works [65], [52], we utilize the TTFT,                                                                                      and S-LoRA lead to 1.38X and 1.87X computation time for
+TPOT, and supported peak load as performance metrics. The                                                                                      the prefill compared to ELORA, respectively.
+
+
+
+                                                                                                                                          9
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                                                    100%
+                                         Queue               LoRA Cold-start                KV Cold-start                                            80%       History KV                                  vLLM           S-LoRA         ELORA
+
+
+
+
+                                                                                                                                         Memory
+                                                                                                                                                                                   (b)ELORA achieves
+                                                                                                                                                     60%                               higher usage
+                          vLLM                                                                                                                       40%
+                         S-LoRA                                                  Chatbots                                                            20%
+                         ELORA                                                                                                                        0%
+                          vLLM                                                                                                                      100%
+                         S-LoRA                                                                                                                      80%       Running KV
+
+
+
+
+                                                                                                                                         Memory
+                         ELORA                                                   Translations                                                        60%
+                                                                                                                                                     40%                                               (c)ELORA fully
+                          vLLM                                                                                                                       20%                                                 uses Memory
+                         S-LoRA                                                  Personal Agents                                                      0%
+                         ELORA                                                                                                                       60%
+                                                                                                                                                                                                                         (d) ELORA allocates more
+                                  0           20     40        60        80          100      120        140                                                   LoRA
+
+
+
+
+                                                                                                                                         Memory
+                                                                                                                                                    40%                                                                      memory for LoRAs
+                                                     Average Latency (ms)                                                                                        (a) ELORA
+                                                                                                                                                    20% Prefetches all LoRAs
+                                                                                                                                                     0%
+                      Fig. 12: The breakdown of the latency in TTFT.                                                                                5000
+                                                                                                                                                    4000
+
+
+
+
+                                                                                                                                         TTFT(ms)
+                                                                                                                                                    3000
+                           $                O                                     LoRA          KV cache                                  2000
+                                                                                                                                                 1000
+                                                                      vLLM                                             Chatbots                        0
+                                                                 S-LoRA                                                                                 0       200       400      600      800    1000        1200      1400     1600      1800
+ " Rate
+
+
+
+
+                                                                    ELORA
+                                                                                                                                                                                                 Time(s)
+            
+
+
+
+
+                                                                                                                Translations
+                                                                      vLLM
+Utilization
+
+
+
+
+                                                                  S-LoRA
+
+                
+                                                                    ELORA                                                                Fig. 14: GPU memory usage over time of different systems.
+                                                                      vLLM                                     Personal Agents
+                                                                 S-LoRA
+                                                                    ELORA
+                
+                      # #"    !"# "       #"               0.0   0.1    0.2    0.3   0.4   0.5     0.6    0.7   0.8        enhances the GPU memory utilization efficiency. Its efficient
+                                                                                               Hit rate
+                                                                                                                                         swapping strategy also prefetches appropriate KV caches and
+                (a) GPU memory utilization.                                    (b) Cache hit rate.                                       LoRAs into GPU memory. S-LoRA has the lowest hit rate
+Fig. 13: The average GPU memory usage and cache hit rate.                                                                                because it does not reuse KV caches. As a result, ELORA
+                                                                                                                                         achieves lower queue and cold-start latency in Fig. 12.
+   Moreover, compared to vLLM, ELORA decreases more                                                                                      D. Analysis of GPU Memory Usage Over Time
+TTFT (average 49.4%) in the translation scenario than others
+                                                                                                                                            In this subsection, we compare GPU memory usage between
+(average 43.8%). This is because the distribution of LoRAs
+                                                                                                                                         ELORA and baselines. We take the example of using the
+in this scenario varies more with the OPUS-100 and MAFT
+                                                                                                                                         Llama2-34B, LoRA number of 100 for the chatbot. Other
+datasets. vLLM’s static GPU memory partition results in
+                                                                                                                                         scenarios have similar results. Fig. 14 shows the GPU memory
+poorer cache management, while ELORA maintains consis-
+                                                                                                                                         usage for history KV caches, LoRAs, and running KV caches.
+tent performance. Compared to S-LoRA, ELORA achieves
+                                                                                                                                            From 0s-400s shown in (a), ELORA proactively fetches all
+the best TTFT reduction (average 53.2%) in the personal agent
+                                                                                                                                         LoRAs into GPU memory based on the cost model to eliminate
+than others (average 38.4%). This is because this scenario has
+                                                                                                                                         the cold-start overhead of LoRAs under low GPU memory
+the longest conversation length, and S-LoRA’s drawback of not
+                                                                                                                                         pressure. In contrast, vLLM and S-LoRA load the LoRAs on
+retaining history KVs is signified. Due to the similar reason,
+                                                                                                                                         demand, leading to a higher TTFT. From 400s-900s shown in
+S-LoRA is worse than vLLM in most cases of personal agents.
+                                                                                                                                         (b), as the load increases, ELORA swaps out some LoRAs
+C. Diving into the High Serving Performance                                                                                              and retains the most history KV caches in GPU memory due
+                                                                                                                                         to the unified caching pool. In contrast, vLLM’s static GPU
+   To better understand the source of performance improve-                                                                               memory partition retains fewer history KVs while S-LoRA
+ment of ELORA, Fig. 12 shows the breakdown of the average                                                                                directly discards them, leading to poorer KV cache reuse and
+queuing, LoRA cold-start, and KV cold-start latency in TTFT.                                                                             higher TTFT. Moreover, the history KVs gradually decrease
+We can observe that ELORA achieves the lowest queue,                                                                                     in this period as they are swapped out to free GPU memory
+LoRA cold-start, and KV cold-start latency in all scenarios,                                                                             for running KVs when the load increases.
+indicating the highest GPU memory utilization efficiency.                                                                                   From 900s-1300s in (c), ELORA swaps out all history KV
+   For in-depth analysis, we sample the average GPU memory                                                                               caches to free up GPU memory for running KV caches of
+utilization of ELORA and baselines, shown in Fig. 13a.                                                                                   the current inference. By contrast, the static GPU memory
+ELORA improves GPU memory utilization by 1.2X and 2.6X                                                                                   partition of vLLM results in the KV cache memory pool being
+over vLLM and S-LoRA, respectively, due to its dynamic                                                                                   exhausted to its maximum capacity (80%), leading to queuing
+swapping of LoRAs and KV caches in a unified caching pool.                                                                               and rapid growth of TTFT. Meanwhile, due to the increase of
+By contrast, S-LoRA wastes GPU memory by not retaining                                                                                   the load, directly discarding history KVs in S-LoRA causes
+history KV caches, while vLLM’s static GPU memory parti-                                                                                 lots of recalculations, resulting in a high TTFT. Lastly, from
+tion makes the GPU memory for LoRAs or KVs under-utilized                                                                                1300s-1800s in (d), with the increase of the required number
+under dynamic loads. These factors also contribute to a lower                                                                            of LoRAs, the static memory space for LoRAs (20%) in vLLM
+queue and cold-start latency for ELORA, as shown in Fig. 12.                                                                             is exhausted, leading to high TTFT of vLLM. In contrast,
+   We also compare the average KV cache and LoRA hit rates                                                                               ELORA can allocate more memory for LoRAs, leading to
+of ELORA and baselines across different scenarios, as shown                                                                              higher GPU memory usage and lower TTFT.
+in Fig. 13b. ELORA increases the cache hit rate by 1.3X and
+3.4X compared to vLLM and S-LoRA, respectively. This is                                                                                  E. Effectiveness of the Cache Manager
+because ELORA maintains the usage dependencies between                                                                                    In this subsection, we show the performance of ELORA-
+LoRAs and KV caches to eliminate invalid KV caches, which                                                                                WOM, a variant of ELORA that does not maintain usage
+
+
+
+                                                                                                                                    10
+                        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+                           WOM-TTFT         WOS-TTFT            WOM-TPOT          WOS-TPOT                       BFS            RRIP         Hawkeye          HALP          ELORA
+               2.5X                                                                                      2.5X
+                            Chatbots             Translations              Personal Agents                                                             1.5X
+Norm-Latency
+
+
+               2.0X                                                                                      2.0X                                          1.2X
+
+
+
+
+                                                                                                                                                TPOT
+                                                                                                                                                       1.0X
+
+
+
+
+                                                                                                  TTFT
+                                                                                                         1.5X
+               1.5X                                                                                                                                    0.8X
+                                                                                                         1.0X
+                                                                                                                                                       0.5X
+               1.0X                                                                                      0.5X                                          0.2X
+                                                                                                         0.0X                                          0.0X
+               0.5X                                                                                             20         50          100                    20       50           100
+                         8B-20
+                         8B-50
+                        8B-100
+                        34B-20
+                        34B-50
+                       34B-100
+                        70B-20
+                        70B-50
+                       70B-100
+
+                                              8B-20
+                                              8B-50
+                                             8B-100
+                                             34B-20
+                                             34B-50
+                                            34B-100
+                                             70B-20
+                                             70B-50
+                                            70B-100
+
+                                                                       8B-20
+                                                                       8B-50
+                                                                      8B-100
+                                                                      34B-20
+                                                                      34B-50
+                                                                     34B-100
+                                                                      70B-20
+                                                                      70B-50
+                                                                     70B-100
+                                                                                                                       LoRA Number                                 LoRA Number
+
+                                                                                                         Fig. 17: The TTFT and TPOT of other caching policies.
+Fig. 15: The TTFT and TPOT of ELORA’s variants normal-
+ized to ELORA, represent by bars and curves, respectively.
+                                                                                                  WOL, ELORA-WOC, ELORA-WOV, and ELORA-WOU
+               1.75X
+                        ELORA-WOL        ELORA-WOC        ELORA-WOV            ELORA-WOU          eliminates the caching of enough LoRAs (Eq. 4), swap cost
+Norm-Latency
+
+
+
+
+                1.5X
+                                                                                                  (costi in Eq. 5), the visit frequency (visiti in Eq. 5), and the
+               1.25X
+                                                                                                  LRU considerations ((1−sigmoid(ti )) in Eq. 5), respectively.
+                1.0X
+                                                                                                     The bars and curves of Fig. 16 show the TTFT and
+               0.75X
+                         8B-20
+                         8B-50
+                        8B-100
+                        34B-20
+                        34B-50
+                       34B-100
+                        70B-20
+                        70B-50
+                       70B-100
+
+                                         8B-20
+                                         8B-50
+                                        8B-100
+                                        34B-20
+                                        34B-50
+                                       34B-100
+                                        70B-20
+                                        70B-50
+                                       70B-100
+
+                                                          8B-20
+                                                          8B-50
+                                                         8B-100
+                                                         34B-20
+                                                         34B-50
+                                                        34B-100
+                                                         70B-20
+                                                         70B-50
+                                                        70B-100
+
+                                                                               8B-20
+                                                                               8B-50
+                                                                              8B-100
+                                                                              34B-20
+                                                                              34B-50
+                                                                             34B-100
+                                                                              70B-20
+                                                                              70B-50
+                                                                             70B-100
+                                                                                                  TPOT of the four variants normalized to ELORA for the
+                                                                                                  chatbot, respectively. Other scenarios have similar results. All
+Fig. 16: The TTFT and TPOT when eliminating different                                             variants increase the TTFT and TPOT in all cases. ELORA-
+components of ELORA’s cost model under the chatbot.                                               WOL, ELORA-WOC, ELORA-WOV, and ELORA-WOU
+                                                                                                  averagely increase the TTFT by 1.21X, 1.19X, 1.25X, 1.21X,
+dependencies between LoRAs and KV caches in unified GPU                                           respectively, while values for TPOT are 1.11X, 1.09X, 1.15X,
+memory with the cache manager. ELORA-WOM still uses                                               1.14X. Moreover, the decrease of the supported peak load is
+the cache swapper to swap in or out LoRAs or KV caches.                                           9.2%, 7.6%, 10.7%, and 9.3%.
+   The blue bars and curves of Fig. 15 show the TTFT                                                 Above results present that each parameter in the cost model
+and TPOT of ELORA-WOM normalized to ELORA. As                                                     has its individual effect to improve the serving performance.
+observed, the TTFT and TPOT of ELORA-WOM are higher
+                                                                                                  H. Comparing to Other Cache Replacement Policies
+than ELORA in all cases, with an average increase of 1.51X
+and 1.34X, respectively. We also sample the history KV caches                                        In this subsection, we compare ELORA’s caching scheme
+during the inference and find ELORA-WOM suffers from an                                           to other advanced policies, including the BFS, RRIP [24],
+average of 48.6% invalid KV caches. Moreover, the supported                                       Hawkeye [23], and HALP [44]. Different from ELORA that
+peak load of ELORA-WOM is also decreased by 19.3%.                                                conducts swapping in a DFS way, BFS is implemented by
+   When ignoring the usage dependencies, lots of invalid KV                                       prioritizing to swap-in/out an entire LoRA branch. The selec-
+caches occupy the GPU memory, leading to low GPU memory                                           tion is based on the largest/smallest summation of each node’s
+utilization and low serving performance.                                                          Evali (Eq. 6) in this LoRA branch. For RRIP/Hawkeye/HALP,
+                                                                                                  we utilize them to replace ERLOA’s cost model, respectively.
+F. Effectiveness of the Cache Swapper                                                             Fig. 17 shows the TTFT and TPOT of ELORA and other
+   In this subsection, we show the performance of ELORA-                                          caching policies with the Llama2-34B in the chatbot scenario.
+WOS, a variant of ELORA that uses a simple LRU policy                                             Other models and scenarios have similar results.
+to replace the cost model (Eq. 6) in the cache swapper. The                                          We can first observe that BFS’s TTFT and TPOT are 2.29X
+usage dependencies between LoRAs and KV caches are still                                          and 1.54X of ELORA’s on average. The BFS that swaps the
+maintained with the cache manager during inference.                                               entire branch has coarse granularity compared to ELORA
+   The green bars and curves of Fig. 15 show the TTFT and                                         that swaps each node. Statistics show that a LoRA branch
+TPOT of ELORA-WOS normalized to ELORA. As observed,                                               can occupy up to 35.6% of the GPU memory, causing BFS’s
+the TTFT and TPOT of ELORA-WOS are increased in all                                               GPU memory utilization to be reduced by 29.1% compared
+test cases, with an average increase of 1.42X and 1.29X,                                          to ELORA’s. The large branch swapping of BFS also causes
+respectively. Moreover, the supported peak load of ELORA-                                         high PCIE overhead, which is averagely 9.71X of ELORA’s.
+WOS is also decreased by 18.6%.                                                                      Moreover, results show the TTFT of RRIP/Hawkeye/HALP
+   Without ELORA’s cost model, inappropriate LoRAs or KV                                          is 1.35X/1.38X/1.41X of ELORA, while the TPOT is
+caches will be swapped in or out when GPU memory is idle or                                       1.27X/1.31X/1.31X on average. This is because they are
+busy, respectively. This results in more cold-starts of LoRAs                                     designed for other caching scenarios (e.g., content delivery
+and KVs, and decreases the performance.                                                           network in Youtube [44]). By contrast, ELORA’s caching
+                                                                                                  scheme is customized for Multi-LoRA serving that incorpo-
+G. Effectiveness of Different Parameters of the Cost Model                                        rates more effective metrics (e.g., the loaded LoRA quantity).
+   In this subsection, we investigate the effectiveness in the
+serving performance of different parameters in ELORA’s                                            I. Scalability with Lots of LoRAs
+cost model (Eq. 6). We construct four variants by remov-                                           In this subsection, we investigate the effectiveness of
+ing different components of the cost model, i.e., ELORA-                                          ELORA under thousands of LoRAs, although real-world
+
+
+
+                                                                                             11
+                        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                                                                            vLLM-TTFT           vLLM-TPOT     S-LoRA-TTFT        S-LoRA-TPOT      ELORA
+                                                                vLLM              S-LoRA              ELORA
+             TPOT (ms) TTFT (ms)   800                                                                                                                                Chatbots                Translations            Personal Agents
+
+
+
+
+                                                                                                                                      Norm-Latency
+                                   600                                                                                                               3.5X
+                                   400                                                                                                               3.0X
+                                   200                                                                                                               2.5X
+                                     0                                                                                                               2.0X
+                                   250                                                                                                               1.5X
+                                   200                                                                                                               1.0X
+                                   150                                                                                                               0.5X
+                                   100                                                                                                               0.0X
+                                    50                                                                                                                          -20       -50       -100 34B-20      -50      -100 34B-20      -50    -100
+                                     0                                                                                                                       34B       34B       34B              34B      34B              34B    34B
+                                                         t                                      t
+                                                   istinc random          d-0.1 wed-0.3 -distinc random          d-0.1 wed-0.3
+                                              00-d         0-         ewe       e      0          0-         ewe        e
+                                         10            100        0-sk      0-sk   200        200        0-sk      0-sk
+                                                              100       100                          200       200                    Fig. 20: The TTFT and TPOT of baselines normalized to
+Fig. 18: The TTFT and TPOT of ELORA and baselines with                                                                                ELORA’s for the Llama2-34B when evaluating on NPUs.
+different combinations of LoRA numbers and distributions.
+                                                                                                                                         The oracle vLLM is also equivalent to combining vLLM
+                                                                          vLLM           ELORA                                        with S-LoRA (which can unifiedly manage GPU memory
+                   LoRA Number=20             LoRA Number=50            LoRA Number=100                                               allocation for LoRAs and KV caches). Nevertheless, our
+           1500                       1500                       4000
+TTFT(ms)
+
+
+
+
+           1200                 40.9% 1200                 36.9%                      38.3%
+
+            900                        900
+                                                                 3000                                                                 results show that the oracle vLLM remains obviously inferior
+                                                                 2000
+            600                        600                                                                                            to ELORA. It is worth noting that such brute-force profiling
+            300                        300                       1000
+              0                          0                          0
+                                                                                                                                      to get the oracle vLLM is impractical in real dynamic serving.
+              0.0 0.1 0.2 0.3 0.4 0.5    0.0 0.1 0.2 0.3 0.4 0.5    0.0 0.1 0.2 0.3 0.4 0.5
+            400                        400                        500
+                                                                                                                                      K. Scalability on NPUs
+TPOT(ms)
+
+
+
+
+                                21.2%                      32.0%  400                 19.9%
+            300                        300
+                                                                  300
+            200                        200
+                                                                  200                                                                    In this subsection, we extend ELORA to NPUs to show the
+            100                        100                        100
+              0                          0                          0
+                                                                                                                                      hardware scalability. We also use the Llama2-34B as examples
+              0.0 0.1 0.2 0.3 0.4 0.5    0.0 0.1 0.2 0.3 0.4 0.5    0.0 0.1 0.2 0.3 0.4 0.5
+                         Ratio                      Ratio                      Ratio                                                  here, and test it on four of our in-house NPUs. Each NPU has
+                                                                                                                                      256 TFLOPS FP16 and 64GB global memory space, as well
+Fig. 19: The TTFT and TPOT of vLLM under different GPU                                                                                as the interconnected bandwidth of the 4 NPUs is 168GB/s.
+memory allocation ratios for LoRAs in the chatbot scenario.                                                                              Fig. 20 shows the TTFT and TPOT of baselines normalized
+                                                                                                                                      to ELORA. ELORA still achieves the lowest TTFT and
+scenarios always only have tens of LoRAs [62], [4]. We also                                                                           TPOT, with an average decrease of 69.8% and 38.4% com-
+use the Llama2-34B model under the chatbot scenario as                                                                                pared to vLLM, and 49.4% and 26.2% compared to S-LoRA,
+examples, and other scenarios have similar results. The LoRA                                                                          respectively. The average supported peak load of ELORA is
+number is 1000 or 2000, and we set the LoRA distributions                                                                             increased by 96.1% and 65.3% compared to vLLM and S-
+to: 1) Random, each query randomly selects a LoRA to use.                                                                             LoRA. These results show that ELORA has strong scalability
+2) Distinct, each query uses an individual LoRA. 3) Skewed-                                                                           and can achieve improvements on various hardware.
+x, we construct queries using different LoRAs based on the
+                                                                                                                                      L. Overhead of ELORA
+Gaussian distribution and set different standard deviations x.
+   Fig. 18 shows the TTFT and TPOT of ELORA and base-                                                                                    Time Overhead: It mainly comes from the dependency tree
+lines, respectively. We can observe that ELORA has the lower                                                                          matching and updating in the cache manager, and the swapping
+TTFT and TPOT in all test cases, with an average decrease of                                                                          decisions of the cache swapper. For the cache manager, we
+48.7% and 21.9%, respectively. The above results present the                                                                          employ an efficient trie tree for rapid matching and updating,
+scalability of ELORA under a large number of LoRAs.                                                                                   which is commonly used in other works [26], [64]. Even if the
+                                                                                                                                      GPU memory is fully utilized and the size of tree reaches the
+                                                                                                                                      maximum, the average overhead for matching and updating of
+J. Comparing to vLLM with Oracle GPU Allocation Ratio
+                                                                                                                                      a query is less than 0.5ms. For swapping memory blocks of the
+   In this subsection, we compare ELORA to vLLM with the                                                                              cache swapper, the overhead during a query inference can be
+oracle GPU memory allocation ratio for LoRAs. We also use                                                                             done within 5ms. The above overheads are acceptable relative
+Llama2-34B in the chatbot scenario as examples. We brute-                                                                             to each query inference, which can take several seconds.
+force profile the GPU memory allocation ratios for LoRAs                                                                                 Memory Overhead: ELORA’s cache manager records the
+with a 0.05 step to get the oracle vLLM’s performance.                                                                                memory address, visit frequency, last recent usage time, and
+   Fig. 19 shows the TTFT and TPOT of vLLM under different                                                                            size of each memory block, with an overhead of just 232Bytes
+GPU allocation ratios in the chatbot scenario. We omit the                                                                            per 16MB memory block (0.0014%). Moreover, ELORA’s
+data after the ratio of 0.5, since the TTFT and TPOT of vLLM                                                                          cache swapper stores the computed costs (Eq. 6) of memory
+continuously increase after 0.5. We can observe that the TTFT                                                                         blocks for swap-in or out decisions, with only 24Bytes per
+or TPOT is first decreased and then increased after reaching                                                                          memory block (0.0001%). Both overheads scale linearly with
+a specific ratio. Moreover, the specific ratio increases with                                                                         the memory block number and are all negligible.
+the increase of the required LoRA number (20, 50, and 100).
+Moreover, TTFT and TPOT in this oracle configuration for                                                                                                                               IX. C ONCLUSION
+vLLM remain higher than those of ELORA, with an average                                                                                  In this paper, we propose ELORA to optimize the caching
+increase of 38.7% and 24.4%, respectively.                                                                                            of LoRAs and KV caches to improve the Multi-LoRA serving
+
+
+
+                                                                                                                                 12
+                                     Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+performance. ELORA’s cache manager maintains the usage                                 [14] L. Floridi and M. Chiriatti, “GPT-3: Its nature, scope, limits, and
+dependencies between KV caches and LoRAs based on a                                         consequences,” Minds and Machines, vol. 30, pp. 681–694, 2020.
+                                                                                       [15] B. Gao, Z. He, P. Sharma, Q. Kang, D. Jevdjic, J. Deng, X. Yang, Z. Yu,
+tree-based scheme with a unified caching pool. Based on                                     and P. Zuo, “Cost-efficient large language model serving for multi-turn
+this scheme, the invalid KV caches are eliminated to im-                                    conversations with cachedattention,” in 2024 USENIX Annual Technical
+prove the GPU memory utilization. ELORA’s cache swapper                                     Conference (USENIX ATC 24), 2024, pp. 111–126.
+periodically determines the swap-in or out of LoRAs and                                [16] I. Gim, G. Chen, S.-s. Lee, N. Sarda, A. Khandelwal, and L. Zhong,
+                                                                                            “Prompt cache: Modular attention reuse for low-latency inference,”
+KVs by using the cost model which reflects the benefits to                                  Proceedings of Machine Learning and Systems, vol. 6, pp. 325–338,
+the performance of queries. The evaluation results show that                                2024.
+ELORA reduces the TTFT and TPOT by 45.7% and 37.8% on                                  [17] R. Gong, S. Bai, S. Wu, Y. Fan, Z. Wang, X. Li, H. Yang, and
+                                                                                            X. Liu, “Past-future scheduler for llm serving under sla guarantees,” in
+average, respectively, compared to the state-of-the-art works.                              Proceedings of the 30th ACM International Conference on Architectural
+                                                                                            Support for Programming Languages and Operating Systems, Volume 2,
+                         ACKNOWLEDGMENT                                                     2025, pp. 798–813.
+   We sincerely thank our anonymous reviewers for their                                [18] Google. (2023) Bard. [Online]. Available: https://bard.google.com/
+helpful comments and suggestions. This work is partially spon-                         [19] S. Ha. Why can’t i use multi-lora adapter and radix attention together?
+                                                                                            [Online]. Available: https://github.com/sgl-project/sglang/issues/2880
+sored by the National Key Research and Development Program                             [20] E. J. Hu, Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang,
+of China (2024YFB4505703), National Natural Science Foun-                                   and W. Chen, “Lora: Low-rank adaptation of large language models,”
+dation of China (62232011, 62302302), and Natural Science                                   arXiv preprint arXiv:2106.09685, 2021.
+                                                                                       [21] C. Huang, Q. Liu, B. Y. Lin, T. Pang, C. Du, and M. Lin, “Lorahub:
+Foundation of Shanghai Municipality (25ZR1402241). Quan                                     Efficient cross-task generalization via dynamic lora composition,” arXiv
+Chen is the corresponding author.                                                           preprint arXiv:2307.13269, 2023.
+                                                                                       [22] N. Iliakopoulou, J. Stojkovic, C. Alverti, T. Xu, H. Franke, and J. Tor-
+                              R EFERENCES                                                   rellas, “Chameleon: Adaptive caching and scheduling for many-adapter
+ [1] A. Agrawal, N. Kedia, A. Panwar, J. Mohan, N. Kwatra, B. Gulavani,                     llm inference environments,” arXiv preprint arXiv:2411.17741, 2024.
+     A. Tumanov, and R. Ramjee, “Taming throughput-latency tradeoff in llm             [23] A. Jain and C. Lin, “Back to the future: Leveraging belady’s algorithm
+     inference with sarathi-serve,” in 18th USENIX Symposium on Operating                   for improved cache replacement,” in 2016 ACM/IEEE 43rd Annual
+     Systems Design and Implementation (OSDI 24), 2024, pp. 117–134.                        International Symposium on Computer Architecture (ISCA), 2016, pp.
+ [2] K. Alizadeh, S. I. Mirzadeh, D. Belenko, S. Khatamifard, M. Cho, C. C.                 78–89.
+     Del Mundo, M. Rastegari, and M. Farajtabar, “Llm in a flash: Efficient            [24] A. Jaleel, K. B. Theobald, S. C. Steely, and J. Emer, “High perfor-
+     large language model inference with limited memory,” in Proceedings                    mance cache replacement using re-reference interval prediction (rrip),”
+     of the 62nd Annual Meeting of the Association for Computational                        SIGARCH Comput. Archit. News, vol. 38, no. 3, p. 60–71, Jun. 2010.
+     Linguistics (Volume 1: Long Papers), 2024, pp. 12 562–12 584.                     [25] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. Gonzalez,
+ [3] Alpaca-lora. (2023) Instruct-tune llama on consumer hardware using                     H. Zhang, and I. Stoica, “Efficient memory management for large
+     alpaca-lora. [Online]. Available: https://github.com/tloen/alpaca-lora                 language model serving with pagedattention,” in Proceedings of the 29th
+ [4] Apple. (2025) Introducing apple’s on-device and server foundation                      Symposium on Operating Systems Principles, 2023, pp. 611–626.
+     models. [Online]. Available: https://machinelearning.apple.com/                   [26] W. Lee, J. Lee, J. Seo, and J. Sim, “InfiniGen: Efficient generative
+     research/introducing-apple-foundation-models                                           inference of large language models with dynamic KV cache manage-
+ [5] A. Aryan, A. K. Nain, A. McMahon, L. A. Meyer, and H. S. Sahota,                       ment,” in 18th USENIX Symposium on Operating Systems Design and
+     “The costly dilemma: generalization, evaluation and cost-optimal de-                   Implementation (OSDI 24). Santa Clara, CA: USENIX Association,
+     ployment of large language models,” arXiv preprint arXiv:2308.08061,                   Jul. 2024, pp. 155–172.
+     2023.                                                                             [27] B. Lester, R. Al-Rfou, and N. Constant, “The power of scale for
+ [6] T. Brown, B. Mann, N. Ryder, M. Subbiah, J. D. Kaplan, P. Dhariwal,                    parameter-efficient prompt tuning,” in Proceedings of the 2021 Con-
+     A. Neelakantan, P. Shyam, G. Sastry, A. Askell et al., “Language mod-                  ference on Empirical Methods in Natural Language Processing, M.-F.
+     els are few-shot learners,” Advances in neural information processing                  Moens, X. Huang, L. Specia, and S. W.-t. Yih, Eds. Online and Punta
+     systems, vol. 33, pp. 1877–1901, 2020.                                                 Cana, Dominican Republic: Association for Computational Linguistics,
+ [7] B. Byrne, K. Krishnamoorthi, C. Sankar, A. Neelakantan, D. Duck-                       Nov. 2021, pp. 3045–3059.
+     worth, S. Yavuz, B. Goodrich, A. Dubey, K.-Y. Kim, and A. Cedilnik,               [28] S. Li, W. Li, C. Cook, C. Zhu, and Y. Gao, “Independently recurrent
+     “Taskmaster-1:toward a realistic and diverse dialog dataset,” in 2019                  neural network (indrnn): Building a longer and deeper rnn,” in 2018
+     Conference on Empirical Methods in Natural Language Processing and                     IEEE/CVF Conference on Computer Vision and Pattern Recognition,
+     9th International Joint Conference on Natural Language Processing,                     2018, pp. 5457–5466.
+     Hong Kong, 2019.                                                                  [29] S. Li, H. Lu, T. Wu, M. Yu, Q. Weng, X. Chen, Y. Shan, B. Yuan, and
+ [8] J. Chen, J. Shi, Q. Chen, and M. Guo, “Kairos: Low-latency multi-agent                 W. Wang, “Toppings: CPU-assisted, rank-aware adapter serving for llm
+     serving with shared llms and excessive loads in the public cloud,” arXiv               inference,” in Proc. USENIX ATC, 2025.
+     preprint arXiv:2508.06948, 2025.
+                                                                                       [30] X. L. Li and P. Liang, “Prefix-tuning: Optimizing continuous prompts
+ [9] L. Chen, Z. Ye, Y. Wu, D. Zhuo, L. Ceze, and A. Krishnamurthy,
+                                                                                            for generation,” arXiv preprint arXiv:2101.00190, 2021.
+     “Punica: Multi-tenant lora serving,” Proceedings of Machine Learning
+     and Systems, vol. 6, pp. 1–13, 2024.                                              [31] Y. Li, H. Wen, W. Wang, X. Li, Y. Yuan, G. Liu, J. Liu, W. Xu,
+[10] W.-L. Chiang, L. Zheng, Y. Sheng, A. N. Angelopoulos, T. Li, D. Li,                    X. Wang, Y. Sun et al., “Personal llm agents: Insights and survey about
+     H. Zhang, B. Zhu, M. Jordan, J. E. Gonzalez et al., “Chatbot arena: An                 the capability, efficiency and security,” arXiv preprint arXiv:2401.05459,
+     open platform for evaluating llms by human preference,” arXiv preprint                 2024.
+     arXiv:2403.04132, 2024.                                                           [32] C. Lin, Z. Han, C. Zhang, Y. Yang, F. Yang, C. Chen, and L. Qiu,
+[11] A. Chowdhery, S. Narang, J. Devlin, M. Bosma, G. Mishra, A. Roberts,                   “Parrot: Efficient serving of LLM-based applications with semantic
+     P. Barham, H. W. Chung, C. Sutton, S. Gehrmann et al., “Palm: Scal-                    variable,” in 18th USENIX Symposium on Operating Systems Design and
+     ing language modeling with pathways,” Journal of Machine Learning                      Implementation (OSDI 24). Santa Clara, CA: USENIX Association,
+     Research, vol. 24, no. 240, pp. 1–113, 2023.                                           Jul. 2024, pp. 929–945.
+[12] copilot. (2022) copilot. [Online]. Available: https://github.com/features/        [33] S.-Y. Liu, C.-Y. Wang, H. Yin, P. Molchanov, Y.-C. F. Wang, K.-T.
+     copilot                                                                                Cheng, and M.-H. Chen, “Dora: Weight-decomposed low-rank adapta-
+[13] T. Dettmers, A. Pagnoni, A. Holtzman, and L. Zettlemoyer, “Qlora:                      tion,” in Forty-first International Conference on Machine Learning.
+     Efficient finetuning of quantized llms,” Advances in Neural Information           [34] Llama3. (2024) Llama3. [Online]. Available: https://huggingface.co/
+     Processing Systems, vol. 36, 2024.                                                     collections/meta-llama/meta-llama-3-66214712577ca38149ebb2b6
+
+
+
+
+                                                                                  13
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+[35] H. Luo, Q. Sun, C. Xu, P. Zhao, Q. Lin, J. Lou, S. Chen, Y. Tang, and                USENIX Symposium on Operating Systems Design and Implementation
+     W. Chen, “Arena learning: Build data flywheel for llms post-training via             (OSDI 24), 2024, pp. 911–927.
+     simulated chatbot arena,” arXiv preprint arXiv:2407.10627, 2024.                [53] J. Yao, H. Li, Y. Liu, S. Ray, Y. Cheng, Q. Zhang, K. Du, S. Lu, and
+[36] NVIDIA. A tensorrt toolbox for optimized large language model infer-                 J. Jiang, “CacheBlend: fast large language model serving for rag with
+     ence. [Online]. Available: https://github.com/NVIDIA/TensorRT-LLM                    cached knowledge fusion,” in Proceedings of the Twentieth European
+[37] OpenAI. (2020) Chatgpt. [Online]. Available: https://openai.com/blog/                Conference on Computer Systems, ser. EuroSys ’25. New York, NY,
+     chatgpt                                                                              USA: Association for Computing Machinery, 2025, p. 94–109.
+[38] PyTorch Contributors. (2023) torch.stream — pytorch 2.0.1                       [54] G.-I. Yu, J. S. Jeong, G.-W. Kim, S. Kim, and B.-G. Chun, “Orca: A
+     documentation. [Online]. Available: https://pytorch.org/docs/stable/                 distributed serving system for transformer-based generative models,” in
+     generated/torch.Stream.html                                                          16th USENIX Symposium on Operating Systems Design and Implemen-
+[39] R. Qin, Z. Li, W. He, J. Cui, F. Ren, M. Zhang, Y. Wu, W. Zheng,                     tation (OSDI 22), 2022, pp. 521–538.
+     and X. Xu, “Mooncake: Trading more storage for less computation—a               [55] L. Yu, J. Lin, and J. Li, “Stateful large language model serving with
+     kvcache-centric architecture for serving llm chatbot,” in 23rd USENIX                pensieve,” in Proceedings of the Twentieth European Conference on
+     Conference on File and Storage Technologies (FAST 25), 2025, pp. 155–                Computer Systems, 2025, pp. 144–158.
+     170.                                                                            [56] B. Zhang, P. Williams, I. Titov, and R. Sennrich, “Improving massively
+[40] M. Shahrad, R. Fonseca, I. Goiri, G. Chaudhry, P. Batum, J. Cooke,                   multilingual neural machine translation and zero-shot translation,” in
+     E. Laureano, C. Tresness, M. Russinovich, and R. Bianchini, “Serverless              Proceedings of the 58th Annual Meeting of the Association for Compu-
+     in the wild: Characterizing and optimizing the serverless workload at                tational Linguistics, D. Jurafsky, J. Chai, N. Schluter, and J. Tetreault,
+     a large cloud provider,” in 2020 USENIX annual technical conference                  Eds. Online: Association for Computational Linguistics, Jul. 2020, pp.
+     (USENIX ATC 20), 2020, pp. 205–218.                                                  1628–1639.
+                                                                                     [57] B. Zhang, “Google’s neural machine translation system: Bridging
+[41] N. Shazeer, “Fast transformer decoding: One write-head is all you need,”
+                                                                                          the gap between human and machine translation,” arXiv preprint
+     arXiv preprint arXiv:1911.02150, 2019.
+                                                                                          arXiv:1609.08144, vol. 11, 2016.
+[42] Y. Sheng, S. Cao, D. Li, C. Hooper, N. Lee, S. Yang, C. Chou, B. Zhu,
+                                                                                     [58] H. Zhang, X. Ji, Y. Chen, F. Fu, X. Miao, X. Nie, W. Chen, and B. Cui,
+     L. Zheng, K. Keutzer et al., “SLoRA: Scalable serving of thousands of
+                                                                                          “PQCache: Product quantization-based kvcache for long context llm
+     lora adapters,” Proceedings of Machine Learning and Systems, vol. 6,
+                                                                                          inference,” Proc. ACM Manag. Data, vol. 3, no. 3, Jun. 2025.
+     pp. 296–311, 2024.
+                                                                                     [59] Q. Zhang, M. Chen, A. Bukharin, P. He, Y. Cheng, W. Chen, and
+[43] Y. Sheng, L. Zheng, B. Yuan, Z. Li, M. Ryabinin, B. Chen, P. Liang,                  T. Zhao, “Adaptive budget allocation for parameter-efficient fine-tuning,”
+     C. Re, I. Stoica, and C. Zhang, “FlexGen: High-throughput generative                 in The Eleventh International Conference on Learning Representations,
+     inference of large language models with a single GPU,” in Proceedings                2023.
+     of the 40th International Conference on Machine Learning, ser. Proceed-         [60] Y. Zhang, Í. Goiri, G. I. Chaudhry, R. Fonseca, S. Elnikety, C. De-
+     ings of Machine Learning Research, A. Krause, E. Brunskill, K. Cho,                  limitrou, and R. Bianchini, “Faster and cheaper serverless computing
+     B. Engelhardt, S. Sabato, and J. Scarlett, Eds., vol. 202. PMLR, 23–29               on harvested resources,” in Proceedings of the ACM SIGOPS 28th
+     Jul 2023, pp. 31 094–31 116.                                                         Symposium on Operating Systems Principles, 2021, pp. 724–739.
+[44] Z. Song, K. Chen, N. Sarda, D. Altınbüken, E. Brevdo, J. Coleman,              [61] Y. Zhang. Release v0.4.8. [Online]. Available: https://github.com/
+     X. Ju, P. Jurczyk, R. Schooler, and R. Gummadi, “HALP:                               sgl-project/sglang/releases/tag/v0.4.8
+     Heuristic aided learned preference eviction policy for YouTube                  [62] J. Zhao, T. Wang, W. Abid, G. Angus, A. Garg, J. Kinnison, A. Sher-
+     content delivery network,” in 20th USENIX Symposium on Networked                     stinsky, P. Molino, T. Addair, and D. Rishi, “LoRA Land: 310
+     Systems Design and Implementation (NSDI 23). Boston, MA:                             fine-tuned llms that rival gpt-4, a technical report,” arXiv preprint
+     USENIX Association, Apr. 2023, pp. 1149–1163. [Online]. Available:                   arXiv:2405.00732, 2024.
+     https://www.usenix.org/conference/nsdi23/presentation/song-zhenyu               [63] L. Zheng, W.-L. Chiang, Y. Sheng, S. Zhuang, Z. Wu, Y. Zhuang, Z. Lin,
+[45] R. C. Staudemeyer and E. R. Morris, “Understanding LSTM–a tutorial                   Z. Li, D. Li, E. Xing et al., “Judging llm-as-a-judge with mt-bench
+     into long short-term memory recurrent neural networks,” arXiv preprint               and chatbot arena,” Advances in Neural Information Processing Systems,
+     arXiv:1909.09586, 2019.                                                              vol. 36, pp. 46 595–46 623, 2023.
+[46] H. Touvron, L. Martin, K. Stone, P. Albert, A. Almahairi, Y. Babaei,            [64] L. Zheng, L. Yin, Z. Xie, C. L. Sun, J. Huang, C. H. Yu, S. Cao,
+     N. Bashlykov, S. Batra, P. Bhargava, S. Bhosale, D. Bikel, L. Blecher,               C. Kozyrakis, I. Stoica, J. E. Gonzalez et al., “Sglang: Efficient execution
+     C. Canton-Ferrer, M. Chen, G. Cucurull, D. Esiobu, J. Fernandes,                     of structured language model programs,” Advances in neural information
+     J. Fu, W. Fu, B. Fuller, C. Gao, V. Goswami, N. Goyal, A. Hartshorn,                 processing systems, vol. 37, pp. 62 557–62 583, 2024.
+     S. Hosseini, R. Hou, H. Inan, M. Kardas, V. Kerkez, M. Khabsa,                  [65] Y. Zhong, S. Liu, J. Chen, J. Hu, Y. Zhu, X. Liu, X. Jin, and
+     I. Kloumann, A. Korenev, P. S. Koura, M. Lachaux, T. Lavril, J. Lee,                 H. Zhang, “Distserve: Disaggregating prefill and decoding for goodput-
+     D. Liskovich, Y. Lu, Y. Mao, X. Martinet, T. Mihaylov, P. Mishra,                    optimized large language model serving,” in 18th USENIX Symposium
+     I. Molybog, Y. Nie, A. Poulton, J. Reizenstein, R. Rungta, K. Saladi,                on Operating Systems Design and Implementation (OSDI 24), 2024, pp.
+     A. Schelten, R. Silva, E. M. Smith, R. Subramanian, X. E. Tan, B. Tang,              193–210.
+     R. Taylor, A. Williams, J. X. Kuan, P. Xu, Z. Yan, I. Zarov, Y. Zhang,          [66] W. Zhu, H. Liu, Q. Dong, J. Xu, S. Huang, L. Kong, J. Chen, and
+     A. Fan, M. Kambadur, S. Narang, A. Rodriguez, R. Stojnic, S. Edunov,                 L. Li, “Multilingual machine translation with large language models:
+     and T. Scialom, “Llama 2: Open foundation and fine-tuned chat models,”               Empirical results and analysis,” arXiv preprint arXiv:2304.04675, 2023.
+     CoRR, vol. abs/2307.09288, 2023.
+[47] M.-F. Tsai, C.-J. Wang, and P.-C. Chien, “Discovering finance keywords
+     via continuous-space language models,” ACM Transactions on Manage-
+     ment Information Systems (TMIS), vol. 7, no. 3, pp. 1–17, 2016.
+[48] vLLM Community. vLLM: A high-throughput and memory-efficient
+     inference and serving engine for llms. [Online]. Available: https:
+     //github.com/vllm-project/vllm
+[49] J. Wang, H. Xu, H. Jia, X. Zhang, M. Yan, W. Shen, J. Zhang, F. Huang,
+     and J. Sang, “Mobile-agent-v2: Mobile device operation assistant with
+     effective navigation via multi-agent collaboration,” Advances in Neural
+     Information Processing Systems, vol. 37, pp. 2686–2710, 2024.
+[50] Z. Wang, J. Liang, R. He, Z. Wang, and T. Tan, “LoRA-Pro: Are
+     low-rank adapters properly optimized?” in The Thirteenth International
+     Conference on Learning Representations (ICLR), 2025.
+[51] Wikipedia. (2023) Trie. [Online]. Available: https://en.wikipedia.org/
+     wiki/Trie
+[52] B. Wu, R. Zhu, Z. Zhang, P. Sun, X. Liu, and X. Jin, “dLoRA: Dynam-
+     ically orchestrating requests and adapters for lorallm serving,” in 18th
+
+
+
+
+                                                                                14
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:26:50 UTC from IEEE Xplore. Restrictions apply.
+

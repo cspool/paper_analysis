@@ -1,0 +1,1901 @@
+   Accelerating Sparse Transformer Inference on GPU
+                 Wenhao Dai                                    Haodong Deng                                     Mengfei Rong
+          SSSLab, Dept. of CST                            SSSLab, Dept. of CST                             SSSLab, Dept. of CST
+           China University of                             China University of                              China University of
+            Petroleum-Beijing                              Petroleum-Beijing                                 Petroleum-Beijing
+              Beijing, China                                 Beijing, China                                    Beijing, China
+      wenhao.dai@student.cup.edu.cn                 haodong.deng@student.cup.edu.cn                   mengfei.rong@student.cup.edu.cn
+
+                 Xinyu Yang                                      Hongyu Liu                                       Fangxin Liu
+      School of Computer Science and                              Baidu Inc.                              School of Computer Science
+                Engineering                                     Beijing, China                           Shanghai Jiao Tong University
+            Beihang University                             liuhongyu02@baidu.com                                Shanghai, China
+               Beijing, China                                                                               liufangxin@sjtu.edu.cn
+            ltyxy@buaa.edu.cn
+
+                Hailong Yang                                    Qianwen Cao                                     Qingxiao Sun∗
+      School of Computer Science and                     College of Safety and Ocean                   School of Computer Science and
+                Engineering                                      Engineering                                     Engineering
+            Beihang University                               China University of                             Beihang University
+               Beijing, China                                 Petroleum-Beijing                                 Beijing, China
+        hailong.yang@buaa.edu.cn                                Beijing, China                            qingxiaosun@buaa.edu.cn
+                                                             qwcao@cup.edu.cn
+
+Abstract                                                                        The experimental results show that compared to the state-
+Large language models (LLMs) are popular around the world                       of-the-art work, STOF achieves maximum speedups of 1.6×
+due to their powerful understanding capabilities. As the core                   in MHA computation and 1.4× in end-to-end inference.
+component of LLMs, accelerating Transformer through par-                        CCS Concepts: • Computing methodologies → Machine
+allelization has gradually become a hot research topic. Mask                    learning; • Computer systems organization → Multiple
+layers introduce sparsity into Transformer to reduce calcu-                     instruction, single data.
+lations. However, previous works rarely focus on the per-
+formance optimization of sparse Transformer. In addition,                       Keywords: GPU, Sparse Transformer, Multi-head Attention,
+current static operator fusion schemes fail to adapt to diverse                 Operator Fusion
+application scenarios. To address the above problems, we                        ACM Reference Format:
+propose STOF, a framework that incorporates optimizations                       Wenhao Dai, Haodong Deng, Mengfei Rong, Xinyu Yang, Hongyu
+for Sparse Transformer that enables flexible masking and                        Liu, Fangxin Liu, Hailong Yang, Qianwen Cao, and Qingxiao Sun.
+Operator Fusion on GPU. For multi-head attention (MHA)                          2026. Accelerating Sparse Transformer Inference on GPU. In Pro-
+structure, STOF maps the computation to row-wise or block-                      ceedings of the 31st ACM SIGPLAN Annual Symposium on Principles
+wise kernels with unique storage formats according to ana-                      and Practice of Parallel Programming (PPoPP ’26), January 31 – Feb-
+                                                                                ruary 4, 2026, Sydney, NSW, Australia. ACM, New York, NY, USA,
+lytical modeling. For downstream operators, STOF maps the
+                                                                                15 pages. https://doi.org/10.1145/3774934.3786434
+fusion scheme to compilation templates and determines the
+optimal running configuration through two-stage searching.
+                                                                                1    Introduction
+                                                                                Large language models (LLMs) have attracted widespread
+∗ Corresponding author                                                          attention from industry and academia around the world [1,
+                                                                                9, 27]. The massive parameters enable LLMs to capture the
+                                                                                subtleties of human language [45]. In addition to general un-
+                                                                                derstanding, Transformer is the foundation of LLMs and the
+                                                                                core of its powerful capabilities [76]. A variety of neural net-
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         works [18, 48, 49] have evolved based on Transformer, while
+tional License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                still retaining its encoding or decoding structure. The tensor
+© 2026 Copyright held by the owner/author(s).                                   operations involved in Transformer have rich parallelism,
+ACM ISBN 979-8-4007-2310-0/2026/01                                              making it suitable for execution on many-core processors
+https://doi.org/10.1145/3774934.3786434                                         such as GPUs [25]. This forces the performance optimization
+
+
+
+                                                                          620
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                       Dai et al.
+
+
+of Transformer for GPU architectures to become an impor-                 selected typical networks with encoding or decoding struc-
+tant issue, which can bring huge economic benefits [3].                  tures including BERT [18], GPT [48], LLaMA [60], ViT [21],
+   Multi-head attention (MHA) is the essential building block            and T5 [49] to verify the effectiveness of STOF. This paper
+in the Transformer model, where the attention module calcu-              makes the following contributions1 :
+lates the correlation among tokens in the input sequence [61].                  • We comprehensively analyze the impact of different
+The high-performance implementation of MHA fuses all ten-                         masking patterns and inference configurations to ex-
+sor operations into one kernel, efficiently utilizing the mem-                    pose potential optimization opportunities.
+ory hierarchy and function units [17, 72]. The novel MHA                        • We propose a unified MHA module that implements
+variants introduce mask layers to reduce the computational                        row-wise and block-wise kernels with unique stor-
+volume while maintaining accuracy [13]. The mask layer in-                        age formats and optimizations. Besides, an analytical
+troduces sparsity to Transformer, and fragmented computa-                         model is designed to determine kernel selection.
+tion exacerbates the memory bandwidth bottleneck [64]. Fur-                     • We propose an operator fusion module that converts
+thermore, the explosive growth of masking patterns [6, 71]                        the fusion scheme into compilation templates via nu-
+makes it impractical to manually optimize each MHA vari-                          merical decoding. The search engine processes the
+ant separately. Although recent approaches [19, 62] have                          encoded numerical representation and expands the
+supported a broader range of masking patterns with sparse                         fusion range based on performance feedback.
+representation or score modification, they are limited to con-                  • We develop an inference framework STOF that enables
+tinuous element distribution or suboptimal performance.                           flexible masking patterns and determines the optimal
+   There are still potential optimization opportunities for                       operator fusion setting on GPU. The experimental re-
+downstream operators of MHA. Compilation-based operator                           sults show that STOF achieves maximum speedups
+fusion is adopted to reduce kernel launches and frequent                          of 1.6× in MHA computation and 1.4× in end-to-end
+I/O operations [39, 77]. DL frameworks [4, 82] generally                          inference compared to the state-of-the-art work.
+only fuse memory-intensive (MI) operators, while compute-
+intensive (CI) operators are handled separately using vendor             2       Background
+libraries. Other studies [41, 54, 79] have further explored the
+fusion of CI operator and MI operator to complement re-                  2.1       Sparsity in Transformer Models
+source utilization such as memory bandwidth and streaming                2.1.1 Transformer Structure. Transformer [61] is widely
+processors. The latest works [73, 80] focus on the fusion of             recognized, where each encoder or decoder contains multi-
+CI operators and improve performance in small-scale ten-                 ple multi-head attention (MHA) layers. The key operation
+sor computation with short sequences. However, the above                 of the MHA layer is scaled dot product attention (SDPA),
+rule-driven operator fusion schemes cannot adapt to diverse              which calculates the dot product of 𝑄 and 𝐾, scales the re-
+model hyperparameters and sequence lengths.                              sult, optionally applies a mask at this stage, then applies
+   From the above analysis, sparse Transformer optimization              the Softmax function to obtain the probabilities (𝑃) and fi-
+faces the following challenges: 1) efficient kernel implemen-            nally calculates the dot product of 𝑃 and 𝑉 . Beyond MHA,
+tations with flexible representation of masking patterns; 2)             Transformer includes downstream components: Add retains
+adaptive operator fusion with sustained high performance                 non-linear transformation information, Norm mitigates inter-
+for various computation scales; 3) fast exploration of hierar-           nal covariate shift via mean/variance normalization, and the
+chical search space with fusion schemes and kernel param-                Feed Forward layer comprises chained general matrix mul-
+eters. We propose the STOF framework, which optimizes                    tiply (GEMM) operations with activations like GELU or ReLU.
+sparse Transformer inference through customized MHA ker-                 These components enable Transformer to handle complex
+nels and adaptive operator fusion. STOF first determines the             cross-domain tasks while introducing operator characteris-
+kernel implementation for MHA computation according to                   tics that facilitate fusion-based optimizations.
+mask sparsity and sequence length. Then, STOF uses the
+encoding representation to specify the fusion scheme and                                    Atomic  Pattern
+                                                                                             Atomic Pattern                            Compound Pattern
+maps it to compilation templates. Finally, STOF gradually
+expands the fusion range and determines the optimal scheme
+and its parameter setting via two-stage searching.
+   To the best of our knowledge, STOF is the first system to                 (a) Causal   (b) Global (c) Sliding Window (d) Random   (e) Longformer   (f) Bigbird
+enable both flexible masking patterns and diverse operator
+fusion schemes for sparse Transformer scenarios. Specifi-                Figure 1. Atomic and compound sparse attention patterns.
+cally, STOF integrates hand-tuned MHA kernels with gen-
+erative compilation templates, providing a complete stack
+that establishes broader optimization opportunities. We have
+                                                                         1 The artifact for this paper is publicly available on Zenodo under DOI [15].
+
+
+
+
+                                                                   621
+Accelerating Sparse Transformer Inference on GPU                                                               PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+2.1.2 Sparse Attention Patterns. Atomic sparse atten-                                                    to SMEM multiple times, gradually performing Softmax re-
+tion patterns are the building blocks of current popular                                                 duction. FA2 [16] further partitions the work between warps
+sparse attention modules [2, 6, 13, 36, 37, 52, 71]. Figure 1                                            within one block of attention computation to reduce the
+(a)-(d) depict four most common atomic sparse attention                                                  read and write of SMEM. However, FA only supports com-
+patterns. The details are as follows.                                                                    mon masking patterns such as causal and sliding window.
+     • Causal Attention. To maintain temporal order, the query                                           FlashMask [62] extends FA with column-wise representa-
+       can access only preceding information, restricting con-                                           tion to exploit attention sparsity for skipped computations,
+       nections to earlier nodes (the colored triangular).                                               integrated into PaddlePaddle [40] but unable to represent
+     • Global Attention. Certain “global” nodes serve as cen-                                            discrete distributions such as random attention.
+       tral hubs, which receive information from others (the                                                For automatic fusion, the captured MHA sub-graph un-
+       colored rows) and send it back (the colored columns).                                             dergoes multi-level intermediate representation (IR) with
+     • Sliding Window Attention. Considering the concept of                                              hardware-independent (e.g., constant folding) and hardware-
+       locality, the query only focuses on the neighboring                                               dependent (e.g., instruction scheduling) optimizations. MC-
+       nodes within a defined window size, with its mask ma-                                             Fuser [73] and Chimera [80] accelerate MHA via GEMM
+       trix presenting a banded pattern (the colored bands).                                             chain loop scheduling but ignore hardware details like bank
+     • Random Attention. The query block is randomly asso-                                               conflicts, performing poorly for long sequences. FlexAtten-
+       ciated with the preceding and following information.                                              tion [19] supports arbitrary masks by combining block masks
+       By adjusting the filling rate, it has the possibility to                                          with expression-based descriptions, but it is still constrained
+       discover accidental correlations (the colored blocks).                                            to fixed optimizations and achieves sub-optimal performance.
+                                                                                                         SPLAT [28] focuses on bridging the performance gap of reg-
+2.2    Fused Kernel for MHA Structure                                                                    ular sparse kernels (R-SDDMM and R-SpMM) under struc-
+Numerous works [7, 17, 19, 25, 43, 62, 64, 66, 72, 73, 80] have                                          tured sparsity (10%–50% non-zeros), yet this approach for-
+explored fusing MHA on GPU. Figure 2 shows a typical work-                                               goes the opportunity to optimize MHA as a whole kernel.
+flow of MHA fusion. The DL framework firstly parses the
+computational graph and captures the MHA sub-graph com-                                                  2.3   Hierarchical Space Exploration
+posed of coarse-grained native operators. Then, MHA fusion                                               The hierarchical framework introduces a huge optimization
+can be achieved manually or automatically. However, if the                                               space, making manual optimization on a case-by-case basis
+fusion of MHA with a certain mask layer is not supported,                                                unrealistic. DL compilers [10, 59, 74] automatically explore
+the sub-graph will be split into fine-grained meta operators                                                            Fusion operator and kernel levels, deploying
+                                                                                                                Manual across
+                                                                                                         opportunities
+to discover small-scale fusion opportunities.                                                            tensor programs on target hardware via IR conversion.
+
+                  𝑆𝑢𝑏0           𝑆𝑢𝑏2            𝑆𝑢𝑏4
+                                                                  Manual Fusion                          2.3.1 Operator Fusion Opportunities. DL compilers pre-
+Computational
+   Graph             𝑆𝑢𝑏1                     𝑆𝑢𝑏3          LightSeq2 [66] ByteTransformer [72]
+                                                                                                         define fusion rules that apply only to specific combinations,
+                                                            FlashAttention [17]   FlashMask [62]
+                                                                                                         severely limiting the optimization space. Researchers fur-
+                                                            FasterTransformer [43] xFormers [7]
+                                                                                                         ther classify tensor operators into MI and CI categories for
+   Native                                                   TurboTransformer [25] Raptor-T [64]
+                                                                                                         selective fusion. Early works [4, 82] treat CI operators as
+  Operator   GEMM        Scale      Mask   Softmax   GEMM
+                                                                                                         non-fusion boundaries, fusing only MI operators to reduce
+                                                                Automatic Fusion                         off-chip accesses. Others [41, 54] merge the CI operator with
+                                           Fused MHA          Chimera [80]        MCFuser [73]           adjacent MI operators to balance hardware resource usage.
+   Meta      𝐾0     𝐾1      𝐾2    … 𝐾n
+  Operator                                   Kernel           FlexAttention [19] SPLAT [28]              Recent works [73, 80] explore fusing CI chains by decom-
+                                                                                                         posing operators into blocks to break dependencies. How-
+        Figure 2. Kernel fusion for MHA computation.                                                     ever, due to GPU resource constraints, we notice that CI
+                                                                                                         chain fusion only benefits on small scales. Moreover, oper-
+   Early works focus on the manual fusion of dense atten-                                                ator categories may shift with tensor dimensions, making
+tion without the mask layer. ByteTransformer [72] adopts                                                 category-based fusion schemes potentially suboptimal.
+hand-written kernels: short sequences store the intermedi-
+                                                                                                         2.3.2 Search Space Construction. When fine-tuning the
+ate matrix entirely in shared memory (SMEM) and registers;
+                                                                                                         performance of DL models, the search space can be con-
+longer sequences employ grouped GEMM to ease resource
+                                                                                                         structed by loop-based or template-based methods. The loop-
+constraint. The customized kernels limit ByteTransformer to
+                                                                                                         based methods [35, 77] represent operators as deeply nested
+a maximum sequence length of 1,024. FlashAttention (FA) se-
+                                                                                                         loops and optimize the statement execution via loop schedul-
+ries2 becomes the most typical open source implementation.
+                                                                                                         ing. Although hardware-universal, they lag vendor libraries
+FA [17] partitions the input into blocks and passes the blocks
+                                                                                                         due to ignoring hardware-specific instructions. The template-
+2 FA3 [53] is only for GPUs with Hopper architecture and later.                                          based methods [11, 67, 69, 81] evolve as a new trend, which
+
+
+
+                                                                                                   622
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                             Dai et al.
+
+
+uses template primitives as building blocks to assemble com-                               the causal achieve a sparsity of over 80%, while the slid-
+plete DL models. The template primitives can map tensor                                    ing window even reaches 93.8%. The above results provide
+programs to special function units like tensor cores. With                                 optimization opportunities to skip useless computations.
+hardware knowledge-driven tuning, they match vendor li-
+brary performance. Bolt [67] derives primitives from CUT-                                             Table 2. Features of typical masking patterns.
+LASS [44] to support common fused operators. Due to the
+complex kernel structure of CUTLASS, further expanding                                      Masking        Masking                  Element Distribution             Sparsity
+                                                                                            Pattern        Parameters             Row           Column        Type              Ratio
+the fusion range is too demanding for programmers.
+                                                                                            Causal         –                      Continuous    Continuous    Structured        50.0%
+                                                                                            Sliding
+2.3.3 Auto-tuning Techniques. For loop-based construc-                                      Window
+                                                                                                           band width = 32        Continuous    Continuous    Structured        93.8%
+
+tion, rule-based pruning first suppresses search space explo-                               Longformer
+                                                                                                           global width = 32
+                                                                                                                                  Discrete      Discrete      Structured        88.8%
+                                                                                                           band width = 32
+sion, yet still amounts of configurations persist. Machine
+                                                                                                           global width = 32
+learning-driven cost models are trained online [77] or of-                                  Bigbird        band width = 32        Discrete      Discrete      Unstructured      80.8%
+fline [78] to predict performance, integrated into heuristic                                               filling rate = 10%
+
+searches (e.g., genetic algorithms) to speed up convergence.
+However, they all require sufficient runtime statistics. Ag-                                  It is difficult for a data structure to represent sparsity fea-
+gressive techniques [4, 50] unfold the computation graph                                   tures of various masking patterns. To achieve high kernel
+sequentially, reducing search ranges from product to sum of                                efficiency, FlashMask [62] only supports the cases where the
+operator spaces. But individual tuning without graph context                               valid elements on the columns are continuous. This is be-
+leads to global suboptimal decisions. In contrast, template-                               cause its data structure consists of four arrays that represent
+based construction maintains a constrained space aided by                                  the start and end of two skipped regions. However, the dis-
+analytical models [33, 34] considering hardware and program                                crete distribution of valid elements involves more skipped re-
+details. Nevertheless, changes in the search space caused by                               gions that cannot be represented. Bigbird integrates random
+operator fusion expansion remains unsolved.                                                patterns with unstructured sparsity, further complicating
+   We summarize comparisons of representative works and                                    the mask representation. For unsupported masking patterns,
+STOF in Table 1. We implement compilation templates via the                                previous works [19, 72] fall back to resetting the score ma-
+hardware abstraction of Triton [59] and TileLang [12]. Both                                trix by subtraction after GEMM. This approach fails to jointly
+of them offer high-level programming interfaces that facili-                               optimize GEMM and Softmax operations in the fused kernel.
+tate the template derivation for a wider fusion range. Then,
+the two-stage procedure encapsulating the AutoTune module                                  3.2    Potential Fusion Opportunities
+quickly determines high-performance configurations.                                        Transformer structure still remains opportunities for oper-
+                                                                                           ator fusion unexplored. If we roughly identify the opera-
+Table 1. Comparison of representative works with STOF.                                     tor types as MI or CI, the operator mixes can be enumer-
+                                                                                           ated into three categories. We fuse the operators of Trans-
+ Name
+                   Operator Fusion               Hierarchical Search Space                 former to evaluate the performance, where Bias+Layernorm,
+                Category    Expansion   Construction    Pruning       Searching
+                                                                                           GEMM+Layernorm, and GEMM+GEMM represent MI+MI, CI+MI,
+ AStitch [82]   MI-MI      Yes          Rule            No           Breadth-First
+ Welder [54]    CI-MI      Yes          Loop            No           Cost Model
+                                                                                           and CI+CI mixes, respectively. Figure 3 shows the speedup of
+ Chimera [80]   CI-CI      No           Loop            No           Analytical            the fused operator over the detached operators on NVIDIA
+ MCFuser [73]   CI-CI      No           Loop            Rule         Analytical
+                                                                                           RTX 4090 and A100 GPUs, where the x-axis represents the
+ Bolt [67]      General    No           Template        No           Analytical
+ STOF (ours)    General    Yes          Template        Analytical   Reward-based          running configurations (detailed in Table 3).
+
+                                                                                            Table 3. The running configurations of fused operators.
+3     Motivation                                                                             Name         Batch Size            Sequence Length            Hidden Dimension
+3.1     Diverse Features of Masking Patterns                                                G1/G2               1                       128                    512/1024
+Within the MHA structure, sparse mask blocks part of the                                    G3/G4               1                      4096                    512/1024
+data elements, making it easier for the model to “focus” on                                 G5/G6               8                       128                    512/1024
+the critical information. The mask layer is inserted between                                G7/G8               8                      4096                    512/1024
+GEMM and Softmax operations, and the weights of the score
+matrix corresponding to the mask part are close to 0. Ta-                                     It can be observed that the effect of operator fusion varies
+ble 2 lists the features of typical masking patterns with the                              significantly under different cases. For example, the fused
+sequence length (𝑠𝑒𝑞_𝑙𝑒𝑛) of 1,024. Consistent with previ-                                 GEMM+Layernorm operator achieves a maximum speedup
+ous√︁works [13], the band width and global width are set                                   of 16.5× and 39.1× when the hidden dimension is 512. But
+to 𝑠𝑒𝑞_𝑙𝑒𝑛 (i.e., 32). As seen, all masking patterns except                                when the hidden dimension is 1,024, it results in significant
+
+
+
+                                                                                     623
+Accelerating Sparse Transformer Inference on GPU                                                                                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                              Detached                          Fused                                                                                Detached                           Fused
+           3                                                                                                         3
+                                                    16.5               12.0       5.4                                                              3.2                     39.1                25.9
+ Speedup
+
+
+
+
+                                                                                                           Speedup
+           2
+                   Bias+Layernorm              GEMM+Layernorm                                 GEMM+GEMM              2
+                                                                                                                               Bias+Layernorm                         GEMM+Layernorm                                   GEMM+GEMM
+           1                                                                                                         1
+
+
+           0                                                                                                         0
+               G1 G2 G3 G4 G5 G6 G7 G8 G1 G2 G3 G4 G5 G6 G7 G8 G1 G2 G3 G4 G5 G6 G7 G8                                   G1 G2 G3 G4 G5 G6 G7 G8 G1 G2 G3 G4 G5 G6 G7 G8 G1 G2 G3 G4 G5 G6 G7 G8
+
+                                    (a) NVIDIA RTX 4090 GPU                                                                                                (b) NVIDIA A100 GPU
+
+                  Figure 3. Performance comparison of detached operators and fused operator under different configurations.
+
+                                       Individual                             Post-Fusion                                                                    Individual                               Post-Fusion
+           3                                                                                                         3
+                                        7.3   3.3    7.4   6.8   3.4   50.6       5.7   5.8                                                        9.9        11.3   4.0   10.0   11.3   3.6   36.5        4.1   5.9
+ Speedup
+
+
+
+
+                                                                                                           Speedup
+           2
+                   Bias+Layernorm              GEMM+Layernorm                                 GEMM+GEMM              2
+                                                                                                                               Bias+Layernorm                         GEMM+Layernorm                                   GEMM+GEMM
+           1                                                                                                         1
+
+
+           0                                                                                                         0
+               G1 G2 G3 G4 G5 G6 G7 G8 G1 G2 G3 G4 G5 G6 G7 G8 G1 G2 G3 G4 G5 G6 G7 G8                                   G1 G2 G3 G4 G5 G6 G7 G8 G1 G2 G3 G4 G5 G6 G7 G8 G1 G2 G3 G4 G5 G6 G7 G8
+
+                                    (a) NVIDIA RTX 4090 GPU                                                                                                (b) NVIDIA A100 GPU
+
+Figure 4. Performance comparison of fused operators using parameter settings from individual tuning and post-fusion tuning.
+
+slowdowns in most cases. The fused GEMM+GEMM operator                                                                module is embodied as the interaction between the fusion
+achieves more than 2× speedup on RTX 4090 GPU when                                                                   scheme converter and the hierarchical search engine.
+batch size and sequence length are 1 and 128, whereas it is                                                             Figure 5 illustrates the design overview of STOF. STOF di-
+inferior to the detached operators under all cases on A100                                                           vides the sparse Transformer model into MHA structure and
+GPU. The above results indicate that fixed operator fusion                                                           downstream operators. This ensures both the customization
+schemes cannot adapt to diverse inference scenarios.                                                                 of MHA and the flexibility of operator fusion. For MHA struc-
+                                                                                                                     ture, STOF maps its calculations directly to GPU kernels with
+3.3             Challenges in Parameter Tuning                                                                       fine-grained optimization. The kernel selector determines the
+The combination of fusion schemes and kernel parameters                                                              MHA kernel by applying an analytical model that takes hard-
+constructs a hierarchical optimization space, making param-                                                          ware specifications into account. For downstream operators,
+eter tuning challenging. This stems from two key insights:                                                           the scheme converter expresses the fusion scheme as a binary
+1) the search space of individual operators differs fundamen-                                                        array through hash coding upwards and maps it to compi-
+tally from that of the fused operator; 2) the optimal parameter                                                      lation templates through numerical decoding downwards.
+settings for individual and fused operators are inherently                                                           The search engine initializes scheme, expands fusion, and
+distinct. Figure 4 shows the speedup of fused operators using                                                        samples parameters via analytical modeling, performance
+parameter settings from post-fusion tuning over those from                                                           feedback, and reward algorithm, respectively.
+                                                                                                                                     Unified MHA Module
+individual tuning on NVIDIA RTX 4090 and A100 GPUs. The
+x-axis represents the experimental configuration consisting                                                                                               Sparse Transformer Model
+of batch size, sequence length and hidden dimension. As seen,
+                                                                                                                                     Multi-head Attention                                              Downstream Operators
+directly applying the optimal setting of individual operators                                                                                                                                                            …
+to their fused implementation often leads to suboptimal per-
+formance. For example, Bias+Layernorm, GEMM+Layernorm,
+and GEMM+GEMM mixes achieve an average speedup of 2.4×,                                                                        Unified MHA Module                                          Operator Fusion Module
+10.1×, and 2.2× on A100 GPU, respectively. The results in-                                                                Row-wise Kernel                Block-wise Kernel                             Fusion Scheme Convertor
+dicate that operator-by-operator sequential tuning is not a                                                              ü row-sliced Q parallel     ü mask bitmap storage                   Hash                Numerical      Compilation
+                                                                                                                         ü sync-elimination          ü Q register resident                 Encoding              Decoding        Template
+viable solution. On the other hand, naive global tuning can                                                              ü shuffle within warp       ü async data copying
+                                                                                                                                                                                               fusion scheme             numerical expression
+be inefficient due to the inconsistent search space.                                                                                   kernel parameters                                              Hierarchical Search Engine
+                                                                                                                                                                                           Scheme                 Fusion         Parameter
+                                                                                                                              Analysis-driven Kernel Selector                            Initialization          Expanding       Sampling
+4              Methodology
+4.1             Design Overview
+                                                                                                                                                            Hardware Specification
+We propose STOF, accelerating Sparse Transformer inference
+with flexible masking patterns and operator fusion schemes
+                                                                                                                                       Figure 5. The design overview of STOF.
+on GPU. STOF consists of a unified MHA module and an
+operator fusion module. The unified MHA module integrates
+row-wise and block-wise kernels with different storage for-                                                            We have implemented two sets of kernels depending on
+mats, each with unique optimizations. The operator fusion                                                            the data partitioning granularity. The row-wise kernel slices
+
+
+
+                                                                                                          624
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                     Dai et al.
+
+
+𝑄 into rows to achieve high locality. Moreover, the row-                 we obtain 𝑙𝑜𝑎𝑑_𝑟𝑜𝑤_𝑝𝑡𝑟 and 𝑙𝑜𝑎𝑑_𝑐𝑜𝑙_𝑖𝑑𝑥 arrays that di-
+wise kernel applies shuffle within a warp and eliminates the             rectly specify the location of non-empty OTs in the mask.
+synchronization among warps, improving performance at
+small input sizes. In contrast, the block-wise kernel is more             load_col_idx 0 1 3 0 1 2 0 1 2 3 0 2 3                 OuterTile         IT0
+                                                                                                                                                    0   1
+                                                                                                                                                                     IT2
+
+general with fine-grained block partitioning, where 𝑄, 𝐾,                 full_col_idx 0 0 1 0 2 0 3              0      1   2      3               2 3 4
+                                                                                                                                                       0
+                                                                                                                                                      5 6 7
+                                                                                                                                                                           2
+and 𝑉 are partitioned into sub-blocks and put into SMEM to                part_col_idx 1 3 2 1 3 2           0 OT0 OT1 OT2 OT3                          8 9
+                                                                                                                                                   IT1               IT3
+utilize the GPU memory hierarchy. Since row partitioning                  load_row_ptr 0 3 6 1013            1 OT4 OT5 OT6 OT7                               0 1     0     1
+                                                                                                                                                    2       13 4     2 33
+can be regarded as an extreme case of block partitioning, we                                                 2 OT8 OT9 OT10 OT11                    5          6     4 5 6
+                                                                          full_row_ptr 0 1 3 5 7                                                        7              7 8 9
+elaborate on the block-wise optimizations in Section 4.2.                 part_row_ptr 0 2 3 5 6             3 OT12 OT13 OT14 OT15                 (uint64) bitmap_mask :
+   The main takeaway of STOF is a novel co-design that                                                                                         0xAE73 0x3B94 0x0 0x9CE7
+
+bridges manual kernel implementation for sparse MHA struc-                    PD0    Q0      S00    S01
+                                                                                                           skip
+                                                                                                            S02   S03             V0
+                                                                                                                                                   ID3
+                                                                                                                                                 ID2                           O0
+ture and automatic fusion for dense downstream operators.                                                         skip
+                                                                                                                                               ID1
+                                                                                                                                             ID0               O03
+                                                                             PD1     Q1      S10    S11    S12     S13            V1                     O02                   O1
+Specifically, the sparsity in STOF is exclusively handled                                                                                             O01
+                                                                                                                                                   O00      O13
+within the MHA module, where mask-based computation is                       PD2     Q2      S20    S21    S22    S23             V2                     O12                   O2
+                                                                                                                                                      O11
+explicitly managed by customized kernels. All subsequent op-                         Q3      S30
+                                                                                                    skip
+                                                                                                     S31   S32    S33             V3
+                                                                                                                                                   O10
+                                                                                                                                                         O22
+                                                                                                                                                            O23
+                                                                                                                                                                               O3
+                                                                             PD3
+erators after MHA are dense and executed via template-based                                                                                        O20
+                                                                                                                                                      O21
+                                                                                                                                                            O33
+                                                                                                                                                         O32
+fusion, ensuring both high performance and compositional                                     KT 0   KT 1   KT 2   KT 3                                O31
+                                                                                                                                                   O30
+flexibility. Beyond the specific optimizations for Transformer
+architectures, the core methodology of STOF is readily ex-
+                                                                         Figure 6. MHA computation with two-level storage format.
+tensible to emerging LLM architectures. For instance, in
+Mixture-of-Experts (MoE) models [8], we can accelerate ac-
+tivated experts via specialized kernels while optimizing the             4.2.2 Kernel Implementation. We cut the input tensor
+routing logic through template-based fusion, potentially sup-            𝑄 into sub-blocks of size (OT_Size_M, head_size) along the
+porting dynamic computation paths at minimal cost.                       𝑠𝑒𝑞_𝑙𝑒𝑛 dimension, as illustrated in Algorithm 1. Each sub-
+                                                                         block 𝑄𝑖 (line 2) corresponds to a Row-Parallel Dimension
+                                                                                                  𝑠𝑒𝑞_𝑙𝑒𝑛
+4.2   Unified MHA Kernels                                                (𝑃𝐷𝑖 ), where 𝑖 ∈ [0, ⌈ 𝑂𝑇 _𝑆𝑖𝑧𝑒_𝑀 ⌉). To enhance data local-
+                                                                         ity, for each row processed by 𝑄𝑖 , 𝐾 and 𝑉 are divided
+4.2.1 Sparse Storage Format. Figure 6 shows the block-                   into sub-blocks 𝐾 𝑇𝑗 and 𝑉𝑗 of size (𝑂𝑇 _𝑆𝑖𝑧𝑒_𝑁 , ℎ𝑒𝑎𝑑_𝑠𝑖𝑧𝑒)
+wise computation with a sparse storage format that can repre-                                                            𝑠𝑒𝑞_𝑙𝑒𝑛
+sent arbitrary mask. Inspired by literature [24, 42], we adopt           (lines 7-9), where 𝑗 ∈ [0, ⌈ 𝑂𝑇 _𝑆𝑖𝑧𝑒_𝑁 ⌉). The workload of
+a two-level storage format combining Block Compressed                    OTs per row is determined by the arrays 𝑙𝑜𝑎𝑑_𝑟𝑜𝑤_𝑝𝑡𝑟 and
+Sparse Row (BSR) and bitmap, preserving sparsity while en-               𝑙𝑜𝑎𝑑_𝑛𝑢𝑚 (lines 4-6). Under the coarse-grained block of size
+abling structured computation. As shown in Figure 6, we                  (𝑂𝑇 _𝑆𝑖𝑧𝑒_𝑀, 𝑂𝑇 _𝑆𝑖𝑧𝑒_𝑁 ), only valid OTs that require com-
+abstract two levels as OuterTile (OT) and InnerTile (IT) to              putation are loaded, while others are skipped. This alleviates
+reveal globally skipped blocks and intra-block element dis-              bandwidth conflicts by greatly reducing global memory ac-
+tribution, respectively. Each OT is composed of 64 8×8 ITs               cess. The asynchronous copy of 𝑉𝑗 (line 9) allows the GEMM
+(only 4 are shown in the figure for clarity). An OT is marked            (line 10) to proceed without waiting for the completion of
+as “full” if all of its ITs are not empty, otherwise “part”. For         𝑉𝑗 ’s transfer. Furthermore, it eliminates the need for data
+the “full” OTs, the difference between 𝑓 𝑢𝑙𝑙_𝑟𝑜𝑤_𝑝𝑡𝑟 [𝑖] and             loading stalls in the subsequent GEMM (line 16). After obtain-
+𝑓 𝑢𝑙𝑙_𝑟𝑜𝑤_𝑝𝑡𝑟 [𝑖 − 1] indicates the number of “full” OTs in              ing 𝑃𝑖 𝑗 , the presence of any “part” OTs in the current row
+the 𝑖-th row. The array 𝑓 𝑢𝑙𝑙_𝑐𝑜𝑙_𝑖𝑑𝑥 specifies the column               is checked to determine whether ITs’ storage information
+indices of “full” OTs. For example, as can be inferred from              should be loaded from the uint64 array bitmap_mask and
+𝑓 𝑢𝑙𝑙_𝑟𝑜𝑤_𝑝𝑡𝑟 and 𝑓 𝑢𝑙𝑙_𝑐𝑜𝑙_𝑖𝑑𝑥 arrays in the figure, the col-           applied to mask 𝑆𝑖 𝑗 (lines 11-14). Due to the consistency of
+umn indices of “full” OTs in the 2-nd row are 0 and 2.                   𝐾 𝑇𝑗 and 𝑉𝑗 blocks on the Iteration Dimension (𝐼 𝐷 𝑗 ), the skip
+   For the “part” OTs, there are also two similar arrays in-             operation on 𝐾 𝑇𝑗 is also applied to 𝑉𝑗 , thus reducing amounts
+cluding 𝑝𝑎𝑟𝑡_𝑟𝑜𝑤_𝑝𝑡𝑟 and 𝑝𝑎𝑟𝑡_𝑐𝑜𝑙_𝑖𝑑𝑥. The 𝑝𝑎𝑟𝑡_𝑐𝑜𝑙_𝑖𝑑𝑥                  of calculation and storage. After the Softmax operation, 𝑆𝑖 𝑗
+further points to the corresponding IT with sparse element               and the scaling factor 𝛼 within the OT are obtained to ensure
+distribution. Since each IT contains exactly 64 elements, it             the correctness of reduction operations (lines 15-16). Finally,
+can be efficiently represented by a single uint64 value. Con-            the results are written back to HBM (line 18).
+sequently, for each “part” OT, the internal mask information                 We further conduct advanced optimizations on the MHA
+is stored as a bitmap_mask array consisting of 64 uint64                 kernel, primarily based on FA2 [16]. For example, the 8×8 size
+elements. During the processing of the innermost loop, each              of ITs not only matches the uint64 size but also aligns with
+bitmap_mask[i] is retrieved to obtain the precise masking                the data granularity operable by Tensor Cores. Notably, OTs
+pattern. By combining the structures of “full” and “part” OTs,           are stored in row-major order to accommodate the row-wise
+
+
+
+                                                                   625
+Accelerating Sparse Transformer Inference on GPU                                                                PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+ Algorithm 1: MHA Kernel with Unified Format                                                    compiler can further add kernel-level optimizations. From
+    Input: flattened tensors on HBM 𝑄 _𝐻 𝐵𝑀 , 𝐾 _𝐻 𝐵𝑀 , 𝑉 _𝐻 𝐵𝑀 ; unified                       the perspective of the computational graph, the captured
+           mask storage structures 𝑝𝑎𝑟𝑡 _𝑟𝑜𝑤 _𝑝𝑡𝑟 , 𝑝𝑎𝑟𝑡 _𝑐𝑜𝑙 _𝑖𝑑𝑥 ,                            adjacent nodes are replaced with fused nodes.
+           𝑙𝑜𝑎𝑑 _𝑟𝑜𝑤 _𝑝𝑡𝑟 , 𝑙𝑜𝑎𝑑 _𝑐𝑜𝑙 _𝑖𝑑𝑥 , 𝑏𝑖𝑡𝑚𝑎𝑝 _𝑚𝑎𝑠𝑘
+    Output: MHA result on HBM 𝑟𝑒𝑠𝑢𝑙𝑡 _𝐻 𝐵𝑀
+                                                                                                                                   Fusion Scheme                                                                    Compilation Template
+                   𝑠𝑒𝑞_𝑙𝑒𝑛
+1  for 𝑖 in [0, ⌈ 𝑂𝑇 _𝑆𝑖𝑧𝑒_𝑀 ⌉ ) do                                                                       #0            #1          #7          #8            #9          #13           #14                         CI + MI GEMM + Layernorm
+                                                                                                      GEMM            Add         GEMM          Add      Layernorm        Add         Layernorm                     template_gemm_layernorm(...):
+ 2       𝑄𝑖 ←Load_from_HBM (𝑄 _𝐻 𝐵𝑀𝑖 ) ;                                                                                                                                                                                configs = template.Config(
+                                                                                                                                                                                                                                  block_size,
+ 3       𝑡𝑚𝑝 _𝑝𝑎𝑟𝑡 _𝑐𝑜𝑙 _𝑖𝑑𝑥, 𝑂𝑖 ← 0;                                                                                                                                        Add                                                  num_stages, num_warps)
+
+
+
+
+                                                                                                                                                                                                   scheme mapping
+                                                                                                 GEMM           Scale        Mask        Softmax       GEMM        GEMM                  GEMM
+ 4       𝑙𝑜𝑎𝑑 _𝑛𝑢𝑚 ← 𝑙𝑜𝑎𝑑 _𝑟𝑜𝑤 _𝑝𝑡𝑟 [𝑖 + 1] − 𝑙𝑜𝑎𝑑 _𝑟𝑜𝑤 _𝑝𝑡𝑟 [𝑖 ] ;                                                                                                         & Act.                                      gemm_layernorm_kernel(configs)
+                                                                                                     #2          #3           #4           #5           #6          #10         #11          #12
+ 5       𝑝𝑎𝑟𝑡 _𝑛𝑢𝑚 ← 𝑝𝑎𝑟𝑡 _𝑟𝑜𝑤 _𝑝𝑡𝑟 [𝑖 + 1] − 𝑝𝑎𝑟𝑡 _𝑟𝑜𝑤 _𝑝𝑡𝑟 [𝑖 ] ;                                                                                                                                                 CI + CI    GEMM + GEMM
+
+ 6       for 𝑘𝑣 _𝑖𝑑𝑥 in [0, 𝑙𝑜𝑎𝑑 _𝑛𝑢𝑚) do                                                                     hash encoding                                   numerical decoding                                    template_gemm_gemm(...):
+                                                                                                                                                                                                                        configs = template.Config(
+
+ 7             𝑗 ← 𝑙𝑜𝑎𝑑 _𝑐𝑜𝑙 _𝑖𝑑𝑥 [𝑙𝑜𝑎𝑑 _𝑟𝑜𝑤 _𝑝𝑡𝑟 [𝑖 ] + 𝑘𝑣 _𝑖𝑑 ] ;                                                          Numerical Expression                                                                                 blkM, blkN, blkK, blkH,
+                                                                                                                                                                                                                                  num_stages, num_warps)
+                                                                                                                                                                                                                        gemm_gemm_kernel(configs)
+ 8             𝐾 𝑇𝑗 ←Load_from_HBM (𝐾 _𝐻 𝐵𝑀 𝑗 ) ;
+                                                                                                                                                                                                                    MI + MI Add + Layernorm
+ 9            𝑉 𝑗 ← __async_memcpy ( Load_from_HBM (𝑉 _𝐻 𝐵𝑀 𝑗 ) ) ;                                                                                                                                                 template_add_layernorm(...):
+10             𝑃𝑖 𝑗 ← Compute_GEMM (𝑄𝑖 , 𝐾 𝑇𝑗 ) ;                                               #0 #1 [#2 #3                 #4    #5     #6] [#7 #8 #9] [#10 #11 #12] [#13 #14]                                        configs = template.Config(
+                                                                                                                                                                                                                                  block_size,
+                                                                                                                                                                                                                                  num_stages, num_warps)
+11             if 𝑡𝑚𝑝 _𝑝𝑎𝑟𝑡 _𝑐𝑜𝑙 _𝑖𝑑𝑥 < 𝑝𝑎𝑟𝑡 _𝑛𝑢𝑚 and                                            0        1     0       0     0      0     0       1     1     1     0     0     0       1     1
+                                                                                                                                                                                                                        add_layernorm_kernel(configs)
+                  𝑗 == 𝑝𝑎𝑟𝑡 _𝑐𝑜𝑙 _𝑖𝑑𝑥 [𝑝𝑎𝑟𝑡 _𝑟𝑜𝑤 _𝑝𝑡𝑟 [𝑖 ] + 𝑡𝑚𝑝 _𝑝𝑎𝑟𝑡 _𝑖𝑑𝑥 ]
+                 then
+12                     Apply_Mask (𝑆𝑖 𝑗 , 𝑏𝑖𝑡𝑚𝑎𝑝 _𝑚𝑎𝑠𝑘 [𝑡𝑚𝑝 _𝑝𝑎𝑟𝑡 _𝑐𝑜𝑙 _𝑖𝑑𝑥 ] ) ;                     Figure 7. The workflow of fusion scheme converter.
+13                     𝑡𝑚𝑝 _𝑝𝑎𝑟𝑡 _𝑐𝑜𝑙 _𝑖𝑑𝑥 ← 𝑡𝑚𝑝 _𝑝𝑎𝑟𝑡 _𝑐𝑜𝑙 _𝑖𝑑𝑥 + 1;
+14             end
+15             𝑆𝑖 𝑗 , 𝛼 ←Softmax (𝑃𝑖 𝑗 ) ;                                                         Figure 7 shows the workflow of the fusion scheme con-
+16             𝑂𝑖 ← 𝑂𝑖 × 𝛼+Compute_GEMM (𝑆𝑖 𝑗 , 𝑉 𝑗 ) ;                                         verter in STOF. Take the forward propagation of BERT as
+17       end                                                                                    an example, STOF traverses the computational graph con-
+18       𝑟𝑒𝑠𝑢𝑙𝑡 _𝐻 𝐵𝑀 ←Write_back_to_HBM (𝑂𝑖 ) .
+19 end
+                                                                                                structed by the DL framework and extracts subgraphs that
+                                                                                                conform to the patterns of fusion schemes. Each subgraph is
+                                                                                                mapped to the target compilation template, which is carefully
+iterative computation of Softmax, whereas ITs are stored in                                     implemented to achieve optimal performance. Specifically,
+col-major order to enable bank conflict-free accesses. The                                      the templates decompose tensor operations into tiles to max-
+OT size is determined by considering cache capacity and the                                     imize data reuse, leverage warp-level primitives for efficient
+number of SMs. During each iteration, 𝑄𝑖 is kept in registers,                                  reductions, and apply multi-stage pipelining to overlap mem-
+𝐾 𝑇𝑗 and 𝑉𝑗 share a single physical portion of shared memory.                                   ory accesses and computation. Although we customize the
+                                                                                                compilation template according to the functionality of the
+4.2.3 Kernel Selection. By comprehensively considering                                          fused operator, the graph mapping process is highly flexible.
+the influence of masking patterns and sequence lengths, we                                      For instance, the template that computes a GEMM chain
+decide whether to apply a row-wise or block-wise kernel for                                     with CI+CI pattern can also incorporate simple MI opera-
+MHA computation. As formulated in Equation 1, we empiri-                                        tions, such as adding bias element by element (i.e., Bias). On
+cally set the coefficient 𝜏 to 1.2 and calculate the 𝑡ℎ𝑟𝑒𝑠ℎ𝑜𝑙𝑑.                                 the other hand, the compilation template hides the hardware
+We select row-wise kernel if 𝑡ℎ𝑟𝑒𝑠ℎ𝑜𝑙𝑑 is less than 0, indi-                                    execution details and only exposes key kernel parameters
+cating that the ratio of valid OTs (i.e., “full” and “part”) is                                 for performance tuning. For the GEMM chain, the sub-block
+sufficiently low. Note that we use 𝑙𝑜𝑔 operation to penalize                                    sizes and the launch configuration (e.g., number of stages)
+the extremely sparse situation due to the increase of 𝑠𝑒𝑝_𝑙𝑒𝑛                                   constitute the search space, providing the possibility of fur-
+while the mask width remains unchanged. By doing so, we                                         ther optimization targeting at a specified case.
+have limited row-wise kernel to cases where the number of                                          The fusion scheme is quantized by hash encoding, and
+valid OTs is small and the 𝑠𝑒𝑝_𝑙𝑒𝑛 is short. In such cases,                                     the native operators are represented as arrays with a length
+centralized row-wise computation of mask elements brings                                        equal to the number of operators according to the vertical
+excellent data locality. For other general cases, we apply                                      fusion situation. In this way, hash encoding translates ab-
+block-wise kernel to maximize performance.                                                      stract fusion patterns into a quantifiable space, a process
+                                                                                                that establishes a bidirectional mapping consistent with the
+                                           𝑠𝑒𝑞 _𝑙𝑒𝑛
+                      𝑙𝑜𝑎𝑑_𝑟𝑜𝑤_𝑝𝑡𝑟 [ ⌈        16    ⌉]               𝜏                          definition of “hash”. We assume that in addition to mapping
+      𝑡ℎ𝑟𝑒𝑠ℎ𝑜𝑙𝑑 =                 𝑠𝑒𝑞 _𝑙𝑒𝑛
+                                                         −          𝑠𝑒𝑞 _𝑙𝑒𝑛
+                                                                                    (1)
+                               ( ⌈ 16 ⌉ ) 2                  (log2 ⌈ 16 ⌉ ) 2                   MHA ([#2-#6]) to the fused kernel, the fusion scheme also
+                                                                                                specifies three other downstream fused operators including
+4.3     Fusion Scheme Conversion                                                                [#7-#9], [#10-#12], and [#13,#14]. The numbers representing
+It is essential to express the fusion scheme appropriately,                                     the operators in the subgraph are the same, which is similar
+quantifying the dependencies among vertical operators and                                       to the high-low voltage levels of the circuit. For example,
+identifying the fusion boundaries. Inspired by the high-low                                     the numbers corresponding to the subgraph [#7-#9] are all
+voltage levels of digital circuits, we use binary hash codes                                    1. Besides, the different numbers of adjacent operators refer
+as the numerical expression of fusion schemes. STOF maps                                        to the boundary of adjacent subgraphs. Note that the num-
+the fused operators to compilation templates so that the                                        bers are unrelated to the operator characteristics, they are
+
+
+
+                                                                                          626
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                                     Dai et al.
+
+
+introduced solely to facilitate the subsequent tuning process.                                                                                             at most two CI operators in each segment, and classified the
+The numerical expression is usually in binary, but it can also                                                                                             fusion rules into the following three categories.
+be converted to hexadecimal format with a higher compres-
+sion rate. Intuitively, this expression approach constructs a                                                                                                    • expand: merge existing individual or fused operators to
+flexible search space that can represent any fusion scheme.                                                                                                        form a new segment without disrupting the structure
+On this basis, we propose a two-stage search mechanism to                                                                                                          of other segments, such as the transition from 𝑆 0 to 𝑆 1 .
+tune the running configuration during inference.                                                                                                                 • seize: a segment with at least one CI operator preempts
+                                                                                                                                                                   an operator from a segment consisting of only MI
+4.4       Search Space Exploration                                                                                                                                 operators, such as the transition from 𝑆 1 to 𝑆 2 .
+STOF deploys a search engine featuring scalable fusion bound-                                                                                                    • compete: if two segments compete for an individual
+aries and parameter-tuning capabilities. As depicted in Fig-                                                                                                       operator, the segment with only one CI operator will
+ure 8, the search engine first uses neural hashing and pre-                                                                                                        be extended first, such as the transition from 𝑆 2 to 𝑆 3 .
+defined rules to derive an initial fusion scheme. Then, the                                                                                                   Based on the above rules, we apply depth-first search (DFS)
+two-stage procedure is conducted to determine the bound-                                                                                                   to gradually expand the fusion range. In this process, STOF
+aries of the fused operators and their kernel parameters.                                                                                                  randomly samples a fixed number of parameter settings of
+                                                                                                                                                           the pre-fusion and post-fusion operators, then takes the best
+Scheme Initialization                                                 Two-Stage Tuning Procedure
+                                                                                                                                                           setting to compare the performance. If there is a performance
+                                                             Fusion Expansion            Parameter Sampling
+                                                                                                                                                           gain, STOF will keep the new fusion scheme, otherwise roll
+                                                        S0   0 1 0 0 0 0 0 1 1 0 1 1 1 0 0                     0 0 1 1 1 1 1 0 0 0 1 1 1 1 0
+                                                                                                                                                           back. As long as the scheme has appeared and the perfor-
+                                initial fusion scheme
+
+
+
+
+                                                        expand
+                                                                                             scheme
+
+
+
+
+                                                        S1   0 0 1 1 1 1 1 0 0 1 0 0 0 1 1            iter0   5 settings   5 settings   5 settings
+  Analytical Model                                                                seize                  reward
+                                                                                                      iter1
+                                                                                                                                                           mance under specific parameter settings is recorded in the
+                                                                                                              6 settings   5 settings   5 settings
+   ü computation graph                                  S2
+   ü neural hashing
+                                                             0 0 1 1 1 1 1 0 0 1 0 0 0 0 1
+                                                                       compete                        iter2
+                                                                                                                       reward
+                                                                                                              6 settings   6 settings   5 settings
+                                                                                                                                                           cache, the same attempt will not be made later.
+   ü predefined rules
+                                                        S3   0 0 1 1 1 1 1 0 0 0 1 1 1 1 0
+                                                                                                      itern                 ……                                In the second stage, STOF conducts parameter sampling for
+                                                                          Performance Tuning Data Cache
+                                                                                                                                                           the determined scheme. Specifically, we fix the total number
+CI CI      CI CI   CI CI
+                                                        performance feedback                sampled settings
+                                                                                                                                                           of configurations during each iteration and retrieve perfor-
+0 1 0 0 0 0 0 1 1 0 1 1 1 0 0
+                                                                          Hardware Execution                                                               mance data. In the first iteration, STOF ensures the number
+                                                                                                                                                           of sampled settings for each segment is the same. When
+   Figure 8. The workflow of hierarchical search engine.                                                                                                   the highest overall gain is achieved when tuning a segment,
+                                                                                                                                                           STOF rewards it by increasing the sampled settings in the
+                                                                                                                                                           next iteration. Similarly, STOF caches performance data to
+4.4.1 Fusion Scheme Initialization. STOF leverages both                                                                                                    avoid repeated execution of the same parameter setting.
+pattern discovery and expert knowledge to derive the initial
+fusion scheme. First, STOF adopts a convolutional subgraph                                                                                                 4.5    Implementation Details
+analysis method neural hashing to discover representative
+                                                                                                                                                           We have implemented a system prototype of STOF based on
+subgraphs that frequently appear during the inference, for-
+                                                                                                                                                           PyTorch [4], Triton [59] and TileLang [12], involving approx-
+malized as: 𝐻 (𝐺) = Fhash (Fconv (𝐺)). Here, 𝐺 is the input
+                                                                                                                                                           imately 5,000 LOC of Python and 2,500 LOC of C/CUDA. The
+computational graph structure; Fconv is a convolutional fea-
+                                                                                                                                                           block-wise kernel is developed based on FA2 [16] with the
+ture extractor that extracts local structural features from the
+                                                                                                                                                           CuTe structure, but introduces an efficient two-level storage
+graph 𝐺. Fhash is a hash mapper, which compresses and dis-
+                                                                                                                                                           format and corresponding optimizations. Subsequently, the
+cretizes the extracted features into a unique hash fingerprint
+                                                                                                                                                           customized MHA kernel is loaded into PyTorch through the
+𝐻 (𝐺). By analyzing the frequency distribution of these fin-
+                                                                                                                                                           torch/cpp_extension interface, which encapsulates the
+gerprints, STOF can rapidly detect classical subgraph struc-
+                                                                                                                                                           kernel in the form of a native function. When the MHA
+tures across Transformer-based models. Second, STOF uses
+                                                                                                                                                           kernel is first called, it is just-in-time (JIT) compiled into a
+predefined rules to extract potentially high-performance sub-
+                                                                                                                                                           shared object file (.so) using the ninja tool, enabling dy-
+graphs from the identified subgraph structures to form the
+                                                                                                                                                           namic linking at runtime without repeated compilation.
+initial scheme. For example, according to the conclusion in
+                                                                                                                                                              Regarding the operator fusion module, we find that the
+Section 3, the GEMM chain is preferentially fused into one
+                                                                                                                                                           Triton- and TileLang-based compilation templates demon-
+segment under smaller batch sizes and sequence lengths.
+                                                                                                                                                           strate performance variance under different fused operators,
+4.4.2 Two-Stage Tuning Procedure. In the first stage,                                                                                                      so we select the implementation that achieves superior per-
+STOF tends to expand the boundaries of the segments until                                                                                                  formance in each case. We enable the graph capture and re-
+there is no additional benefit after fusion. Since DL frame-                                                                                               placement by manipulating objects of type fx.GraphModule.
+works have implemented the fusion of common MI operators,                                                                                                  Since the overall implementation of STOF is compatible with
+we mark CI operators and adjust the fusion scheme around                                                                                                   the torch.compile function, its related compilation opti-
+them for complementarity. We have restricted that there are                                                                                                mizations can be reused to maximize performance.
+
+
+
+                                                                                                                                                     627
+Accelerating Sparse Transformer Inference on GPU                                                                           PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                             PyTorch Native              SPLAT                 MCFuser                 ByteTransformer                     FA2           FlexAttention                STOF
+          30                                                                                                      30                      107.9                     76.6 131.7                42.6   64.2 138.0
+          25                                                                                                      25
+Speedup
+
+
+
+
+                                                                                                        Speedup
+          20                                                                                                      20
+          15                                                                                                      15
+          10                                                                                                      10
+           5                                                                                                       5
+           0 128 256 512 1024 2048 4096   128 256 512 1024 2048 4096      128 256 512 1024 2048 4096
+                                                                                                                   0 128 256 512 1024 2048 4096   128 256 512 1024 2048 4096     128 256 512 1024 2048 4096
+                    batch size=1                batch size=8                    batch size=16                               batch size=1                batch size=8                   batch size=16
+                                                 (a) Causal                                                                                         (b) Sliding window
+          30                                                30.9   48.7                         53.0              30                                                      55.5                       30.7   64.4
+          25                                                                                                      25
+Speedup
+
+
+
+
+                                                                                                        Speedup
+          20                                                                                                      20
+          15                                                                                                      15
+          10                                                                                                      10
+           5                                                                                                       5
+           0 128 256 512 1024 2048 4096   128 256 512 1024 2048 4096      128 256 512 1024 2048 4096
+                                                                                                                   0 128 256 512 1024 2048 4096   128 256 512 1024 2048 4096     128 256 512 1024 2048 4096
+                    batch size=1                batch size=8                    batch size=16                               batch size=1                batch size=8                   batch size=16
+                                              (c) Longformer                                                                                            (d) Bigbird
+
+
+             Figure 9. The MHA performance of the methods normalized to that of PyTorch Native on NVIDIA RTX 4090 GPU.
+
+                             PyTorch Native              SPLAT                 MCFuser                 ByteTransformer                     FA2           FlexAttention                STOF
+          30                                                                                                      30                      107.9                     76.6 131.7                42.6   64.2 138.0
+          25                                                                                                      25
+Speedup
+
+
+
+
+                                                                                                        Speedup
+          20                                                                                                      20
+          15                                                                                                      15
+          10                                                                                                      10
+           5                                                                                                       5
+           0 128 256 512 1024 2048 4096   128 256 512 1024 2048 4096      128 256 512 1024 2048 4096
+                                                                                                                   0 128 256 512 1024 2048 4096   128 256 512 1024 2048 4096     128 256 512 1024 2048 4096
+                    batch size=1                batch size=8                    batch size=16                               batch size=1                batch size=8                   batch size=16
+                                                 (a) Causal                                                                                         (b) Sliding window
+          30                                                30.9   48.7                         53.0              30                                                      55.5                       30.7   64.4
+          25                                                                                                      25
+Speedup
+
+
+
+
+                                                                                                        Speedup
+
+          20                                                                                                      20
+          15                                                                                                      15
+          10                                                                                                      10
+           5                                                                                                       5
+           0 128 256 512 1024 2048 4096   128 256 512 1024 2048 4096      128 256 512 1024 2048 4096
+                                                                                                                   0 128 256 512 1024 2048 4096   128 256 512 1024 2048 4096     128 256 512 1024 2048 4096
+                    batch size=1                batch size=8                    batch size=16                               batch size=1                batch size=8                   batch size=16
+                                              (c) Longformer                                                                                            (d) Bigbird
+
+
+               Figure 10. The MHA performance of the methods normalized to that of PyTorch Native on NVIDIA A100 GPU.
+
+5            Evaluation                                                                                           appears in the end-to-end evaluation. Since SPLAT is not
+5.1           Experiment Setup                                                                                    open source, we reproduce it based on the contents in the pa-
+                                                                                                                  per. We adopt the half precision (FP16) for evaluation, which
+5.1.1 Hardware and Software Platforms. We evaluate
+                                                                                                                  is commonly used for model inference in industry [3], ensur-
+STOF on two generations of GPUs, including NVIDIA RTX
+                                                                                                                  ing a unified comparison across all methods. To minimize
+4090 of Ada model and NVIDIA A100 of Ampere model.
+                                                                                                                  machine errors, we perform warm-ups for all experiments
+The experiments are conducted in the software environment
+                                                                                                                  and run 100 times to record the average performance.
+configured with Ubuntu 22.04, CUDA v12.6, and PyTorch
+2.7.0. We package Docker containers to quickly migrate the
+software environment between hardware platforms.                                                                  5.2     MHA Performance
+                                                                                                                  Figure 9 and Figure 10 present the MHA performance of the
+5.1.2 Comparison Configurations and Methods. We                                                                   methods normalized to that of PyTorch Native on RTX 4090
+conduct evaluation on both atomic and compound masking                                                            and A100 GPUs. The missing bars are attributed to two rea-
+patterns including causal, sliding window, Longformer [6],                                                        sons: 1) ByteTransformer lacks support for sequence lengths
+and Bigbird [71]. The sequence length ranges from 128 to                                                          greater than 1,024; 2) MCFuser runs out of memory (OOM)
+4,096 with a stride of 2×, and the batch size ranges from 1 to                                                    when the input scale is large. As seen, STOF shows consistent
+16. For MHA computation, we follow the configuration of                                                           superior performance on both GPU platforms. Compared
+BERT-Base. For end-to-end inference, the configuration is                                                         to the state-of-the-art FlexAttention implementation, STOF
+set to be consistent with the standard models of BERT [18],                                                       achieves the average speedups of 1.8× and 1.6× on RTX 4090
+GPT2 [48], LLaMA [60], T5 [49] and ViT [22]. We compare                                                           and A100 GPUs, respectively. STOF achieves superior perfor-
+STOF with PyTorch Native, PyTorch Compile [4], FlashAtten-                                                        mance on sliding window mask because its high sparsity and
+tion2 (FA2) [16], FlexAttention [19], ByteTransformer [72],                                                       concentration of valid blocks facilitate computation skipping.
+Bolt [67], MCFuser [73], and SPLAT [28]. Note that FlexAt-                                                        Even for causal masks, STOF still achieves a certain speedup
+tention, FA2, and SPLAT are optimized only for MHA, while                                                         over FA2 and FlexAttention under most cases. The reason is
+PyTorch Compile integrates FA2 for MHA computation. In                                                            that the two-level storage format combining BSR and bitmap
+addition, Bolt has no MHA-specific optimizations and only                                                         further improves on-chip memory locality. In contrast, due
+
+
+
+                                                                                                   628
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                                     Dai et al.
+
+
+                                      PyTorch Native                 MCFuser                 ByteTransformer                                  Bolt                   PyTorch Compile                       STOF
+          4                                                                      4.5                 5.0
+                                                                                                                            4                                                                        6.4      4.2         7.1
+          3                                                                                                                 3
+Speedup
+
+
+
+
+                                                                                                                  Speedup
+          2                                                                                                                 2
+          1                                                                                                                 1
+          0                                                                                                                 0
+               e
+
+                     ge
+
+                      -2
+
+
+
+
+                                           RT se
+
+                                                  ge
+                                  A
+                                      T5
+
+
+                                            RT T
+
+
+
+
+                                                   -2
+
+                                                   A
+                                                                     T5
+
+                                                                             T
+
+                                                                            RT se
+
+                                                                                   ge
+
+                                                                                    -2
+
+
+
+
+                                                                                                                                RT e
+
+                                                                                                                                       ge
+                                                                                    A
+                                                                                                 T5
+
+                                                                                                              T
+
+
+
+
+                                                                                                                                        -2
+
+
+
+
+                                                                                                                                                                T
+
+                                                                                                                                                               RT se
+
+                                                                                                                                                                      ge
+
+                                                                                                                                                                       -2
+
+
+
+
+                                                                                                                                                                                                T
+
+                                                                                                                                                                                                RT se
+
+                                                                                                                                                                                                       ge
+                                                                                                                                        A
+                                                                                                                                                        T5
+
+
+
+
+                                                                                                                                                                       A
+                                                                                                                                                                                        T5
+
+
+
+
+                                                                                                                                                                                                        -2
+
+                                                                                                                                                                                                        A
+                                                                                                                                                                                                                      T5
+
+                                                                                                                                                                                                                                   T
+              as
+
+
+
+
+                                                                                                                                as
+                                                Vi
+
+
+
+
+                                                                          Vi
+
+
+
+
+                                                                                                           Vi
+
+
+
+
+                                                                                                                                                             Vi
+
+
+
+
+                                                                                                                                                                                             Vi
+
+
+
+
+                                                                                                                                                                                                                                Vi
+                              aM
+
+
+
+
+                                               aM
+
+
+
+
+                                                                                aM
+
+
+
+
+                                                                                                                                    aM
+
+
+
+
+                                                                                                                                                                   aM
+
+
+
+
+                                                                                                                                                                                                    aM
+                   PT
+
+
+
+
+                                               PT
+
+
+
+
+                                                                                PT
+
+
+
+
+                                                                                                                                    PT
+
+
+
+
+                                                                                                                                                                   PT
+
+
+
+
+                                                                                                                                                                                                    PT
+                                                 a
+
+
+
+
+                                                                                  a
+
+
+
+
+                                                                                                                                                                     a
+
+
+
+
+                                                                                                                                                                                                      a
+                   ar
+
+
+
+
+                                                ar
+
+
+
+
+                                                                                 ar
+
+
+
+
+                                                                                                                                     ar
+
+
+
+
+                                                                                                                                                                    ar
+
+
+
+
+                                                                                                                                                                                                     ar
+      -B
+
+
+
+
+                                              -B
+
+
+
+
+                                                                               -B
+
+
+
+
+                                                                                                                        -B
+
+
+
+
+                                                                                                                                                                  -B
+
+
+
+
+                                                                                                                                                                                                   -B
+                 -L
+
+
+
+
+                                             -L
+
+
+
+
+                                                                              -L
+
+
+
+
+                                                                                                                                  -L
+
+
+
+
+                                                                                                                                                                 -L
+
+
+
+
+                                                                                                                                                                                                  -L
+                      G
+
+
+
+
+                                             G
+
+
+
+
+                                                                              G
+
+
+
+
+                                                                                                                                  G
+
+
+
+
+                                                                                                                                                                 G
+
+
+
+
+                                                                                                                                                                                                  G
+                             LL
+
+
+
+
+                                            LL
+
+
+
+
+                                                                             LL
+
+
+
+
+                                                                                                                                 LL
+
+
+
+
+                                                                                                                                                                LL
+
+
+
+
+                                                                                                                                                                                                 LL
+    RT
+
+
+
+
+                                                                             RT
+
+
+
+
+                                                                                                                      RT
+
+
+
+
+                                                                                                                                                                RT
+
+
+
+
+                                                                                                                                                                                                 RT
+               RT
+BE
+
+
+
+
+                                           BE
+
+
+
+
+                                                                          BE
+
+
+
+
+                                                                                                                  BE
+
+
+
+
+                                                                                                                                                              BE
+
+
+
+
+                                                                                                                                                                                             BE
+              BE
+
+
+
+
+                                                 BE
+
+
+
+
+                                                                                 BE
+
+
+
+
+                                                                                                                                BE
+
+
+
+
+                                                                                                                                                                    BE
+
+
+
+
+                                                                                                                                                                                                    BE
+                           (1, 128)                       (8, 512)                      (16, 2048)                                           (1, 128)                        (8, 512)                        (16, 2048)
+                                                (a) NVIDIA RTX 4090 GPU                                                                                              (b) NVIDIA A100 GPU
+
+
+Figure 11. The end-to-end performance of the methods normalized to that of PyTorch Native on RTX 4090 and A100 GPUs.
+
+                            Table 4. Tuning time of STOF, MCFuser, and Bolt for end-to-end inference on A100 GPU in seconds.
+
+              Input Size                     (1, 128)                                                 (8, 512)                                                                          (16, 2048)
+              Name             BERT-B BERT-L GPT LLaMA                    T5      ViT   BERT-B BERT-L GPT LLaMA                                T5       ViT         BERT-B BERT-L       GPT LLaMA             T5     ViT
+              MCFuser              51.4         52.4   49.5   48.8        71.9 100.2      91.8        132.3       100.8              110.8    239.0 437.8            660.2   1049.7     664.4       820.6    1987.6 4264.3
+              Bolt                 53.3         57.3   48.8   52.1        70.7 120.7      90.8        126.1       99.8               124.6    244.7 468.8            652.2   1067.7     738.6       837.0    1860.8 3848.6
+              STOF (ours)          23.3         22.6   23.8   29.5        43.1 93.9       40.9        55.0        40.9               43.6     80.3 99.3              99.6    225.3      122.2       264.6    388.3 412.8
+
+
+
+to the lack of tensor core support, SPLAT achieves decent                                                                   across the majority of models and settings on both GPU
+performance on RTX 4090 GPU with higher CUDA core ratio,                                                                    platforms. Even compared to the state-of-the-art PyTorch
+achieving a maximum speedup of 3.6× compared to PyTorch                                                                     Compile, STOF achieves an average speedup of 1.3× and 1.4×
+Native; but it lags behind on A100 GPU across all cases.                                                                    on RTX 4090 and A100 GPUs, respectively. In addition to
+   The above figures illustrate the MHA performance at dif-                                                                 customizing the MHA kernel, the performance gain of STOF
+ferent input scales in detail. At small scales, STOF achieves                                                               also comes from operator fusion and parameter tuning.
+relatively better performance than FA2 and FlexAttention un-                                                                   For the setting (16, 2,048), STOF achieves 1.5×, 1.5×, 1.2×,
+der most cases. STOF enables the row-wise kernel, where the                                                                 1.3×, 1.1×, and 1.2× speedups over PyTorch Compile for the
+use of shuffle operations within the warp incurs extremely                                                                  six models on RTX 4090 GPU. A similar trend can be observed
+low synchronization cost. On the other hand, STOF achieves                                                                  on A100 GPU. The results indicate that the advantages of
+significant speedup compared to other methods at large input                                                                STOF are particularly pronounced for larger input scales.
+scales. For example, when the setting of (batch size, sequence                                                              The reason is attributed to the significant reduction in the
+length) is (16, 4,096), STOF achieves 4.8× and 4.9× speedups                                                                absolute time of the bottleneck MHA computation. This
+over FA2 and FlexAttention on A100 GPU, respectively. This                                                                  demonstrates that STOF has the potential to be applied to
+is mainly because the block-wise kernel makes full use of                                                                   future GPU generations with larger memory capacity.
+the mask sparsity to skip unnecessary calculations. Besides,
+the optimizations such as asynchronous data copying and                                                                     5.4         Tuning Cost
+Q register resident serve as the foundation for performance                                                                 Table 4 lists the tuning time of STOF, MCFuser, and Bolt
+improvement. Note that PyTorch Native, MCFuser, and Byte-                                                                   for end-to-end inference on A100 GPU in seconds, where
+Transformer do not natively support sparse masks. The basic                                                                 BERT-B/L is BERT-Base/Large. Note that PyTorch Native,
+approach is to subtract the mask matrix, thus missing the                                                                   PyTorch Compile, and ByteTransformer are not included due
+opportunity to reduce the amount of calculation.                                                                            to the lack of tuning support. As seen, the tuning time of
+                                                                                                                            STOF is less than that of MCFuser and Bolt in all cases. This
+5.3                End-to-end Performance                                                                                   advantage becomes more prominent when the input scale
+We benchmark five models including BERT-Base, BERT-                                                                         is large. Since the tuning process of operator fusion module
+Large, GPT2, LLaMA, T5 and ViT. Among them, BERT and                                                                        in STOF is positively correlated with the input tensor, the
+ViT are encoder-only, GPT2 and LLaMA are decoder-only,                                                                      tuning cost per iteration increases moderately, but it does not
+whereas T5 contains both encoder and decoder. We adopt the                                                                  grow linearly with respect to the overall tuning time. For the
+Bigbird mask and conduct experiments under three distinct                                                                   setting (16, 2,048), STOF is on average 6.7× and 6.9× faster
+settings of (batch size, sequence length): (1, 128), (8, 512), and                                                          than MCFuser and Bolt. This is mainly because reward-based
+(16, 2,048). Figure 11 presents the end-to-end performance of                                                               sampling enables STOF to find high-performance settings
+the methods normalized to that of PyTorch Native on RTX                                                                     in a shorter time. On the other hand, the caching mecha-
+4090 and A100 GPUs. The missing bars indicate OOM for MC-                                                                   nism ensures that the same parameter setting in each fusion
+Fuser or unsupported sequence length for ByteTransformer.                                                                   scheme will not be executed repeatedly, which particularly
+As seen, STOF consistently delivers the highest speedups                                                                    saves tuning time in scenarios with large input scales.
+
+
+
+                                                                                                              629
+Accelerating Sparse Transformer Inference on GPU                                                                                       PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+5.5                Ablation Study                                                                                  is that the overhead for analyzing mask blocks increases with
+Figure 12 presents the speedup of STOF with only unified                                                           longer sequence lengths. Nevertheless, the analysis consti-
+MHA module or only operator fusion module over PyTorch                                                             tutes at most 0.5% of the total time. Overall, STOF accounts
+Native and PyTorch Compile on A100 GPU. For reference,                                                             for less than 3% of the total tuning time, making it highly
+the speedup of STOF with both modules is also shown in                                                             acceptable in the context of model fine-tuning.
+the figure. For PyTorch Compile, we also break the MHA
+boundary, transforming the whole computation graph into                                                                                       Analytical Model              Numercial Decoding
+low-level meta operators for compilation optimization.                                                                                        Hash Encoding                 Reward Algorithm
+                                                                                                                                3.0%
+
+
+
+
+                                                                                                                   Percentage
+   As seen, the operator fusion module contributes more to                                                                      2.0%
+the performance when the input scale is small. Taking the                                                                       1.0%
+setting of (1, 128) as an example, the speedup achieved by                                                                      0.0%
+only fusion module is 19.5% higher than that of only MHA
+
+
+
+
+                                                                                                                                   RT ase
+
+                                                                                                                                      G e
+
+
+
+
+                                                                                                                                                      T
+
+                                                                                                                                                          RT ase
+
+                                                                                                                                                             G e
+
+
+
+
+                                                                                                                                                                                    G e
+                                                                                                                                    LL -2
+                                                                                                                                            A
+                                                                                                                                                    T5
+
+
+
+
+                                                                                                                                                           LL -2
+                                                                                                                                                                   A
+                                                                                                                                                                         T5
+
+                                                                                                                                                                           T
+
+                                                                                                                                                                                 RT ase
+
+
+
+                                                                                                                                                                                  LL -2
+                                                                                                                                                                                          A
+                                                                                                                                                                                               T5
+
+                                                                                                                                                                                                 T
+                                                                                                                                           g
+
+
+
+
+                                                                                                                                                                  g
+
+
+
+
+                                                                                                                                                                                         g
+                                                                                                                                                   Vi
+
+
+
+
+                                                                                                                                                                        Vi
+
+
+
+
+                                                                                                                                                                                              Vi
+                                                                                                                                       aM
+
+
+
+
+                                                                                                                                                              aM
+
+
+
+
+                                                                                                                                                                                     aM
+                                                                                                                                        PT
+
+
+
+
+                                                                                                                                                               PT
+
+
+
+
+                                                                                                                                                                                      PT
+                                                                                                                                         ar
+
+
+
+
+                                                                                                                                                                ar
+
+
+
+
+                                                                                                                                                                                       ar
+                                                                                                                                 BE T-B
+
+
+
+
+                                                                                                                                                        BE T-B
+
+
+
+
+                                                                                                                                                                               BE T-B
+                                                                                                                                      -L
+
+
+
+
+                                                                                                                                                             -L
+
+
+
+
+                                                                                                                                                                                    -L
+module on average. In fact, the low sequence length and
+
+
+
+
+                                                                                                                                    R
+
+
+
+
+                                                                                                                                                           R
+
+
+
+
+                                                                                                                                                                                  R
+                                                                                                                            BE
+
+
+
+
+                                                                                                                                                       BE
+
+
+
+
+                                                                                                                                                                             BE
+                                                                                                                                             (1,128)              (8,512)              (16,2048)
+batch size lead to a small computational workload, which is
+particularly friendly to the fusion of CI operators. However,
+                                                                                                                   Figure 13. Time breakdown of the STOF overhead normal-
+the contribution of the MHA module exceeds that of fusion
+                                                                                                                   ized to the tuning process on A100 GPU.
+module as the input scale increases. For the (16, 2,048) set-
+ting, the speedup of only MHA module is 2.0× on average,
+higher than that of only fusion module. Since MHA compu-                                                           5.7                 Discussion
+tation becomes the bottleneck, the high parallelism of the
+                                                                                                                   5.7.1 Newer GPU Architectures. In addition to NVIDIA
+block-wise kernel is reflected in end-to-end inference. Note
+                                                                                                                   Ampere and Ada architectures, we have conducted prelimi-
+that STOF with both modules always achieves the highest
+                                                                                                                   nary tests on newer hopper architecture (i.e., NVIDIA H20
+speedup, indicating that the optimizations can complement
+                                                                                                                   GPU). The results show that STOF consistently outperforms
+each other. On the other hand, we find that breaking the
+                                                                                                                   FA2, achieving up to 1.4× speedup for MHA computation.
+MHA boundary would compromise these tailored kernel op-
+                                                                                                                   This proves that kernel optimizations of STOF are universal
+timizations. The results show that such boundary breaking
+                                                                                                                   across GPU architectures. We plan to extend this evaluation
+causes up to 1.5× slowdown compared to preserving it.
+                                                                                                                   to include FA3 for future work.
+                    PyTorch Native                                        Only MHA Module                          5.7.2 Longer Sequence Lengths. We explore sequence
+                    PyTorch Compile                                       Only Fusion Module
+                                                                                                                   lengths ranging from 4k to 16k and batch size of 1 on NVIDIA
+                    PyTorch Compile without MHA boundary                  MHA Module+Fusion Module
+          4                                                               5.8   6.4       4.2   6.6   7.1          A100 GPU. STOF achieves significant speedups over the
+          3
+Speedup
+
+
+
+
+          2
+                                                                                                                   SOTA PyTorch Compile, reaching 4.1×, 11.1×, and 16.8×
+          1                                                                                                        at 4k, 8k, and 16k, respectively. In addition, all baselines
+          0                                                                                                        except STOF encounter Out-of-Memory (OOM) errors at
+    RT se
+
+           ge
+
+            -2
+
+            A
+                                  T5
+
+
+
+
+                                          RT se
+
+                                                 ge
+
+                                                  -2
+
+                                                  A
+                                                              T5
+
+
+
+
+                                                                      RT se
+
+                                                                             ge
+
+                                                                              -2
+                                          T
+
+
+
+
+                                                                      T
+
+
+
+
+                                                                              A
+                                                                                                T5
+
+                                                                                                         T
+                                       Vi
+
+
+
+
+                                                                   Vi
+
+
+
+
+                                                                                                      Vi
+        aM
+
+
+
+
+                                              aM
+
+
+
+
+                                                                          aM
+        PT
+
+
+
+
+                                              PT
+
+
+
+
+                                                                          PT
+          a
+
+
+
+
+                                                a
+
+
+
+
+                                                                            a
+         ar
+
+
+
+
+                                               ar
+
+
+
+
+                                                                           ar
+       -B
+
+
+
+
+                                             -B
+
+
+
+
+                                                                         -B
+
+
+
+
+                                                                                                                   sequence length of 32k, whereas STOF reaches OOM at 64k.
+      -L
+
+
+
+
+                                            -L
+
+
+
+
+                                                                        -L
+      G
+
+
+
+
+                                            G
+
+
+
+
+                                                                        G
+     LL
+
+
+
+
+                                           LL
+
+
+
+
+                                                                       LL
+     RT
+
+
+
+
+                                           RT
+
+
+
+
+                                                                       RT
+BE
+
+
+
+
+                                        BE
+
+
+
+
+                                                                    BE
+
+
+
+
+                       (1, 128)                    (8, 512)                           (16, 2048)
+              BE
+
+
+
+
+                                              BE
+
+
+
+
+                                                                          BE
+
+
+
+
+                                                                                                                   The results indicate that STOF exhibits greater performance
+                                                                                                                   improvement for ultra-long sequence lengths, as well as
+Figure 12. The speedup of STOF with only MHA module or
+                                                                                                                   significantly saving GPU memory.
+only fusion module over PyTorch Native on A100 GPU.
+                                                                                                                   5.7.3 Dynamic Mask Patterns. STOF is inherently posi-
+                                                                                                                   tioned to support dynamic mask patterns due to its flexible
+5.6                Overhead Analysis                                                                               design. For example, MInference [32] could serve as a sophis-
+The STOF overhead mainly includes the analysis model,                                                              ticated frontend to discover dynamic patterns, with STOF as
+scheme conversion (i.e., hash encoding and numerical decod-                                                        the execution backend. The main challenge lies in efficiently
+ing), and reward algorithm. The analysis model is reflected                                                        integrating MInference’s offline pattern determination and
+in MHA kernel selection and fusion scheme initialization.                                                          online index generation into STOF’s compilation pipeline
+Figure 13 presents the time breakdown of STOF overhead                                                             with minor overhead. For future work, we plan to extend
+normalized to the tuning process on A100 GPU. As seen, the                                                         the analytical model to determine optimal configurations at
+time proportion of scheme conversion and reward algorithm                                                          runtime based on input token sequence.
+is relatively smaller when the input scale is large. This is be-
+cause these overheads are dominated by the model structure,                                                        6               Related Work
+and a larger input scale will lead to a longer tuning time, thus                                                   Hardware Accelerators for Attention. Recent works have
+diluting this proportion. In contrast, the proportion of analyt-                                                   considered the inherent parallelism and memory access pat-
+ical model increases with the input scale. The primary reason                                                      terns to design customized accelerators [5, 23, 26, 29–31,
+
+
+
+                                                                                                             630
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                      Dai et al.
+
+
+38, 47, 63, 70, 75, 83]. ELSA [30] utilizes an approximate                          [3] Reza Yazdani Aminabadi, Samyam Rajbhandari, Ammar Ahmad Awan,
+similarity computation scheme to filter out insignificant re-                           Cheng Li, Du Li, Elton Zheng, Olatunji Ruwase, Shaden Smith, Minjia
+lations. ViTCoD [70] polarizes attention maps into denser                               Zhang, Jeff Rasley, et al. 2022. DeepSpeed Inference: Enabling efficient
+                                                                                        inference of Transformer models at unprecedented scale. In Interna-
+and sparser patterns to reduce data movement. He et al. [31]                            tional Conference on High Performance Computing, Networking, Storage
+propose a PIM-enabled heterogeneous system that acceler-                                and Analysis (SC ’22).
+ates LLM decoding with a dynamic online scheduler. This                             [4] Jason Ansel, Edward Yang, Horace He, Natalia Gimelshein, Animesh
+work focuses on attention optimizations on GPU, but has                                 Jain, Michael Voznesensky, Bin Bao, Peter Bell, David Berard, Evgeni
+the potential to be applied to the emerging accelerators.                               Burovski, et al. 2024. PyTorch 2: Faster machine learning through
+                                                                                        dynamic python bytecode transformation and graph compilation. In
+Auto-tuning for Scientific Applications. Existing works                                 International Conference on Architectural Support for Programming
+have designed auto-tuning approaches to handle the com-                                 Languages and Operating Systems (ASPLOS ’24).
+plexity of scientific applications [14, 20, 46, 51, 55–58, 65, 68].                 [5] Zhenyu Bai, Pranav Dangi, Huize Li, and Tulika Mitra. 2024. SWAT:
+Donggarra et al. [20] perform batched calculation self-tuning                           Scalable and efficient window attention-based Transformers accelera-
+on GPU for a series of numerically dense linear algebra op-                             tion on FPGAs. In Design Automation Conference (DAC ’24).
+                                                                                    [6] Iz Beltagy, Matthew E Peters, and Arman Cohan. 2020. Longformer:
+erators. Randall et al. [51] propose a generative method that                           The long-document Transformer. arXiv preprint arXiv:2004.05150
+achieves automatic adjustment based on few-shot transfer-                               (2020).
+learning. Plasticine [65] introduces multi-level stencil rep-                       [7] Lefaudeux Benjamin, Massa Francisco, Liskovich Diana, Xiong Wen-
+resentations and selects the better fusion strategy of stencil                          han, Caggiano Vittorio, Naren Sean, Xu Min, Hu Jieru, Tintore
+                                                                                        Marta, Zhang Susan, Labatut Patrick, Haziza Daniel, Wehrstedt Luca,
+operators with a CNN-GNN-based model. The above works
+                                                                                        Reizenstein Jeremy, and Sizov Grigory. 2022. xFormers: A modu-
+provide references for the implementation of this paper.                                lar and hackable Transformer modelling library. https://github.com/
+                                                                                        facebookresearch/xformers.
+7    Conclusion                                                                     [8] Weilin Cai, Juyong Jiang, Fan Wang, Jing Tang, Sunghun Kim, and
+                                                                                        Jiayi Huang. 2025. A survey on mixture of experts in large language
+In this paper, we propose STOF, an efficient framework with                             models. IEEE Transactions on Knowledge and Data Engineering (2025).
+flexible masking and operator fusion for optimizing sparse                          [9] Yupeng Chang, Xu Wang, Jindong Wang, Yuan Wu, Linyi Yang, Kaijie
+Transformer on GPU. First, we propose a unified MHA mod-                                Zhu, Hao Chen, Xiaoyuan Yi, Cunxiang Wang, Yidong Wang, et al.
+ule that implements row-wise and block-wise kernels with                                2024. A survey on evaluation of large language models. ACM Transac-
+                                                                                        tions on Intelligent Systems and Technology 15, 3 (2024), 1–45.
+unique storage formats and optimizations. Then, we propose
+                                                                                   [10] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie
+an operator fusion module that enables fusion expansion                                 Yan, Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis
+and parameter tuning as well as mapping the fusion schemes                              Ceze, et al. 2018. TVM: An automated end-to-end optimizing compiler
+to compilation templates. The experimental results show                                 for deep learning. In USENIX Symposium on Operating Systems Design
+that STOF outperforms the state-of-the-art works in terms                               and Implementations (OSDI ’18).
+                                                                                   [11] Zhaodong Chen, Andrew Kerr, Richard Cai, Jack Kosaian, Haicheng
+of MHA computation and end-to-end inference. For future
+                                                                                        Wu, Yufei Ding, and Yuan Xie. 2024. EVT: Accelerating deep learning
+work, we plan to extend STOF to support PaddlePaddle3 and                               training with Epilogue Visitor Tree. In International Conference on Ar-
+to incorporate it transparently into the compiler stack.                                chitectural Support for Programming Languages and Operating Systems
+                                                                                        (ASPLOS ’24).
+Acknowledgements                                                                   [12] Yu Cheng, Lei Wang, Yining Shi, Yuqing Xia, Lingxiao Ma, Jilong
+                                                                                        Xue, Yang Wang, Zhiwen Mo, Feiyang Chen, Fan Yang, et al. 2025.
+We sincerely thank our shepherd, Gagan Agrawal, and the                                 PipeThreader: Software-Defined Pipelining for Efficient DNN Execu-
+anonymous reviewers for their insightful feedback that greatly                          tion. In 19th USENIX Symposium on Operating Systems Design and
+improved this paper. This work is supported by National                                 Implementation (OSDI ’25).
+                                                                                   [13] Rewon Child, Scott Gray, Alec Radford, and Ilya Sutskever. 2019. Gen-
+Natural Science Foundation of China (Grant No. 62402525,
+                                                                                        erating long sequences with sparse Transformers. arXiv preprint
+62322201, U23B2020, 62402526), Beijing Natural Science Foun-                            arXiv:1904.10509 (2019).
+dation (Grant No. 4244086), and CCF-Baidu Open Fund. Qingx-                        [14] Younghyun Cho, James W Demmel, Jacob King, Xiaoye S Li, Yang
+iao Sun is the corresponding author.                                                    Liu, and Hengrui Luo. 2023. Harnessing the crowd for autotuning
+                                                                                        high-performance computing applications. In International Parallel &
+                                                                                        Distributed Processing Symposiumm (IPDPS ’23).
+References                                                                         [15] Wenhao Dai. 2025. PPoPP26_AE_STOF_CODE. https://doi.org/10.
+ [1] Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge                      5281/zenodo.17705801.
+     Akkaya, Florencia Leoni Aleman, Diogo Almeida, Janko Altenschmidt,            [16] Tri Dao. 2024. FlashAttention-2: Faster Attention with Better Paral-
+     Sam Altman, Shyamal Anadkat, et al. 2023. GPT-4 technical report.                  lelism and Work Partitioning. In International Conference on Learning
+     arXiv preprint arXiv:2303.08774 (2023).                                            Representations (ICLR ’23).
+ [2] Muhammad Adnan, Akhil Arunkumar, Gaurav Jain, Prashant Nair,                  [17] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, and Christopher Ré.
+     Ilya Soloveychik, and Purushotham Kamath. 2024. Keyformer: KV                      2022. FlashAttention: Fast and Memory-Efficient Exact Attention with
+     cache reduction through key tokens selection for efficient generative              IO-Awareness. In Advances in Neural Information Processing Systems
+     inference. In Conference on Machine Learning and Systems (MLSys ’24).              (NeurIPS ’22).
+
+3 https://github.com/PaddlePaddle/Paddle
+
+
+
+
+                                                                             631
+Accelerating Sparse Transformer Inference on GPU                                             PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+[18] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.                     decoding with a processing-in-memory-enabled computing system. In
+     2019. BERT: Pre-training of deep bidirectional Transformers for lan-                  Proceedings of the 30th ACM International Conference on Architectural
+     guage understanding. In Annual Conference of the North American                       Support for Programming Languages and Operating Systems (ASPLOS
+     chapter of the association for computational linguistics: human language              ’25).
+     technologies.                                                                    [32] Huiqiang Jiang, Yucheng Li, Chengruidong Zhang, Qianhui Wu, Xu-
+[19] Juechu Dong, Boyuan Feng, Driss Guessous, Yanbo Liang, and Ho-                        fang Luo, Surin Ahn, Zhenhua Han, Amir H Abdi, Dongsheng Li,
+     race He. 2024. Flex Attention: A programming model for generating                     Chin-Yew Lin, et al. 2024. Minference 1.0: Accelerating pre-filling
+     optimized attention kernels. arXiv preprint arXiv:2412.05496 (2024).                  for long-context llms via dynamic sparse attention. In Conference on
+[20] Jack Dongarra, Mark Gates, Jakub Kurzak, Piotr Luszczek, and Yao-                     Neural Information Processing Systems (NeurIPS ’24).
+     hung M Tsai. 2018. Autotuning numerical dense linear algebra for                 [33] Sheng-Chun Kao, Suvinay Subramanian, Gaurav Agrawal, Amir Yaz-
+     batched computation with GPU hardware accelerators. Proc. IEEE 106,                   danbakhsh, and Tushar Krishna. 2023. FLAT: An optimized dataflow
+     11 (2018), 2040–2055.                                                                 for mitigating attention bottlenecks. In International Conference on Ar-
+[21] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weis-                     chitectural Support for Programming Languages and Operating Systems
+     senborn, Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani,                          (ASPLOS ’23).
+     Matthias Minderer, Georg Heigold, Sylvain Gelly, et al. 2020. An                 [34] Chendi Li, Yufan Xu, Sina Mahdipour Saravani, and Ponnuswamy
+     image is worth 16x16 words: Transformers for image recognition at                     Sadayappan. 2024. Accelerated auto-tuning of GPU kernels for tensor
+     scale. arXiv preprint arXiv:2010.11929 (2020).                                        computations. In International Conference on Supercomputing (ICS ’24).
+[22] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weis-                [35] Mingzhen Li, Hailong Yang, Shanjun Zhang, Fengwei Yu, Ruihao Gong,
+     senborn, Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani,                          Yi Liu, Zhongzhi Luan, and Depei Qian. 2023. Exploiting subgraph sim-
+     Matthias Minderer, Georg Heigold, Sylvain Gelly, et al. 2021. An                      ilarities for efficient auto-tuning of tensor programs. In International
+     image is worth 16x16 words: Transformers for image recognition at                     Conference on Parallel Processing (ICPP ’23).
+     scale. In International Conference on Learning Representations (ICLR             [36] Tianyang Lin, Yuxin Wang, Xiangyang Liu, and Xipeng Qiu. 2022. A
+     ’21).                                                                                 survey of Transformers. AI open 3 (2022), 111–132.
+[23] Hongxiang Fan, Thomas Chau, Stylianos I Venieris, Royson Lee,                    [37] Zichang Liu, Jue Wang, Tri Dao, Tianyi Zhou, Binhang Yuan, Zhao
+     Alexandros Kouris, Wayne Luk, Nicholas D Lane, and Mohamed S                          Song, Anshumali Shrivastava, Ce Zhang, Yuandong Tian, Christopher
+     Abdelfattah. 2022. Adaptable butterfly accelerator for attention-based                Re, et al. 2023. Deja Vu: Contextual sparsity for efficient LLMs at
+     NNs via hardware and algorithm co-design. In IEEE/ACM International                   inference time. In International Conference on Machine Learning (ICML
+     Symposium on Microarchitecture (MICRO ’22).                                           ’23).
+[24] Ruibo Fan, Xiangrui Yu, Peijie Dong, Zeyu Li, Gu Gong, Qiang Wang,               [38] Siyuan Lu, Meiqi Wang, Shuang Liang, Jun Lin, and Zhongfeng Wang.
+     Wei Wang, and Xiaowen Chu. 2025. Spinfer: Leveraging low-level                        2020. Hardware accelerator for multi-head attention and position-
+     sparsity for efficient large language model inference on gpus. In Pro-                wise feed-forward in the Transformer. In International System-on-Chip
+     ceedings of the Twentieth European Conference on Computer Systems                     Conference (SOCC ’20).
+     (EuroSys ’25).                                                                   [39] Lingxiao Ma, Zhiqiang Xie, Zhi Yang, Jilong Xue, Youshan Miao, Wei
+[25] Jiarui Fang, Yang Yu, Chengduo Zhao, and Jie Zhou. 2021. TurboTrans-                  Cui, Wenxiang Hu, Fan Yang, Lintao Zhang, and Lidong Zhou. 2020.
+     formers: An efficient GPU serving system for Transformer models.                      Rammer: Enabling holistic deep learning compiler optimizations with
+     In ACM SIGPLAN Symposium on Principles and Practice of Parallel                       rTasks. In USENIX Symposium on Operating Systems Design and Imple-
+     Programming (PPoPP ’21).                                                              mentation (OSDI ’20).
+[26] Yufeng Gu, Alireza Khadem, Sumanth Umesh, Ning Liang, Xavier                     [40] Yanjun Ma, Dianhai Yu, Tian Wu, and Haifeng Wang. 2019. PaddlePad-
+     Servot, Onur Mutlu, Ravi Iyer, and Reetuparna Das. 2025. PIM is all                   dle: An open-source deep learning platform from industrial practice.
+     you need: A CXL-enabled GPU-free system for large language model                      Frontiers of Data and Computing 1, 1 (2019), 105–115.
+     inference. In Proceedings of the 30th ACM International Conference               [41] Wei Niu, Jiexiong Guan, Yanzhi Wang, Gagan Agrawal, and Bin Ren.
+     on Architectural Support for Programming Languages and Operating                      2021. DNNFusion: Accelerating deep neural networks execution with
+     Systems (ASPLOS ’25).                                                                 advanced operator fusion. In International Conference on Programming
+[27] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang,                       Language Design and Implementation (PLDI ’21).
+     Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. 2025.              [42] Yuyao Niu, Zhengyang Lu, Haonan Ji, Shuhui Song, Zhou Jin, and
+     DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforce-                Weifeng Liu. 2022. TileSpGEMM: A tiled algorithm for parallel sparse
+     ment learning. arXiv preprint arXiv:2501.12948 (2025).                                general matrix-matrix multiplication on GPUs. In ACM SIGPLAN Sym-
+[28] Ahan Gupta, Yueming Yuan, Devansh Jain, Yuhao Ge, David Aponte,                       posium on Principles and Practice of Parallel Programming (PPoPP ’22).
+     Yanqi Zhou, and Charith Mendis. 2025. SPLAT: A framework for                     [43] NVIDIA. 2022. https://github.com/NVIDIA/FasterTransformer.
+     optimised GPU code-generation for SParse reguLar ATtention. In                   [44] NVIDIA. 2022. https://github.com/NVIDIA/cutlass.
+     Proceedings of the ACM on Programming Languages (OOPSLA ’25).                    [45] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wain-
+[29] Tae Jun Ham, Sung Jun Jung, Seonghak Kim, Young H Oh, Yeonhong                        wright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina
+     Park, Yoonho Song, Jung-Hun Park, Sanghee Lee, Kyoung Park, Jae W                     Slama, Alex Ray, et al. 2022. Training language models to follow in-
+     Lee, et al. 2020. 𝐴3 : Accelerating attention mechanisms in neural net-               structions with human feedback. In Conference on Neural Information
+     works with approximation. In High Performance Computer Architecture                   Processing Systems (NeurIPS ’22).
+     (HPCA ’20).                                                                      [46] Philip Pfaffe, Tobias Grosser, and Martin Tillmann. 2019. Efficient
+[30] Tae Jun Ham, Yejin Lee, Seong Hoon Seo, Soosung Kim, Hyunji Choi,                     hierarchical online-autotuning: A case study on polyhedral accelerator
+     Sung Jun Jung, and Jae W Lee. 2021. ELSA: Hardware-software co-                       mapping. In International Conference on Supercomputing (ICS ’19). ACM,
+     design for efficient, lightweight self-attention mechanism in neural                  354–366.
+     networks. In International Symposium on Computer Architecture (ISCA              [47] Yubin Qin, Yang Wang, Dazheng Deng, Zhiren Zhao, Xiaolong Yang,
+     ’21).                                                                                 Leibo Liu, Shaojun Wei, Yang Hu, and Shouyi Yin. 2023. FACT: FFN-
+[31] Yintao He, Haiyu Mao, Christina Giannoula, Mohammad Sadrosadati,                      attention co-optimized Transformer architecture with eager correla-
+     Juan Gómez-Luna, Huawei Li, Xiaowei Li, Ying Wang, and Onur Mutlu.                    tion prediction. In International Symposium on Computer Architecture
+     2025. Papi: Exploiting dynamic parallelism in large language model                    (ISCA ’23).
+
+
+
+
+                                                                                632
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                      Dai et al.
+
+
+[48] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei,                [64] Hulin Wang, Donglin Yang, Yaqi Xia, Zheng Zhang, Qigang Wang,
+     Ilya Sutskever, et al. 2019. Language models are unsupervised multitask              Jianping Fan, Xiaobo Zhou, and Dazhao Cheng. 2024. Raptor-T: A fused
+     learners. OpenAI blog 1, 8 (2019), 9.                                                and memory-efficient sparse Transformer for long and variable-length
+[49] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan                      sequences. IEEE Trans. Comput. 73, 7 (2024), 1852–1865.
+     Narang, ichael MMatena, Yanqi Zhou, Wei Li, and Peter J. Liu. 2020.             [65] Siqi Wang, Hailong Yang, Pengbo Wang, Shaokang Du, Yufan Xu,
+     Exploring the limits of transfer learning with a unified text-to-text                Qingxiao Sun, Xiaoyan Liu, Xuezhu Wang, Xuning Liang, Zhongzhi
+     Transformer. Journal of Machine Learning Research 21, 140 (2020),                    Luan, et al. 2025. Accelerating Complex Stencil Computations with
+     1–67.                                                                                Adaptive Fusion Strategy. In Proceedings of the 39th ACM International
+[50] Jonathan Ragan-Kelley, Connelly Barnes, Andrew Adams, Sylvain                        Conference on Supercomputing (ICS ’25). 265–278.
+     Paris, Frédo Durand, and Saman Amarasinghe. 2013. Halide: A lan-                [66] Xiaohui Wang, Yang Wei, Ying Xiong, Guyue Huang, Xian Qian, Yufei
+     guage and compiler for optimizing parallelism, locality, and recompu-                Ding, Mingxuan Wang, and Lei Li. 2022. LightSeq2: Accelerated train-
+     tation in image processing pipelines. ACM Sigplan Notices 48, 6 (2013),              ing for Transformer-based models on GPUs. In International Conference
+     519–530.                                                                             on High Performance Computing, Networking, Storage and Analysis (SC
+[51] Thomas Randall, Jaehoon Koo, Brice Videau, Michael Kruse, Xingfu                     ’22).
+     Wu, Paul Hovland, Mary Hall, Rong Ge, and Prasanna Balaprakash.                 [67] Jiarong Xing, Leyuan Wang, Shang Zhang, Jack Chen, Ang Chen,
+     2023. Transfer-learning-based autotuning using Gaussian copula. In                   and Yibo Zhu. 2022. Bolt: Bridging the gap between auto-tuners and
+     International Conference on Supercomputing (ICS ’23).                                hardware-native performance. Proceedings of Machine Learning and
+[52] Aurko Roy, Mohammad Saffar, Ashish Vaswani, and David Grangier.                      Systems 4 (2022), 204–216.
+     2021. Efficient content-based sparse attention with routing Transform-          [68] Jiaming Xu, Shan Huang, Jinhao Li, Guyue Huang, Yuan Xie, Yu Wang,
+     ers. Transactions of the Association for Computational Linguistics 9                 and Guohao Dai. 2024. Enabling efficient sparse multiplications on
+     (2021), 53–68.                                                                       GPUs with heuristic adaptability. IEEE Transactions on Computer-Aided
+[53] Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ra-                   Design of Integrated Circuits and Systems PP (2024), 1–1.
+     mani, and Tri Dao. 2024. FlashAttention-3: Fast and accurate attention          [69] Zhiying Xu, Jiafan Xu, Hongding Peng, Wei Wang, Xiaoliang Wang,
+     with asynchrony and low-precision. Advances in Neural Information                    Haoran Wan, Haipeng Dai, Yixu Xu, Hao Cheng, Kun Wang, et al. 2023.
+     Processing Systems 37 (2024), 68658–68685.                                           ALT: Breaking the wall between data layout and loop optimizations
+[54] Yining Shi, Zhi Yang, Jilong Xue, Lingxiao Ma, Yuqing Xia, Ziming                    for deep learning compilation. In European Conference on Computer
+     Miao, Yuxiao Guo, Fan Yang, and Lidong Zhou. 2023. Welder: Schedul-                  Systems (EuroSys ’23).
+     ing deep learning memory access via tile-graph. In USENIX Symposium             [70] Haoran You, Zhanyi Sun, Huihong Shi, Zhongzhi Yu, Yang Zhao, Yon-
+     on Operating Systems Design and Implementations (OSDI ’23).                          gan Zhang, Chaojian Li, Baopu Li, and Yingyan Lin. 2023. ViTCoD:
+[55] Qingxiao Sun, Yi Liu, Hailong Yang, Zhonghui Jiang, Xiaoyan Liu,                     Vision Transformer acceleration via dedicated algorithm and accel-
+     Ming Dun, Zhongzhi Luan, and Depei Qian. 2021. csTuner: Scalable                     erator co-design. In High Performance Computer Architecture (HPCA
+     auto-tuning framework for complex stencil computation on GPUs. In                    ’23).
+     IEEE International Conference on Cluster Computing (CLUSTER ’21).               [71] Manzil Zaheer, Guru Guruganesh, Avinava Dubey, Joshua Ainslie,
+[56] Qingxiao Sun, Yi Liu, Hailong Yang, Zhonghui Jiang, Zhongzhi Luan,                   Chris Alberti, Santiago Ontanon, Philip Pham, Anirudh Ravula, Qi-
+     and Depei Qian. 2024. Adaptive auto-tuning framework for global                      fan Wang, Li Yang, and Amr Ahmed. 2020. Big Bird: Transformers
+     exploration of stencil optimization on GPUs. IEEE Transactions on                    for longer sequences. In Conference on Neural Information Processing
+     Parallel and Distributed Systems 35, 1 (2024), 20–33.                                Systems (NeurIPS ’20).
+[57] Qi Sun, Xinyun Zhang, Hao Geng, Yuxuan Zhao, Yang Bai, Haisheng                 [72] Yujia Zhai, Chengquan Jiang, Leyuan Wang, Xiaoying Jia, Shang
+     Zheng, and Bei Yu. 2022. GTuner: Tuning DNN computations on                          Zhang, Zizhong Chen, Xin Liu, and Yibo Zhu. 2023. ByteTransformer:
+     GPU via graph attention network. In Asia and South Pacific Design                    A high-performance Transformer boosted for variable-length inputs.
+     Automation Conference (ASP-DAC ’22).                                                 In International Parallel & Distributed Processing Symposium (IPDPS
+[58] Ryan Swann, Muhammad Osama, Karthik Sangaiah, and Jalal Mahmud.                      ’23).
+     2024. Seer: Predictive runtime kernel selection for irregular problems.         [73] Zheng Zhang, Donglin Yang, Xiaobo Zhou, and Dazhao Cheng. 2024.
+     In Code Generation and Optimization (CGO ’24).                                       MCFuser: High-performance and rapid fusion of memory-bound
+[59] Philippe Tillet, Hsiang-Tsung Kung, and David Cox. 2019. Triton: An                  compute-intensive operators. In International Conference for High Per-
+     intermediate language and compiler for tiled neural network computa-                 formance Computing, Networking, Storage and Analysis (SC ’24).
+     tionsf. In ACM SIGPLAN International Workshop on Machine Learning               [74] Jie Zhao, Bojie Li, Wang Nie, Zhen Geng, Renwei Zhang, Xiong Gao,
+     and Programming Languages.                                                           Bin Cheng, Chen Wu, Yun Cheng, Zheng Li, et al. 2021. AKG: Auto-
+[60] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-               matic kernel generation for neural processing units using polyhedral
+     Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal,                       transformations. In ACM SIGPLAN Conference on Programming Lan-
+     Eric Hambro, Faisal Azhar, et al. 2023. LLaMA: Open and Efficient                    guage Design and Implementation (PLDI ’21).
+     Foundation Language Models. arXiv preprint arXiv:2302.13971 (2023).             [75] Jieru Zhao, Pai Zeng, Guan Shen, Quan Chen, and Minyi Guo. 2024.
+[61] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion                    Hardware–software co-design enabling static and dynamic sparse
+     Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. At-                 attention mechanisms. IEEE Transactions on Computer-Aided Design
+     tention is all you need. In Conference on Neural Information Processing              of Integrated Circuits and Systems 43, 9 (2024), 2783–2796.
+     Systems (NeurIPS ’17).                                                          [76] Wayne Xin Zhao, Kun Zhou, Junyi Li, Tianyi Tang, Xiaolei Wang,
+[62] Guoxia Wang, Jinle Zeng, Xiyuan Xiao, Siming Wu, Jiabin Yang, Lujing                 Yupeng Hou, Yingqian Min, Beichen Zhang, Junjie Zhang, Zican
+     Zheng, Zeyu Chen, Jiang Bian, Dianhai Yu, and Haifeng Wang. 2024.                    Dong, et al. 2023. A survey of large language models. arXiv preprint
+     FlashMask: Efficient and Rich Mask Extension of FlashAttention. In                   arXiv:2303.18223 1, 2 (2023).
+     International Conference on Learning Representations (ICLR ’24).                [77] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody Hao Yu,
+[63] Haoran Wang, Haobo Xu, Ying Wang, and Yinhe Han. 2023. CTA:                          Ameer Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen,
+     Hardware-software co-design for compressed token attention mecha-                    et al. 2020. Ansor: Generating high-performance tensor programs for
+     nism. In High Performance Computer Architecture (HPCA ’23).                          deep learning. In USENIX Symposium on Operating Systems Design and
+                                                                                          Implementation (OSDI ’20).
+
+
+
+
+                                                                               633
+Accelerating Sparse Transformer Inference on GPU                                          PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+[78] Lianmin Zheng, Ruochen Liu, Junru Shao, Tianqi Chen, Joseph E Gon-            [81] Size Zheng, Yun Liang, Shuo Wang, Renze Chen, and Kaiwen Sheng.
+     zalez, Ion Stoica, and Ameer Haj Ali. 2021. TenSet: A large-scale                  2020. FlexTensor: An automatic schedule exploration and optimiza-
+     program performance dataset for learned tensor compilers. In Confer-               tion framework for tensor computation on heterogeneous system.
+     ence on Neural Information Processing Systems (NeurIPS ’21).                       In International Conference on Architectural Support for Programming
+[79] Size Zheng, Renze Chen, Yicheng Jin, Anjiang Wei, Bingyang Wu,                     Languages and Operating Systems (ASPLOS ’20).
+     Xiuhong Li, Shengen Yan, and Yun Liang. 2021. NeoFlow: A flexible             [82] Zhen Zheng, Xuanda Yang, Pengzhan Zhao, Guoping Long, Kai Zhu,
+     framework for enabling efficient compilation for high performance                  Feiwen Zhu, Wenyi Zhao, Xiaoyong Liu, Jun Yang, Jidong Zhai, et al.
+     DNN training. IEEE Transactions on Parallel and Distributed Systems                2022. AStitch: Enabling a new multi-dimensional optimization space
+     33, 11 (2021), 3220–3232.                                                          for memory-intensive ML training and inference on modern SIMT
+[80] Size Zheng, Siyuan Chen, Peidi Song, Renze Chen, Xiuhong Li, Shen-                 architectures. In International Conference on Architectural Support for
+     gen Yan, Dahua Lin, Jingwen Leng, and Yun Liang. 2023. Chimera: An                 Programming Languages and Operating Systems (ASPLOS ’18).
+     analytical optimizing framework for effective compute-intensive oper-         [83] Minxuan Zhou, Weihong Xu, Jaeyoung Kang, and Tajana Rosing. 2022.
+     ators fusion. In Proceedings of the 29th IEEE International Symposium              TransPIM: A memory-based acceleration via software-hardware co-
+     on High Performance Computer Architecture (HPCA ’23).                              design for Transformer. In High Performance Computer Architecture
+                                                                                        (HPCA ’22).
+
+                                                                                   Received 2025-09-01; accepted 2025-11-10
+
+
+
+
+                                                                             634
+

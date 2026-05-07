@@ -1,0 +1,1037 @@
+   AdaGen: Workload-Adaptive Cluster Scheduler for
+       Latency-Optimal LLM Inference Serving
+          Sudipta Saha Shubha∗                                   Ayush Goel†                         Diman Zad Tootaghaj
+             University of Virginia                                HPE Labs                                   HPE Labs
+                     USA                                             USA                                        USA
+
+                 Khaled Diab                                     Hardik Soni                           K. K. Ramakrishnan
+                    HPE Labs                                       HPE Labs                      University of California, Riverside
+                     Canada                                        Germany                                      USA
+
+                                        Puneet Sharma                                Haiying Shen
+                                              HPE Labs                            University of Virginia
+                                                USA                                       USA
+Abstract                                                                    Keywords: LLM, Inference, Infrastructure, Scheduling
+The inference workloads of Large Language Models (LLMs)
+pose significant latency and cost challenges due to increasing              ACM Reference Format:
+model sizes and demand for real-time responses. Existing                    Sudipta Saha Shubha, Ayush Goel, Diman Zad Tootaghaj, Khaled
+cluster schedulers for multi-instance LLM serving primarily                 Diab, Hardik Soni, K. K. Ramakrishnan, Puneet Sharma, and Haiy-
+                                                                            ing Shen. 2026. AdaGen: Workload-Adaptive Cluster Scheduler
+focus on load balancing to optimize memory usage, which
+                                                                            for Latency-Optimal LLM Inference Serving. In European Confer-
+is insufficient for workloads with diverse request character-               ence on Computer Systems (EUROSYS ’26), April 27–30, 2026, Ed-
+istics. In such cases, the compute layout—the arrangement                   inburgh, Scotland Uk. ACM, New York, NY, USA, 17 pages. https:
+of tokens across iterations within each instance—plays a                    //doi.org/10.1145/3767295.3769345
+crucial role in determining latency. We propose AdaGen,
+a workload-adaptive cluster scheduler that minimizes la-
+tency and thus maximizes SLO attainment by optimizing
+compute layouts across instances. AdaGen employs a multi-                   1   Introduction
+step scheduling strategy: it first classifies requests based on             Large Language Models (LLMs) have revolutionized applica-
+prefill and decode lengths, then balances load, and finally                 tions across diverse domains such as healthcare and software
+performs selective distributed execution across instances.                  development. LLM inference has emerged as the dominant
+Each step incrementally refines the scheduling based on the                 workload that underpins the LLM-powered applications. The
+compute layouts derived from the decision of the previous                   accelerating growth in model sizes and popularity of the LLM
+step. To avoid the overhead of actual execution to generate                 applications demands expensive GPUs, thus skyrocketing the
+the layouts, AdaGen introduces a novel simulation-based                     datacenter operating cost [1–3]. Minimizing cost necessitates
+estimator. Extensive experiments using production work-                     reducing request inference latency, thus enabling a higher
+loads show that AdaGen achieves up to 3.6× higher SLO                       number of requests to be completed within their Service-
+attainment and 2× better cost-efficiency compared to the                    Level-Objectives (SLOs) using the same GPU resource.
+existing systems, while ensuring scalability.                                  An LLM inference system typically comprises multiple
+                                                                            LLM instances deployed across a GPU cluster. The system
+CCS Concepts: • Computer systems organization → Dis-                        includes a cluster scheduler [3–7] that assigns or dispatches
+tributed architectures; • Computing methodologies →                         each request to a model serving instance, which consists
+Distributed algorithms; Natural language processing.                        of one or multiple (e.g., in model parallelism) GPUs. Then,
+∗ Part of this work was done during an internship at HPE Labs.              inside each instance, an instance scheduler [1, 2, 8–16] sched-
+† Currently at Meta, work done when the author was at HPE.                  ules the prefill (i.e., prompt) and decode (i.e., response) to-
+                                                                            kens (i.e., basic unit of the text) of the requests assigned
+                                                                            to the instance to be executed by an inference engine (e.g.,
+                                                                            vLLM [17]). State-of-the-art cluster schedulers [3, 5–7] aim
+This work is licensed under a Creative Commons Attribution-                 to ensure load-balancing across the instances to ensure opti-
+NonCommercial-NoDerivatives 4.0 International License.
+EUROSYS ’26, Edinburgh, Scotland Uk
+                                                                            mized resource utilization by equally distributing the work-
+© 2026 Copyright held by the owner/author(s).
+                                                                            load (i.e., request set) among the instances. In LLM serving,
+ACM ISBN 979-8-4007-2212-7/26/04                                            this requires achieving memory usage balance since the text
+https://doi.org/10.1145/3767295.3769345                                     generation phase is memory-intensive.
+
+
+
+                                                                     1111
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                             Shubha et al.
+
+
+   Though load-balancing can achieve minimal inference
+latency for a traditional deep learning (DL) workload con-
+sisting of requests with uniform characteristics (e.g., in image
+recognition), our experimental analysis on real traces finds
+that only load-balancing is not enough to achieve minimal
+latency (or maximal SLO attainment) for an LLM workload
+(§2.2), where the requests can have diverse characteristics.
+For example, even for the same application such as chatbot,
+the prompt and response lengths vary across requests (e.g.,
+translating a sentence vs. summarizing a paper). Addition-
+ally, as each iteration in LLM execution processes a batch
+of tokens in parallel for maximal throughput, the prefill and
+decode tokens are organized differently–an iteration can
+accommodate multiple prefill tokens, but only one decode                  Figure 1. Compute layouts of 2 instances for workload_1 (con-
+token of the request.                                                     sisting of 6 requests: R1-R6) under two cluster schedulers. Batch
+   This intrinsic diversity impacts the formation of the com-             size (maximum number of tokens in a batch) is 3. For request R1,
+pute layout within each instance. The compute layout of an                4 (1P, 3D) represents that it has total 4 tokens (1 prefill, 3 decode).
+instance refers to the organization of the tokens across its              Each of its prefill and decode tokens is represented by P1 and D1,
+iterations, i.e., which set of tokens is included in the batch            respectively. Similar is the representation for other requests. TTFT
+processed during each iteration of that instance. While load-             and TFT are measured in number of iterations assuming uniform
+balancing ensures optimized resource utilization, it is the               computation time for each iteration [1] and ignoring the request
+compute layout that determines the time-to-first-[decode]-                arrival times since they are the same for both schedulers.
+token (TTFT) and time-between-[decode]-tokens (TBT) laten-                   To address this challenge, in this paper, we propose Ada-
+cies of each request. Since load-balancing does not guarantee             Gen, a workload-adaptive cluster scheduler designed to min-
+the optimal set of compute layouts across the instances, it is            imize latency and thus maximize SLO attainment by lever-
+not enough to guarantee the optimal latency (§2.2).                       aging the diversity pattern present in the requests in order
+   Let us illustrate this with a simple example. Fig. 1 shows             to optimize the compute layouts across multiple instances.
+the compute layouts of two instances for workload_1 un-                   We design AdaGen from first principles, based on system-
+der two cluster schedulers. The workload consists of 6 re-                atic analysis experiments using real traces (§3). Our analy-
+quests (R1-R6) and they are ordered according to their arrival            sis reveals several novel insights to optimize the compute
+times, with the earliest-arriving request placed first. Fig. 1a           layouts. First, we need to perform selective distributed execu-
+shows the scheduling of Llumnix [3], a state-of-the-art clus-             tion, i.e., executing a selected set of requests in a distributed
+ter scheduler for LLM serving. Llumnix goes through each                  manner across multiple instances even when each instance
+request and assigns it to one of the two instances that has               has enough memory to process all of its assigned requests.
+been assigned with fewer tokens so far to ensure balanced                 Second, we need to incorporate both the lengths and distri-
+token distribution (and hence balanced memory) across in-                 butions of both prefill and decode phases with the scheduler.
+stances (§2.1). As the instance scheduler, we employ the                  Note that the proposed selective distributed execution across
+chunked-prefill-based decode-prioritizing scheduler (Sarathi-             instances is orthogonal to disaggregating instance sched-
+Serve [1]) to create the batch of tokens in each iteration.               ulers [2, 13–16] that process the prefill and decode tokens of
+   Finally, Llumnix assigns R1, R3, and R5 to instance_1 and              all requests assigned to an instance in separate GPUs/sub-
+the rest to instance_2, achieving an average TTFT of 2.33                 instances within the instance (§6.4).
+iterations. Fig. 1b shows another scheduling that assigns R1,                AdaGen leverages such insights to design a multi-step
+R2, and R3 to instance_1 and the rest to instance_2, while                scheduling framework that iteratively refines scheduling
+using the same instance scheduler. Though both schedulers                 decisions. After each step, AdaGen analyzes the resulting
+achieve load-balance (12 tokens in each instance), the second             compute layouts to assess potential inefficiencies. If improve-
+scheduler leads to a better set of compute layouts than Llum-             ments are possible, it proceeds to the next step. Since exe-
+nix, reducing the average TTFT from 2.33 to 2.17 iterations,              cuting each intermediate decision in a real cluster is prohib-
+while keeping TBT the same. Thus, without optimizing the                  itively expensive, AdaGen introduces a novel simulation-
+compute layouts, it is not possible to guarantee the optimal              based method that efficiently approximates the compute lay-
+latency for LLM workloads with diverse requests by only                   outs under realistic execution conditions, including the dy-
+relying on load-balancing. However, optimizing compute                    namically growing KV cache size (§4.2).
+layouts is challenging, as it requires a comprehensive under-                To address the challenge of incorporating both prefill and
+standing of the complex interplay between layout organiza-                decode lengths and their distributions in a time-efficient and
+tion, latency characteristics, and workload diversity patterns.           latency-optimizing manner, AdaGen begins with a request
+
+
+
+                                                                   1112
+AdaGen: Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+categorization-based scheduler. It partitions requests based                 from the compute layouts and indicate system responsive-
+on length profiles and assigns them to instances to minimize                 ness and response fluidity, respectively.
+latency (§4.3). If the simulated layout indicates imbalance due              Existing LLM Cluster Scheduler. We use Llumnix [3] as a
+to skewed distributions, the second step reassigns requests                  representative scheduler, which focuses on load balancing
+to improve load balance across instances (§4.3).                             by assigning each incoming request to the instance with the
+   In the final step, AdaGen integrates selective distributed                fewest tokens, aiming to equalize KV cache usage. However,
+execution. This step addresses the combinatorial complexity                  since decode lengths are unknown at scheduling time, this
+of selecting instance pairs and the associated request sets for              can lead to memory fragmentation across instances during
+distributed execution. First, a scoring-based method ranks                   decoding. To address this, when Llumnix detects any possi-
+instances based on compute layout features to form source-                   bility of memory overflow in any instance, it triggers runtime
+destination pairs. Then, instead of exhaustively evaluating                  rescheduling to rebalance memory usage across instances.
+all requests, AdaGen clusters similar requests and evaluates                    Throughout the paper, we adopt the chunked-prefill-
+one representative per cluster using a heuristic that exploits               based decode-prioritizing instance scheduling as proposed
+the different characteristics of prefill and decode phases in                in Sarathi-Serve [1]. However, as demonstrated experimen-
+compute layout organization (§4.4).                                          tally (§6.4), our proposed methods are general and can be
+   We implemented AdaGen atop vLLM [17] (§5) and evalu-                      extended to any instance scheduler.
+ated it on different models and real traces (§6). Our evaluation
+shows that AdaGen achieves up to 3.6× higher SLO attain-
+ment and 2× better cost-efficiency compared to the existing
+systems.
+   Overall, we make the following contributions:
+1. We perform extensive analysis experiments to investigate
+   the performance of the state-of-the-art cluster schedulers
+   and to gain insights on potential approaches to improve
+   the inference latency.
+2. We propose AdaGen, workload-adaptive cluster scheduler
+   that leverages the insights to optimize the compute layouts
+   across the instances in order to maximize SLO attainment.
+3. We evaluate AdaGen against the state-of-the-art systems                   Figure 2. Compute layouts of 2 instances for workload_2 (consist-
+   and establish its superiority.                                            ing of 4 requests R1-R4) under different schedulers. Batch size=3.
+                                                                             The notations and calculations for TTFT and TBT are the same as
+                                                                             those in Fig. 1.
+2    Background and Motivation
+2.1 Preliminaries                                                            2.2 Shortcomings of Existing Cluster Schedulers
+LLM Execution. Transformer-based LLMs leverage the self-                     In this section, we investigate the performance of existing
+attention mechanism to model token dependencies and gen-                     cluster schedulers using real traces. Let us first use some sim-
+erate coherent responses. LLM inference consists of two                      ple examples. Fig. 2 shows the compute layouts of 2 instances
+phases: prefill, where the model processes the input tokens                  for workload_2 under round-robin and Llumnix schedulers.
+of a request in parallel and populates the key-value (KV)                    The workload consists 4 requests (R1-R4) and the requests
+cache, and decode, which generates the output tokens of the                  are ordered in ascending order of their arrival times. Round-
+request autoregressively (i.e., only one output token of the                 robin scheduling dispatches every other request to an in-
+request is generated in each iteration), requiring access to all             stance. Llumnix assigns each request to an instance which
+prior KV cache entries. Modern systems [1, 2, 8–16] batch                    has been assigned with the fewest tokens so far, leading to
+tokens per iteration to improve GPU utilization, forming the                 R1 and R4 being assigned to instance_1 and the rest to
+compute layout of the instance. The layout specifies token                   instance_2. For round-robin scheduling, the TTFT of the
+positions by iteration and slot (e.g., in Fig. 1a, the positions of          4 requests are 2, 1, 3, and 2 iterations, respectively. For Llu-
+R3’s first and last prefill tokens are <iteration 1, slot 2> and             minx, the TTFT of R3 gets reduced to 2 iterations, while the
+<iteration 2, slot 2>, respectively).                                        TTFT of the other requests remain the same, thus reducing
+Latency Metrics. LLM serving performance is evaluated                        the average TTFT. For both schedulers, the TBT is 1 iteration
+using time-to-first-token (TTFT)—the latency until the last                  for each request. There is no other scheduling that will lead
+prefill token is processed generating the first decode token,                to lower latency than Llumnix for this workload.
+and time-between-tokens (TBT)—the delay between succes-                         However, this statement does not hold true for all work-
+sive decode tokens. These metrics can be directly inferred                   loads as we showed for workload_1 in Fig. 1, which
+
+
+
+                                                                      1113
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                       Shubha et al.
+
+
+has a different diversity pattern than workload_2. Unlike                  executed in one instance, and the decode phase in another
+workload_2, the requests in workload_1 have the same                       instance. If the different phases were processed in different
+total length, but differ in prefill and decode lengths. For                instances, KV cache of the prefill phase of the request needed
+workload_1, round-robin would produce the same schedul-                    to be migrated from the instance processing it to the instance
+ing as Llumnix as shown in Fig. 1a. As shown in Fig. 1b, we                where its decode phase was processed. For this, we adopted
+can design a better scheduler for this workload that reduces               the multi-stage KV cache migration policy described in Llum-
+average TTFT from 2.33 to 2.17 iterations, while keeping                   nix [3] that overlaps token processing computation with the
+the TBT the same. Existing schedulers co-located the re-                   migration to achieve the minimal communication downtime.
+quests with longer prefill lengths (e.g., R5) with requests                   Due to exponential complexity, we limited the exhaustive
+having longer decode lengths (e.g., R1). This leads to longer              search to 20 randomly selected requests per dataset. For each
+time to complete the prefill phases of the former since the                possible scheduling policy, we measured latency on real in-
+instance-level batching is decode-prioritizing. The above two              stances and selected the policy with the lowest P90 TTFT.
+examples demonstrate that due to the difference in the diver-              If multiple policies achieved the same P90 TTFT, the one
+sity patterns of different workloads, the existing schedulers              with the lowest P90 TBT was chosen. The search required 9
+may not always lead to the optimal compute layouts across                  days per dataset. Fig. 3 shows that the best policy achieves
+the instances.                                                             1.5×–1.9× lower P90 TTFT compared to existing schedulers,
+   Motivated by this, we conducted an experiment using                     while maintaining similar TBT latency. Since all schedulers
+Llama3-8B and Mixtral-8X7B models to exhaustively search                   use the same decode-prioritizing instance scheduler, TBT
+for the optimal cluster scheduling. Each model was using                   remains unchanged. Further analysis reveals that for Llama,
+2 instances. For Llama3-8B, each instance was 1 Nvidia                     setting the P90 TTFT of the optimal policy as the TTFT SLO
+H100 GPU. The two instances were connected by NVLink.                      results in only 25% and 45% SLO attainment for round-robin
+For Mixtral-8X7B, we used 2-way tensor parallelism for                     and Llumnix, respectively—indicating a 2×–3.6× improve-
+each instance. Hence, each instance consisted of 2 H100                    ment in TTFT SLO attainment. Similar trends hold for Mix-
+GPUs connected via NVlink. The two instances were                          tral. These results demonstrate that the existing schedulers
+themselves connected via PCIe. We used the BurstGPT [18]                   provide sub-optimal latency performance. This happens be-
+and Openchat [19] datasets to get the inference requests                   cause the existing schedulers do not focus on optimizing the
+for the Llama3 and Mixtral models, respectively. Since the                 compute layouts across the instances, which is crucial to
+datasets do not have request arrival times, we followed prior              guarantee minimal latency for LLM workloads consisting of
+works [1, 2] to generate the arrival times using Poisson                   diverse requests (§1).
+distribution with request rate=10 reqs/s.
+                                                                           Observation 1. Contrary to common practice, only load-
+                                                                           balancing cannot guarantee minimal latency for LLM work-
+                                                                           loads. The optimal cluster scheduler needs to be workload-
+                                                                           adaptive that leverages the diversity pattern of the workload
+                                                                           to optimize the compute layouts of the instances.
+
+
+                                                                           3   Insights and Challenges
+            (a) Llama3.                       (b) Mixtral.                 Since exhaustive search requires exponential time complex-
+Figure 3. P90 TTFT and P90 TBT of existing cluster schedulers and          ity and thus becomes infeasible in real serving, we later
+of the optimal scheduling found from an exhaustive search.                 pursued to design a time-efficient heuristic scheduler that
+                                                                           can closely match the optimal performance of the exhaus-
+   Existing schedulers such as Llumnix execute all tokens                  tive search. Towards the design, we performed extensive
+of a request in the same instance until there is a possibility             experiments using real traces and derived several insights
+of memory overflow when the instance does not have avail-                  as mentioned in §1 that leverage the diversity present in
+able memory to store the KV caches of all of its assigned                  the workload to improve the compute layouts across the
+requests. In this situation, the remaining tokens of some re-              instances. Below, we describe the details of each insight.
+quests may be processed in another instance with enough
+memory. In our exhaustive search, we allowed the prefill                   3.1 Selective Distributed Execution across Instances
+and decode tokens of a request to be executed in different                 Depending on the diversity pattern of the workload, there is
+instances even when one instance has enough memory to                      often opportunity to reorganize the compute layouts across
+store the KV caches of all of its assigned tokens. Thus, in the            the instances in a manner that reduces latency. This is
+exhaustive search, a request could be executed in either of                achieved by distributively executing a selected set of re-
+the two instances as a whole, or its prefill phase could be                quests even when each of the requests can be executed in a
+
+
+
+                                                                    1114
+AdaGen: Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+
+
+Figure 4. Compute layouts of 2 instances for workload_3 (consisting of 4 requests R1-R4) under Llumnix and Llumnix+SD (selective
+distributed execution). Batch size=3. The notations and calculations for TTFT and TBT are the same as those in Fig. 1.
+single instance without any memory overflow. We explain                     whether incorporating the selective distributed execution
+this below using a simple example shown in Fig. 4.                          with the existing schedulers can improve performance.
+    For the 4 requests (R1-R4) in workload_3, Fig. 4a shows                    We followed the same setup as described in §2.2. For each
+the compute layouts of 2 instances when the requests are                    dataset, we randomly took 200 requests. For each of round-
+dispatched according to Llumnix. Let us assume that each                    robin and Llumnix, after the scheduler assigned the requests
+instance has enough memory to store the KV caches of all of                 to the 2 instances, we randomly took one instance as the
+its assigned requests, hence, there is no possibility of mem-               source instance and the other as the destination instance.
+ory overflow. Thus, Llumnix will not trigger any migration                  Then, we went through each request assigned to the source
+for this example. The TTFT of the 4 requests are: 2, 2, 5,                  instance and checked whether reassigning either the prefill
+and 5 iterations, respectively. Fig. 4b shows the compute                   or the decode phase of the request to the destination instance
+layouts of the 2 instances when Llumnix is augmented with                   reduced the P90 TTFT and P90 TBT. We performed real
+selective distributed execution. Here, R2 is distributedly exe-             execution to do the checking. For such distributed execution,
+cuted, i.e., the processing of its decodes has been reassigned              KV cache of the prefill phase of the request needs to be
+from instance_2 to instance_1. After the reassignment,                      migrated from the instance executing it to the instance where
+the TTFT of R3 gets reduced by 1 iteration. The TTFT re-                    its decode phase is executed. For the KV cache migration,
+mains the same for other requests.                                          as mentioned in §2.2, we adopted the multi-stage KV cache
+    This happens because, due to the reassignment, the pre-                 migration policy proposed in Llumnix [3].
+fills of R3 in instance_2 get slots earlier than before, thus
+decreasing its TTFT. On the other hand, in instance_1, as
+the decodes of R2 occupy earlier slots due to the decode-
+prioritizing batching, the prefills of R4 get slots later than be-
+fore. However, they still get completed at iteration 5, though
+the position of the last prefill token of R4 moves towards
+right within the same iteration. Overall, the reassignment
+reduces the average TTFT from 3.5 to 3.25 iterations, while
+keeping TBT the same for all requests. Reassigning the de-                              (a) Llama3.                       (b) Mixtral.
+codes of any other request (e.g., R3) does not change the                   Figure 5. P90 TTFT and P90 TBT by incorporating selective
+TTFT of any request. Overall, this example shows the ef-                    distributed (SD) execution with existing schedulers.
+fectiveness of selective distributed execution in reducing
+latency.                                                                       Fig. 5 shows the result. The result shows that incorporat-
+    Now, the opportunity of reducing latency by conducting                  ing selective distributed execution with the existing sched-
+such reassignment depends on the compute layouts of the                     ulers can decrease their P90 TTFT by around 1.4×, while
+instances, which in turn depends on the diversity pattern of                keeping the P90 TBT latency the same. Since Llumnix leads
+the workload, and hence the opportunity may not be applica-                 to better result than round-robin, we next investigated the
+ble to all diversity patterns. To investigate the opportunity in            TTFT distributions for Llumnix and its augmented version
+real traces, we next experimented using real traces to explore              conducting selective distributed execution (Llumnix+SD).
+
+
+
+                                                                     1115
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                            Shubha et al.
+
+
+
+
+            (a) Llama3.                       (b) Mixtral.                             (a) Llama3.                     (b) Mixtral.
+Figure 6. TTFT distribution for incorporating selective distributed          Figure 8. P90 TTFT of different subsets by incorporating both
+(SD) execution (aiming to reduce P90 TTFT) with Llumnix.                     decode length (DL) and distribution (DLD) with Llumnix.
+
+                                                                             both prefill and decode lengths during scheduling to optimize
+Fig. 6 shows the result. From the figure, for Llama, if we take              compute layouts. As illustrated in Fig. 1b, maximally avoiding
+the P90 TTFT value of Llumnix+SD as the TTFT SLO, only                       co-location of requests with long prefill (e.g., R5) and long
+around 56% of the requests have their TTFTs within the SLO                   decode (e.g., R1) phases improved average TTFT.
+in Llumnix. Hence, Llumnix+SD achieves 1.6× higher TTFT                          Motivated by this, we did a simple augmentation to Llum-
+SLO attainment than Llumnix. Similar is the case for Mixtral.                nix to make it Prefill Length-aware (PL) in the experimental
+    Thus, selective distributed execution can improve perfor-                setup described in §2.2. From each dataset, to experiment
+mance of existing schedulers for the diversity pattern present               with different diversity patterns, we created three random
+in real traces. This happens because by reassigning the pre-                 subsets of 500 requests and dispatched them using Llum-
+fill or decode phase of a request from a source instance to                  nix to two instances. We identified the instance (𝐼ℎ ) with
+a destination instance, the source instance can process its                  higher P90 TTFT and swapped the longest-prefill request
+remaining tokens faster. Depending on the diversity pattern,                 (with both of its phases) from 𝐼ℎ with the shortest-prefill
+though such reassignment can increase the TTFT of some                       request from the lower-TTFT instance (𝐼𝑙 ), repeating until no
+requests in the destination instance, the net gain can be pos-               further improvement. This reduced P90 TTFT by 0.8%–2.6%
+itive by optimizing the compute layouts of the instances                     (Llumnix+PL-aware in Fig. 7).
+through the choice of the optimal set of requests for the                        However, shifting long-prefill requests to 𝐼𝑙 can degrade
+distributed execution as exemplified in Fig. 4.                              its performance if it skews the prefill length distribution.
+                                                                             To address this, we introduced a simple distribution-aware
+Observation 2. Towards optimizing the compute layouts, a                     refinement, restricting swaps that increase 𝐼𝑙 ’s average pre-
+selected set of requests needs to be executed in a distributed               fill length by more than 5%. From Fig. 7, incorporating both
+manner across multiple instances, even when there is no pos-                 Prefill Length- and Distribution-awareness (PLD) in this man-
+sibility of memory overflow in any instance.                                 ner leads to further 2%-6% improvement over just length-
+                                                                             awareness.
+                                                                                 We applied a similar simple augmentation for Decode
+                                                                             Length- and Distribution-awareness (DLD). Using the same
+                                                                             methodology, we swapped the longest-decode requests from
+                                                                             𝐼ℎ with the shortest-decode requests from 𝐼𝑙 , while bounding
+                                                                             the increase in average decode length. As shown in Fig. 8, this
+                                                                             DLD-aware Llumnix variant yields 4%-9% reductions in P90
+                                                                             TTFT compared to the standard Llumnix. Overall, the results
+            (a) Llama3.                       (b) Mixtral.                   demonstrate that even simple augmentations considering
+Figure 7. P90 TTFT of different subsets by incorporating both                prefill and decode characteristics improves performance.
+prefill length (PL) and distribution (PLD) with Llumnix.
+                                                                               Key Takeaway: Towards optimizing the compute layouts,
+                                                                             both the lengths and distributions of both prefill and decode
+3.2 Length- and Distribution-Awareness                                       phases need to be incorporated with the scheduling.
+LLM serving instances can experience high TTFT if their                   3.3 Challenges
+assigned requests have skewed prefill or decode lengths.
+                                                                          To realize the full potential of each insight above, we need
+For example, an instance dominated by long prefill requests
+                                                                          to address the following challenges:
+takes longer to complete all prefill phases, increasing TTFT
+for all requests. Similarly, if an instance is dominated by              (i) To schedule selective distributed execution in a time-
+long decode requests and uses decode-prioritized scheduling,                 efficient manner, two key challenges arise:
+decode tokens may preempt prefill tokens, again degrading                       • identifying source–destination instance pairs with-
+TTFT. Hence, an effective cluster scheduler must account for                       out exhaustively evaluating all combinations, and
+
+
+
+                                                                      1116
+ AdaGen: Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving    EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+       • determining which requests to distribute across each               a request categorization-based scheduling as the first sched-
+          pair to optimize compute layouts without time-                    uling step that accounts for the impact of the lengths on
+          consuming enumeration of every request.                           latency (§4.3). Then, to incorporate the distributions, Ada-
+(ii) How can both the lengths and distributions of both prefill             Gen proposes a request distribution-aware reassignment
+     and decode phases be time-efficiently incorporated into                as the second scheduling step (§4.3). Finally, to address the
+     scheduling to maximize latency reduction?                              challenges in realizing the selective distributed execution,
+                                                                            the third scheduling step efficiently analyzes the compute
+(iii) Realizing these insights requires analyzing compute lay-
+                                                                            layouts to first decide the source-destination instance pairs
+     outs, but generating them via actual execution is infeasible
+                                                                            (§4.4.1) and then the optimal set of requests to be distribut-
+     during scheduling. How can compute layouts be efficiently
+                                                                            edly executed across each pair (§4.4.2). The output of the
+     approximated without real execution?
+                                                                            third scheduling step is taken as the final scheduling de-
+                                                                            cision. Based on empirical evaluation, we set the size of
+ 4    System Design of AdaGen
+                                                                            S𝑡 equal to the average number of requests arriving in 1s
+ 4.1 Overview                                                               time window (§A.2). Though the efficient design of Ada-
+ Motivated by Observation 1 and leveraging the insights, we                 Gen makes the scheduling time small, it is non-negligible
+ propose AdaGen, a workload-adaptive cluster scheduler                      for SLO-strict scenarios and hence, AdaGen overlaps the
+ that maximizes SLO attainment by optimizing compute lay-                   scheduling for S𝑡 with the execution for S𝑡 −1 to hide the
+ outs across instances based on the diversity pattern of the                scheduling time (§6.5). To compensate for the possible error
+ workload. Fig. 9 shows the overall system flow. Unlike exist-              in decode length prediction, AdaGen periodically performs
+ ing schedulers that assign requests independently, AdaGen                  on-demand rescheduling (§4.5).
+ jointly schedules a set of requests—denoted by S𝑡 for schedul-
+ ing time unit 𝑡—to effectively exploit cross-request diversity.            4.2 Simulation to Approximate Compute Layouts
+                                                                            Given the intermediate scheduling decision of a step, for
+                                                                            each instance in parallel, AdaGen simulates the instance-
+                                                                            level scheduling to decide which tokens will be chosen to
+                                                                            create each iteration of the compute layout. For example, for
+                                                                            the chunked-prefill-based decode-prioritizing instance-level
+                                                                            scheduling [1], an iteration is created by first filling up the
+                                                                            slots with the decode tokens. If there are not enough decode
+                                                                            tokens, the remaining slots are filled up by prefill tokens.
+                                                                            The batch size, i.e., the maximum number of slots/tokens
+                                                                            in an iteration is a pre-determined value (i.e., 2048). If there
+              Figure 9. System overview of AdaGen.                          are remaining slots but not enough memory to process a
+     To schedule S𝑡 , AdaGen proposes a multi-step scheduling               decode token in any iteration, the generation process of the
+ method that iteratively refines the scheduling at each step by             lowest-priority request is preempted. Generally, the request
+ analyzing the resultant compute layouts of the previous step.              with the latest arrival time is given the lowest priority [17].
+ To address the challenge of generating the layouts without                 Now, during real execution, the available memory can be
+ performing real execution, AdaGen proposes a simulator to                  easily found from the GPU runtime state. However, simu-
+ efficiently approximate the compute layouts (§4.2). The sim-               lation does not have access to this information and thus it
+ ulator and the scheduling steps require a predicted decode                 is challenging to accurately estimate the available memory.
+ length of each request. For this, as prior works [5, 20], we               Below, we discuss how AdaGen addresses this challenge.
+ used a DistillBERT model. Specifically, before starting the                   The memory is occupied by LLM parameters, KV cache,
+ multi-step scheduling procedure to schedule the request set                and other usage (i.e., intermediate outputs, internal GPU
+ 𝑆𝑡 , AdaGen calls the DistillBERT model online to predict the              kernel calls) [17]. Among these, only the KV cache dynam-
+ decode length of each request in 𝑆𝑡 . The DistillBERT model                ically changes with the number of active tokens (i.e., the
+ outputs the lower and upper bounds for the decode length.                  tokens whose KV values needs to be cached since their cor-
+ We took the average of the bounds as the predicted decode                  responding requests are still in generation phase) [17]. Since
+ length, producing around 76.4% accuracy for the datasets                   the KV value size for each active token is uniform across all
+ used in our experiments (Table 1) after fine-tuning the Dis-               tokens [17], knowing the number of active tokens in suffi-
+ tillBERT on the datasets. Due to the small size of DistillBERT,            cient to calculate the KV cache size. Based on this, AdaGen
+ the overhead for decode length prediction is minimal and                   estimates the number of active tokens by analyzing the pre-
+ effectively hidden (§6.5).                                                 vious compute layout. Specifically, AdaGen keeps a running
+     To address the challenge to efficiently incorporate the pre-           count (denoted by 𝐶𝐴 , initialized to 0) of the number of active
+ fill and decode lengths and distributions, AdaGen proposes                 tokens across all scheduling time units. Now, when AdaGen
+
+
+
+                                                                     1117
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                       Shubha et al.
+
+
+starts simulating at time unit 𝑡, ideally, it would require the          have short prefill phases. Similar is the case to determine the
+𝐶𝐴 that is updated based on the real execution result of the             short and long decode phases.
+final scheduling decision taken at time unit 𝑡 − 1. Unfortu-                 However, the above length-aware scheduling may produce
+nately, this execution is not completed yet because of the               non-optimal compute layouts for certain request distribu-
+overlapping between scheduling and execution.                            tions. For example, for workload_1 in Fig. 1, let us consider
+   To address this issue, AdaGen analyzes the compute lay-               if a prefill/decode phase has length greater than 1, the phase
+out created from the final scheduling decision taken at time             is long, otherwise short. For this example, the length-aware
+unit 𝑡 − 1 to know which requests will complete their gener-             scheduling would create the same schedule as the better
+ation (i.e., reaching the predicted decode length) and hence,            scheduler shown in Fig. 1b, except that request R3 would be
+their token counts are deleted from 𝐶𝐴 . Also, the token count           assigned to instance_2. Consequently, instance_2 would
+of a preempted request is deleted from 𝐶𝐴 . Similarly, the num-          be assigned with too many tokens, thus increasing the num-
+ber of newly processed tokens increases the 𝐶𝐴 count. When               ber of iterations of its compute layout, thereby increasing
+distributed execution happens for a request, AdaGen deletes              TTFT. This happens because of the prefill and decode dis-
+the number of reassigned tokens from the running active                  tributions in workload_1, where most of the requests have
+token count of the source instance and adds it to that of                long prefill phases (i.e., R3-R6). This makes the instance_2
+the destination instance. Once AdaGen estimates the 𝐶𝐴 , it              overloaded. To address such load-imbalance in the compute
+can estimate the KV cache size by multiplying 𝐶𝐴 with the                layouts resulting from imbalanced request distribution, Ada-
+constant KV cache size for each active token. Since the LLM              Gen reassigns requests (with both of its prefill and decode
+parameters and other memory usage (estimated from a pro-                 phases) from an overloaded instance to an underloaded in-
+filer for a specific model and hardware-configuration pair)              stance.
+are static, AdaGen can then easily estimate the available                    Specifically, AdaGen creates the sets of overloaded and
+memory. Since such estimation of 𝐶𝐴 may have some error                  underloaded instances by choosing those with the number
+due to the potential error in decode length prediction, Ada-             of iterations in their compute layouts greater or smaller
+Gen checks the actual 𝐶𝐴 value after the execution finishes              than the average number of iterations across the layouts,
+for the scheduling decision taken at time unit 𝑡 − 1. If the             respectively. AdaGen pairs the instances from both sets
+estimated value differs from the actual value differs by more            by iteratively picking the two with the highest and lowest
+than 5%, AdaGen recalculates the subsequent steps based                  number of iterations. Across each pair, AdaGen prioritizes
+on the actual value.                                                     reassigning requests with longer sequence lengths (pre-
+                                                                         fill+decode), as they more rapidly mitigate load imbalance,
+                                                                         thus reducing scheduling time. Such a prioritization policy
+4.3 Length- and Distribution-Aware Scheduling                            is inspired by the existing works on multi-resource bin
+Motivated by §3.2, AdaGen first schedules by taking into ac-             packing scheduling [21, 22] that similarly prioritize resource
+count the lengths of both prefill and decode phases and then             allocation of the tasks requiring higher amount of resource.
+refines the scheduling by incorporating their distributions if           For the previous example, such reassignment would reassign
+necessary. In decode-prioritizing instance scheduling, if the            R3 to instance_1 from instance_2, thus producing the
+long prefill phases are co-located in an instance with the long          better scheduler in Fig. 1b, outperforming Llumnix.
+decode phases, the prefill tokens need to wait longer to get
+slots in the iterations, thus affecting TTFT. To address this,           4.4 Scheduling for Selective Distributed Execution
+AdaGen co-locates the requests having long prefill phases                Motivated by Observation 2, scheduling for selective dis-
+with the requests having short decode phases in half of the              tributed execution involves the following two steps as out-
+total instances maintaining balanced load distribution across            lined in §4.1:
+the instances. Similarly, AdaGen co-locates the requests
+having short prefill phases with the requests having long                4.4.1 Identifying Source and Destination Instances.
+decode phases in the other half of the instances. If both the            To identify the source-destination instance pairs, AdaGen
+prefill and decode phases are long (or short) for a request,             scores each instance based on its compute layout. The score
+they will be processed in different instances. As mentioned              is calculated based on the factors determining whether an
+in §2.2, we followed the multi-stage migration policy [3] for            instance needs to be a source to reassign some of its tokens to
+the KV cache migration across instances in such cases to                 a destination to improve its SLO attainment. The factors also
+achieve minimal communication downtime. AdaGen maxi-                     determine whether an instance can work as a destination
+mally tries to assign the different phases of such requests to           to execute an additional set of tokens without hurting its
+the instances inter-connected with high-bandwidth connec-                SLO attainment significantly. We chose the following factors
+tion (e.g., NVLink). Based on our empirical evaluation, the              based on empirical evaluation: total prefill tokens count, total
+prefill phases with length greater than the P75 prefill length           decode tokens count, and average number of prefill tokens
+in S𝑡 are taken as the long prefill phases; otherwise, they              in the last iteration of a request. The last factor affects the
+
+
+
+                                                                  1118
+AdaGen: Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving     EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+TTFT in distributed execution because, as shown for the                    Algorithm 1 Evaluating request 𝑅 for distributed execution
+prefills of request R4 in Fig. 4, TTFT of a request in the                  1: procedure Evaluate (𝑅)
+destination may not increase after reassignment if the last                 2:    if not enough memory in destination then
+iteration can accommodate enough prefill tokens. Potential                  3:        return improvement = -1
+source instances have high values for these factors, and the                4:    Re-simulate only for the reassigned phase of 𝑅
+                                                                            5:    CALC_START_END_POS() for non-reassigned phase of 𝑅
+inverse is true for the potential destinations. Based on this,
+                                                                            6:    ENFORCE_LLM_RULES() for 𝑅
+the score of each instance is calculated as the summation of                7:    for prefills and decodes of each impacted request do:
+the values of the above factors. To normalize across different              8:        CALC_START_END_POS()
+scales, before summation, each factor value is divided by                   9:        ENFORCE_LLM_RULES()
+its maximum value across all instances. Finally, AdaGen                    10:    return improvement = change in final SLO attainment
+iteratively pairs the highest-scoring instance with the lowest-
+                                                                           in two clusters-one for each of its phases. A randomly chosen
+scoring instance to create the source-destination pairs.
+                                                                           request of a cluster is taken as its representative request.
+                                                                               To create the vector corresponding to the prefill phase of
+                                                                           a request, we chose the following characteristics based on
+4.4.2 Identifying the Requests for Distributed Execu-
+                                                                           empirical evaluation: number of prefill tokens of the request
+tion. To identify which requests to choose for distributed
+                                                                           itself and the following two characteristics of the requests
+execution across each source-destination pair, AdaGen pro-
+                                                                           that will be impacted, i.e., the requests whose token positions
+poses a scalable method that first clusters similar requests
+                                                                           change if this prefill phase is reassigned: total number of
+based on compute layout factors affecting SLO attainment
+                                                                           tokens across those requests and average number of prefill
+and then selects only one representative request per clus-
+                                                                           tokens in the last iteration of such a request. To create the
+ter for evaluation, thus reducing overhead while preserving
+                                                                           vector corresponding to the decode phase, the characteristics
+decision quality. Finally, AdaGen chooses those represen-
+                                                                           are the same except that the number of decode tokens is used
+tative requests for which the evaluation estimates positive
+                                                                           in the first characteristic.
+gain in SLO attainment. The straightforward approach to
+                                                                           Time-efficient Heuristic to Evaluate a Request for Dis-
+evaluate every representative request involves re-simulating
+                                                                           tributed Execution. Next, we describe how AdaGen eval-
+the compute layouts of the source and destination instances
+                                                                           uates the representative request from each cluster without
+considering the distributed execution of the request. How-
+                                                                           any re-simulation. To this end, AdaGen proposes a novel
+ever, this approach is time-consuming when there are many
+                                                                           heuristic that leverages the characteristics of the prefill and
+representatives and the requests in the source and desti-
+                                                                           decode phases in the compute layout organization to di-
+nation instances have long sequence lengths as simulation
+                                                                           rectly calculate the start and end positions of the impacted
+process needs to go through every token of each request.
+                                                                           requests. From this information, it is straightforward to cal-
+To overcome this challenge, we introduce a time-efficient
+                                                                           culate the new TTFT and TBT of each request, and thus
+heuristic that estimates the potential improvement by ana-
+                                                                           the final SLO attainment. During this calculation, AdaGen
+lyzing the compute layouts directly, without re-simulation.
+                                                                           ensures that LLM-specific rules are enforced. Algorithm 1
+Below, we first describe the clustering approach, followed
+                                                                           shows the heuristic for request 𝑅.
+by the heuristic evaluation method.
+                                                                               The algorithm first checks if there is enough memory in
+Compute Layout-Based Clustering of Requests. Since
+                                                                           the destination instance to store the KV cache pertaining to
+either the prefill or decode phase of a request can be reas-
+                                                                           the reassigned phase of 𝑅 (Lines 2-3). If 𝑅 is the representative
+signed to a destination instance in the distributed execution,
+                                                                           of the cluster corresponding to its prefill phase, then its prefill
+the clustering approach aims to identify which prefill (or
+                                                                           phase will be reassigned; otherwise, the decode phase. After
+decode) phases across the requests lead to similar SLO at-
+                                                                           ensuring enough memory, the algorithm only re-simulates
+tainment improvement if chosen for reassignment. To this
+                                                                           for the reassigned phase of 𝑅 in the destination instance to
+end, AdaGen first creates a multi-dimensional vector for
+                                                                           calculate its start and end positions (Line 4).
+each phase of a request. Each dimension captures a compute
+                                                                               Suppose the prefills are offloaded. As AdaGen maintains
+layout characteristic that impacts SLO attainment. Then,
+                                                                           First-Come-First-Serve (FCFS) order in the waiting request
+AdaGen uses DBSCAN algorithm [23] to group the similar
+                                                                           queue, the start position of the prefills of 𝑅 will be the current
+vectors in the same cluster. Given a set of vectors, DBSCAN
+                                                                           start position of the prefills of request 𝑅 ′ , where 𝑅 ′ has the im-
+algorithm groups the elements with very little distance (i.e.,
+                                                                           mediate next arrival time in the destination instance after 𝑅.
+10−7 ) between themselves in the same cluster, without requir-
+                                                                           Beginning from the start position, AdaGen re-simulates the
+ing any pre-determined number of clusters. AdaGen uses
+                                                                           next few iterations of the destination instance until the last
+Euclidean distance as the distance metric. The clustering
+                                                                           prefill token of 𝑅 is reached to find the end position of its pre-
+approach is done separately for the prefill and decode phases
+                                                                           fills. The process is similar if the decodes of 𝑅 are offloaded.
+ensuring that if two vectors are for different phases, they are
+                                                                           Next, AdaGen calls the CALC_START_END_POS to calculate
+not grouped in the same cluster. Thus, a request 𝑅 is grouped
+
+
+
+                                                                    1119
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                          Shubha et al.
+
+
+                                                                           As shown in Fig. 11, the first decode token moves towards
+                                                                           left in the same manner as a prefill token moves. However,
+                                                                           unlike a prefill token, the last decode token moves towards
+                                                                           left only by 𝑑𝑒 positions, where 𝑑𝑒 denotes the difference
+                                                                           between the new and previous positions of the first decode
+                                                                           token. This is because unlike the prefill tokens, there can be
+                                                                           only one decode token of a request in an iteration.
+                                                                              The calculations for the start and end positions in the desti-
+                                                                           nation instance are similar to the steps described above. The
+                                                                           only difference is that in the destination, to accommodate
+Figure 10. Movement of prefill Figure 11. Movement of decode
+                                                                           the reassigned tokens, the prefill and decode tokens move
+tokens (P2) in the compute lay- tokens (D2) in the compute lay-
+out of source instance. Dashed out of source instance. Dashed
+                                                                           towards the right instead of the left. Now, since the above
+boxes contain the tokens to be boxes contain the tokens to be              position calculations are performed for the prefill and decode
+reassigned to the destination. reassigned to the destination.              phases separately, following LLM rules might be violated in
+                                                                           the calculations: the iteration corresponding to the start po-
+the start and end positions of the non-reassigned phase of 𝑅               sition of the decodes of request 𝑅 must be after the iteration
+that remains in the source instance (Line 5). Note that when               corresponding to the end position of its prefills. Additionally,
+decodes of 𝑅 is reassigned, the start and end positions of its             if 𝑅 is distributedly executed, then the start position of the
+prefills do not change in the source instance. After that, Ada-            decodes must be after the migration of the KV cache of its
+Gen calls the ENFORCE_LLM_RULES function for 𝑅 (Line 6).                   prefills has been completed. As mentioned in §2.2, for the
+This function adjusts the calculated start and end positions               KV cache migration, we adopted the multi-stage migration
+to ensure that the LLM rules are enforced and the KV cache                 policy proposed in Llumnix [3] that overlaps the migration
+migration time is incorporated with the calculation for the                with token processing ensuring minimal communication
+requests that are distributedly executed. These two functions              downtime.
+are also called for each phase of the impacted requests (Lines                To avoid the rule violations, ENFORCE_LLM_RULES func-
+7-9). Below, we first describe the CALC_START_END_POS func-                tion does the following: if the end iteration of the prefills
+tion, and then the ENFORCE_LLM_RULES function.                             of 𝑅 and the start iteration of its decodes are calculated as 𝑖
+   The CALC_START_END_POS function separately calculates                   and 𝑗, respectively, where 𝑖 ≮ 𝑗, then 𝑗 is taken as 𝑖 + 1 for
+the start and end positions for the prefill and decode phases              the case when both phases of 𝑅 are in the same instance. If
+of a request. This is because the prefills and decodes of a                𝑅 is distributedly executed, then 𝑗 = max(𝑖 + 1, 𝑘), where 𝑘
+request are organized differently in the compute layout, thus              denotes the first iteration immediately following the com-
+impacting the calculations.                                                pletion of the KV cache migration (estimated from a profiler
+   First, we describe how to calculate the start and end posi-             based on network bandwidth, KV cache size, and model par-
+tions for the prefills of a request 𝑅 in the source instance. As           allelism setup). Thus, AdaGen takes into consideration the
+shown in Fig. 10, as P1 (in Fig. 10a) and D1 (in Fig. 10b) tokens          communication downtime during scheduling decision. The
+are reassigned to the destination instance, the subsequent                 end iteration of the decodes is also re-calculated accordingly.
+prefill tokens (P2s) of the source instance move leftwards                 Overall, unlike re-simulation, required time of the heuristic
+to occupy the empty positions created by the reassignment.                 does not depend on the sequence lengths of every request,
+When a P2 reaches the leftmost position of an iteration, to                thus completing the evaluations rapidly while maintaining
+move further left, the tokens move one iteration up and takes              accuracy.
+up the last position of that iteration.                                       Note that the selective distributed execution benefits from
+   Based on this, AdaGen first counts the number of empty                  high bandwidth connection (e.g., NVLink) between GPUs
+positions (denoted by 𝑝𝑠 ) placed before the first prefill to-             since it involves KV cache migration across GPUs. In a setup
+ken of 𝑅. Then, the new start position of the prefills of 𝑅                with significantly low bandwidth, even though the multi-
+is calculated as the one moved 𝑝𝑠 positions left from the                  stage migration policy continues to reduce the communi-
+current start position. Similarly, the new end position of the             cation downtime as much as possible, the opportunity of
+prefills of 𝑅 is calculated as the one moved 𝑝𝑒 positions left             selective distributed execution may be limited since AdaGen
+from the current end position, where 𝑝𝑒 denotes the number                 factors the potentially higher downtime into the scheduling
+of empty positions placed before the current end position.                 decision.
+As the prefills of 𝑅 occupy the empty positions, new empty
+positions are created (marked by _ in Fig. 10), which will be              4.5 On-Demand Rescheduling
+occupied by the next set of tokens of the compute layout.                  Due to the possible error in decode length prediction, the
+   Now, we describe how to calculate the start and end po-                 above scheduling steps may produce sub-optimal decisions,
+sitions for the decodes of request 𝑅 in the source instance.               hurting latency performance. To address this, similar to [3],
+
+
+
+                                                                    1120
+AdaGen: Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+AdaGen periodically performs runtime rescheduling of re-                   Table 1. Models, configuration, SLO, and datasets in experiments
+quests from a source instance with lower SLO attainment to                 (TP2: 2-way tensor parallelism, PP2: 2-way pipeline parallelism).
+a destination instance with higher SLO attainment. AdaGen                     Model       Configuration Number of TTFT          TBT
+                                                                                                                                           Dataset
+                                                                              & Size      of an instance instances SLO          SLO
+selects the candidate sets of source and destination instances
+                                                                            Llama3-8B
+by choosing those with SLO attainments smaller or greater                     (16GB)
+                                                                                             1 H100          8        0.2s      0.1s    BurstGPT [18]
+than given thresholds, respectively. AdaGen pairs the in-                  Mixtral-8X7B      2 H100
+                                                                                                             4           2s     0.15s   Openchat [19]
+stances from both sets by iteratively picking the two with                    (94GB)          (TP2)
+the lowest and the highest SLO attainments. For reschedul-                  Llama3-70B        4 H100
+                                                                                                             2        2.5s      0.18s
+                                                                                                                                        Azure LLM [13]
+ing, AdaGen prioritizes the requests with shorter sequence                    (140GB)       (TP2-PP2)                                   (conversation)
+
+lengths to minimize the already generated KV cache size,                   reqs/s, respectively. Table 2 shows the distribution of the
+which needs to be migrated.                                                prompt and response lengths in each dataset, showing dif-
+                                                                           ferent diversity patterns across the datasets. As the primary
+5    Implementation
+We implemented AdaGen on top of vLLM [17]. We extended                         Table 2. Different diversity patterns across the datasets.
+its codebase with 3,407 lines of Python code to support the                                        Prompt length              Response length
+                                                                               Dataset
+decode length prediction, simulator generating compute lay-
+                                                                                               Median     P90     Std.        Median      P90    Std.
+outs, length- and distribution-aware scheduling, scheduling
+for selective distributed execution, and on-demand reschedul-              BurstGPT [18]          582     2122    1823         243        582     114
+ing. AdaGen instantiates the multiple instances as Ray [24]                Openchat [19]         1730     5696    2088         415        834     101
+                                                                           Azure LLM [13]        1103     3082    1728         131        396     129
+actors. We used FlashAttention [25] as the attention backend
+and NCCL [26] as the communication backend for KV cache
+migration and pipeline and tensor parallelisms. The size of                baseline, we augmented Llumnix to consider the predicted
+S𝑡 (defined in §4.1) was empirically chosen to be equal to                 response length during its initial scheduling and denote it by
+the request rate. The details of the empirical procedure are               Llumnix++. Since Llumnix++ outperforms Llumnix in all of
+discussed in Appendix A.2.                                                 our experiments, we only reported the results of the former
+                                                                           to focus on its performance compared to AdaGen. As [2],
+6    Performance Evaluation                                                we take SLO attainment as the percentage of total requests
+6.1 Experimental Setup                                                     within a 1s window that satisfy the SLO.
+Testbed. We deployed AdaGen on a cluster with 2 servers                    6.2 End-to-End Comparison Results
+and 8 GPUs. Each server has 4 Nvidia H100-80GB GPUs
+                                                                           Our key results include: compared to existing systems, Ada-
+inter-connected with NVLink. The inter-server bandwidth
+                                                                           Gen achieves (i) up to 3.6× higher TTFT SLO attainment,
+is around 70Gbps.
+                                                                           while maintaining similar TBT SLO attainment, and (ii) 2×
+Models and Datasets. We took chatbot as the target LLM
+                                                                           better cost-efficiency.
+application. As shown in Table 1, we experimented with
+3 widely used LLMs. For each LLM, the table also shows                     6.2.1 SLO Attainment.
+the parallelism configuration of each instance and dataset                 TTFT. Fig. 12 shows the TTFT SLO attainment of different
+used. The datasets are based on user-shared conversations                  systems with varying request rates. The start time for the
+with a chatbot (e.g., ChatGPT). A conversation may contain                 TTFT measurement of a request is the moment when the
+multiple interactions between the user and the chatbot. Each               request arrives at the system. AdaGen achieves up to 2×
+interaction is considered a separate request. We randomly                  and 3.6× higher SLO attainment compared to Llumnix++ and
+chose 8k requests from each dataset. Since there is no publicly            round-robin, respectively. This is because AdaGen can min-
+available SLO setting for this application, we followed the                imize TTFT by ensuring the optimal set of compute layouts
+approach of DistServe [2] to empirically set the SLO for                   across the instances, as illustrated in Fig. 14 that shows the
+each model. For Llama3-8B, TTFT SLO was set to 0.2s for                    P99 TTFT latency of different systems for Llama3-8B with
+responsiveness and the TBT SLO was set to 0.1s, which is                   varying request rates.
+faster than the human reading speed. For the other two larger                 AdaGen achieves this by proposing the length- and
+models, we slightly relaxed the two SLOs to account for the                distribution-aware scheduling and the selective distributed
+longer execution latency as shown in Table 1.                              execution that analyze the compute layouts in a time-
+   Except the Azure LLM dataset, the other two datasets                    efficient manner to iteratively refine the scheduling decision.
+do not include timestamps and hence we followed [1, 2] to                  Additionally, AdaGen’s simulator generating the compute
+generate the request arrival times using Poisson distribu-                 layouts facilitates the realization of the benefits of the pro-
+tion. Unless otherwise stated, the default request rates for               posed methods by avoiding time-consuming real execution.
+the Llama3-8B, Mixtral, and Llama3-70B are 60, 20, and 8                   This result shows the effectiveness of the design choices in
+
+
+
+                                                                    1121
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                          Shubha et al.
+
+
+
+
+               (a) Llama3-8B.                               (b) Mixtral-8x7B                                  (c) Llama3-70B.
+                       Figure 12. TTFT SLO attainment comparison of different systems with varying request rates.
+
+                                                                           All the systems achieve comparable performance since
+                                                                         they are using the same decode-prioritizing instance sched-
+                                                                         uler aiming to maximize TBT SLO attainment.
+
+
+
+
+Figure 13. TTFT SLO attainment comparison with varying SLO
+scales for Llama3-8B.
+
+
+
+                                                                               Figure 15. TBT SLO attainment of different systems.
+
+
+
+
+Figure 14. P99 TTFT latency of different systems for Llama3-8B.
+maximizing TTFT SLO attainment. Additionally, the signif-
+icant performance gain of AdaGen over the baselines for
+all three different setups establish its superiority for a wide
+range of model architectures, parallelism configuration, and
+diversity patterns.                                                      Figure 16. Average instantaneous GPU utilization of different sys-
+   With the increase of the request rate, the SLO attainment             tems for Llama3-8B.
+decreases for each system since the system needs to execute
+more requests using the same number of instances. The                       Fig. 16 shows the average instantaneous GPU utilization
+decrease rate is significantly lower for AdaGen compared to              of different systems for Llama3-8B. All the systems achieve
+the baselines, especially when the request rate is very high,            almost similar instantaneous utilization. Combined with
+thus showing the superior scalability of AdaGen.                         Fig. 12, Fig. 13, and Fig. 15, this result demonstrates that
+   Fig. 13 shows the TTFT SLO attainment of the systems                  AdaGen maximizes both TTFT and TBT SLO attainments,
+with varying SLO scales for Llama3-8B. For a specific SLO                while achieving similar instantaneous utilization compared
+scale value, the default SLO (from Table 1) is multiplied by             to the existing systems.
+the value. With the decrease in SLO scale, the SLO attain-
+ment decreases for each system since more requests miss the              6.2.2 Comparison with Exhaustive Search. Fig. 17
+SLO when the total GPU resource does not increase as SLO                 shows the TTFT and TBT SLO attainment comparison be-
+becomes stricter. The decrease rate is significantly lower for           tween AdaGen and the optimal scheduling found from ex-
+AdaGen compared to the baselines, thus showing its higher                haustive search. Since the exhaustive search requires expo-
+applicability in SLO-stringent scenarios. Other models pro-              nential time complexity (§2.2), we limited the number of
+duced similar results and we omit them for page limitation.              requests and instances to 20 and 2, respectively. We see that
+TBT. Fig. 15 shows the TBT SLO attainment of the models for              AdaGen can closely match the performance of the optimal
+their default request rate and SLO values. The other request             scheduling, confirming the effectiveness of the insights and
+rate-SLO combinations produced similar results.                          design choices in approximating the optimal result.
+
+
+
+                                                                  1122
+AdaGen: Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving   EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+
+
+Figure 17. Comparing AdaGen with exhaustive search, AdaGen                 Figure 19. TTFT SLO attainment comparison with high request
+took 2.3s, while exhaustive search required 9 days.                        rates using 500 instances for Llama3-8B.
+6.2.3 Cost-Effectiveness. Fig. 18 shows the TTFT SLO
+attainments of the systems for Llama3-8B with varying num-
+ber of instances.
+
+
+
+
+                                                                           Figure 20. Comparing different systems with disaggregating in-
+                                                                           stance scheduler [2] for Llama3-8B.
+                                                                               For this experiment, we considered 4 instances and each
+Figure 18. TTFT SLO attainment comparison with varying number              instance had 2 sub-instances/GPUs–one performing all pre-
+of instances for Llama3-8B.                                                fill phases assigned to the instance and the other performing
+   As Fig. 15, the TBT SLO attainment was similar across                   all decode phases. The 2 sub-instances of an instance were
+the systems, hence we do not repeat it here. From Fig. 18,                 in the same server and inter-connected with NVLink since
+with the increase of the instances, SLO attainment also in-                the KV cache migration load is significant for disaggregating
+creases for each system due to availability of more resource               instance schedulers. Compared to the baselines, AdaGen
+to complete the same workload. With number of instances=4,                 achieves up to 1.6× higher TTFT SLO attainment, while
+AdaGen achieves around 64% SLO attainment. To achieve                      achieving similar TBT SLO attainment, for the same reasons
+similar SLO attainment, the other systems require 1.7×-2×                  described for Fig. 12. This result shows that our proposed
+higher number of instances, and hence higher cost. This re-                methods are generalizable to other instance schedulers as
+sult demonstrates the higher cost-effectiveness of AdaGen                  well.
+in achieving a target SLO attainment.
+                                                                           6.5 Ablation Study
+6.3 Scheduling Scalability                                                 Fig. 21 shows the time overheads for different components
+We performed a stress test to investigate the scalability of               of AdaGen. The total time for scheduling S𝑡 (§4.1) is decom-
+AdaGen with 500 Llama3-8B instances using significantly                    posed into Decode Length Predictor (DLP), Prefill-Decode
+high request rates. Since this cluster exceeds the number of               Lendth- and Distribution-aware scheduling (PDLD), and
+GPUs in our testbed, as Llumnix [3], we replaced the real                  scheduling for Selective Distributed execution (SD). The time
+GPU execution in vLLM with a sleep command. The dura-                      for each scheduling step also includes the time required by
+tion of the sleep was determined through offline profiling                 the simulator to create the compute layouts based on its
+of the model with varying sequence lengths, batch size, and                scheduling decision.
+size of KV cache migrated between instances. Fig. 19 shows
+the TTFT SLO attainment in this setup.
+   AdaGen achieves up to 1.9× and 3.6× higher SLO attain-
+ment compared to Llumnix++ and round-robin, respectively,
+for the same reasons described for Fig. 12. This result shows
+the superiority of AdaGen in production setup, where the
+request rate is very high.
+
+6.4 Performance with Different Instance Scheduler                          Figure 21. Time overheads of different components in AdaGen
+Fig. 20 shows the performance of the systems for Llama3-8B
+model when a disaggregating instance scheduler [2] was                       We also show the execution time for S𝑡 , the decision-
+used instead of the decode-prioritizing one.                               making time for each periodic (after every 100s) On-demand
+
+
+
+                                                                    1123
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                     Shubha et al.
+
+
+Table 3. Performance of AdaGen’s simulator for compute layouts.           balancing may lead to sub-optimal latency performance for
+      Method            TTFT accuracy       TBT accuracy   Time           LLM workloads. Several recent works [16, 34] aim to increase
+                                                                          the opportunity of prefix caching (i.e., KV cache sharing of
+AdaGen’s Simulator           99.01%             98.83%     0.7s
+  Real Execution              100%               100%      3.19s          common prefix across requests) within each instance be-
+                                                                          sides load balancing across the instances. Considering prefix
+Rescheduling (OR), and the total communication downtime                   caching is orthogonal to the methods currently proposed in
+throughout the experiment for KV cache migration. From                    AdaGen. In the future, we will extend AdaGen to increase
+the figure, the DLP time is very low (around 50ms). The total             the opportunity of prefix caching.
+scheduling time is completely hidden by the execution time.               Instance Schedulers. Several early-stage methods [35, 36]
+The communication downtime is very low (around 22ms)                      propose batching multiple requests to increase GPU utiliza-
+because of the adoption of multi-stage KV cache migration                 tion or throughput. However, this may lead to idle GPU
+policy [3] that overlaps the migration with token processing.             cycles due to a varying number of tokens across requests. To
+   Next, we measure the effectiveness of each proposed                    mitigate this, Orca [37] proposes iteration-level scheduling
+method. Table 3 evaluates the effectiveness of the simula-                (also referred to as continuous batching in literature) where
+tor in approximating the compute layouts for Llama3-8B.                   a new batch of tokens is created in each iteration. vLLM [17]
+The result shows that if the TTFT and TBT are calculated                  proposes PagedAttention to optimize KV cache management
+solely from the simulator’s compute layouts, their accura-                in iteration-level scheduling in order to increase through-
+cies are very high, while the simulator requires 4.6× lower               put. Towards improving the iteration-level scheduling ap-
+time compared to real execution to generate the layouts for               proach, a group of methods [1, 8–10] focus on optimal batch
+each S𝑡 . Fig. 22 shows the TTFT SLO attainment of the in-                creation. Among these works, Sarathi-Serve [1] proposes a
+dividual components of AdaGen for Llama3-8B, evaluated                    chunked-prefill-based approach that splits the prefill tokens
+incrementally. The results demonstrate the effectiveness of               of a request into chunks and piggybacks decode tokens to
+                                                                          improve TBT. However, these works employ a colocation
+                                                                          approach where both the prefills and decodes of a request
+                                                                          are processed in the same GPU, leading to resource interfer-
+                                                                          ence. To mitigate this, a group of works [2, 13–16] propose
+                                                                          disaggregating prefills and decodes of a request to differ-
+                                                                          ent GPUs/sub-instances within an instance. However, these
+                                                                          works may suffer from resource under-utilization since the
+                                                                          prefill and decode processing typically saturate only compute
+Figure 22. TTFT SLO attainment of different components of Ada-
+                                                                          and memory, respectively [1]. These works are orthogonal to
+Gen for Llama3-8B.                                                        AdaGen. As stated before (§1, §2.1) and validated experimen-
+                                                                          tally (§6.4), the methods proposed in AdaGen are general
+each component, as their incremental inclusion progressively              and can be extended to any instance scheduler.
+improves SLO attainment. Particularly, the integration of
+selective distributed execution (SD) yields substantial per-
+                                                                          8   Conclusion
+formance gain.
+                                                                          We propose AdaGen, a workload-adaptive cluster scheduler
+7    Related Work                                                         that optimizes compute layouts—beyond traditional load
+                                                                          balancing—to reduce inference latency. It uses multi-step
+Cluster Schedulers. There has been a significant amount
+                                                                          scheduling with selective distributed execution and layout
+of work on cluster schedulers focused on load-balancing
+                                                                          simulation to improve SLO attainment.
+for traditional deep learning workload [22, 27–33]. Among
+these works, Clockwork [30] leverages the execution pre-
+dictability of traditional deep learning models (e.g., CNNs) to           Acknowledgments
+meet the SLOs of the inference requests. These works only                 We sincerely thank the anonymous reviewers and our shep-
+focus on traditional deep learning model serving. However,                herd Vasiliki Kalavri for their invaluable feedback. This re-
+LLMs show unique characteristics such as diverse prefill and              search was supported by HPE. It was also supported in
+decode lengths across requests and dynamically growing KV                 part by U.S. NSF grants NSF-2421782, NSF-2350425, NSF-
+cache. Although DeepSpeed-MII [4] targets multi-instance                  2319988, NSF-2206522, Microsoft Research Faculty Fellow-
+LLM serving, it employs a simple round-robin routing policy,              ship 8300751, Amazon research award, AWS Cloud Credit
+thus ignoring the LLM-specific characteristics. Llumnix [3]               for Research, and the Commonwealth Cyber Initiative (CCI),
+and other similar works [5–7] focus on LLM workloads and                  an investment in the advancement of cyber research, inno-
+propose token-balanced scheduling to ensure memory load                   vation and workforce development. For more information
+balance. However, as described in §1 and §2.2, only load                  about CCI, please visit cyberinitiative.org.
+
+
+
+                                                                   1124
+AdaGen: Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving                 EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+References                                                                            [19] Guan Wang, Sijie Cheng, Xianyuan Zhan, Xiangang Li, Sen Song, and
+ [1] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun                      Yang Liu. Openchat: Advancing open-source language models with
+     Kwatra, Bhargav Gulavani, Alexey Tumanov, and Ramachandran Ram-                       mixed-quality data. arXiv preprint arXiv:2309.11235, 2023.
+     jee. Taming {Throughput-Latency} tradeoff in {LLM} inference with                [20] Haoran Qiu, Weichao Mao, Archit Patke, Shengkun Cui, Saurabh Jha,
+     {Sarathi-Serve}. In Proc. of OSDI, 2024.                                              Chen Wang, Hubertus Franke, Zbigniew Kalbarczyk, Tamer Başar, and
+ [2] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xu-                       Ravishankar K Iyer. Power-aware deep learning model serving with
+     anzhe Liu, Xin Jin, and Hao Zhang. {DistServe}: Disaggregating prefill                {𝜇-Serve}. In 2024 USENIX Annual Technical Conference (USENIX ATC
+     and decoding for goodput-optimized large language model serving. In                   24), pages 75–93, 2024.
+     Proc. of OSDI, 2024.                                                             [21] Robert Grandl, Ganesh Ananthanarayanan, Srikanth Kandula, Sriram
+ [3] Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang,                        Rao, and Aditya Akella. Multi-resource packing for cluster schedulers.
+     Yong Li, and Wei Lin. Llumnix: Dynamic scheduling for large language                  In Proc. of SIGCOMM, 2014.
+     model serving. In Proc. of OSDI, 2024.                                           [22] Sudipta Saha Shubha, Haiying Shen, and Anand Iyer. {USHER}: Holis-
+ [4] DeepSpeed Microsoft. Deepspeed mii. https://github.com/deepspeed                      tic interference avoidance for resource optimized {ML} inference. In
+     ai/DeepSpeed-MII, 2025.                                                               Proc. of OSDI, 2024.
+ [5] Kunal Jain, Anjaly Parayil, Ankur Mallick, Esha Choukse, Xiaoting                [23] Erich Schubert, Jörg Sander, Martin Ester, Hans Peter Kriegel, and
+     Qin, Jue Zhang, Íñigo Goiri, Rujia Wang, Chetan Bansal, Victor Rühle,                 Xiaowei Xu. Dbscan revisited, revisited: why and how you should
+     et al. Performance aware llm load balancer for mixed workloads. In                    (still) use dbscan. ACM Transactions on Database Systems (TODS), 42(3),
+     Proceedings of the 5th Workshop on Machine Learning and Systems,                      2017.
+     pages 19–30, 2025.                                                               [24] Philipp Moritz, Robert Nishihara, Stephanie Wang, Alexey Tumanov,
+ [6] Saurabh Agarwal, Anyong Mao, Aditya Akella, and Shivaram                              Richard Liaw, Eric Liang, Melih Elibol, Zongheng Yang, William Paul,
+     Venkataraman. Symphony: Improving memory management for llm                           Michael I Jordan, et al. Ray: A distributed framework for emerging
+     inference workloads. arXiv preprint arXiv:2412.16434, 2024.                           {AI} applications. In Proc. of OSDI, 2018.
+ [7] Liu Qianli, Hong Zicong, Chen Fahao, Li Peng, and Guo Song. Mell:                [25] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré.
+     Memory-efficient large language model serving via multi-gpu kv cache                  Flashattention: Fast and memory-efficient exact attention with io-
+     management. arXiv preprint arXiv:2501.06709, 2025.                                    awareness. Advances in neural information processing systems,
+ [8] Connor Holmes, Masahiro Tanaka, Michael Wyatt, Ammar Ahmad                            35:16344–16359, 2022.
+     Awan, Jeff Rasley, Samyam Rajbhandari, Reza Yazdani Aminabadi,                   [26] Nvidia. Nvidia nccl. https://developer.nvidia.com/nccl, 2025.
+     Heyang Qin, Arash Bakhtiari, Lev Kurilenko, et al. Deepspeed-fastgen:            [27] Daniel Crankshaw, Xin Wang, Guilio Zhou, Michael J Franklin,
+     High-throughput text generation for llms via mii and deepspeed-                       Joseph E Gonzalez, and Ion Stoica. Clipper: A {Low-Latency} on-
+     inference. arXiv preprint arXiv:2401.08671, 2024.                                     line prediction serving system. In Proc. of NSDI, 2017.
+ [9] Amey Agrawal, Ashish Panwar, Jayashree Mohan, Nipun Kwatra,                      [28] Haichen Shen, Lequn Chen, Yuchen Jin, Liangyu Zhao, Bingyu Kong,
+     Bhargav S Gulavani, and Ramachandran Ramjee. Sarathi: Efficient                       Matthai Philipose, Arvind Krishnamurthy, and Ravi Sundaram. Nexus:
+     llm inference by piggybacking decodes with chunked prefills. arXiv                    A gpu cluster engine for accelerating dnn-based video analysis. In
+     preprint arXiv:2308.16369, 2023.                                                      Proc. of SOSP, 2019.
+[10] Bingyang Wu, Yinmin Zhong, Zili Zhang, Gang Huang, Xuanzhe Liu,                  [29] Nvidia. Nvidia triton. https://github.com/triton-inference-server/ser
+     and Xin Jin. Fast distributed inference serving for large language                    ver, 2025.
+     models. arXiv preprint arXiv:2305.05920, 2023.                                   [30] Arpan Gujarati, Reza Karimi, Safya Alzayat, Wei Hao, Antoine Kauf-
+[11] Wei Zhang, Zhiyu Wu, Yi Mu, Banruo Liu, Myungjin Lee, and Fan Lai.                    mann, Ymir Vigfusson, and Jonathan Mace. Serving {DNNs} like
+     Tempo: Application-aware llm serving with mixed slo requirements.                     clockwork: Performance predictability from the bottom up. In Proc. of
+     arXiv preprint arXiv:2504.20068, 2025.                                                OSDI, 2020.
+[12] Shashwat Jaiswal, Kunal Jain, Yogesh Simmhan, Anjaly Parayil, Ankur              [31] Hong Zhang, Yupeng Tang, Anurag Khandelwal, and Ion Stoica.
+     Mallick, Rujia Wang, Renee St Amant, Chetan Bansal, Victor Rühle,                     {SHEPHERD}: Serving {DNNs} in the wild. In Proc. of NSDI, 2023.
+     Anoop Kulkarni, et al. Serving models, fast and slow: optimizing                 [32] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng,
+     heterogeneous llm inferencing workloads at scale. arXiv preprint                      Xin Jin, Yanping Huang, Zhifeng Chen, Hao Zhang, Joseph E Gonzalez,
+     arXiv:2502.14617, 2025.                                                               et al. {AlpaServe}: Statistical multiplexing with model parallelism for
+[13] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo                      deep learning serving. In Proc. of OSDI, 2023.
+     Goiri, Saeed Maleki, and Ricardo Bianchini. Splitwise: Efficient gener-          [33] Francisco Romero, Qian Li, Neeraja J Yadwadkar, and Christos
+     ative llm inference using phase splitting. In Proc. of ISCA, 2024.                    Kozyrakis. {INFaaS}: Automated model-less inference serving. In
+[14] Cunchen Hu, Heyang Huang, Liangliang Xu, Xusheng Chen, Jiang Xu,                      Proc. of ATC, 2021.
+     Shuang Chen, Hao Feng, Chenxi Wang, Sa Wang, Yungang Bao, et al.                 [34] Chaofan Lin, Zhenhua Han, Chengruidong Zhang, Yuqing Yang, Fan
+     Inference without interference: Disaggregate llm inference for mixed                  Yang, Chen Chen, and Lili Qiu. Parrot: Efficient serving of {LLM-
+     downstream workloads. arXiv preprint arXiv:2401.11181, 2024.                          based} applications with semantic variable. In Proc. of OSDI, 2024.
+[15] Foteini Strati, Sara Mcallister, Amar Phanishayee, Jakub Tarnawski,              [35] Nvidia. Nvidia fastertransformer. https://github.com/NVIDIA/Faster
+     and Ana Klimovic. D\’ej\avu: Kv-cache streaming for fast, fault-                      Transformer, 2023.
+     tolerant generative llm serving. arXiv preprint arXiv:2403.01876, 2024.          [36] Jiarui Fang, Yang Yu, Chengduo Zhao, and Jie Zhou. Turbotransform-
+[16] Nvidia. Nvidia dynamo. https://developer.nvidia.com/dynamo, 2025.                     ers: an efficient gpu serving system for transformer models. In Proc.
+[17] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin                           of SIGPLAN, 2021.
+     Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.                  [37] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim,
+     Efficient memory management for large language model serving with                     and Byung-Gon Chun. Orca: A distributed serving system for
+     pagedattention. In Proc. of SOSP, 2023.                                               {Transformer-Based} generative models. In Proc. of OSDI, 2022.
+[18] Yuxin Wang, Yuhan Chen, Zeyu Li, Zhenheng Tang, Rui Guo, Xin                     [38] Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde
+     Wang, Qiang Wang, Amelie Chi Zhou, and Xiaowen Chu. Towards                           De Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas
+     efficient and reliable llm serving: A real-world workload study. arXiv                Joseph, Greg Brockman, et al. Evaluating large language models
+     e-prints, pages arXiv–2401, 2024.                                                     trained on code. arXiv preprint arXiv:2107.03374, 2021.
+
+
+
+
+                                                                               1125
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                              Shubha et al.
+
+
+[39] Yushi Bai, Xin Lv, Jiajie Zhang, Hongchang Lyu, Jiankai Tang, Zhidian
+     Huang, Zhengxiao Du, Xiao Liu, Aohan Zeng, Lei Hou, et al. Long-
+     bench: A bilingual, multitask benchmark for long context understand-
+     ing. arXiv preprint arXiv:2308.14508, 2023.
+
+
+
+
+                                                                             1126
+AdaGen: Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving     EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+A     More Evaluation Results                                              the SLO attainment is affected. This happens because with
+A.1    Worst-Case Impact on On-Demand                                      decreasing value of |S𝑡 |, AdaGen cannot properly capture
+       Rescheduling                                                        the cross-request diversity pattern because of the lack of
+                                                                           enough requests. When |S𝑡 | is greater than 60, scheduling
+                                                                           time increases and SLO attainment is also affected. This is be-
+                                                                           cause AdaGen needs to wait longer to form the S𝑡 and thus
+                                                                           cannot efficiently overlap the scheduling with the execution
+                                                                           due to the higher scheduling time.
+
+                                                                           A.3 Performance in Other Applications
+                                                                           In this section, we evaluate the performance of AdaGen in
+                                                                           other applications besides chatbot. Fig. 25 shows the TTFT
+Figure 23. Worst-case impact on on-demand rescheduling by dis-             SLO attainment of different systems for two LLM applica-
+abling the decode length predictor for Llama3-8B model.                    tions using Llama3-8B. For the code completion application,
+                                                                           we used the HumanEval [38] dataset. It includes 164 pro-
+   We measured the worst-case impact on on-demand                          gramming problems with a function signature or docstring
+rescheduling by disabling the decode length predictor for                  that is used to evaluate the performance of code completion.
+Llama3-8B model. Fig. 23 shows the result. While we disable                For the summarization task, we used the LongBench [39]
+the decode length predictor, we take the decode length to                  dataset, which contains concise summaries of long articles.
+be equal to the prefill length. The result shows that without
+the deocde length predictor, though the decision making
+overhead of the on-demand rescheduling (denoted by OR)
+stays the same, the communication downtime increases. This
+happens because, without the decode length predictor, Ada-
+Gen experiences significantly higher errors in predicting
+the decode lengths, resulting in a higher frequency of on-
+demand rescheduling. Since the rescheduling requires KV
+                                                                                  (a) Code completion.               (b) Summarization.
+cache migration, the communication downtime increases.
+Even so, the downtime is reasonably small (around 74ms),                   Figure 25. TTFT SLO attainment comparison of different systems
+                                                                           for diverse applications using Llama3-8B.
+thanks to the multi-stage KV cache migration that overlaps
+the migration with token processing.
+                                                                             The result shows similar order and trend as Fig. 12a for
+A.2 Sensitivity Analysis                                                   the same reason as described in §6.2.1. Specifically, Ada-
+Here, we describe the procedure to empirically decide the                  Gen achieves up to 1.8× and 3.3× higher SLO attainment
+best value for the size of S𝑡 (defined in §4.1) for Llama3-8B.             compared to Llumnix++ and round-robin, respectively. As
+The procedure is the same for other models. Fig. 24 shows                  Fig. 15, the TBT SLO attainment was similar across the sys-
+the TTFT SLO attainment and scheduling time of AdaGen                      tems, hence we do not repeat it here. The result establishes
+for different values of the size of S𝑡 , i.e., |S𝑡 |.                      the generalizability of AdaGen’s effectiveness across diverse
+                                                                           LLM applications.
+
+
+
+
+Figure 24. TTFT SLO attainment and scheduling time of AdaGen
+for different values of |S𝑡 | for Llama3-8B.
+
+  We chose |S𝑡 | to be equal to 60, which is the value of the
+request rate, because it achieves the maximal SLO attain-
+ment. When |S𝑡 | is less than 60, though the scheduling time
+decreases due to scheduling fewer requests at each time unit,
+
+
+
+                                                                    1127
+

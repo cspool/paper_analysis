@@ -1,0 +1,1235 @@
+ DFVG: A Heterogeneous Architecture for Speculative
+  Decoding with Draft-on-FPGA and Verify-on-GPU
+                Shaoqiang Lu∗                                     Yangbo Wei∗                                   Junhong Qian
+       Shanghai Jiao Tong University                    Shanghai Jiao Tong University                         Southest University
+              Shanghai, China                                  Shanghai, China                                   Nanjin, China
+       Eastern Institute of Technology                  Eastern Institute of Technology                      220231834@seu.edu.cn
+               Ningbo, China                                    Ningbo, China
+          lushaoqiang@sjtu.edu.cn                          yangforever@sjtu.edu.cn
+
+                  Dongge Qin                                         Shiji Gao                                    Yizhi Ding
+             Southest University                               Southest University                            Southest University
+                Nanjin, China                                     Nanjin, China                                  Nanjin, China
+            230238441@seu.edu.cn                              gsj20010131@163.com                            220231830@seu.edu.cn
+
+                  Qifan Wang                                        Chen Wu†                                       Xiao Shi
+       Shanghai Jiao Tong University                    Ningbo Institute of Digital Twin                      Southest University
+              Shanghai, China                                   Ningbo, China                                   Nanjin, China
+       Eastern Institute of Technology                  Eastern Institute of Technology                        xshi@seu.edu.cn
+               Ningbo, China                                    Ningbo, China
+          wangqifan@sjtu.edu.cn                             cwu@idt.eitech.edu.cn
+
+                                                                      Lei He†
+                                                        Eastern Institute of Technology
+                                                                Ningbo, China
+                                                            Lei.hexun@gmail.com
+
+Abstract                                                                          (1) Heterogeneous architecture design that partitions spec-
+Speculative decoding is a promising paradigm that acceler-                        ulative decoding into FPGA-based drafting and GPU-based
+ates LLM inference by generating drafts and performing ver-                       verification, exploiting complementary hardware strengths
+ification. However, such systems still face three major chal-                     with an overlap processor for high-throughput execution; (2)
+lenges: (1) The imbalance in resource requirements between                        Hardware-aware dynamic draft generation that dynamically
+draft and verification models result in low utilization and en-                   predicts speculative branches and token lengths based on
+ergy inefficiency when deployed together. (2) Fixed-pattern                       model confidence while considering hardware parallelism
+token trees produce many candidates but few valid paths,                          limits; (3) Tightly-coupled heterogeneous pipeline with stage-
+resulting in redundant drafts due to the lack of full leverage                    decoupled scheduling that allocates execution windows be-
+of the inherent confidence in dynamic generation. (3) Asyn-                       tween stages, combined with lightweight cross-device align-
+chronous execution with frequent alternation between the                          ment and rollback prediction strategies. Comprehensive eval-
+two stages suffers from idle waiting and rollback overhead.                       uation on mainstream models (OPT, LLaMA, Qwen) demon-
+To address these issues, we propose DFVG, a heterogeneous                         strates DFVG achieves up to 3.26× speedup and 5.8× energy
+speculative decoding architecture that offloads draft genera-                     efficiency improvement over existing approaches. The source
+tion to FPGAs and verification to GPUs, exploiting their com-                     code at: https://github.com/ShaoqiangLu/DFVG
+plementary strengths. We introduce three key contributions:                       CCS Concepts: • Computer systems organization →
+∗ Contributed equally to this work.                                               Heterogeneous (hybrid) systems; • Hardware → Hard-
+† Corresponding author.                                                           ware accelerators; • Computing methodologies → Natural
+                                                                                  language processing.
+                  This work is licensed under a Creative Commons Attribu-         Keywords: Speculative Decoding; Heterogeneous Comput-
+tion 4.0 International License.                                                   ing; FPGA Acceleration; Software Hardware Co-design
+ASPLOS ’26, Pittsburgh, PA, USA
+© 2026 Copyright held by the owner/author(s).                                     ACM Reference Format:
+ACM ISBN 979-8-4007-2359-9/2026/03                                                Shaoqiang Lu, Yangbo Wei, Junhong Qian, Dongge Qin, Shiji Gao,
+https://doi.org/10.1145/3779212.3790153                                           Yizhi Ding, Qifan Wang, Chen Wu, Xiao Shi, and Lei He. 2026.
+
+
+
+
+                                                                            602
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                        Shaoqiang Lu et al.
+
+                                                                           Table 1. Architecture Comparison for Speculative Decoding
+DFVG: A Heterogeneous Architecture for Speculative Decoding
+with Draft-on-FPGA and Verify-on-GPU . In Proceedings of the 31st             Research   System    HW-Aware Dynamic Tree-based Speed
+ACM International Conference on Architectural Support for Program-             Work    Architecture Decoding Draft    Verify    Up
+ming Languages and Operating Systems, Volume 2 (ASPLOS ’26),
+                                                                           Dovetail [33] CPU+GPU         ✗          ✗         ✗       1.43 ×
+March 22–26, 2026, Pittsburgh, PA, USA. ACM, New York, NY, USA,            DuoDec [13]    GPU+CPU        ✓          ✗         ✗       1.67 ×
+16 pages. https://doi.org/10.1145/3779212.3790153                          SpecInfer [15] Multi-GPU      ✗          ✗         ✓       2.40 ×
+                                                                           SpecPIM [10] PIM-Enabled      ✗          ✗         ✗       1.52 ×
+                                                                           DFVG (Ours) FPGA+GPU          ✓          ✓         ✓       3.26 ×
+1    Introduction
+Large Language Models (LLMs) have demonstrated remark-
+able capabilities across code generation, question answer-                 both models into limited on-chip memory also incurs signif-
+ing, and open-ended text generation [1, 8, 16]. However,                   icant loading overhead and cache thrashing, further stalling
+their reliance on autoregressive decoding—where each to-                   the decoding pipeline.
+ken requires a full forward pass—poses severe latency bottle-                 (2) Fixed-pattern token trees produce many candi-
+necks and limits hardware utilization [32, 37]. To address this,           dates but few valid paths. Traditional speculative decod-
+speculative decoding has emerged as a promising paradigm                   ing systems employ predefined static branching strategies to
+where a lightweight draft model generates multiple candidate               construct token trees, failing to dynamically adjust branch
+tokens for parallel verification by the full model, delivering             counts based on model confidence and hardware resource
+2×–4× speedups while preserving generation quality [26].                   constraints as shown in Fig. 1. This "one-size-fits-all" ap-
+   Recent efforts to improve speculative decoding span two                 proach exhibits fundamental flaws: at high-confidence posi-
+fronts: algorithmic techniques and system-level optimiza-                  tions, static schemes cannot increase branches within hard-
+tions. On the algorithm side, PARD [2] amortizes decoding                  ware parallelism limits to fully exploit certainty; conversely,
+by drafting multiple tokens per step. Lookahead [6] enables                at low-confidence positions, they still generate numerous
+speculative generation without an auxiliary model using                    low-quality candidates according to preset rules, resulting in
+masked parallel decoding. EAGLE [11] rethinks the spec-                    extremely low verification acceptance rates and potentially
+ulative process at the feature level to resolve uncertainty                exceeding hardware processing capacity, leading to resource
+with minimal overhead. On the system side, Specinfer [15]                  contention. The lack of adaptive capability that combines
+leverages idle GPU resources by embedding the draft model                  confidence-awareness with hardware-awareness prevents
+into the offloading pipeline for interleaved execution. Ghi-               traditional methods from fully leveraging heterogeneous
+dorah [24] distributes tasks across CPU/GPU with dynamic                   hardware advantages, resulting in low overall resource uti-
+depth adjustment under unified memory. Dovetail [33] places                lization efficiency of the speculative decoding pipeline.
+the draft model on GPU and verifier on CPU to reduce                          (3) Decoupled execution and frequent rollbacks cre-
+bandwidth. AMUSD [14] decouples execution on separate                      ate pipeline inefficiencies and communication over-
+GPUs. SpecPIM [10] co-designs computation and dataflow                     head. Most prior designs adopt a decoupled execution model
+on PIM hardware to improve throughput and energy effi-                     where draft and verify stages run sequentially or indepen-
+ciency. DuoDec [13] deploys the draft and target models                    dently without sufficient coordination. This creates two ma-
+on CPU and GPU respectively, using hardware-aware draft                    jor inefficiencies: First, hardware remains idle during phase
+budgeting to reduce generation latency. Table 1 summarizes                 transitions—verifiers stall waiting for drafts or drafters finish
+their key architectural differences.                                       early and block on feedback, causing pipeline bubbles and
+   Despite progress in speculative decoding, existing systems              throughput loss [35]. Second, rollback is inherent to specula-
+still suffer from several critical challenges that fundamentally           tive decoding [3]. When draft tokens are rejected, the system
+limit their efficiency and scalability. (1) Model disparity                must discard outputs and regenerate from the last accepted
+causes execution imbalance and inefficient hardware                        prefix, resulting in redundant computation and wasted band-
+utilization. There exists a severe load imbalance stemming                 width. This overhead is amplified when models operate
+from the intrinsic heterogeneity between the draft and ver-                on separate devices [5] (e.g., CPU↔GPU, FPGA↔GPU),
+ify models [38]. The draft model is typically small, latency-              where transfer latency becomes non-negligible. Without fine-
+sensitive, and memory-light, while the verify model is large,              grained coordination and predictive control, low acceptance
+compute-intensive, and memory-bandwidth-bound. When                        rates increase rollback frequency and make the pipeline vul-
+both are deployed on a homogeneous hardware substrate                      nerable to synchronization delays [29], potentially causing
+(e.g., GPU-only or CPU-only), their conflicting resource re-               rollback costs to outweigh speculative benefits.
+quirements lead to underutilization of compute and memory                     To address these challenges, we propose DFVG, a hetero-
+resources. For instance, running both models on a single GPU               geneous speculative decoding framework that offloads draft
+often causes memory contention and serialized workloads,                   generation to FPGA and keeps verification on GPU. As illus-
+while using CPU cores leads to poor throughput due to lim-                 trated in Fig. 2, this architecture exploits the complementary
+ited compute capability. Frequent switching or co-loading of               strengths of both platforms: low-latency streaming on FPGA
+
+
+
+                                                                     603
+DFVG: A Heterogeneous for Speculative Decoding with Draft-on-FPGA and Verify-on-GPU                                     ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+     (a) Speculative Decoding
+                                                                                         Small Model (Draft)                                                      Large Model (Verify)
+                                   Verify Stage                                                                                                                                                                        weight
+                                                                                     weight
+
+                                                                                                                                                    …
+                                                                                                                                                            0                                    Norm
+           1         2         3     Idling          2    3       4       5                                    KV                    KV
+                                                                                                                                                                                            Q      K        V
+
+
+
+
+                                                                                                                                                           …
+                                                                                                                                                                                                Attention
+                                                                                              token1                token2                token3                                                 Linear
+     (b) Tree-based Speculative Decoding (Dense)
+
+
+
+
+                                                                                                                                                          layer
+                                                                                              D1          D2           D3            D4            D5                                            Norm
+                                                                                      GPU
+
+                                                                                                                             …
+                                                                                                   V1          V2            V3            V4
+                                                                                                                                                                                                  FFN
+                                                                                      FPGA                                                                 N
+                                                                                              D1        D2 D3 D4 D5 D6                    Parallel
+                                                                                      GPU          V1     V2 V3 V4 V5 V6
+
+                                   Verify Stage
+                               …                                       …                                            CPU             PCle4x16@64GB/s                                        HostCPU
+                                     Idling
+
+
+
+
+                                                                                                                                                                                                                Load
+                                                                                               Load
+                                                                                                                                                                                Grid
+                                                                                                                         PE PE …                                            Cluster
+
+
+
+
+                                                                                                                                                Out buf
+                                                                                                                         PE PE …                                        0   1     2    3
+
+                                                                                                                         … … PE
+
+
+
+
+                                                                                                                                                                  GPC
+                                                                                                                                     bus
+                                                                                                                                                                        SM SM SM SM
+                                                                                                                                                                                bus
+      (b) DFVG: dynamic, hardware-aware, sparse                                                                         IFMs      KERs
+                                                                                                                               HBM&DDR                                      HBM
+
+                                                     …
+                                                         More choice and
+                                                                                                        FPGA                                                                               GPU
+                                                         Less Rollback!
+                                                     …                                        Figure 2. Overview of the DFVG architecture.
+           …
+
+
+                                                                                     2      Background
+                                    Draft Stage II
+                                                                                     2.1 Theoretical Foundations of Speculative Decoding
+                                                         Shortened Wall Time
+               Draft Stage I
+                                    Verify Stage I                                   Speculative decoding represents an acceleration paradigm
+                          Draft    Target         Low conf.     Waiting              specifically designed for the autoregressive generation pro-
+           Prefix
+                          Token    Token          Token         Bubbles
+                                                                                     cess of Large Language Models (LLMs) [25, 27]. Traditional
+                                                                                     autoregressive decoding can only generate one token at a
+Figure 1. Comparison of Speculative Decoding Approaches.                             time, requiring a complete forward pass, which leads to se-
+                                                                                     vere latency bottlenecks and insufficient hardware utiliza-
+and compute-intensive execution on GPU. We introduce a                               tion. Speculative decoding addresses this problem through
+heterogeneous pipeline scheduler that overlaps execution                             a "draft-first, verify-later" strategy. The core insight of this
+between devices, and a cross-device alignment mechanism                              technique lies in the observation that lightweight models’
+that predicts acceptance and reduces rollback and synchro-                           predictions are highly consistent with heavyweight models
+nization overhead. Our contributions are as follows:                                 in most cases, thus enabling the amortization of expensive
+    • Heterogeneous architecture design: a system that                               large model computation overhead through this consistency.
+      partitions speculative decoding into FPGA-based draft-                            Let the target large model be M𝑝 and the draft small
+      ing and GPU-based verification stages, fully exploiting                        model be M𝑞 , given a prefix sequence 𝑋 1:𝑗 = (𝑥 1, . . . , 𝑥 𝑗 ).
+      the complementary strengths of the two hardware                                In each decoding iteration, the draft model first generates a
+      types. An overlap processor is designed to optimize                            candidate sequence of length 𝛾:
+      dataflow and parallelism in the draft phase, achieving                                            𝑋˜ 𝑗+1:𝑗+𝛾 = {𝑥˜ 𝑗+1, . . . , 𝑥˜ 𝑗+𝛾 } ∼ M𝑞 (·|𝑋 1:𝑗 )                                                             (1)
+      high-throughput and energy-efficient inference.
+    • Hardware-aware dynamic draft: a confidence-driven                              where the generation probability of each candidate token
+      branching mechanism that dynamically predicts the                              is 𝑞(𝑥˜ 𝑗+𝑖 |𝑋 1:𝑗+𝑖 −1 ). Subsequently, the target model computes
+      number of speculative branches and token lengths                               the true probability distributions for all candidate positions
+      based on model confidence while considering hard-                              through a single forward pass:
+      ware parallelism limits and memory constraints.                                                                                     𝑝 (𝑥 𝑗+𝑖 |𝑋 1:𝑗+𝑖 −1 )                                                           (2)
+    • Tightly-coupled heterogeneous pipeline: a stage-
+      decoupled scheduling module that dynamically allo-                             2.2 Verification and Acceptance Mechanism
+      cates execution windows between drafting and verifi-                           The core innovation of speculative decoding lies in its prob-
+      cation stages, combined with lightweight cross-device                          abilistic acceptance mechanism, which ensures that the final
+      token alignment and accept-rate prediction strategies.                         output distribution is completely equivalent to the target
+    • Comprehensive evaluation: DFVG achieves up to                                  model’s native autoregressive decoding. For a candidate to-
+      3.26× speedup and 5.8× energy efficiency improve-                              ken 𝑡˜𝑖 , its acceptance probability is defined as:
+      ment on mainstream models (OPT, LLaMA, Qwen)
+                                                                                                                      𝑝 (𝑡˜𝑖 |𝑋 1:𝑖 −1 )
+                                                                                                                                        
+      across FPGA-GPU platforms.                                                                         𝛼𝑖 = min 1,                           (3)
+                                                                                                                      𝑞(𝑡˜𝑖 |𝑋 1:𝑖 −1 )
+
+
+
+                                                                               604
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                         Shaoqiang Lu et al.
+
+
+Performance                                             Parameter
+ (TFLOPS)                                                 Scale
+                      A100 computation roof                              Llama-70B
+ 312
+
+                                                                                     Llama-33B
+                                                                Llama-13B
+                              Vicuna-7B (64 token/s)
+    1.76                      Vicuna-13B (50 token/s)                        Llama
+    1.31                                                                      -7b
+                              Vicuna-33B (26 token/s)           Llama-160m
+    0.81
+            Computational Intensity (OPS/Byte)                         Model combination
+                        (a)                                                   (b)
+                                                                                                             Figure 4. Breakdown of runtime and memory consumption
+Figure 3. Roofline analysis of speculative decoding and                                                      for LLaMA-7B on RTX 4090 GPU [38].
+model-size combinations.
+
+
+   This formula embodies the concept of importance sam-
+pling, correcting the distributional differences between the
+draft model and target model through probability ratios.                                                     3.1   Resource Utilization Imbalance Between Draft
+When 𝛼𝑖 < 1, it indicates that the target model has lower                                                          and Verify Models
+confidence in this token compared to the draft model, and
+                                                                                                             Speculative decoding, which combines a small draft model
+the token is rejected with probability 1 − 𝛼𝑖 .
+                                                                                                             with a large verify model, naturally exposes distinct resource
+   Furthermore, when token 𝑡˜𝑖 is rejected, the system needs
+                                                                                                             requirements. The draft model, operating in an autoregres-
+to resample from a corrected distribution:
+                                                                                                             sive decoding manner with sequence length reduced to 1,
+ 𝑝 ′ (𝑥𝑖 |𝑋 1:𝑖 −1 ) = norm (max(0, 𝑝 (𝑥𝑖 |𝑋 1:𝑖 −1 ) − 𝑞(𝑥𝑖 |𝑋 1:𝑖 −1 )))                                   suffers from limited data reuse and thus demands higher
+                                                                         (4)                                 bandwidth. By contrast, the verify model executes parallel
+   This correction ensures the unbiasedness of the output                                                    forward passes over long sequences, resembling a prefill pro-
+distribution, making speculative decoding mathematically                                                     cess that requires significant computational capability but
+equivalent to standard autoregressive decoding.                                                              relatively modest bandwidth. Moreover, as shown in Fig. 3,
+                                                                                                             the scale difference is substantial: a lightweight model such
+2.3 Performance Modeling                                                                                     as LLaMA-160M can be paired with verify models ranging
+The expected speedup of speculative decoding can be pre-                                                     from 7B to 70B parameters, implying that the draft model
+cisely modeled through Markov chain theory. Let 𝜌 be the                                                     does not need high-end hardware and may cause resource un-
+average acceptance rate and 𝑐 = 𝑇𝑝 /𝑇𝑞 be the model speed                                                    derutilization. This mismatch results in a resource utilization
+ratio, then the theoretical speedup is:                                                                      imbalance, where the draft model leaves certain resources
+                                                                                                             idle while the verify model requires far greater compute
+                                                      𝑐 ·𝛾                                                   capability, memory bandwidth, and parallelism, motivating
+                     Speedup =                                                                   (5)
+                                           (1 − 𝜌) · 𝑐 · 𝛾 + 𝑐 · 𝜌 + 1                                       deployment on heterogeneous devices.
+   This formula reveals several important insights: ➊ when
+𝑐 ≫ 1 and 𝜌 approaches 1, the speedup approximates 𝛾; ➋
+                                                                                                             3.2    Limitations of Fixed Draft-Generation Low
+there exists an optimal draft length 𝛾 ∗ , beyond which dimin-
+                                                                                                                    Acceptance and Frequent Rollback
+ishing returns occur due to decreasing acceptance rates; ➌
+the quality of the draft model (reflected by 𝜌) is more critical                                             The current approach [18] fails to effectively leverage hard-
+than its absolute speed.                                                                                     ware characteristics to generate more useful drafts. The ear-
+   Despite model architectural differences, performance gaps,                                                lier SpS method follows a “generate-then-verify immediately”
+and occasional rollbacks, real-world systems still achieve                                                   paradigm, which forces both sides to wait for each other. As
+2–4× speedup without compromising output quality.                                                            shown in Fig. 4, our profiling of LLaMA-7B on an RTX 4090
+                                                                                                             GPU reveals that utilization is only 51.72%, and sometimes
+3          Bottleneck Analysis                                                                               drops below 10%. Meanwhile, the memory usage of both
+                                                                                                             models remains constantly occupied. Recent works [19, 22]
+To identify the limitations of existing speculative decoding                                                 have also proposed tree-based verification, but they neglect
+architectures, we conduct a detailed analysis on representa-                                                 hardware resource constraints and blindly generate a large
+tive LLM workloads. In this section, we reveal that practical                                                number of drafts. More critically, they fail to exploit the
+deployments still suffer from Resource utilization imbalance,                                                confidence score of each token. As a result, their generated
+memory contention, and sequential dependencies between                                                       schemes often follow a fixed pattern and incur redundant
+the draft and verification stages, which motivates our pro-                                                  computation. These limitations motivate us to develop a new
+posed heterogeneous design.                                                                                  parallel strategy.
+
+
+
+                                                                                                       605
+DFVG: A Heterogeneous for Speculative Decoding with Draft-on-FPGA and Verify-on-GPU        ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+
+
+Figure 5. DFVG draft–verify decoding with resource-aware constraints. FPGA generates speculative branches subject to depth,
+branching, and budget limits, and GPU verifies them in parallel, ensuring correctness and efficient utilization of resources.
+
+3.3    Asynchronous Two-Stage Execution Pipeline                         4    DFVG Algorithm
+      Waiting and Communication Overhead                                 4.1 Overview
+The asynchronous two-stage execution causes pipeline wait-               In this section, we present the core algorithmic design of
+ing and additional communication overhead. Since draft gen-              DFVG. The overall idea is to realize an efficient and energy-
+eration and verification depend on each other, one stage often           friendly speculative decoding process under the collabora-
+stalls while the other is active, leading to low GPU utiliza-            tion of heterogeneous hardware, through optimizations in
+tion. Meanwhile, frequent synchronization and data transfer              draft generation, branch control, and verification scheduling.
+further increase communication costs, especially when the                Fig. 5, provides an overview of DFVG’s speculative decod-
+draft length grows or the verification stage lags. Profiling             ing. The FPGA draft model generates multiple candidate
+on LLaMA-7B with RTX 4090 shows that communication                       branches under hardware budget constraints, while the GPU
+latency can dominate execution time, creating pipeline bub-              verification model accepts valid tokens and rolls back in-
+bles and limiting scalability. These limitations motivate us             valid paths. This pipelined collaboration balances efficiency
+to design a coupled parallel mechanism that overlaps draft               and correctness within limited resources. After Fig. 5, Alg. 1
+generation and verification stages.                                      summarizes the DFVG speculative decoding process, where
+                                                                         the FPGA generates branches under resource constraints
+                                                                         and the GPU verifies candidates in parallel. This pseudocode
+                                                                         provides a step-by-step view of the draft–verify pipeline for
+                                                                         later analysis.
+
+
+
+3.4 Heterogeneous Acceleration Potential                                 4.2 Adaptive Dynamic Allocation for Parallel Tree
+The asymmetric nature of speculative decoding aligns natu-               Motivation: Traditional SpecInfer [15] employs static prede-
+rally with a heterogeneous execution model. FPGAs, with                  fined configurations to construct token trees, which cannot
+low-latency and fine-grained parallelism [12, 30], are well              dynamically adjust branching strategies according to the un-
+suited for the draft stage, where token generation can be                certainty of model outputs. To address this limitation, we pro-
+deeply pipelined and customized to exploit [31, 36]. Offload-            pose a budget-constrained integer programming approach
+ing this stage to FPGA relieves pressure on the GPU, allowing            (ADAPT) that maximizes the performance of speculative
+it to concentrate on high-throughput tensor operations for               decoding under limited computational resources.
+verification. Modern interconnects such as PCIe Gen4 and                    Problem Formulation: Given a computational budget 𝐵
+NVLink further enable fast candidate transfer, while stream-             and probability distributions of the small model at various
+level scheduling and optimized memory layouts allow draft-               positions, our objective is to determine the optimal token
+ing, communication, and verification to overlap. Based on                tree structure. Let 𝑥𝑖,𝑗,𝑙 ∈ {0, 1} be a binary decision variable
+these insights, our DFVG architecture assigns token drafting             indicating whether to select the 𝑙-th token from the vocabu-
+to FPGA and verification to GPU, achieving both efficiency               lary for branching at the 𝑗-th node in the 𝑖-th layer. Let 𝑝𝑖,𝑗,𝑙
+and scalability.                                                         be the probability that selecting the 𝑙-th token at the 𝑗-th
+
+
+
+                                                                   606
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                     Shaoqiang Lu et al.
+
+
+
+
+Figure 6. Comparison of parallel decoding methods. (a) Speculated token tree. (b) Sequence-based decoding causes redundant
+computation. (c) Tree-based decoding leads to sparse and irregular masks. (d) Our TreeSort-Verify reorders tokens for block-
+parallel execution with higher efficiency.
+
+node in the 𝑖-th layer passes verification by the large model,                  Algorithm 1 DFVG-based Speculative Decoding
+which we simply take as the confidence of the draft model.                      Require: Input 𝐼 , draft model 𝑀draft (FPGA), verify model
+  Optimization Objective: Our goal is to maximize the                               𝑀LLM (GPU)
+expected number of successfully verified tokens:                                Ensure: Output sequence 𝑆
+                                                                                 1: 𝑆 ← 𝐼 ,   Q ← ∅, idleGPU ← True
+                               𝑁𝑖 ∑︁
+                             𝐷 ∑︁  𝑉
+                            ∑︁                                                   2: while EOS ∉ 𝑆 do
+                      max                 𝑝𝑖,𝑗,𝑙 · 𝑥𝑖,𝑗,𝑙           (6)          3:    Draft: T ← BuildTreeADAPT (𝑆, 𝑀draft )
+                            𝑖=1 𝑗=1 𝑙=1
+                                                                                 4:    Q.push(T )
+                                                                                 5:    if idleGPU and depth(T ) ≥ 𝐷 min then
+where 𝐷 is the maximum speculative depth, 𝑁𝑖 is the number
+                                                                                 6:         Verify:
+of nodes in the 𝑖-th layer, and 𝑉 is the vocabulary size.
+                                                                                 7:           T ← Q.pop()
+   Constraints:
+                                                                                 8:           Tsorted ← PathPacking(T )
+   ① The computational budget constraint ensures that the
+                                                                                 9:           B ← GroupSiblings(Tsorted )
+total number of branches does not exceed available resources:
+                                                                                10:           𝑂 ← ParallelBlockAttention(B)
+                            𝑁𝑖 ∑︁
+                          𝐷 ∑︁  𝑉                                               11:           𝑉 ← VerifyTokens(T , 𝑂)
+                         ∑︁
+                                        𝑥𝑖,𝑗,𝑙 ≤ 𝐵                  (7)         12:           𝑆 ←𝑆 ∥𝑉
+                         𝑖=1 𝑗=1 𝑙=1                                            13:    end if
+                                                                                14: end while
+   ② Structural constraints limit the number of branches per                    15: return 𝑆
+layer due to hardware parallelism constraints:
+
+           𝑁𝑖 ∑︁
+           ∑︁  𝑉                                                                   Solution Strategy: Considering the NP-hard complexity
+                      𝑥𝑖,𝑗,𝑙 ≤ 𝑘 max,     ∀𝑖 ∈ {1, 2, . . . , 𝐷 }   (8)         of integer programming problems and the strict real-time re-
+            𝑗=1 𝑙=1                                                             quirements of inference scenarios, we design a temperature-
+                                                                                controlled probabilistic sampling greedy approximation algo-
+   ③ The pipeline depth constraint ensures full exploitation of                 rithm. This algorithm maximizes expected benefits while in-
+heterogeneous hardware pipeline characteristics. The lower                      troducing moderate exploration to avoid local optima caused
+bound of depth 𝐷 is determined by the computational latency                     by overly greedy strategies.
+ratio between the draft model (FPGA) and verification model                        Path Cumulative Probability Definition: For any node
+(GPU). Let 𝑇draft be the single-layer draft inference latency on                (𝑖, 𝑗) in the token tree selecting token 𝑙 for branching, let its
+FPGA and 𝑇verify be the verification inference latency on GPU.                  path from the root node to the current node be path(𝑖, 𝑗) =
+To achieve computational overlap and maximize resource                          {(0, root), (1, 𝑎 1 ), (2, 𝑎 2 ), . . . , (𝑖, 𝑗)}. The cumulative verifica-
+utilization, the depth lower bound should satisfy:                              tion probability of extending this path with token 𝑙 is defined
+                                                                                as:
+                                                       
+                                              𝑇verify                                                                       Ö
+                        𝐷 ≥ 𝐷 min =                                 (9)              𝑃cum (𝑖, 𝑗, 𝑙) = 𝑝𝑖,𝑗,𝑙 ·                          𝑝𝑘,par(𝑎𝑘 ),𝑎𝑘 (10)
+                                              𝑇draft                                                         (𝑘,𝑎𝑘 ) ∈path(𝑖,𝑗 ),𝑘>0
+
+
+
+
+                                                                          607
+DFVG: A Heterogeneous for Speculative Decoding with Draft-on-FPGA and Verify-on-GPU                                                                          ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+                                                                                                                                                                                              BAR OFFSET NAME DEFINE                                     Token management
+where 𝑝𝑘,par(𝑎𝑘 ),𝑎𝑘 represents the verification probability of                      PCle                                                           Inst buffer          execute event               0x00     start   32,wo
+                                                                                                                                                                                                                                  FUNCTION
+                                                                                                                                                                                                                                 start task (w1s)
+
+                                                                                                                                                                                                                                                               verify index
+
+
+
+
+                                                                                                                         DMA
+                                                                                                                                                                       … LD PE SF ST
+                                                                                                                                                                                                     0x04    status   32, ro     status flags
+
+
+
+
+                                                                                                                                                       …
+                                                                                                                                                                                                     0x08     end     32, ro     end-of-task
+
+node 𝑎𝑘 at layer 𝑘 being extended from its parent node. This                                                                                                                                         0x0C
+                                                                                                                                                                                                     0x10
+                                                                                                                                                                                                             fbcmd
+                                                                                                                                                                                                             tokcnt
+                                                                                                                                                                                                                      32, ro
+                                                                                                                                                                                                                      32, rw
+                                                                                                                                                                                                                                 feedback GPU
+                                                                                                                                                                                                                                 tokens count            token
+                                                                                                                                                                                                                                                                              MUX
+
+                                                                                                                                                                                                                                                                           acceptance
+metric reflects the credibility of the entire speculative path.                                                                                      Data
+                                                                                                                                                                                                                                                 Ncore           refresh
+                                                                                                                                                                                                                                                                            rollback
+                                                                                                                                                    Fetcher                              Weght Buffer
+   Temperature-Controlled Probabilistic Sampling Mech-
+
+
+
+
+                                                                                                                                       Read unit
+                                                                                      HBM with 64-channel AXI port
+anism: To balance exploration and convergence, we adopt a                                                                                                                 PE    PE       PE       PE        PE        PE         PE         PE                               index
+                                                                                                                                                                                                                                                                                     =
+
+                                                                                                                                                                                                                                                             tmp
+softmax temperature-regulated probabilistic sampling strat-
+
+
+
+
+                                                                                                                                                                                                                                  ……
+                                                                                                                                                        Activity
+                                                                                                                                                                          PE    PE       PE    PE     PE    PE                   PE         PE
+                                                                                                                                                                                           Systolic PE Array
+
+
+
+
+                                                                                                                         AXI NoC Bus
+                                                                                                                                                                                                 ……
+                                                                                                                                                                                                                                                                               MUX
+egy. For the candidate extension set at layer 𝑖, N𝑖 = {(𝑖, 𝑗, 𝑙) :                                                                                                        PE    PE       PE    PE     PE    PE                   PE         PE              prune
+
+𝑝𝑖,𝑗,𝑙 > 𝜏𝑖 }, we use temperature parameter 𝑇 for probability                                                                                                            PE     PE       PE       PE        PE        PE         PE         PE                               KVcache
+
+normalization:                                                                                                                                        …                           multiple computing cores parallel adder tree
+                                                                                                                                                                                                                                                                 softmax    confidence
+                                                                                                                                                                                                                                                          random               high
+                                                                                                                                                             e
+
+
+
+
+                                                                                                                                       Write unit
+                                                                                                                                                                   x
+
+                                                                                                                                                       IPs                                                                                                + + +              medium
+
+           (𝑇 )                      exp(𝑃 cum (𝑖, 𝑗, 𝑙)/𝑇 )                                                                                           SFU                                                                                                 acum                low
+
+         𝑃˜cum  (𝑖, 𝑗, 𝑙) = Í                                           (11)                                                                          sf,ln
+                                                                                                                                                      topk                                                                                                    topk
+                                                                                                                                                                                                                                                                               MUX
+
+                                (𝑖,𝑗,𝑙 ) ∈ N𝑖 exp(𝑃 cum (𝑖, 𝑗, 𝑙)/𝑇 )                                                                                 rope
+                                                                                                                                                                                         Output Buffer                                                                      num deep
+                                                                                                                                                       …                                                                                                 Branch Management
+
+
+
+
+                                                                                                                     …
+   Subsequently, we employ Gumbel sampling for non-repetitive
+selection:                                                                           Figure 7. Overall architecture of the Multi Compute Core
+                                                                                     Overlay Processor deployed on FPGA.
+                                               (𝑇 )
+        𝐺𝑖,𝑗,𝑙 = − log(− log(𝑈𝑖,𝑗,𝑙 )) + log(𝑃˜cum  (𝑖, 𝑗, 𝑙))          (12)
+
+                                                                                     has a block-diagonal lower triangular structure:
+              S𝑖 = argmax𝑘𝑖 {𝐺𝑖,𝑗,𝑙 : (𝑖, 𝑗, 𝑙) ∈ N𝑖 }                  (13)                             (
+                                                                                                           1, if 𝜋 (𝑡 𝑗 ) ≤ 𝜋 (𝑡𝑖 ) and 𝑡 𝑗 ∈ ancestors(𝑡𝑖 )
+where 𝑈𝑖,𝑗,𝑙 ∼ Uniform(0, 1) are independent uniform ran-                            𝑀reordered [𝑖, 𝑗] =
+dom variables, and 𝑘𝑖 = min(𝑘 max, |N𝑖 |) is the actual number                                             0, otherwise
+of selections at layer 𝑖. The temperature parameter 𝑇 controls                                                                                        (14)
+sampling randomness: as 𝑇 → 0, it degenerates to determin-                             Parallel Verification Acceleration: After TreeSort-Verify
+istic top-𝑘 selection, while larger 𝑇 tends toward uniform                           reordering, tree attention computation is decomposed into
+exploration.                                                                         multiple independent block computations. Let the reordered
+   Algorithm Complexity: The algorithm has time com-                                 sequence be partitioned into 𝐾 consecutive blocks {𝐵 1, . . . , 𝐵𝐾 },
+plexity 𝑂 (𝐷 ·𝑘 max log 𝑘 max ) and space complexity 𝑂 (𝐷 ·𝑘 max ).                  then the total attention output can be expressed as:
+In concrete implementation, 𝑘 max is set to integer multiples                                                                                                          𝐾
+                                                                                                                                                                       Ê
+of FPGA parallel support numbers (such as 8, 16, 32, etc.).                                                                Atttree =                                           Attblock (𝑄 𝐵𝑘 , 𝐾𝐵𝑘 , 𝑉𝐵𝑘 , 𝑀𝐵𝑘 )                                                                      (15)
+                                                                                                                                                                       𝑘=1
+4.3      TreeSort-Verify: Efficient Tree Verification via                                   É
+         Path Reordering                                                             where     denotes recombination in original index order, and
+                                                                                     𝑀𝐵𝑘 is the standard lower triangular mask for the 𝑘-th block.
+Motivation: Traditional tree-based parallel decoding re-                             This decomposition enables each block to independently in-
+quires maintaining complex topology-aware causal masks                               voke highly optimized cuBLAS GEMM kernels, significantly
+for each token sequence, resulting in irregular memory ac-                           improving LLM verification computational efficiency.
+cess patterns during attention computation that cannot fully                           Memory-Friendly Verification Pattern: TreeSort-Verify
+exploit GPU’s vectorized computing capabilities. To address                          improves GPU memory locality by reorganizing tokens into
+this issue, we propose the TreeSort-Verify mechanism,                                consecutive blocks, enabling compact KV-cache storage and
+which transforms the causal masks of tree verification into ef-                      reducing bandwidth waste. Its block-diagonal structure sup-
+ficient block-diagonal lower triangular matrix forms through                         ports pipelined parallel execution across GPU SMs, improv-
+intelligent node reordering. Fig. 6, illustrates the compari-                        ing overall hardware utilization.
+son between sequence-based decoding, tree-based decoding,
+and our approach. Unlike sequence-based methods that suf-
+                                                                                     5                               DFVG Architecture
+fer from redundant KV-cache computation, and tree-based
+methods that lead to sparse and irregular masks, TreeSort-                           5.1 Overview
+Verify sorts the speculative token tree and partitions it into                       The overall DFVG hardware architecture is illustrated in
+parallelizable blocks, significantly improving efficiency.                           Fig. 2. It consists of three core components: A small-scale
+   Core Reordering Strategy: TreeSort-Verify reorganizes                             draft model deployed on the FPGA, where a carefully de-
+token sequences for verification using path-packing. Given                           signed multi-core overlay processing engine executes in
+the node set of the original token tree T = {𝑡 1, 𝑡 2, . . . , 𝑡𝑛 },                 parallel to explore multiple branches simultaneously and
+we define a reordering function 𝜋 : T → {1, 2, . . . , 𝑛} such                       rapidly generate candidate tokens. A large-scale target model
+that for any parent-child node pair (𝑡𝑖 , 𝑡 𝑗 ), if 𝑡𝑖 is an ancestor                running on the GPU, which performs a batch forward pass
+of 𝑡 𝑗 , then 𝜋 (𝑡𝑖 ) < 𝜋 (𝑡 𝑗 ). The reordered causal mask matrix                   to compute the confidence scores of candidate tokens and
+
+
+
+                                                                               608
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                                        Shaoqiang Lu et al.
+
+
+                                          IFM    Loop1        Loop2                               psum                                                                                                            A
+                                                                                                                                              26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+                                                                                                                                                           A2:8bit                                      A1:8bit
+                                                                                 weight                                                              23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0B
+                                          KER                                                                                                                                                            B:8bit
+             X           =                                                                                 PE   PE       PE 31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0 P
+
+
+
+
+                                                                                   MUX
+                                 Result   PE                   +                                                                          P2:16bit=B*A2                              P1:16bit=B*A1
+  Activate                                                            +                      REG                     …
+             Weight                       SFU   Partial Sum                      activity                  PE   PE       PE        A1_exp                               A1_exp          0                    P1_exp
+
+                                                 Loop1        Loop2
+                                                                                                                     …             B_exp                  127
+                                                                                                                                                                         B_exp
+                                                                                                                                                                                        1
+                                                                                                                                                                                            [15]
+
+                 prefix branch            IFM
+                                                                                 weight
+                                                                                                  psum     PE   PE       PE        A1_exp                                               0
+                                                                                                                                                                                        1
+                                                                                                                                                                                            [15]
+                                                                                                                                                                                                             P2_exp
+                                          KER
+             X            =                                                                                          …             A1_mts                               A1_mts         0                     P1_mts
+                                          PE                    +     +                                    PE   PE       PE                                                            1
+                                                                                                                                                                                                     shift
+   Query                   P=Q*KT                                                           REG                                    A2_mts                                                   [15]
+
+                                          SFU   Partial Sum                                                                        B_mts                                A2_mts 0                             P2_mts
+                  KeyT                                                           activity                                                                                              1      [15]
+
+
+                                          IFM    Loop1        Loop2                         (a) PE Micro-Architecture                   (b) DSP packing two BF16 X BF16
+                                          KER
+             X            =               PE
+     P                        O=P*V
+                                                               +      +         Figure 9. PE micro-architecture with a multi-weight buffer
+                                          SFU   Partial Sum
+                   Value                                                        for branch concatenation and DSP packing two BF16 × BF16
+
+Figure 8. Mapping multiple branches to block events in-
+creases data reuse to match bandwidth with computation.                         how these tokens are mapped to block events within our pro-
+                                                                                cessor. (1) Linear: multiple branches increase weight reuse,
+                                                                                boosting PE utilization. (2) 𝑄 × 𝐾 𝑇 : First, the shared prefix
+makes acceptance decisions for each token. A runtime man-                       is reused, and then in the pipeline only the loading address
+agement on the CPU, which coordinates the token flow                            needs to be changed at the end, which allows the PEs to
+and cross-device synchronization to ensure orderly pipeline                     run extra cycles to produce a sequence length of 𝐿 + 1. (3)
+execution. The system adopts a pipelined parallel execu-                        𝑆 × 𝑉 : The additional tokens are reduced back to length 𝐿
+tion strategy: while the GPU verifies candidate tokens, the                     during the accumulation at the last round, alignment with
+FPGA concurrently generates the next tokens. Tokens are                         the original sequence. We adopt a ping-pong mechanism:
+transferred across devices via PCIe interface and exchanged                                                              𝑃𝐸 𝑁𝑢𝑚 × 𝐷𝑎𝑡𝑎 𝑤𝑖𝑑𝑡ℎ
+through shared host CPU memory using a ping-pong buffer-                                                  𝐾𝐸𝑅𝑙𝑜𝑎𝑑 =                                                                                           (16)
+                                                                                                                              𝐵𝑎𝑛𝑑 𝑤𝑖𝑑𝑡ℎ
+ing mechanism, thereby ensuring efficient cross-device data
+movement and seamless integration of inference.
+                                                                                                         𝐼 𝐹 𝑀𝑙𝑜𝑎𝑑 = 𝐾𝐸𝑅𝑙𝑜𝑎𝑑 + 𝐶𝐴𝑆 𝐿𝑎𝑡𝑒𝑛𝑐𝑦                                                                    (17)
+5.2 Multi Compute Core Overlay Processor                                           Where, CAS represents the read latency. The scheduling
+Motivation: The draft stage tends to be limited by band-                        objective is to first ensure the single-cycle computational
+width. The underlying reason is that the tokens are generated                   capability of the PE. Equation 16 indicates that the number of
+autoregressively with sequence length reduced to one, where                     MACs required per cycle determines the amount of weight
+low data reuse leads to light computation, while frequent                       loading. Furthermore, the multi-cycle PE operation aims for
+weight loading becomes the primary limitation. We propose                       data reuse equal to 𝐾𝐸𝑅𝑙𝑜𝑎𝑑 . However, due to the presence
+an overlay processor to fully utilize bandwidth and optimize                    of CAS latency, 𝐼 𝐹 𝑀𝑙𝑜𝑎𝑑 becomes slightly larger, enabling
+the computation dataflow.                                                       effective overlap between computation and data loading.
+   The micro-architecture is shown in Fig. 7. The inference                        PE Micro-architecture: As shown in Fig. 9, the micro-
+process fully utilizes HBM channels to feed weights and                         architecture of the PE is designed with two key features.
+activations into each core, where systolic PE arrays per-                       (1) Branch concatenation: parallel speculative branches lead
+form the matrix multiplication. The partial sums from the                       to matrix concatenation, which typically occurs at the last
+cores are fused in a parallel adder tree and then accumulated                   few tokens. To enable fast switching, we introduce multiple
+over many rounds into the output buffer. A special function                     weight buffer and additional wires, allowing the PE to select
+unit executes non-linear operations, including softmax, layer                   the correct path according to the feeding activations. (2)
+normalization, etc. Finally, the results are written back to                    DSP packing: since BF16 has only 7 mantissa bits, splitting a
+off-chip memory. Furthermore, for speculative decoding, we                      single DSP is beneficial. This allows each DSP unit to support
+design three key components: a KV-cache management mod-                         twice the parallelism while maintaining numerical accuracy,
+ule to prune tokens that are not accepted, a dynamic token                      thereby boosting the compute throughput to double.
+management module to monitor GPU execution states and
+switch draft streams, and a branch management module to                         5.3 Draft Model KV-Cache Management
+calculate token confidence scores for deciding the number                       As shown in Fig. 10, we adopt two methods to efficiently
+of drafts to be generated next. These techniques leverage the                   manage the KV-Cache of the draft model. (1) Candidate
+algorithmic advantages of Section 4 and aware hardware.                         buffering and pruning: for each branch, we allocate an
+   Multi-Branch Mapping: Using a shared prefix, the draft                       on-chip temporary buffer (temp buffer) to store dynamically
+model generates multiple tokens in parallel. Fig. 8 illustrates                 generated KVs. The caching process proceeds in the order
+
+
+
+                                                                          609
+DFVG: A Heterogeneous for Speculative Decoding with Draft-on-FPGA and Verify-on-GPU                                                             ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+
+
+                                                                        …
+                                                                                                                       Table 2. Platform configurations of GPU, FPGA and CPU
+
+
+
+
+                                                                                    …
+                                                                       …
+                      hidden size
+
+
+
+
+                                                                      …
+
+
+
+
+                                                                                                  …
+                                                         layer0 …N
+                                                                                               #Token6
+                                                                                   K
+ branch
+
+
+
+
+                                                                                               #Token5                       Hardware         NVIDIA   NVIDIA    AMD       AMD    Intel CPU
+                           K                                          K                        #Token4                       Platform        4090 GPU A100 GPU U200 FPGA V80 FPGA Xeon4310
+                                                                                               #Token3                                          512      432      6480     10848       2
+                                                                                   V           #Token2                      Compute Units    Tensor Cores   Tensor Cores        DSP48s        DSP58s         AVX-512
+                           V                                          V                        #Token1                     Frequency (MHz)      2230             1410            300            300           2100
+                                                                                  prune
+                           …
+
+
+
+                                                                     temp                      off-chip                    FP16 PCP (TOPS)      330              312             3.3            6.5           0.26
+                   Next token                                        buffer       buffer       memory
+                                                                                                                              SRAM (MB)          72               40             43              84            18
+                                                                                                                              DRAM (GB)          24               80             64           32 & 32         768
+Figure 10. KV Cache Management: Candidate Pruning and                                                                          BW (GB/s)        1008             1935             76         51 & 820          21
+                                                                                                                              PCIE (GB/s)        64               64             32              64            64
+Contiguous Allocation.                                                                                                     Power TDP (W)∗       450              400             225            190           120
+                                                                                                                       ∗ TDP vs. runtime power: the V80 FPGA has a 190 W TDP, while the optimized
+
+ FPGA 1              2         3            4      5            6         7   8            9    10                     DFVG design draws about 75 W during inference, well below the TDP limit.
+          branch
+                                                                                                                       Table 3. Workload configurations for target and draft models
+ GPU
+
+  Time                                                                                                                     Target     Hidden FFN Num                    Draft            Hidden FFN Num Vocab
+          Draft generate           Target verify       Target generate        Draft rejected    Target waiting             Model       Size dim Layers                  Model             Size Dim Layers Size
+                                                                                                                           Vicuna-7B 4096 11008             32     Vicuna-160M 768 3072                 12    32000
+                                                                                                                           LLaMA-7B 1096 11008              32     LLaMA-160M 768 3072                  12    32000
+Figure 11. Compact pipelined scheduling with overlapping                                                                   OPT-13B   5120 20480             40     OPT-125M    768 3072                 12    50272
+execution of draft and target models.                                                                                      Qwen3-8B 1094 12288              36     Qwen3-0.6B 1024 3072                 28    151936
+
+
+of K and V, then layer, and finally round. Based on the veri-
+                                                                                                                       performs verification, while also evaluating acceptance using
+fier’s decision, we prune the entire branch if necessary, and
+                                                                                                                       Eq. (3). The GPU returns accepted prefixes, and the FPGA
+move the accepted tokens’ KV entries into the prune buffer.
+                                                                                                                       detects rollbacks by comparing the returned prefix length
+This mechanism ensures timely cleanup of invalid cache and
+                                                                                                                       with its local sequence, resets its KV cache if necessary, and
+releases on-chip memory space. (2) Contiguous allocation:
+                                                                                                                       resumes execution from the verified prefix without stalling
+we maximize the utilization of on-chip RAM to store the
+                                                                                                                       the pipeline. Because only compact token information and
+KV of accepted tokens, and adopt a block-based accumula-
+                                                                                                                       status metadata are exchanged over PCIe and transfers are
+tion strategy where KVs are stored until a certain amount is
+                                                                                                                       fully overlapped with FPGA/GPU computation, these com-
+reached before being evicted in bulk.
+                                                                                                                       munication and rollback paths are kept off the critical path
+5.4 Cross-Device Compact Pipeline Scheduling                                                                           and do not become a throughput bottleneck in DFVG.
+Fig. 11, illustrates the pipeline scheduling across devices.
+                                                                                                                       6      Evaluation
+The process works as follows: (1) the FPGA first generates
+candidate tokens, including multiple branches with dynamic                                                             6.1 Experimental Setup
+lengths; (2) the GPU immediately verifies these candidates,                                                            Implementation. We implement DFVG on a heterogeneous
+while the FPGA continues generating new drafts; (3) once                                                               platform with draft models deployed on V80 FPGAs and
+verification finishes, the GPU sends the decision back to the                                                          verification models on GPUs. The FPGA implementation in-
+FPGA, otherwise the FPGA keeps producing; (4) if the FPGA                                                              cludes a custom micro-architecture designed in Verilog HDL
+has not finished generating by the time verification ends,                                                             synthesized at 300 MHz, along with an extended compiler
+the GPU continues forward from the prefix to produce new                                                               supporting communication, dynamic draft configuration,
+tokens until the FPGA requests validation; (5) if a token is                                                           and rollback recovery instructions. The GPU implementa-
+rejected, the FPGA rolls back, while the GPU simultaneously                                                            tion features our TreeSort-Verify framework with unified
+continues forward from the prefix to generate new tokens.                                                              KV-cache management and multi-GPU synchronization via
+In this way, the FPGA is kept fully utilized, continuously pro-                                                        NCCL. Detailed implementations are provided in the Appen-
+ducing drafts even if some are later rejected, while the GPU                                                           dix.
+is never idle, either verifying or forwarding. This achieves a                                                            Platforms. We combine NVIDIA RTX 4090 and A100
+tightly overlapped execution pipeline between devices.                                                                 GPUs with AMD U200 and V80 FPGAs, and use an Intel
+   DFVG realizes this cross-device pipeline with interrupt-                                                            Xeon 4310 as the host CPU. The configuration parameters of
+driven coordination and fully asynchronous PCIe communi-                                                               the hardware platforms are summarized in Table 2. Unless
+cation over a shared CPU memory region. When the FPGA                                                                  otherwise noted, all experiments reported in Figs. 12–17 are
+produces new drafts, it writes token IDs and optional logits                                                           conducted on a server equipped with an Intel Xeon 4310
+into a shared host buffer, updates status registers in its BAR                                                         CPU, an RTX 4090 GPU, and a Xilinx V80 FPGA.
+space, and raises an interrupt to the CPU; the CPU then                                                                   Energy Measurement. Energy is defined as 𝐸 = 𝑃¯act × 𝑇 ,
+triggers DMA so that the GPU fetches the same buffer and                                                               where 𝑃¯act is the average on-device runtime power and 𝑇
+
+
+
+                                                                                                                 610
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                    Shaoqiang Lu et al.
+
+
+
+
+Figure 12. Dynamic Draft Mechanism with Qwen3-0.6B/                     Figure 13. Effect of Hyperparameters on Acceptance Rate.
+Qwen3-8B: Length Distribution and Acceptance Stability.
+                                                                        require only short drafts to pass, while a few iterations need
+                                                                        longer drafts to achieve sufficient acceptance. This "long-
+the end-to-end inference time. FPGA and GPU power are
+                                                                        tail" characteristic makes it difficult for static draft length
+sampled every 1 ms using Xilinx xbutil and nvidia-smi
+                                                                        strategies to accommodate both extremes—too short leads
+during steady-state inference after a warm-up phase.
+                                                                        to frequent rollbacks, while too long causes computational
+   Models and Datasets. We use popular open-source LLMs
+                                                                        waste. The right part of Fig. 12 further demonstrates the
+to evaluate our system. Table 3 provides detailed descriptions
+                                                                        stable performance of our method in this dynamic environ-
+of the structures of different models, including Vicuna-7B-
+                                                                        ment: even when draft lengths fluctuate significantly across
+v1.3 [21], LLaMA-2-7B [23], OPT-13B [34], Qwen3-8B [28],
+                                                                        different iterations, the acceptance rate remains consistently
+as well as smaller draft models from the same families. In par-
+                                                                        high at 75%–85%. These results show that dynamic drafts can
+ticular, Figs. 12 and 13 use the Qwen3-0.6B / Qwen3-8B draft–
+                                                                        adaptively allocate computation over time. They mitigate the
+target model pair. For datasets, following Spec-Bench [26],
+                                                                        inherent mismatch in static strategies, where a fixed budget
+we use MT-Bench (MT), Translation (TRAN), Summarization
+                                                                        is used for tokens with highly variable difficulty, and improve
+(SUMM), Question answering (QA), Math reasoning (MR),
+                                                                        overall efficiency without degrading generation quality.
+and Retrieval-Augmented Generation (RAG).
+                                                                           To further validate its robustness, Fig. 13, analyzes two
+   Metrics. The evaluation metrics mainly include end-to-
+                                                                        key hyperparameters: the confidence threshold 𝜖 and the
+end speedup, energy efficiency ratio. In addition, we also mea-
+                                                                        sampling temperature 𝑇 . In the left part of Fig. 13, we observe
+sure ablation and resource utilization to comprehensively
+                                                                        that as the confidence threshold increases, the acceptance
+demonstrate the system’s advantages. Each experiment is
+                                                                        rate gradually decreases across all tasks, which is due to
+repeated five times under identical thermal and scheduling
+                                                                        stricter verification criteria allowing fewer drafts to pass.
+conditions, and we report averaged results. Both the FPGA
+                                                                        However, it is worth noting that even under relatively high
+draft module and the GPU verifier operate deterministically
+                                                                        threshold conditions (𝜖 ≤ 0.6), the acceptance rate still re-
+with fixed top-𝑘 and temperature settings.
+                                                                        mains above 75%. This indicates that our method achieves a
+   Baseline. All experiments are conducted with sufficient
+                                                                        good balance between prudence and efficiency, while being
+GPUs to ensure fair comparison:
+                                                                        insensitive to moderate variations in confidence calibration,
+    • AR [20]: Autoregressive token-by-token decoding.                  thereby ensuring stable efficiency in practical applications.
+    • SpS [4]: The original speculative decoding with draft                In the right part of Fig. 13, we analyze the effect of the
+       generation and immediate sequential verification.                sampling temperature 𝑇 . As the temperature increases, the
+    • DuoDecoding [13]: A heterogeneous approach that                   diversity of model outputs grows, but the deviation from
+       places the draft on CPU and the target on GPU for                the predicted drafts also increases, leading to a decline in
+       parallel decoding with preserved quality.                        acceptance rate. Nevertheless, the dynamic draft mechanism
+    • SpecInfer [15]: A tree-based speculative decoding and             demonstrates strong resilience: within most practically used
+       verification framework that enables distributed LLM              temperature ranges (𝑇 ≤ 1), the acceptance rate across dif-
+       inference across multiple GPUs.                                  ferent tasks remains stable above 80%. Only under extremely
+    • vLLM [9], LLaMA.cpp [7], and GPT-Fast [17]: Ef-                   high temperatures does performance degrade significantly
+       ficient implementations leveraging PagedAttention,               due to excessive randomization of outputs.
+       pure C/C++, and kernel/operator fusion.                             Rollbacks occur only when draft tokens are rejected by
+                                                                        the verifier and are rare in practice. For the Qwen3-0.6B /
+6.2 Algorithm Analysis                                                  Qwen3-8B model pair, the token-level acceptance rate re-
+To more systematically reveal the efficiency advantages of              mains between 75% and 85%, so rollback overhead accounts
+the dynamic draft mechanism, we present two complemen-                  for only a small fraction of the total processing time.
+tary perspectives in Fig. 12. The accepted draft length dis-               In summary, the dynamic draft mechanism exhibits adap-
+tribution shown in the left part of Fig. 12 reflects the highly         tive efficiency advantages in dynamic generation environ-
+dynamic nature of the generation process: most iterations               ments and maintains high robustness under variations of key
+
+
+
+                                                                  611
+DFVG: A Heterogeneous for Speculative Decoding with Draft-on-FPGA and Verify-on-GPU       ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+
+
+Figure 14. End-to-end performance comparison, where AR and SpS [4] denote autoregressive and speculative sampling,
+respectively. DuoDecoding [13] is a hybrid architecture deployed on a 16-core Intel Xeon CPU and a GPU, while SpecInfer [15]
+adopts a distributed multi-GPU deployment. For fairness, all experiments are conducted on two RTX 4090 GPUs, and speedup
+and energy efficiency are reported relative to AR as the baseline, on a wide range of models and six representative datasets.
+
+
+
+
+                                                                         Figure 17. Comparison of acceleration contributions from
+                                                                         different optimization techniques.
+Figure 15. Comparison of speedup with different inference
+                                                                            Latency Speedup. We summarize three key observations.
+frameworks: vLLM [9], LLaMA.cpp [7], and GPT-Fast [17]
+                                                                         First, from the model perspective, Vicuna-7B achieves a 2.44×
+                                                                         speedup while Qwen3-8B reaches 3.26×, mainly due to align-
+                                                                         ment gaps between small and large models. By generating
+                                                                         more effective drafts through parallel branches, our method
+                                                                         significantly improves the acceptance rate. Second, from the
+                                                                         dataset perspective, the highest speedup is observed on MTB,
+                                                                         since it involves multi-turn dialogues with a large number
+                                                                         of generated tokens, allowing the FPGA-deployed drafting
+                                                                         mechanism to fully exploit parallelism and reduce latency.
+Figure 16. Average per-token wall time distribution between              Third, from the scaling perspective, while existing methods
+the main stages. Draft and verification are measured inde-               exhibit a clear drop in speedup when scaling up from Llama-
+pendently as they overlap in the parallel execution pipeline.            7B to OPT-13B, our method maintains stable acceleration.
+                                                                         This robustness stems from the extensive overlap between
+hyperparameters, highlighting its universality and practical             GPU verification and FPGA-based draft generation, which
+value in large-scale real-world inference scenarios.                     avoids pipeline idling.
+                                                                            Energy Efficiency. We highlight two key observations.
+6.3 End-to-End Performance                                               First, due to shorter end-to-end runtime, the total energy
+In this section, the “end-to-end” metric refers to the full              consumption is reduced by about 3×. Compared with multi-
+inference pipeline, from ingesting input token IDs to produc-            GPU deployment, where an RTX 4090 reaches an average
+ing output token IDs. Throughput (tokens/s) is computed as               power consumption of 236W during long executions, our
+the total number of generated tokens divided by the end-to-              method significantly lowers total energy by reducing redun-
+end latency, and all reported speedups are measured against              dant computation through efficient algorithms and leverag-
+baseline systems under this metric. As shown in Fig. 14, our             ing FPGA-based parallel draft generation for low-latency
+system achieves a latency speedup of 2.44 × –3.26 × and                  execution. Second, the runtime power consumption of the
+an energy efficiency improvement of 4.33 × – 5.79 ×. We                  FPGA is extremely low, leading to an additional reduction of
+analyze the underlying reasons.                                          about 1.7×. With careful design and resource optimization,
+
+
+
+                                                                   612
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                         Shaoqiang Lu et al.
+
+                                                                       PE   DMA    ADD   PSUM   SFU   PCIe   Token              LUT(k)   FF(k) DSP BRAM URAM
+                                                                                                                     Module
+                                                                                                                                 2574    5148 10848 4224 1924
+                                                                                                                     PE Array    1441    2461 8192   0     0
+                                                                                                                      DMA         361    1220   0   280    0
+                                                                                                                     ADD.Pall     181     327   0    0     0
+                                                                                                                      PSUM        102     249   0   1362   0
+                                                                                                                       SFU         89     137  256   65    0
+                                                                                                                     KVcache       52     125   0   720  1278
+                                                                                                                      Other        80     164   4   166   96
+                                                                            SRL2         SRL1         SRL0            Total      2306    4683 8461 2593 1374
+
+
+
+                                                                      Figure 19. Resource utilization and post-implementation
+                                                                      layout mapped onto the V80 FPGA.
+
+
+
+
+Figure 18. Impact of variable factors on tokens per second
+                                                                      Figure 20. Execution efficiency of FPGA operators balances
+                                                                      loading and computation in matrix multiplication.
+
+                                                                      6.4 Ablation Study
+                                                                      Impact of Incremental Optimizations. We conduct an
+the FPGA achieves an average runtime power of only 75W,
+                                                                      incremental ablation study on Qwen3-8B to evaluate accel-
+substantially lower than GPUs and CPUs.
+                                                                      eration benefits, defined as follows:
+   Framework Advantage. As shown in Fig. 15, we observe
+that existing frameworks obtain about 1.5× speedup mainly                   • HW-Branch: Hardware-aware branching. It dynami-
+through fine-grained optimizations on memory access and                       cally determines the number of branches according to
+operator execution flow. However, this remains insufficient,                  the entropy of each token while considering hardware
+since as more candidate tokens are generated, the drafts                      parallelism to generate as many drafts as possible.
+themselves gradually become a burden.                                       • TreeSort-Verify: Sorts the token tree to transform
+   Wall Time Breakdown. We further decompose the mea-                         irregular masks into compact block sparsity, reducing
+sured runtime latency into three stages: draft generation,                    redundant attention computation of the target model.
+target verification, and communication overhead. As shown                   • MCore-Acc: An FPGA-based multi-core accelerator,
+in Fig. 16, the drafting stage accounts for about 92%–96% of                  whose bandwidth is well matched to the computing
+the total wall time, while the verification stage contributes                 capability. It optimizes the dataflow and computation
+around 96%–98%. Communication overhead remains within                         pattern of the draft model, mapping multiple branches
+1.08%–3.2%, which is negligible compared to the computa-                      onto multi-cores for parallel draft generation.
+tion itself. This is because our dynamic drafting enables a                 • Pipe-Overlap: Through monitored and scheduled pipelin-
+tightly coupled pipeline that occasionally overlaps, effec-                   ing, the draft and verification are overlapped. Verifica-
+tively avoiding idle stages. Importantly, the drafting and                    tion forwards new tokens during drafting, and drafting
+verification stages run concurrently in a pipelined manner,                   generates the next branches in verification.
+so their individual wall time portions reported in Fig. 16 do            The ablation results are shown in Fig. 17. Starting from
+not sum to the end-to-end latency; the pie chart illustrates          the baseline, HW-Branch achieves a 2.21× speedup through
+their relative contribution to the overall computation rather         hardware-aware branching. With Tree-Sort, the efficiency of
+than disjoint serial segments of runtime. This is because our         attention computation is further improved, reaching 2.46×.
+dynamic drafting enables a tightly coupled pipeline that oc-          Introducing MCore-Acc leverages FPGA multi-core paral-
+casionally overlaps, effectively avoiding idle stages. These          lelism, increasing the speedup to 3.08×. Finally, Pipe-Overlap
+percentages reflect overlapped execution, not serialized wall         overlaps drafting and verification to reduce idle cycles, achiev-
+time, and therefore do not add up to 100%.                            ing an overall 3.26× acceleration.
+   PCIe Communication. DFVG uses a PCIe Gen4 ×16                         A further evaluation of the impact of various factors on
+link between the FPGA and GPU. Profiling shows that this              system performance is presented in Fig. 18, where we analyze
+PCIe Gen4 ×16 configuration already satisfies DFVG’s data-            four aspects: (a) Variable Output Length. As the output
+transfer requirements under typical acceptance rates (75%–            length increases, more drafts are generated, yet the FPGA’s
+85%), and the GPU verifier is compute-bound; therefore, up-           parallel processing capability enables faster token genera-
+grading to PCIe Gen5 would have negligible impact on end-             tion. (b) Variable Batch Size. When the batch size is less
+to-end throughput or latency.                                         than 4, the computational burden is negligible. However, as
+
+
+
+                                                                613
+DFVG: A Heterogeneous for Speculative Decoding with Draft-on-FPGA and Verify-on-GPU         ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+it continues to increase, the combined overhead of drafting              enabling efficient mapping of larger or more complex draft
+and verification accumulates, leading to a gradual decline in            models onto reconfigurable hardware to adapt to evolving
+speed. (c) Variable Model Scale. When the model size is be-              LLMs. Integrating faster interconnects (e.g., NVLink or PCIe
+low approximately 14B, the speed remains relatively stable.              Gen5) could further smooth the pipeline and reduce commu-
+In contrast, scaling from 32B to 72B causes a sharp increase             nication latency between FPGA and GPU. In addition, explor-
+in computation, resulting in a noticeable drop in throughput.            ing multi-branch speculative decoding on DFVG may allow
+(d) Variable Device Combination. The U200 is limited                     parallel generation of multiple candidate token streams, en-
+by bandwidth, yielding lower throughput. The V80, benefit-               hancing acceptance rates. This work takes a promising step
+ing from HBM, achieves significant improvement, while the                toward broader system designs.
+A100 demonstrates strong computational power but shows
+different trade-offs in bandwidth utilization compared with              Acknowledgments
+the FPGA. We use the U200 as a non-HBM FPGA baseline to                  This work was supported by Science and Technology Inno-
+isolate the impact of memory bandwidth: although the V80’s               vation Key R&D Program of Chongqing (CSTB2025TIAD-
+HBM can be disabled, contrasting an HBM FPGA (V80) with                  STX0016), and "Science and Technology Innovation in Yongjiang
+a conventional DDR-based FPGA (U200) provides a clearer                  2035" Key Technology Project (2024Z283), and Ningbo Key
+comparison between the two hardware classes.                             R&D Program (2023Z214), together with research support
+                                                                         from BTD Inc (20250X1).
+6.5 Resource Utilization
+We implemented the Overlay Processing Unit on the V80                    A      Appendix
+FPGA, and the corresponding resource utilization and layout              This appendix provides additional implementation insights
+are shown in Fig. 19. The design occupies about 89.6% of                 and discusses potential future directions for DFVG. We envi-
+LUTs and 90.9% of FFs, while consuming 8192 DSP units.                   sion extending this work to support multi-round speculative
+In terms of memory, it uses 18 MB of BRAM and 67 MB of                   decoding and broader LLM families.
+URAM (mainly for the KV-cache). PEs consume 55.9% of
+LUTs to support a two-BF16 packing strategy, thereby en-                 A.1 Abstract
+hancing computational capability.. In addition, the system               This artifact contains the implementation of DFVG, a het-
+adopts the Xilinx Gen4 x16 PCIe IP, with an overhead of                  erogeneous speculative decoding architecture for Large Lan-
+0.03% LUTs and 12 URAMs, for high-speed CPU commu-                       guage Models that leverages FPGA-GPU collaboration. The
+nication. The V80 card is compatible with standard CPU                   artifact includes: (1) FPGA-based draft model implementation
+server chassis and only requires sufficient airflow for reliable         with custom micro-architecture designed in Verilog HDL,
+cooling, which facilitates deployment in existing clusters.              (2) GPU-based verification framework with TreeSort-Verify
+   The execution efficiency of each operator is shown in                 mechanism, (3) runtime coordination system for cross-device
+Fig. 20. In matrix multiplication tasks, both loading and com-           communication, and (4) evaluation scripts and datasets for re-
+putation reach about 86.2% – 97.5% efficiency, fully utilizing           producing the key results demonstrating up to 3.26× speedup
+bandwidth and computational resources, mainly due to the                 and 5.8× energy efficiency improvement over existing ap-
+increased branch parallelism in the token-by-token draft                 proaches.
+generation stage. The results confirm that draft generation
+on FPGA effectively exploits its parallelism advantages.                 A.2     Artifact check-list (meta-information)
+                                                                               • Algorithm: Speculative decoding, hardware-aware dynamic
+                                                                                 draft generation, TreeSort-Verify
+7    Conclusions                                                               • Program: DFVG system implementation in Verilog HDL
+We proposed DFVG, demonstrates that speculative decod-                           and C++
+ing can be effectively scaled across different processors:                     • Compilation: Xilinx Vivado 2024.1, GCC 9.4.0, CUDA 12.1
+the FPGA handles lightweight, parallelizable drafting tasks,                   • Transformations: Token tree reordering, block-parallel
+while the GPU focuses on heavy verification. Our experimen-                      attention computation
+tal evaluation shows that DFVG achieves up to 2.44 × –3.26                     • Binary: FPGA bitstream, GPU kernels, host controller exe-
+× higher token throughput than traditional single-GPU spec-                      cutable
+                                                                               • Model: LLaMA-7B, OPT-13B, Qwen3-8B, Vicuna-7B and
+ulative decoders, thanks to the FPGA’s ability to pre-generate
+                                                                                 corresponding draft models
+multiple tokens for batch verification on the GPU. This in-                    • Data set: MT-Bench, Translation, Summarization, QA, Math
+creased parallelism also brings improved energy efficiency,                      reasoning, RAG datasets
+reducing energy per generated token by approximately 40–                       • Run-time environment: Ubuntu 20.04, CUDA 12.1, Xilinx
+50% compared to GPU-only baselines. Our work opens up                            Runtime (XRT) 2024.1
+promising directions for future research. Scaling to multi-                    • Hardware: AMD V80/U200 FPGA, NVIDIA RTX 4090/A100
+FPGA and multi-GPU configurations is a compelling path,                          GPU, Intel Xeon 4310 CPU
+
+
+
+
+                                                                   614
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                 Shaoqiang Lu et al.
+
+
+    • Run-time state: KV-cache management, cross-device syn-                 • Question Answering: SQuAD, Natural Questions
+      chronization                                                           • Math Reasoning: GSM8K, MATH datasets
+    • Execution: Heterogeneous pipeline with FPGA draft gen-                 • RAG: Retrieval-Augmented Generation tasks
+      eration and GPU verification
+    • Metrics: Latency speedup, energy efficiency, token through-         A.3.5    Models.
+      put, acceptance rate                                                   • Target Models: LLaMA-7B, OPT-13B, Qwen3-8B, Vicuna-
+    • Output: Performance logs, resource utilization reports, en-
+                                                                               7B
+      ergy consumption data
+                                                                             • Draft Models: LLaMA-160M, OPT-125M, Qwen3-0.6B,
+    • Experiments: End-to-end performance, ablation studies,
+      scalability analysis                                                     Vicuna-160M
+    • How much disk space required (approximately)?: 50GB                    • Formats: HuggingFace Transformers format, quan-
+      (models, datasets, logs)                                                 tized variants
+    • How much time is needed to prepare workflow (ap-
+      proximately)?: 2-3 hours                                            A.4 Installation
+    • How much time is needed to complete experiments                        1. Clone Repository:
+      (approximately)?: 8-12 hours
+    • Publicly available?: Yes, upon paper acceptance                             git clone https://github.com/ShaoqiangLu/DFVG
+    • Code licenses (if publicly available)?: MIT License                    2. Install Dependencies:
+    • Data licenses (if publicly available)?: Model-specific
+                                                                                  sudo apt update
+      licenses (Apache 2.0, MIT)
+    • Workflow automation framework used?: Custom Python
+                                                                                  sudo apt install build-essential cmake
+      scripts with job scheduling                                                 pip install -r requirements.txt
+    • Archived (provide DOI)?: Will be provided upon accep-                  3. Setup FPGA Environment:
+      tance
+                                                                                  source /opt/xilinx/xrt/setup.sh
+                                                                                  export XILINX_VIVADO=/opt/Xilinx/Vivado/2024.1
+A.3 Description
+A.3.1 How to access. The source code is at: https://github.                  4. Build FPGA Bitstream:
+com/ShaoqiangLu/DFVG                                                              cd fpga/
+                                                                                  make synthesize
+A.3.2    Hardware dependencies.                                                   make implement
+    • FPGA: AMD Versal V80 or U200 FPGA with HBM/DDR                         5. Compile GPU Kernels:
+      memory
+                                                                                  cd gpu/
+    • GPU: NVIDIA RTX 4090 or A100 GPU with at least
+                                                                                  make all
+      24GB memory
+    • CPU: Intel Xeon or equivalent with PCIe Gen4 support                   6. Download Models:
+    • Memory: At least 64GB system RAM                                            python scripts/download_models.py
+    • Storage: 100GB available disk space for models and
+      datasets                                                            A.5 Experiment workflow
+    • Connectivity: PCIe Gen4 x16 slots for FPGA-GPU                         1. Environment Setup: Initialize FPGA and GPU de-
+      communication                                                             vices
+A.3.3    Software dependencies.                                              2. Model Loading: Load target and draft models onto
+                                                                                respective devices
+    • OS: Ubuntu 20.04 LTS or later                                          3. Baseline Measurement: Run autoregressive and stan-
+    • FPGA Tools: Xilinx Vivado 2024.1, Xilinx Runtime                          dard speculative decoding
+      (XRT) 2024.1                                                           4. DFVG Evaluation: Execute DFVG with various con-
+    • GPU Tools: CUDA 12.1, cuDNN 8.9, NVIDIA Driver                            figurations
+      530+                                                                   5. Performance Analysis: Collect latency, throughput,
+    • Compilers: GCC 9.4.0, Python 3.8+                                         and energy metrics
+    • Libraries: PyTorch 2.0+, Transformers 4.30+, NumPy,                    6. Ablation Studies: Evaluate individual component
+      NCCL                                                                      contributions
+    • Monitoring: NVIDIA-SMI, Xilinx XRT utilities
+                                                                            Example execution:
+A.3.4    Data sets.                                                       python scripts/run_experiments.py
+    • MT-Bench: Multi-turn conversation benchmark                         --config configs/llama7b.yaml
+    • Translation: WMT translation tasks                                  python scripts/collect_results.py
+    • Summarization: CNN/DailyMail, XSum datasets                         --output results/
+
+
+
+                                                                    615
+DFVG: A Heterogeneous for Speculative Decoding with Draft-on-FPGA and Verify-on-GPU           ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+A.6 Evaluation and expected results                                      A.9 Hardware Platform and Toolchain
+Key Performance Metrics:                                                 We implement DFVG on a heterogeneous system consisting
+      • Latency Speedup: 2.44×–3.26× improvement over                    of Xilinx V80 FPGAs and NVIDIA RTX 4090 GPUs. The FPGA
+        autoregressive baseline                                          logic is synthesized using Vivado 2022.2, and the runtime
+      • Energy Efficiency: 4.33×–5.79× improvement in en-                communication uses PCIe with custom memory-mapped
+        ergy per token                                                   buffers. The host controller is written in C++ with support
+      • Token Throughput: 100-200 tokens/second depend-                  for non-blocking draft and verify streams.
+        ing on model size                                                Token Stream Serialization Format
+      • Acceptance Rate: 75%-85% for dynamic draft genera-
+        tion                                                             Tokens generated on FPGA are serialized into a lightweight
+      • Resource Utilization: 83% LUT, 79% FF utilization                stream format containing token IDs, timestamps, and confi-
+        on FPGA                                                          dence scores. Each entry is 16 bytes, with 4 bytes for token
+                                                                         ID, 4 for confidence, and 8 for alignment. The stream is
+  Expected Output Files:                                                 transferred via DMA to GPU memory and queued for batch
+    • performance_summary.json: Overall speedup and ef-                  verification.
+       ficiency metrics
+    • energy_analysis.csv: Detailed energy consumption      C. Future Directions
+       breakdown                                            While DFVG demonstrates the effectiveness of FPGA-GPU
+    • ablation_results.json: Component-wise performance cooperation for single-round speculative decoding, future
+       contributions                                        work includes:
+    • resource_utilization.log: FPGA and GPU resource           • Supporting multi-round speculative decoding by pipelin-
+       usage                                                      ing multiple draft-verify iterations.
+   Reproducibility: Results should be within ±5% of re-         • Extending support to other model families such as
+ported values due to hardware variations and thermal condi-       Mistral, DeepSeek, and Mamba.
+tions.                                                          • Integrating with LLM agent frameworks (e.g., LangChain)
+                                                                  to accelerate reasoning workflows.
+A.7 Experiment customization                                    • Exploring compiler-level fusion of decoding logic with
+                                                                  attention sparsity patterns.
+Configuration Parameters:
+      • Draft Length: Modify configs/draft_params.yaml       References
+      • Batch Size: Adjust BATCH_SIZE in configuration files [1] Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge
+      • Model Selection: Change TARGET_MODEL and DRAFT_MODEL     Akkaya, Florencia Leoni Aleman, Diogo Almeida, Janko Altenschmidt,
+      • Hardware Mapping: Modify device assignments in           Sam Altman, Shyamal Anadkat, et al. 2023. GPT-4 Technical Report.
+        device_config.yaml                                       In arXiv preprint arXiv:2303.08774. https://arxiv.org/abs/2303.08774
+                                                                          [2] Zihao An, Huajun Bai, Ziqiong Liu, Dong Li, and Emad Barsoum.
+  Adding New Models:                                                          2025. PARD: Accelerating LLM Inference with Low-Cost Parallel
+                                                                              Draft Model Adaptation. In arXiv preprint arXiv:2504.18583. https:
+python scripts/add_model.py                                                   //arxiv.org/abs/2504.18583
+--target new_model --draft new_draft                                      [3] Anonymous. 2025. SpecBranch: Hybrid Drafting and Rollback-Aware
+                                                                              Branch Parallelism. In arXiv preprint arXiv:2506.01979. https://arxiv.
+  Custom Datasets:                                                            org/abs/2506.01979
+python scripts/prepare_dataset.py                                         [4] Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste
+--input custom_data.json                                                      Lespiau, Laurent Sifre, and John Jumper. 2023. Accelerating Large Lan-
+                                                                              guage Model Decoding with Speculative Sampling. In arXiv preprint
+                                                                              arXiv:2302.01318. https://arxiv.org/abs/2302.01318
+A.8     Notes                                                             [5] Fahao Chen, Peng Li, Tom H Luan, Zhou Su, and Jing Deng. 2025.
+      • FPGA synthesis may take 2-4 hours depending on de-                    SPIN: Accelerating Large Language Model Inference with Heteroge-
+        sign complexity                                                       neous Speculative Models. In IEEE INFOCOM 2025-IEEE Conference on
+                                                                              Computer Communications. IEEE, 1–10.
+      • GPU memory requirements scale with model size and                 [6] Yichao Fu, Peter Bailis, Ion Stoica, and Hao Zhang. 2024. Break the
+        batch size                                                            Sequential Dependency of LLM Inference Using Lookahead Decoding.
+      • Cross-device communication latency depends on PCIe                    In Proceedings of the 41st International Conference on Machine Learning
+        generation and utilization                                            (ICML).
+                                                                          [7] Gerganov, Georgi and contributors. 2023. llama.cpp: Inference of
+      • Results may vary with different FPGA boards due to
+                                                                              LLaMA Model in Pure C/C++. https://github.com/ggml-org/llama.cpp.
+        timing variations                                                 [8] Juyong Jiang, Fan Wang, Jiasi Shen, Sungju Kim, and Sunghun Kim.
+      • Power measurements require external monitoring tools                  2024. A Survey on Large Language Models for Code Generation. In
+        for highest accuracy                                                  arXiv preprint arXiv:2406.00515. https://arxiv.org/abs/2406.00515
+
+
+
+
+                                                                   616
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                          Shaoqiang Lu et al.
+
+
+ [9] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin                     [24] Jinhui Wei, Ye Huang, Yuhui Zhou, Jiazhi Jiang, Jiangsu Du, and Yutong
+     Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.                      Lu. 2025. Ghidorah: Fast LLM Inference on Edge with Speculative De-
+     2023. Efficient Memory Management for Large Language Model Serv-                     coding and Hetero-Core Parallelism. In arXiv preprint arXiv:2505.23219.
+     ing with PagedAttention. In Proceedings of the 29th Symposium on                     https://arxiv.org/abs/2505.23219
+     Operating Systems Principles (SOSP).                                            [25] Zhuofan Wen, Shangtong Gui, and Yang Feng. 2024. Speculative
+[10] Cong Li, Zhe Zhou, Size Zheng, Jiaxi Zhang, Yun Liang, and Guangyu                   Decoding with CTC-based Draft Model for LLM Inference Acceleration.
+     Sun. 2024. SpecPIM: Accelerating Speculative Inference on PIM-                       In NeurIPS 2024 Poster. https://arxiv.org/abs/2412.00061
+     Enabled System via Architecture-Dataflow Co-Exploration. In Pro-                [26] Heming Xia, Zhe Yang, Qingxiu Dong, Peiyi Wang, Yongqi Li, Tao
+     ceedings of the 29th ACM International Conference on Architectural                   Ge, Tianyu Liu, Wenjie Li, and Zhifang Sui. 2024. Unlocking Effi-
+     Support for Programming Languages and Operating Systems (ASPLOS).                    ciency in Large Language Model Inference: A Comprehensive Survey
+[11] Yuhui Li, Fangyun Wei, Chao Zhang, and Hongyang Zhang. 2024. EA-                     of Speculative Decoding. In Association for Computational Linguistics
+     GLE: Speculative Sampling Requires Rethinking Feature Uncertainty.                   (ACL).
+     In Proceedings of the 41st International Conference on Machine Learning         [27] Minghao Yan, Saurabh Agarwal, and Shivaram Venkataraman. 2024.
+     (ICML).                                                                              Decoding Speculative Decoding. In arXiv preprint arXiv:2402.01528.
+[12] Shaoqiang Lu, Tiandong Zhao, Ting-Jung Lin, Rumin Zhang, Chen Wu,                    https://arxiv.org/abs/2402.01528
+     and Lei He. 2025. MCoreOPU: An FPGA-based Multi-Core Overlay                    [28] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui,
+     Processor for Transformer-based Models. In ACM Transactions on                       Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et al.
+     Reconfigurable Technology and Systems (TRETS).                                       2025. Qwen3 Technical Report. In arXiv preprint arXiv:2505.09388.
+[13] Kai Lv, Honglin Guo, Qipeng Guo, and Xipeng Qiu. 2025. DuoDecoding:                  https://arxiv.org/abs/2505.09388
+     Hardware-aware Heterogeneous Speculative Decoding with Dynamic                  [29] Ze Yang, Yihong Jin, and Xinhe Xu. 2024. HADES: Hardware Acceler-
+     Multi-Sequence Drafting. In arXiv preprint arXiv:2503.00784. https:                  ated Decoding for Efficient Speculation in Large Language Models. In
+     //arxiv.org/abs/2503.00784                                                           arXiv preprint arXiv:2412.19925. https://arxiv.org/abs/2412.19925
+[14] Bradley McDanel. 2025. AMUSD: Asynchronous Multi-Device Specula-                [30] Yunxuan Yu, Chen Wu, Tiandong Zhao, Kun Wang, and Lei He. 2020.
+     tive Decoding for LLM Acceleration. In IEEE International Symposium                  OPU: An FPGA-Based Overlay Processor for Convolutional Neural
+     on Circuits and Systems (ISCAS).                                                     Networks. In IEEE Transactions on Very Large Scale Integration (VLSI)
+[15] Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu                       Systems (TVLSI).
+     Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang,                  [31] Yunxuan Yu, Tiandong Zhao, Kun Wang, and Lei He. 2020. Light-OPU:
+     Xiaoxiang Shi, et al. 2024. SpecInfer: Accelerating Large Language                   An FPGA-based Overlay Processor for Lightweight Convolutional
+     Model Serving with Tree-Based Speculative Inference and Verification.                Neural Networks. In ACM/SIGDA International Symposium on Field-
+     In The 29th ACM International Conference on Architectural Support for                Programmable Gate Arrays (FPGA).
+     Programming Languages and Operating Systems (ASPLOS).                           [32] Zhihang Yuan, Yuzhang Shang, Yang Zhou, Zhen Dong, Zhe Zhou,
+[16] Shervin Minaee, Tomas Mikolov, Narjes Nikzad, Meysam Chenaghlu,                      Chenhao Xue, Bingzhe Wu, Zhikai Li, Qingyi Gu, Yong Jae Lee, et al.
+     Richard Socher, Xavier Amatriain, and Jianfeng Gao. 2024. Large                      2024. LLM Inference Unveiled: Survey and Roofline Model Insights.
+     Language Models: A Survey. In arXiv preprint arXiv:2402.06196. https:                In arXiv preprint arXiv:2402.16363. https://arxiv.org/abs/2402.16363
+     //arxiv.org/abs/2402.06196                                                      [33] Libo Zhang, Zhaoning Zhang, Baizhou Xu, Songzhu Mei, and Dong-
+[17] PyTorch Foundation. 2023. Accelerating Generative AI with PyTorch                    sheng Li. 2024. Dovetail: A CPU/GPU Heterogeneous Speculative
+     II: GPT, Fast. https://pytorch.org/blog/accelerating-generative-ai-2/.               Decoding for LLM Inference. In arXiv preprint arXiv:2412.18934. https:
+[18] Benjamin S. Spector and Chris Re. 2023. Accelerating LLM Inference                   //arxiv.org/abs/2412.18934
+     with Staged Speculative Decoding. In arXiv preprint arXiv:2308.04623.           [34] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen,
+     https://arxiv.org/abs/2308.04623                                                     Shuohui Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Victoria
+[19] Qidong Su, Christina Giannoula, and Gennady Pekhimenko. 2023.                        Lin, et al. 2022. OPT: Open Pre-Trained Transformer Language Models.
+     The Synergy of Speculative Decoding and Batching in Serving Large                    In arXiv preprint arXiv:2205.01068. https://arxiv.org/abs/2205.01068
+     Language Models. In arXiv preprint arXiv:2310.18813. https://arxiv.             [35] Ziyi Zhang, Ziheng Jiang, Chengquan Jiang, Menghan Yu, Size Zheng,
+     org/abs/2310.18813                                                                   Haibin Lin, Henry Hoffmann, and Xin Liu. 2025. SwiftSpec: Ultra-
+[20] Zhiqing Sun, Zhuohan Li, Haoqing Wang, Di He, Zi Lin, and Zhi-                       Low Latency LLM Decoding by Scaling Asynchronous Speculative
+     hong Deng. 2019. Fast Structured Decoding for Sequence Models. In                    Decoding. In arXiv preprint arXiv:2506.11309. https://arxiv.org/abs/
+     Advances in Neural Information Processing Systems (NeurIPS).                         2506.11309
+[21] Vicuna Team. 2023. Vicuna: An Open-source Chatbot Impressing GPT-               [36] Tiandong Zhao, Shaoqiang Lu, Chen Wu, and Lei He. 2025. ChatOPU:
+     4 with 90% ChatGPT Quality. In Large Model Systems Organization.                     An FPGA-based Overlay Processor for Large Language Models with
+[22] Rishabh Tiwari, Haocheng Xi, Aditya Tomar, Coleman R. C. Hooper,                     Unstructured Sparsity. In IEEE/ACM International Conference on
+     Sehoon Kim, Maxwell Horton, Mahyar Najibi, Michael W. Mahoney,                       Computer-Aided Design (ICCAD).
+     Kurt Keutzer, and Amir Gholami. 2025. QuantSpec: Self-Speculative               [37] Zixuan Zhou, Xuefei Ning, Ke Hong, Tianyu Fu, Jiaming Xu, Shiyao
+     Decoding with Hierarchical Quantized KV Cache. In Proceedings of                     Li, Yuming Lou, Luning Wang, Zhihang Yuan, Xiuhong Li, et al. 2024.
+     ICML 2025 (Poster).                                                                  A Survey on Efficient Inference for Large Language Models. In arXiv
+[23] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Alma-                   preprint arXiv:2404.14294. https://arxiv.org/abs/2404.14294
+     hairi, Yasmine Babaei, et al. 2023. Llama 2: Open Foundation and                [38] Xiangwen Zhuge, Xu Shen, Zeyu Wang, Fan Dang, Xuan Ding,
+     Fine-Tuned Chat Models. In arXiv preprint arXiv:2307.09288. https:                   Danyang Li, Yahui Han, Tianxiang Hao, and Zheng Yang. 2025.
+     //arxiv.org/abs/2307.09288                                                           SpecOffload: Unlocking Latent GPU Capacity for LLM Inference on
+                                                                                          Resource-Constrained Devices. In arXiv preprint arXiv:2505.10259.
+                                                                                          https://arxiv.org/abs/2505.10259
+
+
+
+
+                                                                               617

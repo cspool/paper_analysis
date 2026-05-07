@@ -1,0 +1,2083 @@
+STARC: Selective Token Access with Remapping and
+Clustering for Efficient LLM Decoding on PIM Systems
+                  Zehao Fan                                      Yunzhen Liu                                   Garrett Gagnon
+      Rensselaer Polytechnic Institute             University of Massachusetts, Amherst                 Rensselaer Polytechnic Institute
+              Troy, NY, USA                                 Amherst, MA, USA                                    Troy, NY, USA
+              fanz2@rpi.edu                              yunzhenliu@umass.edu                                  gagnog@rpi.edu
+
+                 Zhenyu Liu                                       Yayue Hou                                  Hadjer Benmeziane
+      Rensselaer Polytechnic Institute                 Rensselaer Polytechnic Institute                   IBM Research – Ruschlikon
+              Troy, NY, USA                                    Troy, NY, USA                                Ruschlikon, Switzerland
+              liuz32@rpi.edu                                   houy4@rpi.edu                             hadjer.benmeziane@ibm.com
+
+                                  Kaoutar El Maghraoui                                         Liu Liu
+                             IBM T. J. Watson Research Center                     Rensselaer Polytechnic Institute
+                               Yorktown Heights, NY, USA                                  Troy, NY, USA
+                                 kelmaghr@us.ibm.com                                      liu.liu@rpi.edu
+
+Abstract                                                                         ACM Reference Format:
+Serving large language models (LLMs) places significant                          Zehao Fan, Yunzhen Liu, Garrett Gagnon, Zhenyu Liu, Yayue Hou,
+                                                                                 Hadjer Benmeziane, Kaoutar El Maghraoui, and Liu Liu. 2026. STARC:
+pressure on memory systems due to frequent accesses and
+                                                                                 Selective Token Access with Remapping and Clustering for Effi-
+growing key–value (KV) caches as context lengths increase.                       cient LLM Decoding on PIM Systems. In Proceedings of the 31st
+Processing-in-memory (PIM) architectures offer high inter-                       ACM International Conference on Architectural Support for Program-
+nal bandwidth and near-data compute parallelism, but cur-                        ming Languages and Operating Systems, Volume 2 (ASPLOS ’26),
+rent designs target dense attention and perform poorly under                     March 22–26, 2026, Pittsburgh, PA, USA. ACM, New York, NY, USA,
+the irregular access patterns of dynamic KV cache sparsity.                      17 pages. https://doi.org/10.1145/3779212.3790226
+To mitigate this limitation, we propose STARC, a sparsity-
+optimized data mapping scheme for efficient LLM decoding
+                                                                                 1    Introduction
+on PIM. STARC clusters semantically similar KV pairs and
+co-locates them contiguously within PIM banks, enabling                          Large language models (LLMs) have demonstrated excep-
+retrieval at cluster granularity by matching queries against                     tional capabilities across a wide range of natural language
+precomputed centroids. This bridges the gap between fine-                        processing tasks and are increasingly deployed in real-world
+grained sparse attention and row-level PIM operations, im-                       applications such as interactive chat systems [1, 57, 61], code
+proving utilization while minimizing overhead. On a sim-                         generation tools [38, 45, 48], and decision support [29, 47, 55].
+ulated HBM-PIM system, under constrained KV budgets,                             During decoding, however, LLMs operate auto-regressively,
+STARC achieves up to 78% and 65% reductions in attention-                        requiring repeated attention over a growing key-value (KV)
+layer latency and energy over token-wise sparsity methods,                       cache [41]. As context lengths scale, the KV cache expands
+and up to 93% and 92% reductions relative to full attention,                     proportionally, leading to frequent and large memory ac-
+while preserving model accuracy.                                                 cesses. Despite high computational throughput, modern GPUs
+                                                                                 are constrained by limited memory bandwidth, making atten-
+CCS Concepts: • Computer systems organization →                                  tion layers predominantly memory-bound [25]. Processing-
+Architectures; • Computing methodologies → Machine                               in-memory (PIM) architectures [8, 13, 19, 20, 39] offer a
+learning.                                                                        promising solution by alleviating bandwidth bottlenecks
+Keywords: Processing-in-memory (PIM); Large language                             and enabling efficient in-memory computation. Recent work
+model (LLM); Sparse attention; KV clustering; KV cache                           has explored heterogeneous designs (e.g., GPU-PIM, NPU-
+                                                                                 PIM) that offload memory-bound attention layers to PIM
+                                                                                 while leveraging traditional accelerators (xPUs) for compute-
+                                                                                 intensive feed-forward networks (FFNs) and Query-Key-
+This work is licensed under a Creative Commons Attribution 4.0 Interna-          Value (QKV) generation [15, 40].
+tional License.
+ASPLOS ’26, Pittsburgh, PA, USA
+                                                                                    However, the trend toward longer contexts continues to
+© 2026 Copyright held by the owner/author(s).
+                                                                                 impose substantial computation and memory costs, driven
+ACM ISBN 979-8-4007-2359-9/2026/03                                               by the quadratic complexity of attention. Recent methods
+https://doi.org/10.1145/3779212.3790226                                          alleviate this by introducing KV cache sparsity through
+
+
+
+                                                                          1863
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                                                                                Zehao Fan et al.
+
+
+
+     Model
+                  A sequence of 16 tokens                                                          Sparsity 50%                                                               Attention score
+      0   1   2   3   4   5   6   7   8   9   10 11 12 13 14 15              0   1   2   3   4    5    6   7    8   9   10 11 12 13 14 15               0   0.3 0.4 0.6   0   0   0.8   0   0.7   0     0   0.7   0   0.4 0.3   0
+
+
+
+
+                                                                             Hardware
+                                                                                                 Store for PIM                   Compute attention score
+                                                                                 Row 0   0   1     2   3    4   5   6    7          0   1   2   3   4   5   6   7   Execution 1                       Limit: Inability to
+                                                                                                                                                                                                        skip execution
+                                                                                 Row 1   8   9    10 11 12 13 14 15                 8   9   10 11 12 13 14 15       Execution 2
+   Challenge
+
+   Solution           Algorithm
+                                                      Clusters                                   Store for PIM                   Compute attention score
+                      (Ours)                                                                                                                                                                          Row skipping via
+                              Cluster 1       0   4   5   7   9   10 12 15       Row 0   0   4     5   7    9   10 12 15            0   4   5   7   9   10 12 15
+                                                                                                                                                                                                              clusters
+                              Cluster 2       1   2   3   6   8   11 13 14       Row 1   1   2     3   6    8   11 13 14            1   2   3   6   8   11 13 14    Execution 1
+
+
+
+
+Figure 1. Enhanced PIM execution efficiency through STARC. Due to the coarse row-level access granularity of PIM, directly
+applying sparsity to KV caches often fails to skip computation. STARC addresses this by clustering keys and values such
+that selected tokens are physically co-located, enabling effective computation skipping and realizing the speedup benefits of
+sparsity on PIM.
+
+selective retrieval or compression, retrieving only a subset                                                        achieves efficient support for sparse attention in LLM serv-
+of tokens to approximate full attention. While such meth-                                                           ing. This paper makes the following contributions:
+ods can reduce retrieval by over 90% with minimal accuracy                                                              • We analyze the challenges of applying KV cache spar-
+loss, they introduce irregular and dynamic access patterns                                                                sity to PIM-enabled LLM inference and identify the
+that traditional PIM designs—optimized for dense, row-level                                                               mismatch between dynamic sparse retrieval and rigid
+accesses—struggle to support. Most existing PIM-enabled                                                                   row-level PIM data layouts.
+systems largely assume full KV cache attention, leading to                                                              • We propose STARC, a novel clustering-based data map-
+underutilization when sparsity is applied. Techniques such                                                                ping scheme that co-locates semantically similar KV
+as Quest [49] address this by retrieving at page granular-                                                                entries to align sparse attention with PIM bank orga-
+ity, aligning with memory row organization and improving                                                                  nization.
+bandwidth efficiency. Yet, page-based layouts remain coarse-                                                            • We introduce efficient in-memory designs that directly
+grained, often fetching semantically irrelevant tokens, which                                                             leverage existing PIM primitives and hardware to im-
+wastes compute and undermines accuracy. This mismatch                                                                     plement cosine-based K-means clustering for KV clus-
+between dynamic sparsity and rigid PIM data layouts                                                                       tering, avoiding additional area overhead while min-
+remains a fundamental barrier to efficient LLM decoding.                                                                  imizing GPU involvement and exploiting near-data
+To address this challenge, we propose STARC, a sparsity-                                                                  compute.
+optimized data mapping scheme designed specifically for                                                                 • We demonstrate that STARC significantly improves
+PIM architectures. The key idea, illustrated in Figure 1, is to                                                           throughput, utilization, and energy efficiency over
+cluster semantically similar tokens and physically co-locate                                                              state-of-the-art PIM system baselines while preserv-
+their KV pairs in memory. Our design aligns sparse attention                                                              ing model accuracy under sparse attention. It reduces
+with PIM’s row-level organization.                                                                                        attention-layer latency and energy by up to 78% and
+   To overcome the mismatch between dynamic sparsity and                                                                  65% compared to token-wise sparsity, and under a KV-
+rigid PIM layouts, we propose STARC, a sparsity-optimized                                                                 cache budget of 1024, achieves up to 93% latency and
+data mapping scheme for LLM decoding on PIM. STARC                                                                        92% energy reduction relative to full KV retrieval.
+clusters semantically similar tokens and co-locates their KV
+entries contiguously in memory, enabling sparse attention                                                           2        Background
+to align with row-level PIM operations. Queries retrieve clus-                                                      In this section, we first introduce PIM architectures as a so-
+ters by matching against precomputed centroids, ensuring                                                            lution to the memory bandwidth bottlenecks that arise dur-
+most fetched vectors are relevant and improving hardware                                                            ing decoding. We then describe sparse attention techniques,
+utilization. By performing lightweight clustering directly                                                          which alleviate the growing computational and memory ac-
+within PIM and fixing clusters across decoding steps, STARC                                                         cess costs associated with long-context sequences, providing
+                                                                                                                    basic understandings of our proposed design.
+
+
+
+                                                                                                           1864
+STARC                                                                                          ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+2.1 PIM for LLM Attention                                                written to the memory arrays, they can be reused repeatedly
+Transformer-based LLMs [1, 6, 21, 31, 50] perform inference              for subsequent query vectors in the same or following decod-
+in two stages: prefill and decoding. In prefill, the entire              ing iterations. This reuse pattern allows PIM systems to take
+input sequence (i.e., the user prompt) is processed in parallel          full advantage of the high internal bandwidth. Second, MHA
+to produce the first output token. In decoding, tokens are               operations rely heavily on general matrix-vector multiplica-
+generated autoregressively, with each new token appended                 tion (GEMV) to compute attention scores and outputs. Dis-
+to the sequence and used as input for the next step. This iter-          tributing these computations across parallel memory banks
+ative process requires the model to repeatedly read from the             allows the PIM architecture to exploit abundant internal
+KV cache, which stores the key and value vectors projected               bandwidth while offloading repeated GEMV operations.
+from all previously generated tokens.
+                                                                         2.2 Selective Token Access with Attention Sparsity
+   Although modern GPUs offer high FLOPs, attention com-
+putation during decoding is typically memory-bound, given                Recent studies on attention distributions in LLMs have re-
+its low arithmetic intensity and frequent memory accesses                vealed that attention scores during inference are often highly
+to tokens stored in the KV cache. As context lengths grow                sparse. In many cases, only a small subset of tokens signifi-
+to hundreds of thousands of tokens, data transfers between               cantly contributes to the output, while the majority of tokens
+GPU and external memory become a bottleneck. This results                receive negligible weights. This observation has motivated a
+in suboptimal resource utilization, as much of computational             range of sparse attention techniques that aim to reduce the
+capacity remains idle while waiting for memory transactions              number of KV pairs accessed during decoding by performing
+to complete.                                                             selective retrieval or compression of the KV cache.
+                                                                            To be more specific, in the Transformer architecture, each
+                                                                         attention head operates on projected query, key, and value
+                                                                         vectors. Let 𝑞 ∈ R1×𝑑ℎ denote the query vector correspond-
+                                                                         ing to the most recent token in a single head, and let 𝐾, 𝑉 ∈
+                                                                         R𝐿×𝑑ℎ represent the cached key and value matrices for the
+                                                                         𝐿 previous tokens. Here, 𝑑ℎ denotes the hidden dimension
+                                                                         of a single attention head. Sparse attention methods select
+                                                                         a subset of 𝐵 ≪ 𝐿 KV pairs, typically based on similarity
+                                                                         metrics such as dot-product or cosine similarity, yielding the
+Figure 2. Typical xPU–PIM hybrid system: QKV Generation                  reduced matrices 𝐾𝑆 , 𝑉𝑆 ∈ R𝐵×𝑑ℎ√   . The attention output is
+and Feed-Forward Networks are executed on xPU such as                    then computed as softmax(𝑞𝐾𝑆⊤ / 𝑑ℎ )𝑉𝑆 , where 𝑞 ∈ R1×𝑑ℎ
+GPU and NPU, while Attention is executed on PIM.                         is the query vector. This selective computation significantly
+                                                                         reduces both the memory access and the per-step computa-
+   A more detailed examination of the decoder block architec-            tional cost, while maintaining model quality in many sce-
+ture provides insight into the source of this memory bottle-             narios. Crucially, it also decouples the per-token decoding
+neck. Each decoder block consists of three fundamental com-              complexity from the total context length.
+ponents: (1) Query-Key-Value (QKV) generation, which
+projects the input hidden states into separate query, key, and                                         Dynamic Sparsity        Dynamic Sparsity
+                                                                             Static Sparsity
+value vectors; (2) Multi-Head Attention (MHA), where                                                     (Token-wise)            (Page-wise)
+
+attention weights are computed and applied across multiple
+heads in parallel; and (3) Feed-Forward Networks (FFNs),
+which apply independent linear transformations and non-
+linear activations to each token embedding. Among these
+components, the MHA module, particularly during the de-
+coding phase, incurs the highest memory bandwidth demand
+due to its frequent token access to KV cache.
+   PIM architectures have emerged as a promising solution to                    Figure 3. Common attention sparsity patterns.
+mitigate such memory bandwidth bottlenecks by integrating
+computation directly within memory systems. Figure 2 illus-                In practice, sparse attention mechanisms can be broadly
+trates the typical execution partitioning adopted by recent              categorized into three representative classes, illustrated in
+PIM-enabled heterogeneous systems, where memory-bound                    Figure 3: Firstly, static sparsity restricts each query to at-
+MHA is offloaded to PIM units, while QKV generation and                  tend only to fixed historical token positions or to a fixed-size
+FFNs remain on xPU compute cores. Attention layers are                   window of past tokens (e.g., the most recent 𝐵 tokens), in-
+especially well-suited for PIM acceleration, primarily for two           dependent of content. This type of sparsity typically evicts
+reasons. First, once the KV matrices for a decoding step are             other tokens and is hardware-friendly, but fails to capture
+
+
+
+                                                                  1865
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                    Zehao Fan et al.
+
+                                                                                                                           Dynamic Sparsity
+long-range dependencies. Secondly, token-wise dynamic                                     Static Sparsity
+                                                                                                                             (Token-wise)
+sparsity selects the top-𝐵 most relevant tokens for each                                                        act                                    act
+                                                                                                                act                                    act
+query dynamically based on similarity scores. It provides                                                                                              act
+                                                                                                                                                       act
+finer control over which tokens are attended but introduces                                                                                            act
+                                                                          PIM rows
+irregular access patterns. Lastly, page-wise dynamic spar-                                                                                             act
+sity groups the context into fixed-size pages and selects rel-                                                                                         act
+                                                                                                                                                       act
+evant pages rather than individual tokens. Compared with                                                                                               act
+                                                                                                                act                                    act
+token-wise, this method maintains hardware-friendly access                               Dynamic Sparsity
+                                                                                                                                STARC
+patterns but compromises the effectiveness of per-iteration                                (Page-wise)
+token access due to the retrieval of irrelevant tokens within a                                                                                        act
+                                                                                                                act
+page. In this work, we mainly discuss the latter two sparsity
+                                                                                                                act                                    act
+methods. Both are KV cache retrieval methods that preserve
+the full KV cache without eviction. This focus aligns with
+our emphasis on model accuracy rather than reducing the                                                         act
+                                                                                                                                                       act
+KV cache storage footprint, since in our system the KV cache                                                                                           act
+
+resides in HBM-PIM and does not pressure GPU memory
+capacity.                                                                 Figure 4. Comparison of row activation patterns under dif-
+                                                                          ferent sparse attention methods.
+
+3     Motivation
+                                                                          This behavior severely reduces the efficiency of row-parallel
+This section motivates our proposed design by analyzing                   execution across memory banks.
+the limitations of existing attention mechanisms on PIM                      Applying sparse attention can potentially alleviate this
+architectures. We first highlight the inefficiencies of dense             overhead by accessing only a subset of past tokens. How-
+and token-wise sparsity under PIM’s row-level access gran-                ever, applying these methods in current PIM architectures
+ularity. We then consider page-wise sparsity, which aligns                introduces new challenges. A main issue is that token impor-
+better with hardware constraints but suffers from low rel-                tance changes dynamically during decoding. A token that
+evance density and reduced attention quality. Finally, we                 is unimportant at one step may become crucial later, limit-
+motivate a clustering-based remapping strategy that groups                ing the effectiveness of static data placement or scheduling
+semantically similar tokens into contiguous memory rows,                  strategies in PIM.
+aiming to improve execution efficiency without sacrificing                   These limitations become especially severe under token-
+the accuracy of token retrieval.                                          wise sparsity, which requires fine-grained retrieval of tokens.
+                                                                          As illustrated in Figure 4, such fine-grained access patterns
+3.1   Challenges of Attention on Existing PIM                             are poorly aligned with the row-level access granularity of
+      Architectures                                                       PIM architectures. Each PIM array operates at row granu-
+                                                                          larity: the near-memory logic must activate an entire row,
+Prior PIM architectures for attention are designed to work                bring all entries onto the bit-lines, and perform computation
+with a fully dense KV cache [14, 15, 24, 40, 59], where all past          there. When relevant tokens are scattered across multiple
+tokens are retained throughout decoding. However, with the                rows, the memory controller is forced to read and process
+long contexts used by modern LLMs, dense attention places                 every row individually, leading to substantial over-fetching
+heavy demands not only on internal bandwidth but also                     of irrelevant data and redundant computation.
+on the limited computational capacity of PIM architectures.
+Specifically, the near-memory logic embedded close to the                   Page 246 (3936 to 3951)         Page 247 (3952 to 3967)
+memory arrays is typically lightweight and optimized for
+simple row-wise operations. These resources lack the deep                   Page 248 (3968 to 3983)         Page 249 (3984 to 3999)             0.05
+pipelining and wide parallelism of traditional GPU compute                                                                                      0.04
+units, and are constrained by area and energy budgets within                Page 250 (4000 to 4015)         Page 251 (4016 to 4031)             0.03
+the memory die. Moreover, each attention query must access
+                                                                            Page 252 (4032 to 4047)         Page 253 (4048 to 4063)             0.02
+a large number of stored key-value vectors, which are laid
+out across many memory rows. In PIM architectures, process-                                                                                     0.01
+
+ing even a single token requires activating entire memory                   Page 254 (4064 to 4079)         Page 255 (4080 to 4095)
+rows, since the logic operates at row granularity. When dense
+attention forces many such activations per query, the sys-
+tem suffers from frequent row switching and high energy                    Figure 5. Page-wise retrieval with less important tokens.
+costs due to repeated bitline toggling and row precharging.
+
+
+
+                                                                   1866
+STARC                                                                                                  ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+3.2 Hardware Efficiency vs. Attention Quality                             architecture, which provides massive near-bank parallelism
+To reduce the overhead of selecting important tokens during               but imposes rigid row-level access constraints. We then de-
+decoding, several recent attention sparsity methods, such                 scribe how STARC leverages this architecture to perform
+as Quest [49], adopt a page-wise retrieval strategy. In this              efficient KV clustering directly inside HBM-PIM, thereby
+approach, tokens are grouped into fixed-size pages, and at-               eliminating costly GPU offloading and reusing existing PIM
+tention is computed over selected pages rather than individ-              primitives and hardware without introducing additional area
+ual tokens. Quest estimates the importance of each page by                overhead.
+comparing the query vector with the minimal and maximal
+                                                                          4.1 PIM Architecture Overview
+key vectors of that page, and retrieves only the most rele-
+vant ones. This simplifies the sparsity decision process and              To enable high-throughput execution of attention mecha-
+reduces the complexity of token scoring.                                  nisms in Transformer-based models, we adopt AttAcc [40]
+   As shown in Figure 4, page-wise token access also aligns               as our PIM architecture—a PIM system specifically designed
+well with the memory organization of a PIM accelerator.                   to accelerate the attention layer. As illustrated in Figure 6,
+When the page size is a multiple of the physical memory                   AttAcc places compute units near each bank within an HBM
+row size, PIM can fetch and process entire rows efficiently.              stack. Specifically, a single HBM channel contains 2 pseudo-
+This allows the accelerator to fully utilize internal memory              channels (pCHs), each pCH is divided into 2 ranks, and every
+bandwidth and avoid partial-row access overhead. In HBM-                  rank further breaks down into 4 bank groups, with 4 banks
+PIM architectures, where computation occurs near DRAM                     in each group. This results in a total of 64 banks per channel,
+banks, this alignment improves data locality and reduces                  which can be activated simultaneously to collectively utilize
+unnecessary data movement.                                                the full channel bandwidth and drive the near-bank compute
+   However, this hardware compatibility comes at the cost                 fabric efficiently.
+of attention quality and model accuracy. Page boundaries
+                                                                                                                                                  1KB
+are defined purely based on token position, not on token                                                                                                  KV Cache
+relevance. As a result, selected pages often include many irrel-                                                                        213rows
+
+
+
+
+                                                                                                                                                   …
+evant tokens. These tokens are still accessed and processed,                        2 Channels
+                                                                                                                                        213rows
+
+
+
+
+                                                                                                                                                   …
+wasting bank-level bandwidth and compute resources.
+                                                                               pCH0           pCH0                   Rank0        Rank1           Bank0
+   We illustrate this issue using attention heatmaps with a                  pCH1           pCH1
+context length of 4K in Figure 5, where the model used is                                                          BG0 BG1      BG0 BG1
+
+
+
+
+                                                                                                                                                   …
+LLaMA3.1-8B. The example uses Quest’s page-wise method
+                                                                                                                   BG2 BG3      BG2 BG3
+
+
+
+
+                                                                                                                                                   …
+with a page size of 16 tokens. In the heatmaps, lighter cells
+                                                                                                                                                  Bank1              16 Keys
+represent tokens with higher attention weights. As shown,                                                                       Bank0
+                                                                                                                             2 GEMV Units                            16 Values
+most pages contain only one or two important tokens. This
+
+
+                                                                                                                                                   …
+                                                                                                                                Bank1
+                                                                             HBM Stack                                          Bank2
+inefficiency limits the usefulness of page-wise sparsity, de-
+
+                                                                                                                                                   …
+                                                                                                                             2 GEMV Units
+spite its compatibility with PIM architectures.                                                                                 Bank3             Bank2
+                                                                                             PHY                             Accumulator
+                                                                                                                   TSVs
+                                                                             Accumulators          Softmax Units
+                                                                                                                                                   …
+3.3 Motivation for Remapping and Clustering
+                                                                                      Buffer Die
+                                                                                                                                                   …
+
+
+
+To address the limitations of sparse attention on PIM, we
+                                                                                                                                                  Bank3
+propose a remapping strategy that clusters semantically sim-
+ilar key–value vectors and places each cluster in contiguous
+                                                                          Figure 6. HBM-PIM architecture and KV cache organization.
+memory rows. By aligning row-level layout with attention
+relevance, activating a single row retrieves multiple relevant
+                                                                            A key principle of STARC is an architecture–algorithm co-
+tokens, reducing redundant row activations and unneces-
+                                                                          design strategy: we select the number of clusters in K-means
+sary computation, as illustrated in Figure 4. Compared with
+                                                                          such that the arithmetic intensity of clustering matches the
+conventional sequential mapping, this design increases the
+                                                                          hardware-defined tipping point between memory-bound and
+usefulness of each row access and enables coarse-grained ex-
+                                                                          compute-bound execution. This balance is determined by the
+ecution skipping. The approach thus balances hardware and
+                                                                          architecture of our simulated HBM-PIM system. Each bank
+algorithmic needs: PIM architectures benefit from regular
+                                                                          hosts a dedicated GEMV compute unit, and each pCH inte-
+row-granular access patterns, while clustering ensures that
+                                                                          grates 32 GEMV units. Each GEMV contains 16 FP16 fused-
+each accessed row contains semantically important tokens.
+                                                                          multiply-add (FMA) pairs operating at 666 MHz. The system
+                                                                          includes 40 HBM stacks, each consisting of 16 channels, yield-
+4   STARC System Architecture                                             ing a total of 40 × 16 = 640 channels and 640 × 2 = 1280
+This section details the hardware-algorithm co-design princi-             pCHs. With 32 GEMV units per pCH and 2 FMA operations
+ples of STARC. We begin by introducing the underlying PIM                 per unit per cycle, the peak compute throughput is:
+
+
+
+                                                                   1867
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                 Zehao Fan et al.
+
+
+                                                                       Table 1. Command-level breakdown of cosine-based K-
+                                                                       means clustering on PIM. Read/write bytes include only
+   Peak FLOPs = 32 × 2 × 16 × 1280 × 666 MHz                           PIM-side memory traffic; host-side scalar operations are ex-
+                   ≈ 8.7 × 1014 FLOPs/s = 873 TFLOPs/s,                cluded.
+
+                                                                        Operation                    Command Count        MAC            Read Bytes       Write Bytes
+                                                                                                         Normalization (per vector)
+         Peak FLOPs       873 TFLOPs/s
+𝐼∗ =
+                                                                        MAC_AB(self-dot)                  𝑇𝐷               𝐷                𝐷𝑆                 —
+                        =              ≈ 4 FLOPs/Byte.                  MVSB(norm)                         1                0                —                 𝑆
+       Peak Internal BW     242 TB/s                                                   √
+                                                                        VNORM(vector/ ·)                  𝑇𝐷               𝐷                𝐷𝑆                 —
+                                                                        Total / vector                    —                2𝐷               2𝐷𝑆                𝑆
+   This arithmetic intensity value serves as a hardware-defined                                          Assignment (per iteration)
+
+tipping point: workloads with intensity below 𝐼 ∗ are memory-           WRGB(samples)                      𝑁                0                 —
+                                                                                                                                        samples: 𝑁 𝐷𝑆,
+                                                                                                                                                             𝑁 𝐷𝑆
+                                                                        MAC_AB                          𝑁𝑇𝐷 × 𝑇𝐾          𝑁 𝐾𝐷                                 —
+bound, while those above are compute-bound. In our algo-                                                                                centroids: 𝐾𝐷𝑆
+                                                                        MVSB(scores)                      𝑁𝑇𝐾               0                 —               𝑁 𝐾𝑆
+rithm design (Section 5), we exploit this principle by selecting        Host(argmax)                       —                —                𝑁 𝐾𝑆          only labels
+the number of clusters 𝐾 in K-means such that the arithmetic            Total / iteration                  —              𝑁 𝐾𝐷        (𝑁 𝐷 + 𝐾𝐷 + 𝑁 𝐾)𝑆   𝑁 𝐷𝑆 + 𝑁 𝐾𝑆
+
+intensity of the clustering workload matches 𝐼 ∗ .                      MVGB(broadcast 𝑣𝑖 )
+                                                                                                           Update (per iteration)
+                                                                                                           𝑁                0               𝑁 𝐷𝑆               —
+   Additionally, despite HBM-PIM’s high throughput, its ex-             MAC_AB
+                                                                                                          𝑁𝑇𝐷         (𝑁 𝐷 + 𝐾𝐷)/2           —                 —
+                                                                        (accumulation & averaging)
+ecution model offers limited flexibility. As illustrated in Fig-        WRGB(new 𝜇𝑘 )                      1                0                —               𝐾𝐷𝑆
+ure 6, under our configuration, each DRAM bank row stores               Total / iteration                  —          (𝑁 𝐷 + 𝐾𝐷)/2          𝑁 𝐷𝑆             𝐾𝐷𝑆
+
+1KB of data. Assuming FP16 precision (2B per element) and
+an attention head dimension of 128 (as in typical LLaMA-
+style models), a single key or value vector occupies 256B.             prior modeling practice, we approximate one addition, multi-
+To fully utilize the parallelism across banks, each vector is          plication, or division as half a MAC, since each corresponds
+dimension-partitioned across the four banks within a bank              to a single FLOP.
+group, such that each bank stores a contiguous 64B slice of               Normalization. To enable cosine similarity computation,
+the vector. Consequently, one row across a bank group can              each vector must first be normalized into the form 𝑣/∥𝑣 ∥.
+accommodate 16 complete key or value vectors, yielding a               As shown in Table 1, this process begins with a self dot-
+row-level block size of blkrow = 16, meaning that a single             product via MAC_AB, requiring 𝑇𝐷 commands, 𝐷 multiply-
+row activation accesses 16 complete key or value vectors at            accumulate operations, and reading 𝐷𝑆 bytes from memory.
+once.                                                                  The resulting scalar norm is then transferred into the softmax
+                                                                       buffer using MVSB. To avoid host involvement and reduce
+4.2 Efficient KV Clustering Implementation on PIM                      data transfers across the memory interface, we introduce a
+Although clustering-based remapping can mitigate row-level             fused command VNORM, implemented via a small lookup-
+inefficiencies, performing clustering efficiently on hardware          table (LUT)–based reciprocal square-root approximation and
+presents additional challenges. During decoding, the QKV               the scaling datapath, since the √ 1 2 term used in clustering
+                                                                                                                          ∥𝑣 ∥
+generation stage already writes the key and value vectors              does not require high precision and can be approximated
+into HBM. Offloading these vectors to GPUs for clustering              using a piecewise-defined LUT. Both the LUT lookup and
+would incur substantial transfer overhead across the memory            the ensuing multiply–accumulate and scaling operations are
+interface, negating the benefits of in-memory data layout              native to AttAcc’s PIM primitives, and thus neither VNORM
+optimization. To avoid this bottleneck, we perform KV clus-            nor the clustering control logic introduces new hardware
+tering directly inside HBM-PIM, leveraging AttAcc’s near-              structures or additional area overhead. This step requires
+bank compute fabric to execute the three phases of K-means:            another 𝑇𝐷 commands and 𝐷 operations, reading the vector
+normalization, assignment, and update.                                 once more (𝐷𝑆 bytes). In total, per-vector normalization
+   Table 1 details the command-level breakdown of cosine-              entails 2𝐷 MACs, 2𝐷𝑆 bytes of reads, and 𝑆 bytes of writes.
+based K-means clustering implemented on PIM. We denote                    Assignment. After normalization, each sample must be
+𝐷 as the number of vector dimensions and 𝑆 as the byte                 assigned to its closest centroid. For each of the 𝑁 samples,
+size of an FP16 value (two bytes). Each GEMV unit supports             we first write the sample vector into the GEMV buffer with a
+64-way SIMD MACs, so computing a dot product between                   WRGB command, incurring 𝑁 𝐷𝑆 bytes of writes. The sam-
+two 𝐷-dimensional vectors requires 𝑇𝐷 = 𝐷/64 MAC_AB                    ple is then compared against all 𝐾 centroids using 𝑁𝑇𝐷 × 𝑇𝐾
+operations. Following Section 4.1, we use blkrow to denote             MAC_AB operations, corresponding to 𝑁 𝐾𝐷 MACs. Here,
+the number of 𝐷-dimensional vectors accommodated in one                the read volume includes both the sample (𝑁 𝐷𝑆 bytes) and
+DRAM row across a bank group. To compare against 𝐾 cen-                the centroids (𝐾𝐷𝑆 bytes). The resulting similarity scores
+troids, the system requires 𝑇𝐾 = 𝐾/blkrow such operations.             are dispersed across different row blocks, so they must be
+Finally, we denote 𝑁 , 𝐾, and 𝐼 as the number of samples,              gathered into the softmax buffer before the host can perform
+clusters, and clustering iterations, respectively. Following           argmax. This gathering is carried out with MVSB commands:
+
+
+
+                                                                1868
+STARC                                                                                              ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+                                                                           Prefill tokens
+each sample requires 𝑇𝐾 such transfers to collect all 𝐾 scores,                       Values                          Values                        Values                         Values
+                                                                         Keys                       Keys                               Keys                          Keys
+leading to 𝑁𝑇𝐾 commands and 𝑁 𝐾𝑆 bytes of writes in total.                      0                               0                             1                              1
+Finally, the host performs the argmax across 𝐾 scores per                       1                               1                             2                              2
+sample, which involves reading 𝑁 𝐾𝑆 bytes and returning                         2                               2                             3                              3
+                                                                                3                               3                             0                              0
+only cluster labels. Overall, the assignment phase per itera-                   4                               4                             4                              4
+tion requires 𝑁 𝐾𝐷 MACs, (𝑁 𝐷 + 𝐾𝐷 + 𝑁 𝐾)𝑆 bytes of reads,                      5                               5                             5                              5
+and 𝑁 𝐷𝑆 + 𝑁 𝐾𝑆 bytes of writes.                                                6     1 Block partitioning      6     2
+                                                                                                                            Block-wise        6     3
+                                                                                                                                                         Select KV using     6
+                                                                                                                          local clustering              cluster centroids
+                                                                                7                               7                             7                              7
+   Update. Once assignments are made, cluster centroids
+                                                                                8                               8                             8              Query           8
+must be updated by averaging the vectors assigned to each                       9                               9                             9                              9
+cluster. To enable accumulation across all centroids, each                      10                           10                               11                             11
+of the 𝑁 sample vectors is broadcast to the GEMV buffer                         11                           11                               14                             14
+                                                                                12                           12                               10                             10
+across all banks using 𝑁 MVGB commands, corresponding                           13                           13                               12                             12
+to 𝑁 𝐷𝑆 bytes of reads. Accumulation is then carried out via                    14                           14                               13                             13
+𝑁𝑇𝐷 MAC_AB operations. We approximate the operation                             15                           15                               15                             15
+
+count as (𝑁 𝐷 + 𝐾𝐷)/2 equivalent MACs, accounting for                                 Keys
+                                                                                                  Values
+                                                                                                                                                    Keys
+                                                                                                                                                                  Values
+
+vector additions and the final scalar divisions when aver-                                   1                                                               1
+                                                                                             2                                                               2
+aging. Because samples are already broadcast into GEMV                                       3                                                               3
+buffers, no additional read traffic is incurred. Finally, the                                0                      Values                                   0                    Values
+                                                                                                  Keys                                                            Keys
+new centroids 𝜇𝑘 are written back to memory with a single                                    4             16                                                4              16
+                                                                                             5             17                                                5              19
+WRGB command, writing 𝐾𝐷𝑆 bytes. In total, the update                                                                      Incremental clustering
+                                                                                             6             18         4                                      6              20
+phase per iteration requires (𝑁 𝐷 + 𝐾𝐷)/2 equivalent MACs,                                   7             19
+                                                                                                                           every N decoding steps
+                                                                                                                                                             7              22
+𝑁 𝐷𝑆 bytes of reads, and 𝐾𝐷𝑆 bytes of writes.                                                8             20                                                8              17
+   Through this breakdown, Table 1 demonstrates that all                                     9             21                                                9              18
+                                                                                             11            22                                               11              21
+three phases of cosine-based K-means can be expressed as                                     14            23                                               14              23
+compositions of existing PIM commands (MAC_AB, WRGB,                                         10   Newly generated                                           10
+MVSB, MVGB) augmented with one lightweight fused com-                                        12    tokens during                                            12
+                                                                                                     decoding
+                                                                                             13                                                             13
+mand (VNORM). By carefully mapping normalization, as-
+                                                                                             15                                                             15
+signment, and update into these command sequences, STARC
+leverages existing PIM primitives and hardware to achieve in-
+memory clustering of KV vectors directly within HBM-PIM,                 Figure 7. Flowchart of the clustering algorithm. We per-
+eliminating costly GPU offloading and enabling hardware-                 form incremental clustering on the KV pairs using K-means,
+aware clustering aligned with AttAcc’s memory architecture.              meaning that only the newly generated segment of KV pairs
+                                                                         is clustered during decoding.
+
+5   Algorithm Design
+Building upon the STARC framework, we propose an online                  each vector incurs 3𝐷 FLOPs and 3𝐷𝑆 bytes of traffic. For
+clustering strategy that incrementally reorganizes the KV                𝑁 + 𝐾 vectors, this yields
+cache during decoding. The aim is to balance model accuracy                 FLOPsnorm = 3𝐷 (𝑁 + 𝐾),                               Bytesnorm = 3𝐷 (𝑁 + 𝐾)𝑆.
+with HBM-PIM’s row-level access granularity by grouping
+semantically similar KV pairs into hardware-aware clusters.              Given 𝐼 ≫ 1 and 𝑁 ≫ 𝐾, this one-off cost is amortized and
+While these clusters may not always align exactly with HBM               omitted from the per-iteration AI.
+rows, the resulting regularized access pattern effectively                 Per-iteration cost. Each Lloyd iteration consists of:
+reduces row over-fetch and improves bandwidth utilization.                 (1) Assignment: Each sample is compared with all 𝐾
+The overall procedure is outlined in Algorithm 1.                        centroids via 𝐷-dimensional dot products, each requiring 2𝐷
+   We begin by quantifying the arithmetic intensity (AI) of              FLOPs. Across all 𝑁 samples and 𝐾 centroids:
+cosine K-means, defined as the ratio between floating-point
+operations (FLOPs) and main-memory traffic in bytes, using                      FLOPsassign = 2𝐷𝑁 𝐾,                           Bytesassign = (𝑁 + 𝐾)𝐷𝑆,
+the notation (𝑁 , 𝐾, 𝐷, 𝐼, 𝑆) in Section 4.2.                            where the byte count accounts for reading both 𝑁 samples
+   One-off normalization cost. Each vector undergoes an                  and 𝐾 centroids from main memory.
+ℓ2 normalization prior to clustering. Computing the squared                (2) Update: Updating centroids involves adding 𝑁 sam-
+norm requires 𝐷 multiply-add pairs (2𝐷 FLOPs), followed                  ples into 𝐾 cluster sums (𝑁 𝐷 additions) and scaling each
+by one square root and one reciprocal (host-side scalar op-              centroid by 1/𝑛𝑘 (𝐾𝐷 scalar multiplications/divisions):
+erations, excluded from FLOPs). The normalized vector is
+reconstructed by 𝐷 scalar multiplications (𝐷 FLOPs). Thus,                           FLOPsupdate = 𝑁 𝐷 + 𝐾𝐷,                            Bytesupdate = 𝐾𝐷𝑆,
+
+
+
+                                                                  1869
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                               Zehao Fan et al.
+
+
+Algorithm 1 Clustering-Based Retrieval during Decoding                        Based on this principle, we design a hardware-aware on-
+Require: Prefill KV pairs Kpre, Vpre ; Decoding stream {𝑥𝑡 };              line clustering method that reorganizes the KV cache into
+   Block size 𝑁 ; KV cache budget 𝐵                                        contiguous, row-aligned clusters and keeps the clusters fixed
+                                                                           after their initial formation, so that each vector is clustered
+ 1: // Initial clustering after prefill                                    only once. As shown in Figure 7, at the start of decoding,
+ 2: Partition (Kpre, Vpre ) into non-overlapping blocks of                 the prefill tokens are divided into non-overlapping blocks of
+      size 𝑁                                                               size 𝑁 ➊. We apply cosine K-means with 𝐾=4 and random
+ 3: for each block (K𝑏 , V𝑏 ) do                                           initialization to each block, limiting the number of iterations
+ 4:     C𝑏 ← KMeans(K𝑏 )                     ⊲ cosine similarity           𝐼 to 16 to control runtime ➋. Clustering is applied to keys
+ 5:    Assign each (𝑘𝑖 , 𝑣𝑖 ) ∈ (K𝑏 , V𝑏 ) to its cluster in C𝑏            only, and the corresponding values inherit the same labels.
+ 6:    C ← C ∪ C𝑏                                                          The resulting clusters are stored in contiguous physical loca-
+ 7: end for                                                                tions that match the PIM bank layout. With a PIM row size
+                                                                           of blkrow = 16 and 𝐾=4, we set 𝑁 = 𝐾 × blkrow = 64 so that
+ 8: Initialize: Knew ← ∅, Vnew ← ∅                                         each cluster contains about 16 tokens, aligning the access
+ 9: for each decoding step 𝑡 do                                            granularity with the row size and reducing row overfetch
+10:     Generate token 𝑥𝑡 , compute key 𝑘𝑡 and value 𝑣𝑡                    and internal data movement. Once these prefill clusters are
+11:     Append 𝑘𝑡 to Knew , 𝑣𝑡 to Vnew                                     formed, they remain unchanged to avoid costly reshuffling
+12:     if |Knew | = 𝑁 then                                                under row-level access.
+13:         Cnew ← KMeans(Knew )                                              During decoding, newly generated tokens are kept in full
+14:         Assign each (𝑘𝑖 , 𝑣𝑖 ) ∈ (Knew, Vnew ) to its cluster          for attention computation until their number reaches the size
+    in Cnew                                                                𝑁 , as they strongly influence the immediate attention distri-
+15:         C ← C ∪ Cnew                                                   bution. The same as the processing of tokens generated in the
+16:         Reset Knew, Vnew ← ∅                                           prefill stage, every 𝑁 = 64 decoding steps, we cluster only
+17:     end if                                                             the most recent 64-token block using the same configuration
+                                                                           (𝐾=4, up to 16 iterations), append the resulting clusters, and
+18:    // KV retrieval for current step                                    store them contiguously ➍. Once formed, clusters remain
+19:    Compute scores 𝑠 𝑗 = 𝑞𝑡⊤ 𝜇 𝑗 for all centroids 𝜇 𝑗 ∈ C              fixed and are never updated. As a result, STARC does not
+20:    Sort clusters by 𝑠 𝑗 in descending order                            require re-clustering throughout inference, thereby avoid-
+21:    Select top clusters until total token count reaches 𝐵               ing the costly remapping of clustered KV vectors already
+22:    Truncate final cluster if needed to fit budget 𝐵                    stored in memory. This incremental, append-only design
+23:    Include all non-clustered tokens in Knew, Vnew                      not only reduces the clustering overhead but also draws on
+24: end for                                                                two observations. First, the distribution of decoding keys
+                                                                           gradually diverges from that of the prefill keys (Figure 8),
+                                                                           which justifies clustering the two stages separately. Second,
+where the byte count corresponds to writing updated cen-                   key vectors exhibit locality, meaning that adjacent tokens
+troids back to memory.                                                     tend to have high cosine similarity. Clustering only the most
+   Total per-iteration AI. The per-iteration arithmetic in-                recent contiguous segment takes advantage of this property,
+tensity is therefore                                                       improving clustering quality while keeping the approach
+                                                                           suitable for online inference.
+          FLOPsassign + FLOPsupdate 2𝐷𝑁 𝐾 + 𝑁 𝐷 + 𝐾𝐷
+   AI =                              =                 .
+           Bytesassign + Bytesupdate   (𝑁 + 𝐾)𝐷𝑆 + 𝐾𝐷𝑆
+                                                                                                               Prefill Tokens
+                                                                                                               Decoding Tokens      350
+For 𝑁 ≫ 𝐾, this simplifies to
+                                                                                                                                    300
+                    2𝐾 + 1
+               AI ≈         −−−−→ 𝐾 FLOPs/byte.                                                                                     250
+                                                                                                                                         Decoding Steps
+
+
+
+
+                       𝑆     𝑆=2 B
+                                                                                                                                    200
+Thus, under ideal centroid reuse and negligible host over-
+head, the algorithm-level AI scales linearly with 𝐾 for FP16                                                                        150
+data. On the hardware side, Section 4.1 established the peak                                                                        100
+throughput and compute-to-memory tipping point 𝐼 ∗ , yield-                                                                         50
+ing Peak FLOPs ≈ 873 TFLOPs/s and 𝐼 ∗ ≈ 4 FLOPs/Byte.
+                                                                                                                                    0
+Comparing the two results gives a clear co-design rule: choose
+𝐾 so that AI ≈ 𝐼 ∗ . Since AI ≈ 𝐾 under FP16, we set 𝐾=4 to
+ensure the clustering workload operates near the hardware-                 Figure 8. The distributions of key vectors differ significantly
+defined balance point.                                                     between the prefill and decoding stages.
+
+
+
+
+                                                                    1870
+STARC                                                                                                                 ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+              Table 2. LongBench results for STARC and baseline sparsity methods (KV cache budget: 1024 tokens).
+
+                   Single-Document QA           Multi-Document QA                 Summarization                 Few-Shot Learning           Synthetic          Code
+
+
+
+
+                                                            A
+
+
+
+
+                                                                                                          s
+                                                                                 rt
+                                                 tQA
+
+
+
+
+                                                                                                       ew
+                                                          MQ
+
+
+
+
+                                                                                                                                    um
+                                                                                                                            A
+                                                                              epo
+KV Budget: 1024
+
+
+
+
+                                                                     ue
+
+
+
+
+                                                                                             m
+                       A
+
+
+
+
+                                                                                                                          aQ
+
+
+
+
+                                                                                                                                              nt
+                                                                                                   ltiN
+                                r
+
+
+                                      -en
+                    tvQ
+
+
+
+
+                                              tpo
+
+
+
+
+                                                                                         Su
+                                                                  siq
+                             spe
+
+
+
+
+                                                                                                                                  MS
+                                                         iki
+
+
+
+
+                                                                                                                 EC
+                                                                            vR
+
+
+
+
+                                                                                                                                           ou
+
+
+
+
+                                                                                                                                                                        -P
+                                                                                                                          vi
+
+
+
+
+                                                                                                                                                                                 g.
+                                                                                                                                                       e
+                                                                                        QM
+                                                       2W
+
+
+
+
+                                                                                                                                                             Lcc
+                                                                 Mu
+
+
+
+
+                                                                                                  Mu
+                                     MF
+
+
+                                            Ho
+
+
+
+
+                                                                                                                      Tri
+                                                                          Go
+
+
+
+
+                                                                                                                                         PC
+                                                                                                               TR
+
+
+
+
+                                                                                                                                SA
+
+
+
+
+                                                                                                                                                                      RB
+                           Qa
+
+
+
+
+                                                                                                                                                     PR
+
+
+
+
+                                                                                                                                                                              Av
+                  Nr
+
+
+
+
+  LongChat
+Full KV           19.51    25.98    43.80    31.94       23.20   11.38      31.77       21.66     26.06       66.00    82.00    20.79    2.00      30.00   53.86   48.68     33.66
+STARC             17.55    29.44    40.92    32.32       19.29    9.73      31.22       22.08     25.01       64.00    80.80    21.82    2.00      32.00   57.16   48.82     33.38
+SparQ             19.56    29.90    40.90    31.05       22.84   12.92      30.98       23.19     26.49       64.00    84.53    25.89    0.00      30.50   54.34   55.72     34.55
+InfiniGen         15.41    29.56    41.92    36.20       20.35    8.89      29.36       22.22     24.73       64.00    84.38    29.75    2.00      32.00   51.84   51.06     33.98
+Quest             14.58    29.23    43.67    28.37       18.62   10.51      29.12       22.29     24.91       66.00    79.31    20.88    2.00      34.00   52.60   49.00     32.82
+
+  Mistral
+Full KV           23.94    40.07    57.58    49.10       36.71   22.27      35.66       25.77     26.80       80.00    87.67    47.35    4.00      98.00   58.98   56.36     46.89
+STARC             19.97    34.93    57.70    51.49       35.48   23.39      35.67       24.72     26.72       76.00    88.87    48.16    2.00      98.00   61.74   55.76     46.29
+SparQ             29.36    40.93    53.68    51.33       37.36   27.22      34.49       25.67     27.66       74.00    88.86    47.17    5.00      99.00   60.43   62.14     47.77
+InfiniGen         23.34    37.73    57.90    51.41       39.45   19.69      35.06       24.89     26.29       76.00    85.67    47.60    2.00      98.00   59.82   59.58     46.53
+Quest             22.79    30.88    52.39    47.12       38.63   18.73      33.45       24.23     27.26       66.00    88.42    44.73    8.18      92.00   60.86   57.52     44.57
+
+  Llama-3.1
+Full KV           27.02    13.98    28.04    18.30       17.45   13.01      35.83       23.66     25.91       74.00    89.77    44.56    3.92      97.50   63.30   55.06     39.46
+STARC             31.73    13.57    28.14    20.40       18.08   11.54      35.26       23.53     25.62       72.00    88.57    44.25    5.67      98.33   64.30   54.42     39.71
+SparQ             29.53    13.83    26.97    17.64       16.85   10.27      33.95       23.79     26.73       71.00    91.47    44.20    7.12      98.21   64.19   60.44     39.76
+InfiniGen         28.80    14.15    27.88    24.27       17.79    9.75      34.15       23.31     26.59       70.00    89.81    44.05    4.67      96.00   61.98   59.02     39.51
+Quest             18.66    11.75    22.96    16.90       13.52    5.46      34.22       22.12     25.87       70.00    85.60    42.94    0.80      96.27   58.90   56.08     36.38
+
+
+
+   At inference time, KV retrieval operates at the cluster                                       We compare STARC against three recent sparsity methods:
+level. At each decoding step, the current query is compared                                   Quest [49], InfiniGen [26], and SparQ [44]. Each baseline fol-
+against all cluster centroids using dot products ➌. Clusters                                  lows the configurations in its original paper (e.g., page size
+are ranked by the resulting scores, and the top-ranked clus-                                  for Quest, partial weights and threshold for InfiniGen, and
+ters are retrieved until the KV budget is reached. Because                                    largest retained components 𝑟 for SparQ). For a fair compar-
+clusters may contain different numbers of KV entries, the last                                ison, we reproduce all methods under the same framework
+retrieved cluster may be partially truncated to stay within                                   and adopt the Quest setting of using full KV cache in the first
+the budget.                                                                                   two layers, which typically exhibit low sparsity [49]. Unless
+                                                                                              otherwise specified, results are reported at a KV cache budget
+                                                                                              of 1024 tokens, matching the budget used in our performance
+6    Evaluation                                                                               experiments. Results under other budgets (256, 512, 2048)
+                                                                                              are provided in the appendix. For STARC, we perform clus-
+6.1 Evaluation Methodology
+                                                                                              tering over every 64 consecutive tokens using cosine-based
+   Accuracy Evaluation. To evaluate the effectiveness of                                      K-means, with the number of clusters fixed at 𝐾 = 4.
+STARC under long-context scenarios, we consider three
+representative LLMs: LongChat-7B-v1.5-32K (MHA) [28],                                            Performance on PIM Systems. To investigate how at-
+LLaMA-3.1-8B-Instruct (GQA) [6], and Mistral-7B-Instruct-                                     tention sparsity impacts PIM architectures and evaluate
+v0.3 (GQA) [21]. These models cover both multi-head and                                       the effectiveness of STARC, we adopt the AttAcc simula-
+grouped-query attention mechanisms, enabling a compre-                                        tor [40], which extends Ramulator [36] to model heteroge-
+hensive study of STARC across different attention designs.                                    neous GPU–PIM systems, and evaluate on a DGX+AttAcc
+For benchmarking, we use the LongBench benchmark [2],                                         platform where attention kernels are offloaded to PIM units
+consisting of 16 datasets across diverse tasks: multi-document                                while FC layers remain on GPU. The DGX consists of 8
+QA (HotpotQA [54], 2WikiMQA [53], Musique [51]), single-                                      NVIDIA H100 cores and 40 HBM3 stacks (5.2 Gbps per pin),
+document QA (QASPER [5], MultiFieldQA-en, NarrativeQA                                         with a total memory capacity of 1.28 TB. The AttAcc side
+[23]), summarization (GovReport [18], QMSum [58], Multi-                                      contains an additional 40 HBM3 stacks, also totaling 1.28 TB.
+News [7]), few-shot learning (TriviaQA [22], TREC [30],                                       Each DRAM bank integrates one GEMV unit (1P1B configu-
+SAMSum [11]), synthetic reasoning (PCount, PRe [43]), and                                     ration), and all arithmetic and buffer components follow the
+code completion (Lcc [12], RB-P [34]). We also present an                                     microarchitectural assumptions in AttAcc [40].
+evaluation on the RULER benchmark [17], which is designed                                        We configure inference workloads to emphasize long-
+to stress-test model robustness under extreme long-context                                    context, memory-bound decoding scenarios, with prefill/-
+scenarios. In addition, we evaluate on PG-19 [42] for lan-                                    decoding sequence pairs of (2K, 16K), (2K, 24K), and (2K,
+guage modeling using perplexity as the evaluation metric.                                     32K). Batch size is fixed at 16. The evaluated models include
+
+
+
+                                                                                      1871
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                                     Zehao Fan et al.
+
+
+LLaMA-7B, Mistral-7B, and GPT-13B, all at FP16 precision.                                                                  Results on RULER. Table 3 reports the results on the
+To highlight trade-offs between accuracy and efficiency, we                                                             RULER benchmark for LLaMA-3.1-8B-Instruct at a context
+incorporate STARC’s KV clustering overhead into the sim-                                                                length of 32K. RULER consists of 13 tasks grouped into four
+ulation. Page-wise sparsity is represented by Quest, while                                                              categories: Retrieval, Multi-Hop Tracing, Aggregation, and
+token-wise sparsity is represented by SparQ, which achieves                                                             Question Answering. All methods are evaluated under the
+the highest accuracy in our experiments. We adopt AttAcc’s                                                              same KV budget of 1024. Overall, STARC achieves average
+optimal configuration by enabling both head-level pipelining                                                            accuracy close to the full-KV and SparQ baseline, while out-
+and feedforward co-processing. All other simulator configu-                                                             performing InfiniGen. Moreover, STARC outperforms the
+rations follow AttAcc defaults.                                                                                         page-wise sparsity baseline Quest across most tasks. These
+                                                                                                                        results further support the robustness of STARC under long-
+6.2 Accuracy Evaluation                                                                                                 context scenarios.
+   Results on LongBench. Table 2 presents the results on
+                                                                                                                          Results on Language Modeling. Figure 9 shows the per-
+LongBench datasets under a KV cache budget of 1024. Sev-
+                                                                                                                        plexity of generated tokens on the PG-19 test set across
+eral consistent trends emerge across models. First, STARC
+                                                                                                                        varying input lengths, ranging from 1 to 32,000 tokens, un-
+outperforms the page-wise sparsity method Quest in terms of
+                                                                                                                        der a fixed KV budget of 1024. STARC outperforms both
+average accuracy across all models. Second, STARC achieves
+                                                                                                                        Quest and InfiniGen, particularly at longer input lengths.
+accuracy comparable to token-wise sparsity methods (SparQ
+                                                                                                                        Although SparQ slightly outperforms STARC, the gap re-
+and InfiniGen), and on grouped-query attention models (LLaMA-
+                                                                                                                        mains narrow, and STARC consistently tracks closely with
+3.1 and Mistral) it achieves the best results among all spar-
+                                                                                                                        the Full-KV baseline.
+sity methods on many datasets. These results indicate that
+STARC provides robust accuracy across both MHA and GQA                                                                     Recall Rate of Important Tokens. Figure 10 reports the
+models, while aligning better with PIM hardware.                                                                        recall rate of important tokens on HotpotQA and Narra-
+                                                                                                                        tiveQA. Although STARC does not surpass SparQ, it achieves
+                   STARC             SparQ            InfiniGen                      Quest             Full KV          higher recall than both Quest and InfiniGen across all bud-
+             13                                                                                                         gets. This demonstrates that STARC’s clustering strategy
+                                                7.0                   Zoomed-In View
+             12                                                                                                         improves the selection of semantically important tokens,
+                                                                                                                        which explains its strong downstream task performance.
+             11                                 6.8
+                                                                                                                        6.3 Performance on PIM Systems
+Perplexity
+
+
+
+
+             10
+                                                6.6
+                                                 30000                      31000            32000                      We evaluate attention sparsity on PIM systems using three
+               9
+                                                                                                                        models (LLaMA-7B, GPT-13B, and Mistral-7B) under long-
+               8                                                                                                        context decoding scenarios with sequence pairs (2k, 16k),
+               7                                                                                                        (2k, 24k), and (2k, 32k). All methods use a KV cache budget
+                                                                                                                        of 1024 tokens.
+               6
+                   0       5000        10000    15000                  20000        25000      30000                       To assess hardware efficiency, we analyze the attention
+                                               Input Length
+                                                                                                                        masks produced by each method at each decoding step and
+                                                                                                                        map them to the row-level granularity of the PIM architec-
+                   Figure 9. Language modeling on PG-19 dataset.
+                                                                                                                        ture, where each DRAM row activation fetches blkrow = 16
+                                                                                                                        key/value vectors in parallel. The efficiency thus depends
+                                                                                                                        on how well the retrieved tokens align with row boundaries.
+                       STARC              SparQ                            InfiniGen                 Quest              Page-wise sparsity naturally avoids over-fetching, since each
+                                                                                                                        page matches the row size exactly. In contrast, token-wise
+               1.0
+                               HotpotQA                              1.0
+                                                                                NarrativeQA                             sparsity often scatters tokens across many rows, leading
+               0.8                                                   0.8                                                to additional memory accesses and the processing of irrel-
+ Recall Rate
+
+
+
+
+                                                       Recall Rate
+
+
+
+
+                                                                                                                        evant data. STARC retrieves tokens at the cluster level, so
+               0.6                                                   0.6
+                                                                                                                        semantically similar tokens are stored in the same or adja-
+               0.4                                                   0.4
+                                                                                                                        cent rows during cluster construction, significantly reducing
+               0.2                                                   0.2                                                redundant memory activations.
+               0.0                                                   0.0                                                   Figure 11 presents the normalized end-to-end decoding
+                   258
+                      6
+                      2
+
+                                  24
+
+
+
+
+                                                48
+
+
+
+                                                                       258
+                                                                          6
+                                                                          2
+
+                                                                                       24
+
+
+
+
+                                                                                                        48
+                   12
+
+                   51
+
+
+
+
+                                                                       12
+
+                                                                       51
+
+
+
+
+                                                                                                                        latency (top) and energy (bottom) per token. Each bar is bro-
+                                10
+
+
+
+
+                                               20
+
+
+
+
+                                                                                     10
+
+
+
+
+                                                                                                       20
+
+
+
+
+                           KV Cache Budget                                     KV Cache Budget                          ken down into attention, feed-forward, communication, and
+                                                                                                                        miscellaneous costs. The yellow markers show the additional
+                        Figure 10. Recall rate of important tokens.                                                     KV clustering overhead of STARC, plotted against the right
+                                                                                                                        𝑦-axis.
+
+
+
+                                                                                                                 1872
+STARC                                                                                                                                                        ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+                                                                  Table 3. RULER results on LLaMA-3.1-8B-Instruct with 32K context length.
+
+                                         Niah1        Niah2        Niah3        MKey1         MKey2         MKey3         MValue        MQuery            VT          CWE          FWE          QA1          QA2          Avg.
+
+  Full KV                                1.0000       1.0000       1.0000       1.0000        1.0000        1.0000         0.9844         1.0000        0.9938       0.1479       0.9444       0.8542       0.5312       0.8812
+  STARC                                  1.0000       1.0000       1.0000       1.0000        0.9688        0.9479         0.9688         0.9948        0.9896       0.1729       0.9167       0.8542       0.5312       0.8727
+  SparQ                                  1.0000       1.0000       1.0000       1.0000        1.0000        1.0000         0.9844         1.0000        0.9854       0.2396       0.8854       0.8542       0.5312       0.8831
+  InfiniGen                              1.0000       1.0000       0.9896       1.0000        0.9583        0.7812         0.9193         0.9974        0.9542       0.1917       0.7882       0.8542       0.5104       0.8419
+  Quest                                  0.9792       1.0000       0.8854       1.0000        1.0000        0.2500         0.9609         0.9870        0.8688       0.1115       0.8472       0.8333       0.4792       0.7848
+
+
+                                                                                       ATTN              FC              COMM                ETC              CLUSTER
+                                                                                                                                                                                                                            0.001
+
+
+
+
+                                                                                                                                                                                                                                 Normalized Cluster Latency
+        Normalized Execution Time
+
+
+
+
+                                    1.0 1.00                1.00                1.00                1.00                1.00                1.00                1.00                1.00                1.00
+                                             0.84                                                        0.86                                                        0.86                                                   0.0008
+                                    0.8           0.70 0.70      0.74                                         0.75 0.75      0.77
+                                                                                                                                  0.67 0.67      0.70                     0.68 0.68
+                                                                                                                                                                                         0.75
+
+                                    0.6                               0.61 0.61
+                                                                                     0.66
+                                                                                          0.54 0.54
+                                                                                                                                                      0.61 0.60                               0.59 0.59
+                                                                                                                                                                                                             0.66
+                                                                                                                                                                                                                            0.0006
+                                                                                0.50                                                                                                                    0.53      0.52 0.51
+                                                                                                                                                                                    0.46
+                                    0.4 0.35
+                                                            0.43
+                                                                                                                        0.37
+                                                                                                                                            0.43
+                                                                                                                                                                0.37                                                        0.0004
+                                                                                                    0.29
+                                                                                                                                                                     0.23
+                                    0.2      0.19                0.17                0.15                0.15                0.14                0.13
+                                                                                                                                                                                         0.21                0.18           0.0002
+                                                  0.05 0.05           0.04 0.04           0.04 0.04           0.04 0.04           0.04 0.03           0.03 0.03           0.06 0.05           0.05 0.04           0.04 0.04
+                                    0.0                                                                                                                                                                                     0
+                                                                                                                                                                                                                            0.001
+                                    1.0 1.00                1.00                1.00                1.00                1.00                1.00                1.00                1.00                1.00
+
+
+
+
+                                                                                                                                                                                                                                 Normalized Cluster Energy
+                                                                                                                                                                                                                            0.0008
+        Normalized Energy
+
+
+
+
+                                    0.8      0.68
+                                                                                                         0.74
+                                                                                                                                                                     0.69
+                                    0.6 0.48      0.59 0.57 0.55 0.59           0.60
+                                                                                                              0.66 0.64      0.65
+                                                                                                                                  0.58 0.57
+                                                                                                                                            0.53
+                                                                                                                                                 0.59                     0.57 0.55 0.57 0.60
+                                                                                                                                                                                                        0.62                0.0006
+                                                                      0.51 0.50      0.53                                                             0.52 0.51 0.50                          0.49 0.48      0.53
+                                                                                          0.46 0.44                     0.48
+                                    0.4                                                             0.40                                                                                                          0.44 0.42
+                                                                                                                                                                                                                            0.0004
+                                    0.2      0.16                0.14                0.13                0.14                0.13                0.12
+                                                                                                                                                                     0.19                0.17                0.15           0.0002
+                                                  0.07 0.05           0.06 0.04           0.05 0.04           0.06 0.04           0.05 0.04           0.05 0.04           0.07 0.05           0.06 0.05           0.06 0.04
+                                    0.0                                                                                                                                                                                     0
+                            ST se
+
+
+
+
+                            S se
+
+
+
+
+                            S se
+
+
+
+
+                            ST se
+
+
+
+
+                            ST se
+
+
+
+
+                            S se
+
+
+
+
+                            ST se
+
+
+
+
+                            ST se
+
+
+
+
+                            S se
+                           en V
+
+                           ge C
+                                 ise
+                           en V
+
+                           ge C
+                                 ise
+                           en V
+
+                           ge C
+                                 ise
+                           en V
+
+                           ge C
+                                 ise
+                           en V
+
+                           ge C
+                                 ise
+                           en V
+
+                           ge C
+                                 ise
+                           en V
+
+                           ge C
+                                 ise
+                           en V
+
+                           ge C
+                                 ise
+                           en V
+
+                           ge C
+                                 ise
+                         Pa AR
+
+
+
+
+                         Pa TAR
+
+
+
+
+                         Pa TAR
+
+
+
+
+                         Pa AR
+
+
+
+
+                         Pa AR
+
+
+
+
+                         Pa TAR
+
+
+
+
+                         Pa AR
+
+
+
+
+                         Pa AR
+
+
+
+
+                         Pa TAR
+                        Tok Full K
+
+
+
+
+                        Tok Full K
+
+
+
+
+                        Tok Full K
+
+
+
+
+                        Tok ll K
+
+
+
+
+                        Tok Full K
+
+
+
+
+                        Tok Full K
+
+
+
+
+                        Tok Full K
+
+
+
+
+                        Tok Full K
+
+
+
+
+                        Tok Full K
+                                 i
+
+
+
+
+                                 i
+
+
+
+
+                                 i
+
+
+
+
+                                 i
+
+
+
+
+                                 i
+
+
+
+
+                                 i
+
+
+
+
+                                 i
+
+
+
+
+                                 i
+
+
+
+
+                                 i
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+
+
+
+
+                              -w
+                            Fu
+
+
+
+
+Decoding Length:                                16K                 24K                32K                16K                 24K                32K                 16K                24K                 32K
+                   Model:                                       LLAMA-7B                                                   GPT-13B                                                  MISTRAL-7B
+
+Figure 11. Normalized end-to-end decoding latency and energy on PIM systems across different models and sequence lengths.
+
+   Several consistent trends can be observed across all three                                                                    requires past tokens (on the order of (𝐿in + 𝐿out )𝐿out /2 or
+models. As the decoding length increases, the attention layer                                                                    𝐵 ·𝐿out tokens, respectively), STARC only clusters each token
+rapidly becomes the dominant contributor to both latency                                                                         once, resulting in 𝐿in +𝐿out clustering operations in total. This
+and energy, and the benefits of sparsity grow accordingly.                                                                       incremental design makes the overhead scale linearly with
+At the level of overall decoding, even token-wise sparsity                                                                       context length rather than quadratically, which explains why
+achieves up to 34% speedup and 47% energy reduction com-                                                                         it remains around 0.02% of total decoding latency and energy
+pared to full KV retrieval. STARC further improves efficiency,                                                                   in long-context settings, as shown by the yellow markers.
+providing 25%–48% speedup and 34%–56% energy reduction,                                                                              Overall, STARC achieves significant reductions in attention-
+corresponding to 13%–21% faster execution and 11%–18%                                                                            layer latency and energy relative to token-wise sparsity
+lower energy consumption than token-wise methods.                                                                                methods, while providing substantially higher accuracy than
+   When isolating the attention layer, the improvements are                                                                      page-wise sparsity. These results demonstrate STARC’s effec-
+even more pronounced. Relative to full KV retrieval, STARC                                                                       tiveness as a hardware-aware sparse attention mechanism
+reduces attention latency by up to 93% and energy by up to                                                                       tailored for long-context inference on PIM architectures.
+92%. Compared to token-wise sparsity, STARC still achieves
+up to 78% latency reduction and 65% energy reduction. Im-
+portantly, in both latency and energy, STARC approaches                                                                          7       Related Work
+the ideal efficiency of page-wise sparsity, while preserving
+much higher model accuracy.                                                                                                      7.1 PIM-enabled LLM Accelerators
+   Notably, these improvements come at virtually no addi-                                                                        PIM has emerged as an effective architectural paradigm to
+tional cost: the clustering overhead of STARC is negligible.                                                                     overcome the bandwidth bottlenecks in LLMs, particularly
+Unlike full or sparse attention where each decoding step                                                                         during autoregressive decoding. By placing compute units
+                                                                                                                                 near memory arrays, PIM boosts bandwidth utilization and
+
+
+
+                                                                                                                         1873
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                     Zehao Fan et al.
+
+
+parallelism for memory-intensive workloads. This has moti-             with correlation-aware updates, mitigating early-token bias.
+vated many recent efforts to integrate PIM into LLM acceler-           However, this kind of method results in the loss of crucial in-
+ation pipelines [4, 14, 15, 24, 40, 59].                               formation, as previously evicted tokens may become relevant
+   Hybrid Strategy. To better balance the compute and mem-             again during decoding.
+ory workloads in LLMs, hybrid xPU–PIM designs have been                   Dynamic Token Access. To avoid permanent loss, an-
+proposed. AttAcc [40] maps attention layers to HBM-based               other line of work keeps the full KV cache but uses dynamic
+PIM while keeping feed-forward computation on GPUs. Ne-                sparse attention to load only the relevant tokens at runtime.
+uPIMs [15] combines NPUs (for GEMM) and PIMs (for GEMV)                SparQ [44] approximates the relevant tokens using query-
+with dual-row buffers and sub-batch interleaving to reduce             key projections to reduce memory transfers. InfiniGen [26]
+contention. PAPI [14] extends this model by dynamically                uses partial attention simulation to predict which tokens
+scheduling workloads between GPUs and PIM units based                  to prefetch. RocketKV [3] bridges permanent eviction and
+on runtime profiling. IANUS [46] further unifies the NPU               dynamic selection by first filtering the KV cache through
+and PIM memory space, with a dedicated scheduling logic to             coarse-grained token eviction and then applying fine-grained
+interleave PIM execution and NPU memory accesses. How-                 dynamic fetching. These approaches improve bandwidth ef-
+ever, none of these designs account for the irregular memory           ficiency, but ignore the architectural constraints of emerging
+access patterns introduced by sparse attention.                        memory systems like PIM.
+   Optimization for LLM with PIM. Several works opti-                     Block-Based Optimization. To bridge dynamic token ac-
+mize LLM inference on PIM architectures [24, 27, 33, 37, 59].          cess and hardware efficiency, several works adopt block-level
+TransPIM [59] improves Transformer inference via token-                optimization. Quest [49] partitions the KV cache into fixed-
+based dataflows and lightweight hardware extensions to                 size pages and selects relevant blocks using query-aware
+HBM, yet is still tuned for dense computation. LoL-PIM [24]            scoring, which aligns better with PIM memory layouts. How-
+supports long-context LLMs with a distributed PIM design               ever, coarse page-level division may fetch irrelevant tokens.
+and dynamic memory management, but ignores token rele-                 To address this, ClusterKV [32] and Squeezed Attention [16]
+vance. PIM-LLM [37] accelerates 1-bit LLMs by using analog             introduce clustering-based KV retrieval for finer granularity
+PIM crossbars to perform binary projection matrix multipli-            and semantic relevance. SentenceKV [60] focuses on seman-
+cations and digital systolic arrays to execute 8-bit attention         tic clustering during the prefill stage but does not cluster or
+matrix multiplications, yet it still assumes dense, fixed ac-          compress newly generated tokens during decoding. More
+cess patterns. Hermes [33] leverages near-data processing              broadly, these clustering-based methods do not target GPU-
+DIMMs to offload cold neurons in activation-heavy work-                PIM systems, as well as the deployment considerations such
+loads, focusing on activation sparsity rather than attention           as data mapping and clustering in PIM.
+sparsity and lacking support for fine-grained token selection.            Our method, STARC, builds on this line of work by jointly
+   In summary, existing PIM-enabled LLM accelerators largely           designing clustering-based sparsity and a memory-aware
+assume dense attention patterns and fail to address the chal-          layout for PIM systems. This co-design provides a balanced
+lenges of sparse attention, such as irregular access and dy-           solution that improves both model accuracy and hardware
+namic KV reuse, and fine-grained selection. This results in            efficiency for long-context inference.
+workload imbalance and poor memory efficiency. In contrast,
+our work introduces a sparsity-aware co-design of both mem-
+ory layout and access strategy, enabling efficient execution
+of sparse attention under PIM architectures.
+                                                                       8   Conclusion
+7.2 Efficient LLM Inference                                            In this work, we propose STARC, a clustering-based data
+Sparsity-based methods have been widely explored to reduce             mapping strategy that enables efficient sparse attention ex-
+the inference cost of LLMs, particularly under long-context            ecution on PIM architectures. By co-locating semantically
+scenarios where the KV cache becomes a memory and la-                  similar KV pairs and remapping them to contiguous memory
+tency bottleneck.                                                      regions, STARC bridges the gap between dynamic token-
+   KV Cache Eviction. Several works propose permanently                wise sparsity and the rigid row-level access granularity of
+discarding less important tokens from KV cache to reduce               PIM. This co-design improves both throughput and energy
+memory footprint. H2O [56] and Scissorhands [35] rely on               efficiency without compromising model accuracy. Experi-
+ranking tokens by cumulative attention scores or recency,              ments show that STARC achieves up to 78% latency reduc-
+while StreamingLLM [52] follows a similar recency-oriented             tion and 65% energy savings on the attention layer compared
+design by retaining a small set of initial tokens as atten-            to token-wise sparsity baselines. We hope that our work in-
+tion sinks together with a fixed sliding window. FastGen [9]           spires further integration of PIM architectures with emerging
+introduces head-specific strategies for token selection. Mor-          LLM optimization techniques, ultimately enabling scalable
+phKV [10] improves this by maintaining a fixed-size cache              and efficient LLM inference in real-world deployments.
+
+
+
+                                                                1874
+STARC                                                                                                                 ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+Acknowledgments                                                                              PG-19, and (3) the simulator setup to reproduce the system-
+This work was supported in part by RPI-IBM Future of                                         level performance/energy results on GPU–PIM platforms
+Computing Research Collaboration and the National Sci-                                       based on the AttAcc simulator (Ramulator-based).
+ence Foundation under Award Number 2442271. We thank
+the anonymous reviewers for their constructive feedback
+and our shepherd Jongse Park for guidance throughout the                                     B.2          Artifact check-list (meta-information)
+revision process. We also thank Yinan Wang for insightful                                          • Algorithm: The STARC algorithm, which enables efficient
+discussions.                                                                                         long-context LLM inference by selectively accessing and
+                                                                                                     remapping KV cache entries via online clustering under a
+                                                                                                     fixed KV-cache budget.
+                                                                                                   • Program: The STARC artifact running public long-context
+Appendix                                                                                             benchmarks: LongBench (16 datasets) and RULER (13 datasets).
+A Additional Results                                                                               • Model: LongChat-7B-v1.5-32K; LLaMA-3.1-8B-Instruct; Mistral-
+                                                                                                     7B-Instruct-v0.3, all of which are publicly available and can
+To complement the main evaluation, we present additional                                             be downloaded from Huggingface.
+LongBench results that examine STARC’s effectiveness across                                        • Dataset: LongBench (16 datasets; e.g., HotpotQA, QASPER,
+a range of KV cache budgets (256, 512, and 2048), beyond the                                         GovReport, etc.); PG-19; RULER (13 datasets; e.g., NIAH Sin-
+budget of 1024 used in the main results (Table 4, 5). These                                          gle, Multi-key NIAH, Multi-value NIAH, etc.), all of which are
+experiments illustrate how varying the KV cache budget                                               publicly available and can be downloaded from Huggingface.
+affects model quality when serving long-context LLMs, and                                          • Run-time environment: Linux; Python 3.10; CUDA 12.8.
+how STARC adapts its clustering-based mapping to improve                                           • Hardware: See B.3.2.
+efficiency while preserving model quality.                                                         • Metrics: LongBench task scores; PG-19 perplexity; RULER
+                                                                                                     task scores; System metrics such as latency and energy.
+                                                                                                   • Output: Key results of our paper, including LongBench/RULER
+                                                                                                     scores, PG-19 perplexity, and system-level performance and
+B     Artifact Appendix                                                                              energy metrics with breakdowns.
+B.1 Abstract                                                                                       • Experiments: See B.5
+                                                                                                   • How much disk space required (approximately)?: Ap-
+This artifact provides a complete workflow to reproduce the                                          proximately 80 GB in total.
+key results of STARC, including (1) the implementation of                                          • How much time is needed to prepare workflow (ap-
+STARC’s selective token access with KV remapping and on-                                             proximately)?: 20 minutes.
+line clustering, (2) evaluation scripts to reproduce accuracy                                      • How much time is needed to complete experiments (ap-
+results on LongBench and RULER, and perplexity results on                                            proximately)?: Excluding the additional results reported in
+
+               Table 4. LongBench results for STARC and baseline sparsity methods (KV cache budget: 256 tokens).
+
+            Single-Document QA             Multi-Document QA                    Summarization                 Few-Shot Learning            Synthetic         Code
+                                                         QA
+
+
+
+
+                                                                                                      s
+                                                                              rt
+                                           tQA
+
+
+
+
+                                                                                                   ew
+
+
+
+
+                                                                                                                                   um
+                                                                                                                          A
+                                                                          epo
+                                                                  ue
+
+
+
+
+                                                                                         m
+                                                         M
+                 A
+
+
+
+
+                                                                                                                       iaQ
+
+
+
+
+                                                                                                                                             t
+                                                                                                ltiN
+                         er
+
+
+
+
+                                                                                                                                           un
+                                -en
+             tv Q
+
+
+
+
+                                       tpo
+
+
+
+
+                                                                                     Su
+                                                               siq
+
+
+
+
+                                                                                                                               MS
+                                                      iki
+
+
+
+
+                                                                                                               EC
+                                                                         vR
+                        sp
+
+
+
+
+                                                                                                                                                                      -P
+
+
+                                                                                                                                                                               g.
+                                                                                                                       v
+
+
+
+
+                                                                                                                                           o
+
+
+
+                                                                                                                                                     e
+                                                                                    QM
+                                                 2W
+
+
+
+
+                                                                                                                                                           Lcc
+                                                              Mu
+
+
+
+
+                                                                                              Mu
+                               MF
+
+
+                                      Ho
+
+
+
+
+                                                                                                                    Tri
+                                                                       Go
+
+
+
+
+                                                                                                                                        PC
+                                                                                                             TR
+
+
+
+
+                                                                                                                              SA
+
+
+
+
+                                                                                                                                                                    RB
+                     Qa
+
+
+
+
+                                                                                                                                                   PR
+
+
+
+
+                                                                                                                                                                            Av
+           Nr
+
+
+
+
+                                                                                KV Budget: 256
+  LongChat
+Full KV     19.51    25.98    43.80    31.94      23.20       11.38     31.77       21.66       26.06       66.00   82.00     20.79      2.00    30.00   53.86   48.68     33.66
+STARC       18.82    28.35    34.79    34.41      18.64        8.10     30.50       21.74       24.64       62.00   81.01     24.17      2.00    32.00   55.56   45.00     32.61
+SparQ       19.87    30.77    40.71    31.70      20.93       12.89     30.93       22.80       26.38       64.00   85.17     31.37      0.50    31.50   55.63   55.58     35.05
+InfiniGen   13.68    27.47    36.05    27.86      20.41        7.75     26.27       20.49       24.97       62.00   77.22     32.47      2.00    18.00   52.70   50.28     31.23
+Quest       10.49    26.47    34.90    20.04      24.23       12.53     21.59       20.48       25.29       56.00   63.80     22.62      2.00    28.00   47.86   38.58     28.43
+  Mistral
+Full KV     23.94    40.07    57.58    49.10      36.71       22.27     35.66       25.77       26.80       80.00   87.67     47.35      4.00    98.00   58.98   56.36     46.89
+STARC       20.19    35.71    56.50    44.43      45.85       20.32     34.06       24.06       26.54       68.00   87.11     48.97      6.00    88.00   61.94   57.60     45.33
+SparQ       27.12    40.87    53.94    49.32      39.51       23.97     35.31       25.14       27.48       73.00   88.78     47.28      4.50    99.50   61.56   63.15     47.53
+InfiniGen   19.52    37.95    54.54    42.28      38.98       10.34     31.14       22.82       27.21       74.00   83.45     47.70      4.00    90.00   61.70   52.34     43.62
+Quest       16.81    30.88    36.99    35.62      27.66       10.12     29.18       21.11       26.04       66.00   78.39     37.84      4.89    83.50   57.22   43.98     37.89
+  Llama-3.1
+Full KV     27.02    13.98    28.04    18.30      17.45       13.01     35.83       23.66       25.91       74.00   89.77     44.56      3.92    97.50   63.30   55.06     39.46
+STARC       30.84    12.91    26.42    21.88      18.34       13.48     34.96       22.18       25.46       66.00   86.71     44.94     12.00    94.33   65.52   57.32     39.58
+SparQ       29.70    12.35    26.97    17.69      15.31       11.40     33.89       23.38       27.00       70.00   92.19     44.58      6.90    97.50   64.55   60.79     39.64
+InfiniGen   21.86    16.53    29.63    21.47      17.76        5.36     32.38       22.70       25.50       68.00   86.40     44.58      7.25    96.00   67.36   55.38     38.64
+Quest        8.68     9.90    18.18    12.19       9.48        3.02     25.33       18.36       23.50       44.00   73.23     31.53      3.55    83.00   51.90   46.52     28.90
+
+
+
+
+                                                                                    1875
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                                     Zehao Fan et al.
+
+
+        Table 5. LongBench results for STARC and baseline sparsity methods (KV cache budget: 512 and 2048 tokens).
+
+            Single-Document QA               Multi-Document QA                   Summarization                     Few-Shot Learning           Synthetic           Code
+
+
+
+
+                                                         A
+
+
+
+
+                                                                                                          s
+                                                                                rt
+                                            A
+
+
+
+
+                                                                                                       ew
+                                                       MQ
+
+
+
+
+                                                                                                                                       um
+                                                                                                                              A
+                                                                            po
+                                         otQ
+
+
+
+
+                                                                  ue
+
+
+
+
+                                                                                             m
+                A
+
+
+
+
+                                                                                                                            aQ
+
+
+
+
+                                                                                                                                               nt
+                                                                                                   ltiN
+                         r
+
+
+
+
+                                                                            e
+                               -en
+             tvQ
+
+
+
+
+                                                                                          Su
+                                                              s iq
+                     sp e
+
+
+
+
+                                                                                                                                   MS
+                                                     ik i
+
+
+
+
+                                                                                                                    C
+                                                                         vR
+
+
+
+
+                                                                                                                                              ou
+                                        tp
+
+
+
+
+                                                                                                                                                                             -P
+                                                                                                                            vi
+
+
+
+
+                                                                                                                                                                                     g.
+                                                                                                                    E
+
+
+
+
+                                                                                                                                                           e
+                                                                                        QM
+                                                   2W
+
+
+
+
+                                                                                                                                                                 Lcc
+                                                             Mu
+
+
+
+
+                                                                                                  Mu
+                              MF
+
+
+                                     Ho
+
+
+
+
+                                                                                                                        Tri
+                                                                       Go
+
+
+
+
+                                                                                                                                            PC
+                                                                                                                 TR
+
+
+
+
+                                                                                                                                  SA
+
+
+
+
+                                                                                                                                                                            RB
+                    Qa
+
+
+
+
+                                                                                                                                                       PR
+
+
+
+
+                                                                                                                                                                                   Av
+           Nr
+
+
+
+
+                                                                                     KV Budget: 512
+  LongChat
+Full KV     19.51   25.98    43.80     31.94         23.20   11.38       31.77          21.66     26.06         66.00    82.00    20.79     2.00     30.00     53.86      48.68   33.66
+STARC       17.59   29.86    39.44     33.92         18.70   10.21       30.46          20.49     25.11         64.00    79.81    22.48     2.00     30.00     57.60      48.38   33.13
+SparQ       19.20   29.18    40.81     32.27         22.30   13.43       30.81          22.81     26.29         64.50    84.70    29.05     0.00     30.00     55.11      55.70   34.76
+InfiniGen   16.37   25.37    38.10     28.48         18.15   13.52       28.71          21.10     25.06         64.00    79.03    31.93     0.00     28.00     52.60      53.42   32.74
+Quest       13.39   28.08    40.90     25.34         24.59    7.59       27.82          21.48     25.39         66.00    76.67    21.94     0.00     36.00     53.36      45.08   32.10
+  Mistral
+Full KV     23.94   40.07    57.58     49.10         36.71   22.27       35.66          25.77     26.80         80.00    87.67    47.35     4.00     98.00     58.98      56.36   46.89
+STARC       21.49   37.26    58.73     47.18         40.15   23.68       34.32          23.66     26.64         74.00    87.67    48.38     4.00     94.00     62.18      58.90   46.39
+SparQ       29.00   40.09    53.70     50.43         37.75   26.49       34.23          25.68     27.50         74.00    89.07    47.35     5.00     99.50     60.72      62.07   47.66
+InfiniGen   22.76   36.82    58.67     49.17         31.64   15.34       33.80          23.87     26.51         78.00    83.67    49.67     2.00     96.00     62.88      58.04   45.55
+Quest       18.39   33.14    45.93     41.79         33.64   18.21       32.57          22.77     26.45         64.00    84.50    41.63     6.50     92.67     59.92      49.84   42.00
+  Llama-3.1
+Full KV     27.02   13.98    28.04     18.30         17.45   13.01       35.83          23.66     25.91         74.00    89.77    44.56     3.92     97.50     63.30      55.06   39.46
+STARC       31.78   13.06    28.77     18.49         18.58   14.24       34.33          22.65     25.80         70.00    88.57    44.26     4.67     95.83     63.56      60.08   39.67
+SparQ       30.30   13.30    26.19     17.90         16.12   10.43       34.11          23.83     27.17         70.50    91.97    43.80     8.29     98.08     64.43      61.34   39.86
+InfiniGen   23.36   16.90    27.18     22.17         18.30    8.76       33.69          22.79     25.85         66.00    89.90    45.10     6.67     98.07     66.46      50.72   38.87
+Quest       15.57   10.77    21.82     12.42         13.25    5.93       29.48          22.05     26.65         60.00    78.87    37.44     2.54     90.52     61.18      53.94   33.90
+
+                                                                                 KV Budget: 2048
+  LongChat
+Full KV     19.51   25.98    43.80     31.94         23.20   11.38       31.77          21.66     26.06         66.00    82.00    20.79     2.00     30.00     53.86      48.68   33.66
+STARC       17.70   28.27    41.15     33.75         23.28   11.21       30.97          23.13     26.50         63.00    81.53    20.80     1.00     31.00     54.15      50.92   33.65
+SparQ       20.01   28.48    42.21     31.02         23.53   12.68       31.06          23.07     26.69         65.00    84.41    24.61     0.00     30.00     52.86      55.69   34.46
+InfiniGen   15.76   30.35    40.52     31.81         20.05    9.00       29.82          22.13     26.00         62.00    81.78    25.94     0.00     36.00     57.62      50.38   33.70
+Quest       14.93   31.48    45.33     31.60         19.70   12.93       30.83          22.07     25.61         62.00    81.33    20.35     2.00     30.00     55.68      49.92   33.49
+  Mistral
+Full KV     23.94   40.07    57.58     49.10         36.71   22.27       35.66          25.77     26.80         80.00    87.67    47.35     4.00     98.00     58.98      56.36   46.89
+STARC       28.71   43.73    54.06     48.62         37.87   23.36       34.82          25.75     27.87         72.00    85.76    47.87     9.00    100.00     59.64      57.91   47.31
+SparQ       29.58   40.25    53.37     51.01         37.94   27.22       34.45          25.68     27.76         74.50    89.06    47.01     5.00     99.00     59.76      62.04   47.73
+InfiniGen   25.34   39.30    59.51     50.20         41.79   18.54       34.83          24.68     26.85         78.00    87.67    47.38     2.00     96.00     58.96      59.46   46.91
+Quest       23.48   40.55    58.73     48.94         37.63   25.41       32.79          24.07     27.28         70.00    88.33    47.07     6.00     98.00     57.86      60.54   46.67
+  Llama-3.1
+Full KV     27.02   13.98    28.04     18.30         17.45   13.01       35.83          23.66     25.91         74.00    89.77    44.56     3.92     97.50     63.30      55.06   39.46
+STARC       30.61   13.88    27.94     20.85         19.62   11.53       34.56          22.75     26.30         72.00    88.57    45.54     2.92     99.00     62.66      55.54   39.64
+SparQ       29.76   13.06    26.61     17.30         16.85   11.26       34.02          23.50     26.69         71.00    91.48    43.82     6.37     98.01     63.38      59.78   39.56
+InfiniGen   27.98   13.33    32.01     19.49         18.79   12.86       35.45          23.10     26.66         72.00    89.81    44.63     7.00     96.67     61.12      55.74   39.79
+Quest       24.41   13.34    23.39     15.97         15.59   10.59       35.03          23.33     25.58         74.00    92.60    45.23     5.18     97.50     59.44      56.52   38.61
+
+
+
+      the appendix, the model accuracy experiments take approxi-                                       • System-level simulation: CPU-only execution is suf-
+      mately 12 hours. In addition, the system-level performance                                         ficient. Experiments in the paper were conducted on
+      experiments take approximately 24 hours.                                                           a dual-socket AMD EPYC 9334 system with 64 CPU
+    • Publicly available?: https://doi.org/10.5281/zenodo.18050293                                       cores in total (2×32 cores).
+    • Code licenses (if publicly available)?: MIT license.
+                                                                                                 B.3.3 Software dependencies. The software is performed
+B.3 Description                                                                                  using Python 3.10, and CUDA version 12.8. The dependent
+                                                                                                 Python packages can be found in the pyproject.toml file.
+B.3.1 How to access. The STARC algorithm, benchmarks,
+and scripts are available at GitHub: EPIC-RPI/STARC
+                                                                                                 B.4     Installation
+B.3.2    Hardware dependencies.                                                                        • Code access. First, please access the code by:
+
+    • LLM accuracy evaluation (LongBench / PG-19 / RULER):                                                    git clone -- recurse - submodules
+      Compatible with commonly used NVIDIA GPUs. We                                                               https :// github . com / EPIC - RPI / STARC
+      recommend NVIDIA H100 or L40 with sufficient GPU                                                        cd STARC
+      memory (e.g., at least 48 GB per GPU).
+
+
+
+                                                                                         1876
+STARC                                                                                   ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+   • Environment setup. To better reproduce the results              E3: RULER (32K context) on LLaMA-3.1-8B-Instruct.
+     and avoid potential conflicts, we recommend using               The RULER testing data are already included in the STARC/ruler
+     Python 3.10 and CUDA 12.8. We provide scripts for               directory. To reproduce the RULER results under a 32K con-
+     the recommended environment setup. Please follow                text length, please run:
+     the instructions to create the conda environment and            cd < Your Path >/ STARC / scripts /
+     install the STARC packages:                                     sh RULER . sh
+        conda create - yn STARC python =3.10
+        conda activate STARC                                         E4: GPU–PIM system simulation. The system-level sim-
+        pip install ninja ==1.11.1.1 packaging                       ulation experiments are conducted using the AttAcc-based
+        pip install -e .                                             simulator. To reproduce the results for full attention, please
+        pip install flash - attn ==2.3.0                             run the following command:
+            --no - build - isolation                                 python main . py -- system dgx - attacc -- gpu
+        conda install -c conda - forge cupy                              H100 -- ngpu 8 -- model Mistral -7 B \
+        conda install numpy scikit - learn                             -- lin 2048 -- lout 32000 -- batch 16 -- pim
+        conda install cmake                                                 bank \
+   • PIM system simulator setup. Next is the setup for                 -- powerlimit -- ffopt -- pipeopt
+     the PIM system simulator. In this artifact, we mainly           To reproduce the results for configurations with sparse at-
+     build on the AttAcc simulator:                                  tention methods, please run:
+        cd simulator_starc                                           python main . py -- system dgx - attacc -- gpu
+        git submodule update -- init -- recursive                        H100 -- ngpu 8 -- model Mistral -7 B \
+   • Build Ramulator2.                                                 -- lin 2048 -- lout 32000 -- batch 16 -- pim
+                                                                            bank \
+        bash set_pim_ramulator . sh                                    -- powerlimit -- ffopt -- pipeopt \
+        cd ramulator2                                                  -- sparsity -- kv_budget_table
+        mkdir build                                                         kv_budget_Mistral_STARC . txt
+        cd build
+        cmake ..                                                        Different sparse attention methods and models use dif-
+            - DCMAKE_POLICY_VERSION_MINIMUM =3.5                     ferent .txt files specified by the –kv_budget_table option.
+        make -j                                                      These files are derived from the attention masks produced
+        cp ramulator2 ../ ramulator2                                 by each method at each decoding step in real inference tasks
+        cd ../../                                                    (e.g., LongBench), and map them to the row-level granularity
+                                                                     of the PIM architecture, where each DRAM row activation
+                                                                     fetches 16 key/value vectors in parallel. They define how
+B.5 Experiment workflow                                              many memory rows are activated at each decoding step and
+This section describes how to reproduce the key results re-          are used to guide the simulator accordingly. Detailed expla-
+ported in the paper.                                                 nations are provided in the script comments and the GitHub
+                                                                     repository README.md.
+E1: LongBench accuracy. To reproduce the LongBench
+accuracy results, please run:                                        B.6     Evaluation and expected results
+cd < Your Path >/ STARC / scripts /                                        • Model accuracy experiments: For LongBench, the
+sh longbench . sh                                                            evaluation generates a corresponding .jsonl file for
+If you want to evaluate more models, first you can find the                  each model and each task. These files contain the
+corresponding model paths in:                                                ground-truth answers and model predictions. The final
+                                                                             results are summarized in result.json. For RULER,
+STARC / evaluation / LongBench / config / model2path . json                  evaluation results are printed directly to the terminal.
+By replacing the model name in longbench.sh, you can eval-                 • PG-19 perplexity: A log_PG19.txt file is generated
+uate STARC under different models reported in the paper.                     to record the evolution of perplexity during evaluation.
+                                                                           • Simulation experiments: The simulator produces
+E2: PG-19 perplexity. To reproduce the perplexity results                    an output.csv file that records the breakdown of end-
+on PG-19, please run:                                                        to-end latency and energy consumption.
+cd < Your Path >/ STARC / scripts /
+                                                                     B.7 Methodology
+sh ppl_eval . sh
+                                                                     Submission, reviewing and badging methodology:
+
+
+
+                                                              1877
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                             Zehao Fan et al.
+
+
+    • https://www.acm.org/publications/policies/artifact-review- [15] Guseul Heo, Sangyeop Lee, Jaehong Cho, Hyunmin Choi, Sanghyeon
+      and-badging-current                                             Lee, Hyungkyu Ham, Gwangsun Kim, Divya Mahajan, and Jongse Park.
+                                                                      2024. Neupims: Npu-pim heterogeneous acceleration for batched llm
+    • https://cTuning.org/ae
+                                                                                          inferencing. In Proceedings of the 29th ACM International Conference
+                                                                                          on Architectural Support for Programming Languages and Operating
+References                                                                                Systems, Volume 3. 722–737.
+ [1] Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge                   [16] Coleman Hooper, Sehoon Kim, Hiva Mohammadzadeh, Monishwaran
+     Akkaya, Florencia Leoni Aleman, Diogo Almeida, Janko Altenschmidt,                   Maheswaran, June Paik, Michael W Mahoney, Kurt Keutzer, and Amir
+     Sam Altman, Shyamal Anadkat, et al. 2023. Gpt-4 technical report.                    Gholami. 2024. Squeezed attention: Accelerating long context length
+     arXiv preprint arXiv:2303.08774 (2023).                                              llm inference. arXiv preprint arXiv:2411.09688 (2024).
+ [2] Yushi Bai, Xin Lv, Jiajie Zhang, Hongchang Lyu, Jiankai Tang, Zhidian           [17] Cheng-Ping Hsieh, Simeng Sun, Samuel Kriman, Shantanu Acharya,
+     Huang, Zhengxiao Du, Xiao Liu, Aohan Zeng, Lei Hou, Yuxiao Dong,                     Dima Rekesh, Fei Jia, Yang Zhang, and Boris Ginsburg. 2024. RULER:
+     Jie Tang, and Juanzi Li. 2024. LongBench: A Bilingual, Multitask                     What’s the Real Context Size of Your Long-Context Language Models?
+     Benchmark for Long Context Understanding. In Proceedings of the                      arXiv preprint arXiv:2404.06654 (2024).
+     62nd Annual Meeting of the Association for Computational Linguistics            [18] Luyang Huang, Shuyang Cao, Nikolaus Parulian, Heng Ji, and Lu
+     (Volume 1: Long Papers). Association for Computational Linguistics,                  Wang. 2021. Efficient attentions for long document summarization.
+     Bangkok, Thailand, 3119–3137. doi:10.18653/v1/2024.acl-long.172                      arXiv preprint arXiv:2104.02112 (2021).
+ [3] Payman Behnam, Yaosheng Fu, Ritchie Zhao, Po-An Tsai, Zhiding Yu,               [19] Bongjoon Hyun, Taehun Kim, Dongjae Lee, and Minsoo Rhu. 2024.
+     and Alexey Tumanov. 2025. RocketKV: Accelerating Long-Context                        Pathfinding future pim architectures by demystifying a commer-
+     LLM Inference via Two-Stage KV Cache Compression. arXiv preprint                     cial pim technology. In 2024 IEEE International Symposium on High-
+     arXiv:2502.14051 (2025).                                                             Performance Computer Architecture (HPCA). IEEE, 263–279.
+ [4] Benjamin Y Cho, Jeageun Jung, and Mattan Erez. 2021. Accelerat-                 [20] Mohsen Imani, Saransh Gupta, Yeseong Kim, and Tajana Rosing. 2019.
+     ing bandwidth-bound deep learning inference with main-memory                         Floatpim: In-memory acceleration of deep neural network training
+     accelerators. In Proceedings of the International Conference for High                with high precision. In Proceedings of the 46th International Symposium
+     Performance Computing, Networking, Storage and Analysis. 1–14.                       on Computer Architecture. 802–815.
+ [5] Pradeep Dasigi, Kyle Lo, Iz Beltagy, Arman Cohan, Noah A Smith, and             [21] Albert Q. Jiang, Alexandre Sablayrolles, Arthur Mensch, Chris Bam-
+     Matt Gardner. 2021. A dataset of information-seeking questions and                   ford, Devendra Singh Chaplot, Diego de las Casas, Florian Bressand, Gi-
+     answers anchored in research papers. arXiv preprint arXiv:2105.03011                 anna Lengyel, Guillaume Lample, Lucile Saulnier, Lélio Renard Lavaud,
+     (2021).                                                                              Marie-Anne Lachaux, Pierre Stock, Teven Le Scao, Thibaut Lavril,
+ [6] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Ka-                        Thomas Wang, Timothée Lacroix, and William El Sayed. 2023. Mistral
+     dian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten,                    7B. arXiv:2310.06825 [cs.CL] https://arxiv.org/abs/2310.06825
+     Amy Yang, Angela Fan, et al. 2024. The llama 3 herd of models. arXiv            [22] Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke Zettlemoyer.
+     e-prints (2024), arXiv–2407.                                                         2017. Triviaqa: A large scale distantly supervised challenge dataset
+ [7] Alexander R Fabbri, Irene Li, Tianwei She, Suyi Li, and Dragomir R                   for reading comprehension. arXiv preprint arXiv:1705.03551 (2017).
+     Radev. 2019. Multi-news: A large-scale multi-document summa-                    [23] Tomáš Kočiskỳ, Jonathan Schwarz, Phil Blunsom, Chris Dyer,
+     rization dataset and abstractive hierarchical model. arXiv preprint                  Karl Moritz Hermann, Gábor Melis, and Edward Grefenstette. 2018.
+     arXiv:1906.01749 (2019).                                                             The narrativeqa reading comprehension challenge. Transactions of the
+ [8] Fei Gao, Georgios Tziantzioulis, and David Wentzlaff. 2019. Compute-                 Association for Computational Linguistics 6 (2018), 317–328.
+     dram: In-memory compute using off-the-shelf drams. In Proceedings               [24] Hyucksung Kwon, Kyungmo Koo, Janghyeon Kim, Woongkyu Lee,
+     of the 52nd annual IEEE/ACM international symposium on microarchi-                   Minjae Lee, Hyungdeok Lee, Yousub Jung, Jaehan Park, Yosub Song,
+     tecture. 100–113.                                                                    Byeongsu Yang, et al. 2024. LoL-PIM: Long-Context LLM Decoding
+ [9] Suyu Ge, Yunan Zhang, Liyuan Liu, Minjia Zhang, Jiawei Han, and                      with Scalable DRAM-PIM System. arXiv preprint arXiv:2412.20166
+     Jianfeng Gao. 2023. Model tells you what to discard: Adaptive kv cache               (2024).
+     compression for llms. arXiv preprint arXiv:2310.01801 (2023).                   [25] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+[10] Ravi Ghadia, Avinash Kumar, Gaurav Jain, Prashant Nair, and Poulami                  Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+     Das. 2025. Dialogue without limits: Constant-sized kv caches for                     2023. Efficient memory management for large language model serving
+     extended responses in llms. arXiv preprint arXiv:2503.00979 (2025).                  with pagedattention. In Proceedings of the 29th Symposium on Operating
+[11] Bogdan Gliwa, Iwona Mochol, Maciej Biesek, and Aleksander Wawer.                     Systems Principles. 611–626.
+     2019. SAMSum corpus: A human-annotated dialogue dataset for ab-                 [26] Wonbeom Lee, Jungi Lee, Junghwan Seo, and Jaewoong Sim. 2024.
+     stractive summarization. arXiv preprint arXiv:1911.12237 (2019).                     {InfiniGen}: Efficient generative inference of large language models
+[12] Daya Guo, Canwen Xu, Nan Duan, Jian Yin, and Julian McAuley.                         with dynamic {KV} cache management. In 18th USENIX Symposium
+     2023. Longcoder: A long-range pre-trained language model for code                    on Operating Systems Design and Implementation (OSDI 24). 155–172.
+     completion. In International Conference on Machine Learning. PMLR,              [27] Cong Li, Yihan Yin, Xintong Wu, Jingchen Zhu, Zhutianya Gao, Dimin
+     12098–12107.                                                                         Niu, Qiang Wu, Xin Si, Yuan Xie, Chen Zhang, et al. 2025. H2-
+[13] Mingxuan He, Choungki Song, Ilkon Kim, Chunseok Jeong, Seho Kim,                     LLM: Hardware-Dataflow Co-Exploration for Heterogeneous Hybrid-
+     Il Park, Mithuna Thottethodi, and TN Vijaykumar. 2020. Newton:                       Bonding-based Low-Batch LLM Inference. In Proceedings of the 52nd
+     A DRAM-maker’s accelerator-in-memory (AiM) architecture for ma-                      Annual International Symposium on Computer Architecture. 194–210.
+     chine learning. In 2020 53rd Annual IEEE/ACM International Symposium            [28] Dacheng Li, Rulin Shao, Anze Xie, Ying Sheng, Lianmin Zheng,
+     on Microarchitecture (MICRO). IEEE, 372–385.                                         Joseph E. Gonzalez, Ion Stoica, Xuezhe Ma, and Hao Zhang. 2023.
+[14] Yintao He, Haiyu Mao, Christina Giannoula, Mohammad Sadrosadati,                     How Long Can Open-Source LLMs Truly Promise on Context Length?
+     Juan Gómez-Luna, Huawei Li, Xiaowei Li, Ying Wang, and Onur Mutlu.                   https://lmsys.org/blog/2023-06-29-longchat
+     2025. PAPI: Exploiting Dynamic Parallelism in Large Language Model              [29] Shuang Li, Xavier Puig, Chris Paxton, Yilun Du, Clinton Wang, Linxi
+     Decoding with a Processing-In-Memory-Enabled Computing System.                       Fan, Tao Chen, De-An Huang, Ekin Akyürek, Anima Anandkumar,
+     arXiv preprint arXiv:2502.15470 (2025).                                              et al. 2022. Pre-trained language models for interactive decision-
+                                                                                          making. Advances in Neural Information Processing Systems 35 (2022),
+
+
+
+
+                                                                              1878
+STARC                                                                                                       ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+     31199–31212.                                                                      [46] Minseok Seo, Xuan Truong Nguyen, Seok Joong Hwang, Yongkee
+[30] Xin Li and Dan Roth. 2002. Learning question classifiers. In COLING                    Kwon, Guhyun Kim, Chanwook Park, Ilkon Kim, Jaehan Park, Jeongbin
+     2002: The 19th International Conference on Computational Linguistics.                  Kim, Woojae Shin, et al. 2024. Ianus: Integrated accelerator based
+[31] Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao Wu, Chengda                       on npu-pim unified memory system. In Proceedings of the 29th ACM
+     Lu, Chenggang Zhao, Chengqi Deng, Chenyu Zhang, Chong Ruan, et al.                     International Conference on Architectural Support for Programming
+     2024. Deepseek-v3 technical report. arXiv preprint arXiv:2412.19437                    Languages and Operating Systems, Volume 3. 545–560.
+     (2024).                                                                           [47] Noah Shinn, Federico Cassano, Ashwin Gopinath, Karthik Narasimhan,
+[32] Guangda Liu, Chengwei Li, Jieru Zhao, Chenqi Zhang, and Minyi Guo.                     and Shunyu Yao. 2023. Reflexion: Language agents with verbal rein-
+     2024. Clusterkv: Manipulating llm kv cache in semantic space for                       forcement learning. Advances in Neural Information Processing Systems
+     recallable compression. arXiv preprint arXiv:2412.03213 (2024).                        36 (2023), 8634–8652.
+[33] Lian Liu, Shixin Zhao, Bing Li, Haimeng Ren, Zhaohui Xu, Mengdi                   [48] Alexey Svyatkovskiy, Ying Zhao, Shengyu Fu, and Neel Sundaresan.
+     Wang, Xiaowei Li, Yinhe Han, and Ying Wang. 2025. Make LLM                             2019. Pythia: Ai-assisted code completion system. In Proceedings of
+     Inference Affordable to Everyone: Augmenting GPU Memory with                           the 25th ACM SIGKDD international conference on knowledge discovery
+     NDP-DIMM. In 2025 IEEE International Symposium on High Perfor-                         & data mining. 2727–2735.
+     mance Computer Architecture (HPCA). IEEE, 1751–1765.                              [49] Jiaming Tang, Yilong Zhao, Kan Zhu, Guangxuan Xiao, Baris Kasikci,
+[34] Tianyang Liu, Canwen Xu, and Julian McAuley. 2023. Repobench:                          and Song Han. 2024. Quest: Query-aware sparsity for efficient long-
+     Benchmarking repository-level code auto-completion systems. arXiv                      context llm inference. arXiv preprint arXiv:2406.10774 (2024).
+     preprint arXiv:2306.03091 (2023).                                                 [50] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Alma-
+[35] Zichang Liu, Aditya Desai, Fangshuo Liao, Weitao Wang, Victor Xie,                     hairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal
+     Zhaozhuo Xu, Anastasios Kyrillidis, and Anshumali Shrivastava. 2023.                   Bhargava, Shruti Bhosale, et al. 2023. Llama 2: Open foundation and
+     Scissorhands: Exploiting the persistence of importance hypothesis for                  fine-tuned chat models. arXiv preprint arXiv:2307.09288 (2023).
+     llm kv cache compression at test time. Advances in Neural Information             [51] Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish
+     Processing Systems 36 (2023), 52342–52364.                                             Sabharwal. 2022. MuSiQue: Multihop Questions via Single-hop Ques-
+[36] Haocong Luo, Yahya Can Tuğrul, F Nisa Bostancı, Ataberk Olgun,                         tion Composition. Transactions of the Association for Computational
+     A Giray Yağlıkçı, and Onur Mutlu. 2023. Ramulator 2.0: A modern,                       Linguistics 10 (2022), 539–554.
+     modular, and extensible dram simulator. IEEE Computer Architecture                [52] Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han, and Mike
+     Letters 23, 1 (2023), 112–116.                                                         Lewis. 2023. Efficient streaming language models with attention sinks.
+[37] Jinendra Malekar, Peyton Chandarana, Md Hasibul Amin, Mo-                              arXiv preprint arXiv:2309.17453 (2023).
+     hammed E Elbtity, and Ramtin Zand. 2025. PIM-LLM: A High-                         [53] Yi Yang, Wen-tau Yih, and Christopher Meek. 2015. Wikiqa: A chal-
+     Throughput Hybrid PIM Architecture for 1-bit LLMs. arXiv preprint                      lenge dataset for open-domain question answering. In Proceedings of
+     arXiv:2504.01994 (2025).                                                               the 2015 conference on empirical methods in natural language processing.
+[38] Daye Nam, Andrew Macvean, Vincent Hellendoorn, Bogdan Vasilescu,                       2013–2018.
+     and Brad Myers. 2024. Using an llm to help with code understanding. In            [54] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William W
+     Proceedings of the IEEE/ACM 46th International Conference on Software                  Cohen, Ruslan Salakhutdinov, and Christopher D Manning. 2018. Hot-
+     Engineering. 1–13.                                                                     potQA: A dataset for diverse, explainable multi-hop question answer-
+[39] Geraldo F Oliveira, Juan Gómez-Luna, Saugata Ghose, Amirali                            ing. arXiv preprint arXiv:1809.09600 (2018).
+     Boroumand, and Onur Mutlu. 2022. Accelerating neural network                      [55] Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Tom Griffiths, Yuan
+     inference with processing-in-DRAM: from the edge to the cloud. IEEE                    Cao, and Karthik Narasimhan. 2023. Tree of thoughts: Deliberate
+     Micro 42, 6 (2022), 25–38.                                                             problem solving with large language models. Advances in neural
+[40] Jaehyun Park, Jaewan Choi, Kwanhee Kyung, Michael Jaemin Kim,                          information processing systems 36 (2023), 11809–11822.
+     Yongsuk Kwon, Nam Sung Kim, and Jung Ho Ahn. 2024. AttAcc!                        [56] Zhenyu Zhang, Ying Sheng, Tianyi Zhou, Tianlong Chen, Lianmin
+     Unleashing the power of PIM for batched transformer-based gener-                       Zheng, Ruisi Cai, Zhao Song, Yuandong Tian, Christopher Ré, Clark
+     ative model inference. In Proceedings of the 29th ACM International                    Barrett, et al. 2023. H2o: Heavy-hitter oracle for efficient generative
+     Conference on Architectural Support for Programming Languages and                      inference of large language models. Advances in Neural Information
+     Operating Systems, Volume 2. 103–119.                                                  Processing Systems 36 (2023), 34661–34710.
+[41] Reiner Pope, Sholto Douglas, Aakanksha Chowdhery, Jacob Devlin,                   [57] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Tianle Li, Siyuan Zhuang,
+     James Bradbury, Jonathan Heek, Kefan Xiao, Shivani Agrawal, and                        Zhanghao Wu, Yonghao Zhuang, Zhuohan Li, Zi Lin, Eric P Xing,
+     Jeff Dean. 2023. Efficiently scaling transformer inference. Proceedings                et al. 2023. Lmsys-chat-1m: A large-scale real-world llm conversation
+     of Machine Learning and Systems 5 (2023), 606–624.                                     dataset. arXiv preprint arXiv:2309.11998 (2023).
+[42] Jack W Rae, Anna Potapenko, Siddhant M Jayakumar, and Timothy P                   [58] Ming Zhong, Da Yin, Tao Yu, Ahmad Zaidi, Mutethia Mutuma, Rahul
+     Lillicrap. 2019. Compressive transformers for long-range sequence                      Jha, Ahmed Hassan Awadallah, Asli Celikyilmaz, Yang Liu, Xipeng Qiu,
+     modelling. arXiv preprint arXiv:1911.05507 (2019).                                     et al. 2021. QMSum: A new benchmark for query-based multi-domain
+[43] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan                        meeting summarization. arXiv preprint arXiv:2104.05938 (2021).
+     Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. 2020.                [59] Minxuan Zhou, Weihong Xu, Jaeyoung Kang, and Tajana Rosing. 2022.
+     Exploring the limits of transfer learning with a unified text-to-text                  TransPIM: A memory-based acceleration via software-hardware co-
+     transformer. Journal of machine learning research 21, 140 (2020), 1–67.                design for transformer. In 2022 IEEE International Symposium on High-
+[44] Luka Ribar, Ivan Chelombiev, Luke Hudlass-Galley, Charlie Blake,                       Performance Computer Architecture (HPCA). IEEE, 1071–1085.
+     Carlo Luschi, and Douglas Orr. 2023. Sparq attention: Bandwidth-                  [60] Yuxuan Zhu, Ali Falahati, David H Yang, and Mohammad Mohammadi
+     efficient llm inference. arXiv preprint arXiv:2312.04985 (2023).                       Amiri. 2025. SentenceKV: Efficient LLM Inference via Sentence-Level
+[45] Baptiste Roziere, Jonas Gehring, Fabian Gloeckle, Sten Sootla, Itai Gat,               Semantic KV Caching. arXiv preprint arXiv:2504.00970 (2025).
+     Xiaoqing Ellen Tan, Yossi Adi, Jingyu Liu, Tal Remez, Jérémy Rapin,               [61] Yuchen Zhuang, Yue Yu, Kuan Wang, Haotian Sun, and Chao Zhang.
+     et al. 2023. Code llama: Open foundation models for code. arXiv                        2024. Toolqa: A dataset for llm question answering with external tools.
+     preprint arXiv:2308.12950 (2023).                                                      Advances in Neural Information Processing Systems 36 (2024).
+
+
+
+
+                                                                                1879
+

@@ -1,0 +1,1219 @@
+ASM-SpMM: Unleashing the Potential of Arm SME for
+    Sparse Matrix Multiplication Acceleration
+                 Jiazhi Jiang                                      Xijia Yao                                                   Jiayu Chen
+            Sun Yat-sen University                          Sun Yat-sen University                                  Sun Yat-sen University
+              Guangzhou, China                                Guangzhou, China                                        Guangzhou, China
+        jiangjzh6@mail2.sysu.edu.cn                       yaoxj9@mail2.sysu.edu.cn                               chenjy666@mail2.sysu.edu.cn
+
+                  Jinhui Wei                                     Dan Huang∗                                                   Yutong Lu∗
+           Sun Yat-sen University                         Sun Yat-sen University                                     Sun Yat-sen University
+             Guangzhou, China                               Guangzhou, China                                           Guangzhou, China
+         weijh28@mail2.sysu.edu.cn                      huangd79@mail.sysu.edu.cn                                  luyutong@mail.sysu.edu.cn
+
+Abstract                                                                        the 31st ACM SIGPLAN Annual Symposium on Principles and Prac-
+Sparse Matrix–Matrix Multiplication (SpMM) is a core kernel                     tice of Parallel Programming (PPoPP ’26), January 31 – February 4,
+                                                                                2026, Sydney, NSW, Australia. ACM, New York, NY, USA, 13 pages.
+in scientific computing, data analytics, and artificial intel-
+                                                                                https://doi.org/10.1145/3774934.3786422
+ligence, supporting applications such as linear solvers and
+Graph Neural Networks (GNNs). The Scalable Matrix Ex-                           1     Introduction
+tension (SME) in Armv9 introduces dedicated matrix accel-
+eration for ARM CPUs, but exploiting its full potential for                     General Sparse Matrix-Matrix Multiplication(SpMM) serves
+SpMM requires architecture-aware optimizations to address                       as a critical and computationally intensive kernel underpin-
+irregular sparsity and hardware constraints.                                    ning a broad spectrum of application domains, including
+   We present ASM-SpMM, a high-performance SpMM li-                             scientific computing, data analytics, and modern artificial
+brary co-designed with ARM SME. ASM-SpMM combines a                             intelligence[3, 5, 11]. Its pervasive role extends from the core
+memory-efficient compression format, an SME-aware ker-                          of linear algebra solvers to large-scale graph analytics and
+nel optimized for outer-product execution, a hybrid ma-                         Graph Neural Networks (GNNs)[4, 16]. As such, advance-
+trix–vector execution strategy, and work-stealing-based dy-                     ments in SpMM optimization are poised to deliver substantial
+namic load balancing across heterogeneous cores. Exper-                         improvements across diverse applications.
+iments on emerging Armv9 platforms demonstrate up to                               The ARM architecture, long dominant in mobile comput-
+7.9× speedup over state-of-the-art SpMM libraries across                        ing, is rapidly expanding into desktop and high-performance
+diverse matrices. A GNN inference case study further shows                      systems [9, 10]. To meet the growing demands of AI work-
+that ASM-SpMM significantly improves end-to-end perfor-                         loads, vendors have introduced dedicated matrix acceler-
+mance, highlighting the effectiveness of SME-aware SpMM                         ation units such as NVIDIA Tensor Cores [14] and Intel
+optimization on ARM CPUs.                                                       AMX [8], delivering substantial performance gains for ma-
+                                                                                trix operations[29]. Following this trend, ARM integrated the
+CCS Concepts: • Computer systems organization → Par-                            Scalable Matrix Extension (SME) into Armv9, offering spe-
+allel architectures.                                                            cialized hardware support for matrix multiplication. Distinct
+                                                                                from other matrix units that implement GEMM with inner
+Keywords: SpMM, ARM SME, SVE, Outer Product                                     products, SME adopts the outer product as its building block.
+ACM Reference Format:                                                           This operation takes two input vectors and generates a ma-
+Jiazhi Jiang, Xijia Yao, Jiayu Chen, Jinhui Wei, Dan Huang, and Yu-             trix via elementwise multiplication (Figure 1). With ARM’s
+tong Lu. 2026. ASM-SpMM: Unleashing the Potential of Arm SME                    growing role in performance-critical domains, optimizing
+for Sparse Matrix Multiplication Acceleration. In Proceedings of                SpMM on SME is timely and essential to fully unleash its
+                                                                                potential for scientific and AI applications.
+∗ Corresponding author
+                                                                                                                                          
+                                                                                                 𝑎 𝑎        𝑏 00 𝑏 01       𝑎                  𝑎 
+                                                                                C = A × B = 00 01                      = 00 𝑏 00 𝑏 01 + 01 𝑏 10 𝑏 11
+                                                                                                                                                               
+                                                                                                 𝑎 10 𝑎 11 𝑏 10 𝑏 11        𝑎 10                𝑎 11
+                                                                                                                                                                    
+                                                                                     𝑎 𝑏 𝑎 𝑏               𝑎 𝑏 𝑎 𝑏               𝑎 𝑏 + 𝑎 01𝑏 10 𝑎 00𝑏 01 + 𝑎 01𝑏 11
+                                                                                  = 00 00 00 01 + 01 10 01 11 = 00 00
+This work is licensed under a Creative Commons Attribution 4.0 Interna-              𝑎 10𝑏 00 𝑎 10𝑏 01     𝑎 11𝑏 10 𝑎 11𝑏 11     𝑎 10𝑏 00 + 𝑎 11𝑏 10 𝑎 10𝑏 01 + 𝑎 11𝑏 11
+tional License.
+                                                                                Figure 1. Outer-product execution of Matrix Multiplication.
+PPoPP ’26, Sydney, NSW, Australia
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2310-0/2026/01                                                However, fully unleashing SME’s potential for SpMM ac-
+https://doi.org/10.1145/3774934.3786422                                         celeration presents unique challenges. Designed primarily
+
+
+
+                                                                          232
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia         Jiazhi Jiang, Xijia Yao, Jiayu Chen, Jinhui Wei, Dan Huang, and Yutong Lu
+
+
+for dense matrix operations, SME’s dense-oriented archi-                 • Leveraging instruction-level scheduling, we propose so-
+tecture does not inherently align with irregular structures                phisticated hybrid kernel strategies that coordinate SME
+encountered in sparse matrix computations. Integrating SME                 with vector units on ARM CPUs, thereby unlocking com-
+with SpMM thus demands careful consideration and inno-                     putation performance across heterogeneous resources.
+vative solutions. Previous research on GPU-based Tensor                  • We propose a dynamic inter-thread work-stealing scheme
+Core acceleration for sparse deep learning workloads pro-                  to achieve load-balanced execution, enabling sparse-aware
+vides some insights[1, 15, 18, 22, 23, 28]. Nevertheless, ARM              workload distribution across heterogeneous cores and fur-
+SME diverges significantly from other matrix multiplication                ther improving SpMM scalability on multi-core ARM CPU.
+accelerators (e.g., GPU Tensor Cores) by adopting vector
+outer-product instructions and a dedicated Z Array (ZA)
+                                                                         2    Background and Motivations
+register, which serves as a large matrix accumulator for high-
+throughput operations. However, SME currently exposes                    2.1 Sparse Matrix Multiplication
+only low-level primitives without compiler or programming                SpMM computes the product of a sparse matrix 𝐴 of size
+model support, thereby shifting the complexity of kernel                 𝑀 × 𝐾 and a dense matrix 𝐵 of size 𝐾 × 𝑁 , producing a dense
+construction to the software stack and requiring novel algo-             output matrix 𝐶 of size 𝑀 × 𝑁 , where 𝐶 = 𝐴𝐵. The sparse
+rithmic and system-level designs.                                        matrix 𝐴 contains NNZ nonzero elements, while both 𝐵 and
+   In this work, we target SpMM optimization for GNN and                 𝐶 are fully dense. NNZ denotes the total number of nonzero
+scientific computing workloads on ARM CPUs with SME.                     entries in sparse matrix. A substantial body of research have
+Our analysis reveals four key challenges: inefficient sparse             been conducted to improve SpMM performance on CPUs
+storage, the mismatch between sparsity and SME’s dense-                  [30], encompassing a variety of optimization techniques such
+oriented outer-product primitives, limited coordination be-              as sparse storage formats, reordering algorithms, parallel
+tween matrix and vector units, and workload imbalance                    strategies, and memory access optimizations. Most existing
+across heterogeneous cores. To address these issues, we pro-             SpMM optimizations are grounded in exploiting the general-
+pose ASM-SpMM, which integrates SME-aware kernels, a                     purpose capabilities of modern processors, utilizing multi-
+new sparse compression format, and dynamic scheduling                    core architectures in conjunction with vectorized instruction
+mechanisms tailored to ARM SME.                                          sets such as NEON to accelerate SpMM computations.
+   To the best of our knowledge, ASM-SpMM represents the
+first effort to accelerate sparse matrix multiplication with             2.2 ARM CPU and SME Matrix Unit
+ARM SME. We perform comprehensive evaluations of ASM-                    The rising computational demands of AI and scientific com-
+SpMM using large-scale power-law graph matrices represen-                puting have driven the development of specialized hardware
+tative of GNN workloads, as well as a wide spectrum of sparse            accelerators for matrix operations. Broadly, matrix acceler-
+matrices from the SuiteSparse Matrix Collection. Our experi-             ation architectures follow two paths: (i) dedicated matrix-
+mental study includes rigorous comparisons against state-of-             multiplication units supporting diverse matrix sizes, exem-
+the-art SpMM kernels, including those from the Armadillo                 plified by Intel AMX, NVIDIA Tensor Cores, and Google
+library, Eigen library, the ARM Performance library(ArmPL),              TPUs; and (ii) lightweight vector outer-product units, such
+Cholmod, and MP-SpMM[30] on the Apple M4 ARM proces-                     as IBM’s Math Matrix Accelerator and ARM’s Scalable Ma-
+sor, and the newly released LX2 ARM processor. The results               trix Extension (SME). ARM CPUs, now pervasive from mo-
+demonstrate that ASM-SpMM consistently achieves substan-                 bile to servers, are increasingly required to deliver high-
+tial average speedups over these baselines across diverse,               performance matrix computation for workloads ranging
+real-world sparse matrix benchmarks, highlighting its effec-             from edge AI inference to large-scale simulations. This trend
+tiveness and the potential of architecture-aware optimization            underscores the need to embed matrix-centric acceleration
+for ARM SME. A case study illustrates that ASM-SpMM sig-                 directly into general-purpose CPUs.
+nificantly accelerates end-to-end GNN inference compared                    ARM’s Scalable Vector Extension (SVE) introduces variable-
+to DGL[20] and PyG[2], two widely used GNN frameworks.                   length vector registers and vector-length-agnostic program-
+We summarize our contributions as follows:                               ming, providing flexibility and scalability for SIMD work-
+                                                                         loads. ARM SME with ARMv9 enhances the CPU architec-
+• We introduce a novel, memory-efficient sparse matrix com-              ture’s support for matrix operations. SME works with the ex-
+  pression format tailored to ARM SME’s outer-product ex-                isting SVE and provides a dedicated two-dimensional matrix
+  ecution model, enabling efficient use of matrix primitives.            register array (ZA) storage and outer product instructions
+• We implement a highly optimized SME-aware SpMM ker-                    using two SVE Z registers as input vectors, enabling efficient
+  nel with specialized outer-product designs that coordinate             construction of matrix multiplication via outer-product ac-
+  prefetching, multi-tile parallelism, and pipelined execu-              cumulation as shown in Figure 2. The ZA register is architec-
+  tion to improve register utilization and fully exploit SME’s           turally defined for matrix tiles, with supporting instructions
+  instruction-level parallelism.                                         for data transfer between registers and memory. Each input
+
+
+
+                                                                   233
+ASM-SpMM: Unleashing the Potential of Arm SME for SpMM Acceleration                                                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+source vector can be independently predicated by its corre-                                                   not support the consolidation of sparsely populated columns
+sponding predicate register. For example, input vector Z0 is                                                  that could be further aggregated to maximize compression.
+predicated by P0, and Z1 is predicated by P1.                                                                 For instance, column 0 and column 1 of TC Block1 in Figure 3
+         Predicate Register              Z Register of SVE                      ZA Matrix Register            could be consolidated into a single column, as could column
+          Mask Operation
+        P0            --
+                                  Z0
+                                                      --
+                                                      --                                    --                4 and column 5 of TC Block2. By leveraging SME’s outer-
+                                  Z1                                 Outer
+                      --
+                                                                                            --
+        P1
+                                  Z2
+                                                      --
+                                                                    Product                 --                product computation model and the flexibility afforded by
+        ----
+               ----
+
+
+
+
+                           ----
+
+                                  ----
+                                         ----
+
+
+
+
+                                                             ----
+                                                                                                              predicate registers, there remains considerable potential for
+
+
+
+
+                                                                               ----
+
+
+
+
+                                                                                                 ----
+        P15           --          Z31
+                                                      --              ×
+                                                                                            --
+                                                                                                              advanced structural compression strategies and substantial
+                                         Stream Vector Length                 Stream Vector Length            efficiency improvements.
+                                                                                                                                                         TC Block1 TC Block2
+                                                                                                                     0 1 2 3 4 5 6 7 8 9 10 11          0 1 2 3 4 5 6 7
+                      Figure 2. Registers in SME.                                                                  0   b     a              h        0    b a      h
+                                                                                                                   1 c       e      d     i           1 c   e d i
+   Apple’s M4 chip is the first and currently the only pub-                                                        2                f
+                                                                                                                                          j
+                                                                                                                                                      2        f
+                                                                                                                   3 g                                3 g        j
+licly available processor to support SME. This represents                                                                   Sparse Matrix             Condensed Sparse Matrix
+a pivotal step toward the mainstream adoption of matrix
+acceleration on general-purpose CPUs[17]. Developers can
+                                                                                                              Figure 3. Condensed sparse matrix format for Tensor Core.
+leverage SME’s C-level intrinsics to efficiently implement
+matrix operations while abstracting away low-level reg-                                                          𝑪2 : SpMM kernel lack specialized outer-product de-
+ister management. For instance, data tiles can be loaded                                                      signs and sophisticated optimization stacks like tradi-
+from memory into vector registers using intrinsics such                                                       tional implementations, hindering SpMM kernel effi-
+as svld1_f32, and outer product accumulation can be per-                                                      ciency on SME. Traditional CPU-based SpMM implemen-
+formed with svmopa_za32_f32_m, directly accumulating re-                                                      tations are primarily optimized for vectorized computation
+sults into specified ZA tiles. Results are then written back to                                               paradigms, whereas GPU Tensor Core approaches are inher-
+memory using store intrinsics such as svst1_hor_za32.                                                         ently designed around inner-product-based calculations[1,
+                                                                                                              15, 18, 22, 28]. SME, however, utilizes an outer-product com-
+    Listing 1. SME Intrinsics for Matrix Multiplication.                                                      putation paradigm, presenting distinct and underexplored
+1 svbool_t pg = svptrue_b32();                                                                                optimization opportunities for efficient SpMM kernel design.
+2 //Load a tile from global memory into a vector register                                                     Moreover, due to substantial differences in memory hierar-
+3 svfloat32_t a_vec = svld1_f32(pg, A_block);
+                                                                                                              chies and cache organizations, GPU-specific SpMM strate-
+4 svfloat32_t b_vec = svld1_f32(pg, B_block);
+5 //Perform outer product and accumulate into ZA[0].
+                                                                                                              gies cannot be directly adapted to ARM platforms. For exam-
+6 svmopa_za32_f32_m(0, pg, pg, a_vec, b_vec);                                                                 ple, SME’s ZA register array enables flexible tile partitioning
+7 //Store the result from ZA[0] to global memory.                                                             according to data precision, offering fine-grained parallelism
+8 svst1_hor_za32(0, row_idx, pg, C_result);                                                                   but increasing kernel scheduling complexity. Consequently,
+                                                                                                              effectively utilizing the Z vector registers and predicate reg-
+2.3 Motivations                                                                                               isters within this outer-product framework demands novel
+𝑪1 : Existing storage formats of sparse matrix retain                                                         optimization strategies that transcend existing CPU- and
+intra-column zeros and impose strict block alignment,                                                         GPU-oriented methods.
+limiting the efficiency gains achievable on SME archi-                                                           𝑪3 : Efficiently orchestrating SME and conventional
+tectures. Recent advances in sparse storage compression                                                       vector units demands sophisticated instruction sched-
+formats designed for matrix units, such as TCF [22] and                                                       uling to mitigate resource contention and optimize het-
+ME-TCF [1, 28], condense the sparse matrix into compact,                                                      erogeneous execution. ARM architectures retain indepen-
+fixed-size tiles to reduce storage overhead, primarily by elim-                                               dent vector processing resources, including dedicated Neon
+inating columns consisting entirely of zeros (see Figure 3).                                                  computational units and registers, whose aggregate com-
+Compared to traditional sparse compression formats such                                                       puting capability can be substantial and thus non-negligible
+as CSR, these matrix-unit-oriented designs can substantially                                                  (e.g., preliminary experiments indicate that conventional vec-
+enhance SpMM efficiency on matrix processing units. How-                                                      tor units can contribute up to 20–30% of the computational
+ever, these designs are fundamentally constrained by the                                                      throughput compared to SME units). Our empirical observa-
+input requirements of Tensor Core architectures, enforcing                                                    tions further confirm that conventional Neon instructions
+strict block alignment and left-aligned tiles, with extensive                                                 can be efficiently co-issued alongside SME’s Matrix Outer
+zero-padding to fill incomplete regions (e.g., Column 6 and 7                                                 Product Add(MOPA) instructions, suggesting the feasibility
+of TC Block2). By contrast, SME’s outer-product execution                                                     of effectively accelerating SpMM workloads through het-
+model operates directly on pairs of input vectors, thereby                                                    erogeneous collaborative computing. However, despite this
+obviating the need for rigid alignment and padding. More                                                      promising potential, simultaneous use of SME and conven-
+importantly, while formats such as TCF and ME-TCF achieve                                                     tional vector units inevitably incurs complex issues such
+partial compression by removing empty columns, they do                                                        as mutual interference, pipeline contention, and non-trivial
+
+
+
+                                                                                                        234
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia         Jiazhi Jiang, Xijia Yao, Jiayu Chen, Jinhui Wei, Dan Huang, and Yutong Lu
+
+
+task allocation problems across heterogeneous resources.                 SpMM kernels alongside conventional vector units. This dy-
+Currently, solutions for coordinating such diverse resources             namic resource coordination maximizes overall performance,
+for SpMM, while simultaneously avoiding contention and                   particularly in heterogeneous computing environments. ❺
+optimizing task distribution, remain largely unexplored.                 Finally, the SME-based sparse matrix computation library is
+   𝑪4 : Load imbalance in SpMM is driven by archi-                       seamlessly integrated into higher-level frameworks such as
+tectural diversity of CPU core and irregular sparsity                    GNNs, providing transparent, efficient support for a broad
+patterns of matrix, which together create substantial                    spectrum of sparse workloads on ARM platforms.
+disparities in computational loads among processing
+units. Load imbalance during SpMM computation refers                           Sparse Matrix                     Applications (GNN, Sparse Solver, LLM…)
+                                                                                                                                             5) Integrated in Application
+to the uneven assignment of computational work among                                       1) Condensed Sparse Matrix
+
+                                                                               SME-Adapted Condensed                             Matrix-oriented outer product execution
+processing units. This issue often arises from the irregular                     Format Conversion                             ① FetchSPMask (FSM)                  ② VectorizedFetchDense (VFD)
+
+distribution of nonzero elements in sparse matrices. In homo-                              2) Dynamic Task Scheduling
+
+geneous environments such as GPUs with identical CUDA                         Load Balance Across HeteroCore                                              ZA
+                                                                                                                                            ③OuterProductCompute(OPC)
+
+cores or streaming multiprocessors, traditional load balanc-                                                                    Latency-hiding pipeline
+                                                                                                                                  ① FSM              ① FSM       ②VFD        ① FSM        ②VFD
+                                                                                                                                           ② VFD
+
+ing strategies like static row-wise partitioning are commonly                                            3) Task Execution                                ③ OPC                     ③ OPC
+
+                                                                                                                                Resource-adaptive multi-tile parallelism
+used. For example, the workload may be divided by assigning                       Vector Instruction execution                  ZA0.S        ZA1.S             ZA2.S              ZA3.S
+
+each processing unit an equal number of matrix rows, or                                     ×
+
+rows with a similar number of nonzero elements. However,                     Vector SpMM Kernel 4) Matrix-Vector Instruction Scheduling                        Matrix SpMM Kernel
+
+ARM CPUs present new challenges due to their inherent het-
+erogeneity. For instance, Apple’s M4 chip includes four high-                    Figure 4. The design overview of ASM-SpMM.
+power cores and six power-efficient cores, while the M4 Pro
+features ten high-power cores and four power-efficient cores.            3.2 SME-Adpated Compressed Storage Format
+ARM CPUs across different vendors can show even greater                  To fully exploit the unique capabilities of ARM SME for
+variation in core configurations, counts, and performance.               SpMM acceleration, we propose OP-MCF (Outer-Product-
+This diversity makes static, sparsity-based partition strate-            based Matrix Unit Compression Format), a highly compact,
+gies developed for homogeneous systems poorly portable to                data-affinity storage scheme tailored to SME’s outer-product
+diverse ARM platforms with varying configurations.                       execution model and predicate-driven masking. OP-MCF is
+                                                                         designed to overcome the structural inefficiencies and rigid
+3    Design of ASM-SpMM                                                  block alignment constraints inherent in TCF-like formats, as
+                                                                         discussed in our preceding analysis.
+3.1 Design Overview
+                                                                                  0 1 2 3 4 5 6 7 8 9 10 11
+As illustrated in Figure 4, ASM-SpMM consists of several                      0
+                                                                              1 c
+                                                                                    b     a
+                                                                                          e        d   i
+                                                                                                         h                   RowWindow
+                                                                                                                                 0 1      2 3
+                                                                                                                              0 b a
+tightly integrated modules designed to fully exploit SME’s                    2
+                                                                              3 g
+                                                                                                   f
+                                                                                                       j                      1 c e
+                                                                                                                                          h
+                                                                                                                                          d i
+                                                                                                                                                      0 8 RowWindowOffset
+                                                                                                                              2           f
+computational capabilities on ARM processors.                                 4
+                                                                                                                              3 g            j
+                                                                                                                                                      4 1 ColumnOfRowWindow
+                                                                              5                                                                       SparseAtoB
+                                                                                                                              8  l
+   ❶ The SME-adapted format conversion module first trans-                    6
+                                                                              7                                               9 m
+                                                                                                                                                      0 1 4 7 11 10 1 2 4 7
+
+                                                                                                                              10 n
+forms the input sparse matrix into a compact, SME-friendly                    8     l
+                                                                                          m                                   11 k
+                                                                                                                                                      1010 0001 0011 0110 0001 1010 1000 0001 0010 0100
+
+                                                                                                                                                      ColumnPositionMaskBit
+                                                                              9
+representation, ensuring efficient storage and data access                    10
+                                                                                 k
+                                                                                                   n
+                                                                              11
+                                                                                                                             Condensed Sparse Matrix             Storage Format
+patterns that are well suited for outer-product computation.                             Sparse Matrix
+
+❷ Next, the load balance module adaptively partitions and
+distributes computational workloads according to both the                   Figure 5. Design of SME-adapted compression format.
+sparsity structure of the input and the diverse core character-
+istics of the underlying processor. This enables fine-grained            3.2.1 Format Structure. OP-MCF represents the com-
+load balancing across widely diverse cores, significantly im-            pressed sparse matrix using four specialized arrays, as il-
+proving hardware utilization. ❸ At the heart of ASM-SpMM                 lustrated in Figure 5. ❶ RowWindowOffset records the start-
+is a highly optimized SpMM kernel specifically engineered                ing offset of each row window, with window size matching
+for SME. This kernel adopts a specialized outer-product exe-             SME’s vector length (e.g., 8 rows for M4’s SVL512 in FP64). ❷
+cution paradigm and leverages advanced techniques such as                ColumnOfRowWindow stores, for each row window, the num-
+data prefetching, multi-tile parallelism, and pipelined sched-           ber of compacted columns generated after format transforma-
+uling of memory operations and computation. These op-                    tion and condensation. ❸ SparseAtoB holds the original col-
+timizations substantially increase register utilization and              umn indices of each compacted column, ensuring full trace-
+allow the kernel to fully harness SME’s instruction-level par-           ability to the input sparse matrix. ❹ ColumnPositionMaskBit
+allelism and architectural strengths. ❹ To further boost sys-            stores, for each original column in a row window, a bit-
+tem throughput, ASM-SpMM introduces a vector SpMM ker-                   mask encoding the positions of nonzero elements in original
+nel and enables coordinated execution of SME-accelerated                 column of the input sparse matrix, thus enabling efficient
+
+
+
+                                                                   235
+ASM-SpMM: Unleashing the Potential of Arm SME for SpMM Acceleration           PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+masked computation. This layout facilitates high-throughput             data load and a small number of lightweight mask loads for
+streaming into SME Z registers as shown in Figure 2, sub-               each merged column, while preserving computation correct-
+stantially reducing memory overhead while supporting fine-              ness and maximizing efficiency of SME’s predicate-driven
+grained, predicate-controlled access.                                   execution model. For instance, in the third row window of
+                                                                        Figure 2, the number of data loads is reduced from four sep-
+3.2.2 Window-Column Compaction. OP-MCF employs                          arate column reads to a single merged column read along
+a column-centric compaction strategy within RowWindow,                  with a single 32-bit mask (composed of four 8-bit masks). By
+which represents a fundamental shift from the block-oriented            decoupling storage layout from rigid block alignment and
+approach of TCF and ME-TCF designed for GPU Tensor                      adopting a flexible, predicate-oriented dataflow that aligns
+Cores. In contrast to block-based formats that retain con-              with the architectural features of SME, OP-MCF dynamically
+siderable redundancy due to rigid block boundaries and of-              adapts to the irregularity of real-world sparsity patterns. This
+ten require zero-padding or the inclusion of empty rows,                design addresses the key limitations articulated in the 𝑪1
+OP-MCF partitions the matrix into row windows that are                  challenge, enabling improvements in both memory efficiency
+precisely aligned with the SME’s native vector width, using             and computation throughput for SME-based SpMM.
+consecutive rows as the essential processing unit. During
+the compaction process, all unnecessary empty columns are               3.3 ASM-SpMM Runtime Kernel Optimizations
+completely removed, addressing a key inefficiency of tradi-             The SME architecture provides a solid foundation for accel-
+tional formats that preserve unused structure for alignment,            erating SpMM. SME features two-dimensional ZA registers
+as shown in Figure 3. Within each row window, only columns              partitioned into tiles, along with input vector Z registers
+that are nonempty and structurally compatible are aggre-                that enable efficient parallel data movement and computa-
+gated into a minimal set of storage columns, as illustrated in          tion. For example, on processors such as Apple M4, all 32 Z
+Figure 5. This focused aggregation results in a storage format          registers are available for flexible operand assignment. This
+that is both highly compact and memory-locality-aware, de-              architectural organization calls for SpMM kernel designs
+livering substantial savings in storage overhead and notable            that are closely aligned with the underlying hardware. The
+improvements in memory access efficiency.                               following sections detail three core optimization principles
+3.2.3 Masked Multi-Column Merging. Building on this                     for ASM-SpMM: matrix-oriented outer product execution,
+foundation, OP-MCF introduces intra-window masked multi-                resource-adaptive multi-tile parallelism, and latency-aware
+column merging to further enhance storage and compu-                    pipelining as shown in Algorithm 1 and Figure 6.
+tational efficiency. This approach leverages the observa-               3.3.1 Outer-Product-Oriented Execution. ASM-SpMM
+tion that, within a row window, many sparse columns have                maximizes hardware utilization by organizing computation
+nonzero elements located at non-overlapping row positions.              around a matrix-oriented outer product pattern that matches
+By systematically analyzing these sparsity patterns, OP-MCF             SME’s architecture. Guided by the compressed storage for-
+allows such columns to be reordered and merged into a sin-              mat, the kernel first partitions the sparse matrix into row
+gle physical column whenever their nonzero entries do not               windows, each grouping nonzero elements to align with the
+coincide. Data reordering is achieved through a heuristic sort-         vector length (SVL) and hardware-friendly memory access
+ing–based strategy. Specifically, columns are first pre-sorted          patterns. As shown in Algorithm 1, for each window, the al-
+by sparsity patterns, and then merged iteratively within each           gorithm iterates over compressed slots, loading sparse values
+row window if their nonzeros does not overlap across rows.              into Z registers and fetching the corresponding dense frag-
+This avoids local optima that often occurs in greedy cluster-           ments from 𝐵 with vectorized loads. Prefetch instructions are
+ing. For each merged column, a compact bitmask is generated,            inserted for both sparse and dense operands to keep mem-
+for example, an 8-bit mask for a row window comprising                  ory pipeline primed. Within each slot, the kernel generates
+eight rows (for double-precision elements). These bitmasks              predicate vectors from position masks, ensuring that only
+are stored in the ColumnPositionMaskBit array, accurately               valid nonzero elements participate in the outer product. For
+indicating the position of each valid nonzero element.                  every sparse-dense vector pair, the kernel computes an outer
+   This data layout enables SME to utilize predicate regis-             product and directly accumulates results into the relevant
+ters to achieve an efficient separation of data movement and            ZA tiles or slices. These computations are statically unrolled
+computation. All non-overlapping sparse columns within                  across all available tiles and slices to maximize parallelism
+a merged column are thus loaded collectively as a single                and saturate SME resources. Once all contributions are accu-
+compressed column, accompanied by the corresponding bit-                mulated, the results in each ZA tile and slice are written back
+masks. These masks are streamed into predicate registers,               to their corresponding locations in 𝐶. This tightly coupled
+allowing outer-product instruction (svmopa) to be invoked               flow between compressed input, computation, and output,
+for each mask in turn. Each invocation corresponds to one of            as detailed in Algorithm 1, delivers both high throughput
+the original columns. As a result, OP-MCF achieves a substan-           and efficient resource usage, fully leveraging SME’s vector
+tial reduction in memory traffic by requiring only a single             and matrix register capabilities.
+
+
+
+                                                                  236
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia             Jiazhi Jiang, Xijia Yao, Jiayu Chen, Jinhui Wei, Dan Huang, and Yutong Lu
+
+
+3.3.2 Resource-Adaptive Multi-Tile Concurrent Ex-                            thus saturating all Z registers and maximizing matrix unit
+ecution. To fully unleash SME’s computation throughput,                      occupancy (lines 24-32 in Algorithm 1).
+ASM-SpMM dynamically schedules multiple outer-product                           This strategy is resource-adaptive: when the input data
+operations across the available ZA tiles and Z registers, adapt-             type allows the ZA register to be partitioned into more tiles
+ing execution to the current workload and hardware con-                      or register resources are ample, the kernel adjusts concur-
+straints. While a naive implementation may process a single                  rency by unrolling computation across more tiles and slices,
+tile with two input Z registers (one for sparse, one for dense),             thereby boosting parallel execution and data throughput.
+this only achieves a fraction of SME’s peak FLOPS.                           Conversely, when register pressure increases, the kernel re-
+                                                                             duces the degree of unrolling and processes fewer tiles or
+ Algorithm 1: ASM-SpMM Kernel Pseudo Code                                    slices per cycle. This flexible scheduling ensures efficient
+     Input: Sparse Matrix 𝐴, Dense Matrix 𝐵                                  utilization of both matrix and vector registers under varying
+     Output: Matrix 𝐶                                                        hardware configurations.
+1  blockId ← current sparse block index;                                     3.3.3 Latency-Hiding Pipeline Organization. Efficient
+2  slotOffset ← sum of 𝐴.𝐶𝑜𝑙𝑂 𝑓 𝑅𝑜𝑤𝑊 𝑖𝑛𝑑𝑜𝑤 before blockId;                   ASM-SpMM execution relies on minimizing memory latency
+ 3 slotsInBlock ← 𝐴.𝐶𝑜𝑙𝑂 𝑓 𝑅𝑜𝑤𝑊 𝑖𝑛𝑑𝑜𝑤 [𝑏𝑙𝑜𝑐𝑘𝐼𝑑 ];
+                                                                             and keeping compute units fully occupied. Since default
+ 4 for 𝑛 = 0 to 𝑁 by tileWidth do
+                                                                             hardware caching is not well-suited for the irregular access
+ 5      ClearZA();
+ 6      slotIdx ← slotOffset;
+                                                                             patterns of sparse matrix operations, it is essential to explic-
+ 7      for 𝑘 = 0 to slotsInBlock −1 do                                      itly manage data movement.
+ 8           slotData ← 𝐴.𝑆𝑝𝑎𝑟𝑠𝑒𝐴𝑡𝑜𝐵 [𝑠𝑙𝑜𝑡𝐼𝑑𝑥 ];                                ASM-SpMM introduces an explicit prefetching strategy
+ 9           colMasks ← 𝐴.𝐶𝑜𝑙𝑃𝑜𝑠𝑖𝑡𝑖𝑜𝑛𝑀𝑎𝑠𝑘𝐵𝑖𝑡 [𝑠𝑙𝑜𝑡𝐼𝑑𝑥 ];                     that leverages SME’s dedicated prefetch instruction _svprfw.
+10           colIndices ← 𝐴.𝑅𝑜𝑤𝑊 𝑖𝑛𝑑𝑜𝑤𝑂 𝑓 𝑓 𝑠𝑒𝑡 [𝑠𝑙𝑜𝑡𝐼𝑑𝑥 ];                  Rather than relying on hardware to automatically detect ac-
+11           slotIdx ← slotIdx+1;                                            cess patterns, the kernel strategically inserts prefetch instruc-
+12           if 𝑘 + 1 < slotsInBlock then                                    tions to fetch the next required rows or blocks of the sparse
+13                Prefetch(𝐴.𝑆𝑝𝑎𝑟𝑠𝑒𝐴𝑡𝑜𝐵 [𝑠𝑙𝑜𝑡𝐼𝑑𝑥 + 1] );
+                                                                             and dense matrices into cache before they are needed (lines
+14                Prefetch(𝐴.𝐶𝑜𝑙𝑃𝑜𝑠𝑖𝑡𝑖𝑜𝑛𝑀𝑎𝑠𝑘𝐵𝑖𝑡 [𝑠𝑙𝑜𝑡𝐼𝑑𝑥 + 1] );
+                                                                             12-24 in Algorithm 1).. For example, during the computation
+15                Prefetch(𝐴.𝑅𝑜𝑤𝑊 𝑖𝑛𝑑𝑜𝑤𝑂 𝑓 𝑓 𝑠𝑒𝑡 [𝑠𝑙𝑜𝑡𝐼𝑑𝑥 + 1] );
+                                                                             of the current row window, the kernel schedules a prefetch
+16            a ← LoadSparseVector(𝑠𝑙𝑜𝑡𝐷𝑎𝑡𝑎);
+                                                                             for the next sparse matrix row and the relevant segments
+17            for each valid column 𝑐 in slot do
+18                 maskVec ← GetPredicate(𝑐𝑜𝑙𝑀𝑎𝑠𝑘𝑠 [𝑐 ] );
+                                                                             of the dense matrix. By aligning these prefetch instructions
+19                 col ← 𝑐𝑜𝑙𝐼𝑛𝑑𝑖𝑐𝑒𝑠 [𝑐 ];                                    with the main compute loop, the kernel primes the cache for
+20                 if next column is valid then                              upcoming accesses, effectively reducing memory access la-
+21                      PrefetchDense(𝐵, nextCol, 𝑛, 0);                     tency. This software-managed prefetching is complemented
+22                      ...                                                  by a pipeline execution model. While the matrix units are
+23                      PrefetchDense(𝐵, nextCol, 𝑛, 7);                     actively computing with the current set of operands, the
+24                 bTile0 ← LoadDenseTile(𝐵, 𝑐𝑜𝑙, 𝑛, 0);                     next set of required data is prefetched from memory to cache
+25                 ...                                                       in the background. This overlap allows memory transfers
+26                 bTile7 ← LoadDenseTile(𝐵, 𝑐𝑜𝑙, 𝑛, 7);                     and computation to proceed concurrently, minimizing idle
+27                 OuterProductAccum(𝑍𝐴0 , 𝑎, 𝑏𝑇 𝑖𝑙𝑒 0 , 𝑚𝑎𝑠𝑘𝑉 𝑒𝑐 );         cycles and ensuring a continuous flow of data to the compute
+28                 ...                                                       units. The pipeline is further supported by precomputing
+29                 OuterProductAccum(𝑍𝐴7 , 𝑎, 𝑏𝑇 𝑖𝑙𝑒 7 , 𝑚𝑎𝑠𝑘𝑉 𝑒𝑐 );
+                                                                             all index offsets for the sparse and dense matrices. These
+30       Store all tiles of 𝑍𝐴0 to 𝐶 at correct position;                    precomputed indices enable the kernel to issue vectorized
+31       ...                                                                 loads and prefetches with minimal runtime overhead. As a
+32       Store all tiles of 𝑍𝐴7 to 𝐶 at correct position;                    result, as soon as a computation phase completes, the data for
+                                                                             the next phase is already resident in cache and immediately
+   ASM-SpMM kernels exploit SME’s ability to support sev-                    available for processing. By combining explicit cache guid-
+eral independent matrix operations in parallel. For example,                 ance through prefetching with a software-managed pipeline,
+on the Apple M4 processor with double-precision data, each                   ASM-SpMM overcomes the limitations of default hardware
+ZA register is partitioned into 8 ZA register tiles, and the                 caching. This approach delivers high sustained throughput
+kernel can concurrently map up to 8 independent outer prod-                  for sparse matrix computations, even in the face of irregular
+ucts, each consuming two Z registers. This maps to 16 of the                 memory access patterns and varying sparsity structures.
+input 32 Z registers (2 input vector × 8 tile) used solely for
+operand streaming, achieving 50% utilization of the input Z                  3.4 Heterogeneous Matrix-Vector Co-Execution
+register. The remaining Z registers enable further parallelism               Even after compression, sparse matrices still contain tiles
+by subdividing each ZA register tile into slices, so that each               with highly irregular nonzero distributions. SME achieves
+tile can be processed by two input streams simultaneously,                   high throughput on tiles that remain relatively dense after
+
+
+
+                                                                       237
+ASM-SpMM: Unleashing the Potential of Arm SME for SpMM Acceleration                                    PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+compression, but its utilization drops when operating on                                         increases instruction-level parallelism by offloading scatter-
+low-density or fragmented blocks. In contrast, ARM’s vector                                      like operations to vectors, while SME focuses exclusively on
+units (SVE/Neon) provide flexible handling of such irregular                                     compute-heavy dense tiles.
+fragments, though with lower peak throughput. ASM-SpMM
+adopts a hybrid kernel that couples SME and vector execu-                                        3.4.2 Interleaved Instruction Scheduling. Naive mix-
+tion, with fine-grained scheduling to maximize parallelism                                       ing leads to stalls when both units contend for cache band-
+and memory efficiency.                                                                           width. To overcome this, ASM-SpMM employs interleaved
+                                         Input                       Output                      scheduling, where computation, memory access, and prefetch
+                                         Data                         Data                       are pipelined across SME and vector instructions. Specifi-
+                                                                                                 cally, while SME executes outer-product accumulation on
+               ② FetchDense (VFD) ① FetchSPMask (FSM)
+                                    Z0             Z2                         ⑦ Store
+                                                                                                 the current dense tile, vector instructions are scheduled in
+                                ×                       ×
+                       P1, Z1                               P3, Z3                               parallel to (1) prefetch the next dense row-window into L1
+           ③Prefetch Data
+                                         ZA Tile
+                                                                                                 cache and (2) accumulate sparse tails from the current block.
+              Cache
+                                                                     ＋                           This staggered scheduling reduces SME stalls waiting for
+                       P4, Z4                               P6, Z6
+                                ×                       ×                ⑥ Accumulate
+                                                                                                 data, as vector units effectively overlap memory latency with
+                                 Z5                Z7
+                    ⑤ Multi-tile concurrent execution                                            useful computation. Furthermore, partial stores are scattered
+                                               ×
+             Vector Register
+                                               ×            ＋                                    back incrementally rather than at the end of a tile, smooth-
+                     ⑤ Vector unit execution                                                     ing out bandwidth usage and reducing cache pressure. To
+           Matrix Instructions           Vector Instructions          LD/ST Instructions         balance resource usage, ASM-SpMM partitions registers ex-
+                            Instruction Scheduling
+                                                                                                 plicitly: ZA arrays are reserved for SME tile accumulation,
+                                                                                                 while Z vector registers act as shared buffers for both vector
+  Figure 6. Heterogeneous Matrix-Vector Co-execution.                                            accumulation and SME input loading. This careful register
+                                                                                                 management reduces spilling overhead and ensures high
+3.4.1 Hybrid Micro Kernel Design. The core idea is to                                            concurrency between SME and vector units.
+split SpMM computation into SME-dominant and vector-
+assisted paths within the same kernel as shown in Figure 6.
+We employ a hardware-aware cost model to ensure that the                                         3.5 Dynamic Load Balance Across Hetero-Core
+auxiliary vector path never stalls SME execution. The execu-                                     SpMM execution on ARM CPUs featuring heterogeneous
+tion time of vector-processed sparse blocks is estimated using                                   cores is fundamentally challenged by both irregular spar-
+latencies obtained from concurrent SME/SVE microbench-                                           sity patterns of the input matrix and diverse computational
+marks. Since SME outer-product operations exhibit a nearly                                       capabilities across the available cores. Static load balanc-
+fixed execution window determined by the ZA tile size and                                        ing schemes, as shown in Figure 7, which simply partition
+outer-product latency, we enforce an overlap constraint: the                                     nonzero elements among processing units according to pre-
+aggregate estimated time of the blocks assigned to the vector                                    computed estimates, fail to provide sufficient balance when
+path fit within this window. To maximize overlap, ASM-                                           facing such architectural and data irregularities. To address
+SpMM prioritizes the sparsest blocks for vector execution.                                       this challenge, we propose a dynamic load balancing strategy
+Once the accumulated vector workload reaches this limit,                                         built on adaptive row-window task assignment and real-time
+all remaining blocks are executed on SME. This strategy                                          work stealing as shown in Figure 7.
+ensures that vector-side work remains hidden behind SME
+computation while maintaining stable efficiency.                                                 3.5.1 Hardware-Aware Task Mapping. At initialization,
+   Dense blocks, typically containing clusters of nonzeros,                                      the sparse matrix is partitioned into a large set of row win-
+are mapped to SME outer-product instructions, where each                                         dows, where each window is a contiguous block of rows, and
+pair of input vectors contributes to ZA tile accumulation.                                       each core is assigned a starting set of row windows tailored to
+Meanwhile, sparse blocks and irregular row fragments are                                         its compute capabilities. High-performance cores equipped
+delegated to SVE/Neon. Instead of computing these sepa-                                          with SME matrix units are preferentially allocated row win-
+rately, ASM-SpMM directly feeds vector results back into                                         dows with higher nonzero density, effectively concentrating
+SME’s ZA registers through outer-product accumulation, ef-                                       more computational effort on the most capable hardware. In
+fectively using the matrix unit as the final reduction buffer.                                   contrast, energy-efficient cores, typically operating on vector
+This in-place accumulation avoids redundant memory traffic:                                      units, are assigned a larger count of lighter windows, each
+intermediate vector results do not need to be written back                                       containing fewer nonzero elements. This hardware-aware
+to memory before SME consumption. Moreover, by letting                                           mapping explicitly aligns the computational demands of each
+vector units handle irregular fragments, SME avoids cycles                                       window with the processing strength of the assigned core,
+wasted on padding zeros, sustaining high effective utilization.                                  maximizing initial workload balance and enabling efficient
+Compared with a pure SME-only kernel, hybrid micro-kernel                                        subsequent rebalancing.
+
+
+
+                                                                                           238
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                     Jiazhi Jiang, Xijia Yao, Jiayu Chen, Jinhui Wei, Dan Huang, and Yutong Lu
+
+
+3.5.2 Progress Monitoring. As execution advances, dis-                                               matrices from the SuiteSparse collection [12]. To obtain a
+parities in completion rates between cores naturally emerge,                                         representative benchmark from the SuiteSparse collection,
+driven by both the irregularity of matrix and architectural                                          we select matrices using a stratified sampling strategy that
+differences among cores. To mitigate these imbalances, the                                           spans three orthogonal dimensions: (1) problem scale, cov-
+runtime system maintains a sliding window that continually                                           ering matrix sizes from small (≤ 103 ) to very large ≥ (105 );
+tracks the progress of all threads. Upon completing their cur-                                       (2) matrix shape, including symmetric and unsymmetric
+rent assignments, threads report back the count of completed                                         square matrices together with rectangular matrices; and (3)
+and outstanding nonzero elements (or row windows), allow-                                            sparsity level, covering five NNZ-ratio intervals (< 0.001%,
+ing the scheduler to aggregate information and maintain a                                            0.001%−0.1%, 0.1%−1%, 1%−5%, and > 5%), capturing the full
+running average workload per thread.                                                                 range from extremely sparse to moderately dense matrices.
+                  Core1                                                               Core1
+                                      Core2                                           Core2          Table 1. Dataset statistics for evaluation. (Abbr: abbreviation,
+                          Core3                                                       Core3
+          Core5
+                      Core4
+                                                                                      Core4
+                                                                                                     AvgL: average NNZ length in each row of dataset). 1:from TC-
+                          a) Static Load Balance Strategy                                            GNN[22]; 2:from SNAP[13]; 3:from OGB[19]; 4:from DGL[6].
+                          1) Task Mapping                             Energy-efficient Core1
+                                                   Monitor                                                   Name         Abbr.        M&K           NNZ     Avg. Row Length
+                                                                      High-performance Core1
+                                              2) Process Monitoring                                         YeastH1         YH       3,138,114   6,487,230               2.07
+                                                                      High-performance Core2
+                                                                                                         OVCAR-8H1         OH        1,889,542   3,946,402               2.09
+                   3) Work Stealing                                   Energy-efficient Core2
+                                                                                                             Yeast1         Yt       1,710,902   3,636,546               2.13
+                      b) Dynamic Load Balance Across Hetero -Core                                        roadNet-CA2       rCA       1,971,281   5,533,214               2.81
+                                                                                                         roadNet-PA2       rPA       1,090,920   3,083,796               2.83
+Figure 7. Diagram of a) Static load balance strategy, b) Dy-                                                  DD1          DD          334,925   1,686,092               5.03
+                                                                                                        web-BerkStan2      WB          685,230   7,600,595              11.09
+namic load balance across hetero-core scheduling policy.                                                      PPI1          ppi         56,944     818,716              14.38
+3.5.3 Work Stealing for Dynamic Rebalancing. When-                                                      FraudYelp-RSR3   FY-RSR         45,954   6,805,486             148.09
+                                                                                                            reddit4       reddit       232,965 114,848,857             492.99
+ever a core exhausts its assigned row windows, it first checks                                                ddi3          ddi          4,267   2,140,089             501.54
+the global queue for unassigned tasks. If no unassigned work                                               protein3      protein       132,534 79,255,038              598.00
+remains, the system triggers an inter-core work-stealing
+phase. Idle threads then identify peers with an above-average                                        4.1.3 Baselines. We compare the overall performance of
+outstanding workload, as determined by the scheduler’s slid-                                         ASM-SpMM with several state-of-the-art SpMM kernels and
+ing window. These idle threads steal portions of the remain-                                         libraries on ARM CPUs, including the ARM Performance
+ing tasks, with the size of the transfer dynamically adjusted                                        Library (ArmPL, v24.10), Armadillo (v14.6.0), Cholmod from
+to move the system toward a balanced state. This mecha-                                              SuiteSparse[12] (v5.3.3), Eigen(v3.4.0), and MP-SpMM[30].
+nism is applied iteratively, ensuring that load is continually                                       For end-to-end GNN case studies, we integrate ASM-SpMM
+redistributed in response to ongoing shifts in both core per-                                        into two popular frameworks, PyG(v2.6.1) and DGL(v1.1.2),
+formance and matrix sparsity. By tightly coupling initial                                            and evaluate their performance improvement.
+hardware-aware task mapping with adaptive progress moni-                                             Table 2. The percentage represents matrice portion out of
+toring and iterative work stealing, ASM-SpMM achieves high                                           the 80 testcases from SuiteSparse.
+resource utilization and effectively mitigates load imbalance
+across diverse ARM core configurations.                                                                Platform   Speedup   ArmPL       Armadillo   Eigen    Cholmod   MP-SpMM
+                                                                                                                   1 ∼ 2×    1.3%         1.3%      0.0%      3.9%       2.6%
+                                                                                                                   2 ∼ 4×    1.3%         0.0%      0.0%      37.7%     70.5%
+4    Evaluation                                                                                          LX2
+                                                                                                                   4 ∼ 8×    16.9%         1.3%      1.3%     41.6%     23.0%
+4.1 Experimental Setup                                                                                              > 8×     80.5%        97.4%     98.7%     16.9%      3.9%
+                                                                                                                  Geomean     9.69        16.43     19.53      4.32      2.62
+4.1.1 Testbed. We conduct most of experiments on the                                                               1 ∼ 2×    0.0%         0.0%      0.0%      0.0%       2.7%
+Mac M4 CPU and newly released LX2 ARM processor. Both                                                    M4
+                                                                                                                   2 ∼ 4×    1.3%         3.9%      1.1%      15.6%     25.3%
+                                                                                                                   4 ∼ 8×    6.5%         10.4%     2.4%      28.6%     32.0%
+of these two processor utilizes a 512-bit vector length, pro-                                                       > 8×     92.2%        85.7%     96.5%     55.8%     40.0%
+cessing 8 double-precision floating-point numbers at a time.                                                      Geomean    11.81        15.12     18.62      4.78      2.94
+M4 processor features an up to 10-core CPU, with four per-
+formance (P) cores and up to six efficiency (E) cores. M4                                            4.2 Overall Performance Comparison
+only equips with two SME compute units, one for P-core
+                                                                                                     We measure average performance under different values of
+clusters, one for E-core clusters. LX2 processor features an
+                                                                                                     N, the number of columns of matrix B, including 512 and
+up to 12-core CPU, all the cores are equipped with SME unit.
+                                                                                                     1024. Figure 8 shows the performance on the M4 processor,
+For compilation, we used Clang 16.0.
+                                                                                                     with speedups normalized to Cholmod, indicated by the red
+4.1.2 Benchmarks. In addition to the 12 representative                                               dashed line. ASM-SpMM consistently achieves the highest
+real-world matrices presented in Table 3, our evaluation                                             speedups across all 12 matrices, delivering gains of 3.5× to
+further incorporates a random and diverse selection of 80                                            7.9× over Cholmod. This advantage stems from the fact that
+
+
+
+                                                                                               239
+ASM-SpMM: Unleashing the Potential of Arm SME for SpMM Acceleration                                                     PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                     (a)    ArmPL        Cholmod   Armadillo    Eigen         MP-SpMM         ASM-SpMM                                                          (b)
+                                 8                                                                                                                                        140
+                                                                                                                                                                                      MP-SpMM
+
+
+            Normalized Speedup
+                                 7                                                                                                                                        120
+                                                                                                                                                                                      Armadillo
+                                 6                                                                                                                                        100         ArmPL
+
+
+
+
+                                                                                                                                                                 GFLOPS
+                                 5                                                                                                                                        80          Cholmod
+                                 4                                                                                                                                                    Eigen
+                                                                                                                                                                          60          ASM-SpMM
+                                 3
+                                                                                                                                                                          40
+                                 2
+                                                                                                                                                                          20
+                                 1
+                                 0                                                                                                                                         0
+                                       YH    OH     Yt       rCA   rPA     DD   WB      ppi     FY-RSR   reddit   ddi                   protein   suitesparse*                  0           20      40 MatrixID 60    80
+
+
+
+
+Figure 8. (a) Speedups on 13 matrices (normalized to Cholmod (red dashed line)). (b) Measured throughputs on 80 matrices
+from SuiteSparse (sorted by GFLOPS of ASM-SpMM). SuiteSparse* shows the geomean speedups across SuiteSparse matrices.
+
+ASM-SpMM is the first SpMM library on ARM platforms to                                                        parallelism within the SME unit and provides the first signifi-
+exploit the SME compute unit through SME-oriented opti-                                                       cant performance boost. For instance, the speedup on FY-RSR
+mizations, whereas existing libraries rely solely on vector                                                   rises from 1.23× to 2.89×, while on ddi and ppi it improves
+units, limiting their achievable performance.                                                                 from around 1.04× to more than 2.1×. This highlights that
+   Beyond the per-matrix trends shown in Figure 8, Table 2                                                    the fine-grained utilization of SME tiles is crucial for un-
+provides distribution-level insights across the selected SuiteS-                                              locking its compute throughput. Building on MT, applying
+parse testcases. The results indicate that ASM-SpMM achieves                                                  the SME-adapted compressed storage format (FM) further
+consistently large gains over general-purpose libraries, with                                                 reduces redundant computations and lowers memory traffic.
+most matrices falling into the high-speedup region. This                                                      The speedups increase to 4.23× on FY-RSR. Adding pipeline
+reflects the inherent advantage of SME’s outer-product exe-                                                   organization and data prefetching (PR) brings additional but
+cution, which can sustain high compute efficiency once the                                                    smaller gains, mainly through data access latency hiding
+sparse structure exposes any degree of local density. In con-                                                 and smoothing of memory accesses. Finally, by offloading
+trast, the improvements over sparse-optimized libraries such                                                  part of the computation to the vector units, ASM-SpMM fur-
+as Cholmod and MP-SpMM are more balanced. The overall                                                         ther exploits the available compute capacity beyond the SME
+distribution patterns are also similar on both M4 and LX2,                                                    units alone. On top of the previous optimizations, it delivers
+demonstrating that the proposed optimizations maintain sta-                                                   an additional improvement of around 5%−10%, demonstrat-
+ble benefits across different Armv9 microarchitectures. M4                                                    ing the benefits of heterogeneous co-execution in utilizing
+exhibits a slightly higher proportion of large speedups due                                                   all on-chip resources. Overall, the ablation results reveal a
+to its stronger SME pipeline, while the general trends remain                                                 clear progression: naive SME use alone is insufficient, while
+consistent. This confirms that ASM-SpMM provides portable                                                     successive optimizations that integrate tiling, format adap-
+performance advantages across diverse Arm CPUs.                                                               tation, pipeline design, and heterogeneous co-execution are
+                                                                                                              all necessary to fully realize the potential of SME units.
+                                                                                                                                             5                                  Base                     Base+SME
+4.3 Single-Core Breakdown Analysis
+                                                                                                                        Normalized Speedup
+
+
+
+
+                                                                                                                                             4                                  Base+SME+MT              Base+SME+MT+FM
+                                                                                                                                                                                Base+SME+MT+FM+PR        Base+SME+MT+FM+PR+VC
+                                                                                                                                             3
+4.3.1 Ablation Study. To evaluate the effectiveness of                                                                                       2
+individual optimization techniques on the overall perfor-                                                                                    1
+                                                                                                                                             0
+mance of ASM-SpMM, we use MP-SpMM without multi-                                                                                                     FY-RSR                           rCA             ddi            ppi
+
+threading as the baseline and conduct ablation experiments
+on the M4 processor with the dense matrix 𝐵 having 1024                                                       Figure 9. The ablation study. Base: SpMM without SME
+columns, as shown in Figure 9. To evaluate the effectiveness                                                  acceleration from MP-SpMM; SME: naive SME acceleration;
+of individual optimization techniques on the overall perfor-                                                  MT: SME with multi-tile concurrent execution; FM: SME-
+mance of ASM-SpMM, we use MP-SpMM (which performs                                                             adapted compressed storage format; PR: pipeline and data
+best among all the tested open-source implementations as                                                      prefetching; VC: hybrid matrix–vector unit.
+shown in Figure 8) without multithreading as the baseline,                                                    4.3.2 Evaluation of Compressed Storage Format. We
+and conduct ablation experiments on the M4 processor with                                                     define mean NNZ per slot as the average number of nonze-
+the dense matrix 𝐵 having 1024 columns, as shown in Fig-                                                      ros retrieved per memory transaction under SME’s outer-
+ure 9. Compared with the baseline, directly applying SME                                                      product execution model(similar to MeanNnzTC in [1, 28]).
+through a naive outer-product-oriented execution achieves                                                     On the M4, a double-precision fetch slot contains 8 elements.
+only marginal improvements, yielding a speedup of merely                                                      This metric reflects both workload reduction (fewer slots for
+1.04−1.23× over MP-SpMM that relies solely on the vec-                                                        the same NNZ) and data reuse efficiency (multiple nonzeros
+tor unit. This indicates that a straightforward adaptation                                                    sharing one transaction). With CSR, only one nonzero is
+to the SME execution model is insufficient to fully exploit                                                   obtained per slot, offering almost no reuse. As shown in Ta-
+the computational capability of SME units. Introducing the                                                    ble 10, TensorCore-oriented formats such as SGT, DTC-LSH,
+multi-tile concurrent execution (MT) substantially increases                                                  and AccOrder improve the mean NNZ per slot to about 0.6
+
+
+
+                                                                                                     240
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                     Jiazhi Jiang, Xijia Yao, Jiayu Chen, Jinhui Wei, Dan Huang, and Yutong Lu
+
+
+to 2.3, yet remain limited by block alignment and padding of                                                                                                                         throughput in the ASM-SpMM runtime kernel. We also an-
+Tensor Core. In contrast, OP-MCF achieves 4 to 6x NNZ per                                                                                                                            alyze the performance impact of SME’s ability to support
+slot across workloads, an order-of-magnitude higher than                                                                                                                             concurrent tile execution. As shown in Figure 11-b, the ZA
+CSR and three to five times greater than TensorCore-oriented                                                                                                                         matrix can be partitioned into multiple independent tiles, up
+formats. These gains stem from two SME-specific designs: (i)                                                                                                                         to 8 tiles for double precision and 4 tiles for single precision.
+row-window compaction, which eliminates empty columns                                                                                                                                The results show a consistent trend across datasets: mov-
+without padding, and (ii) masked multi-column merging,                                                                                                                               ing from 1-tile to multi-tile execution provides substantial
+which fuses sparse, non-overlapping columns with light-                                                                                                                              speedups. The largest gains are observed on workloads such
+weight predicate masks. By moving from isolated nonzeros                                                                                                                             as protein, FY-RSR, and ppi, which benefit most from in-
+in CSR or padded blocks in TCF-style formats to dense bun-                                                                                                                           creased parallelism in SME due to higher arithmetic intensity.
+dles of useful nonzeros, OP-MCF aligns with SME’s outer-                                                                                                                             For lighter workloads such as Yt or YH, the improvements
+product model, thereby reducing memory transactions and                                                                                                                              plateau beyond 2 tiles.
+sustaining higher throughput.
+                       7
+                                                                                                                                                                                     Table 3. Performance of vector, matrix and hybrid kernel.
+                                                                     CSR     SGT             DTC-LSH        AccOrder             OP-MCF
+   Mean NNZ Per Slot
+
+
+
+
+                       6
+                       5
+                                                                                                                                                                                      Dataset Vector-only (GFLOPS)                   Matrix-only (GFLOPS)   Hybrid (GFLOPS)     Hybrid/Theory
+                       4                                                                                                                                                              rCA                              8.45                   16.42               19.43                     0.78
+                       3                                                                                                                                                              FY-RSR                           11.44                  49.72               55.245                    0.90
+                       2
+                                                                                                                                                                                      ddi                              11.85                  31.82               34.62                     0.79
+                       1
+                                                                                                                                                                                      ppi                              10.01                  29.84               33.67                     0.84
+                       0
+                                           YH                 OH      Yt         rCA         rPA       DD          WB          reddit       protein      FY-RSR suitesparse*
+
+
+
+
+                                                                                                                                                                                     4.3.4 Evaluation of Hybrid Kernel. Table 3 reports the
+Figure 10. Mean NNZ per fetch of different sparse com-
+                                                                                                                                                                                     performance of SpMM on vector unit, matrix unit, and the
+pression formats with the outer-product execution model
+                                                                                                                                                                                     hybrid vector-matrix kernel on the M4 processor. The hybrid
+on ARM SME. CSR is a widely used sparse compression for-
+                                                                                                                                                                                     kernel consistently outperforms either unit alone, achieving
+mat, while DTC-LSH [1], SGT [22], and AccOrder [28] are
+                                                                                                                                                                                     about 8% to 18% speedup over sole matrix unit and much
+improved compression formats designed for Tensor Core.
+                                                                                                                                                                                     larger gains over sole vector unit. For example, on FY-RSR,
+                                                    80%
+                                                                           Naïve version                     With Prefetching                                                        the hybrid kernel reaches 55.2 GFLOPS compared with 49.7
+                           LLC Miss Rate
+
+
+
+
+                                                    60%
+                                                                                                                                                                                     GFLOPS on the matrix unit. Nevertheless, the efficiency rela-
+                                                    40%                                                                                                                              tive to the ideal aggregate performance remains between 0.78
+                                                    20%                                                                                                                              and 0.90, showing that hybrid execution cannot fully realize
+                                                         0%                                                                                                                          the ideal additive performance. The gap mainly arises from
+                                                               DD
+
+                                                                     Yt
+
+                                                                            WB
+
+                                                                                       ppi
+
+                                                                                              OH
+
+                                                                                                      YH
+
+                                                                                                             rCA
+
+                                                                                                                        rPA
+
+                                                                                                                                 reddit
+
+                                                                                                                                            protein
+
+                                                                                                                                                        ddi
+
+                                                                                                                                                               FY-RSR
+
+
+
+
+                                                                                                                                                                                     contention for resources as well as overheads in workload
+                                                                    a) Reduce of cache miss with data prefetching
+                                                         4
+                                                                                                                                                                                     partitioning. While instruction scheduling alleviates these
+                                    Normalized Speedup
+
+
+
+
+                                                                                 1 tile            2 tile          4 tile                 8 tile                                     issues to some extent, it cannot fully eliminate them. Overall,
+                                                         3
+                                                                                                                                                                                     hybrid execution effectively leverages both SME and vector
+                                                         2
+                                                                                                                                                                                     pipelines, but resource contention still limits its ability to
+                                                         1
+                                                                                                                                                                                     reach ideal combined throughput.
+                                                         0
+                                                               DD
+
+                                                                      Yt
+
+                                                                            WB
+
+                                                                                       ppi
+
+                                                                                               OH
+
+                                                                                                      YH
+
+                                                                                                              rCA
+
+                                                                                                                         rPA
+
+                                                                                                                                   reddit
+
+                                                                                                                                              protein
+
+                                                                                                                                                         ddi
+
+                                                                                                                                                                 FY-RSR
+
+
+
+
+                                                                                                                                                                                                                18                                                               5
+                                                                                                                                                                                          SME Utilization (%)
+
+
+
+
+                                                                                                                                                                                                                16
+                                                                                                                                                                                                                                                                                     Power Efficiency
+                                                                             b) Co-execution with different tiles
+                                                                                                                                                                                                                                                                                      (GFLOPS/W)
+                                                                                                                                                                                                                14                                                               4
+                                                                                                                                                                                                                12
+                                                                                                                                                                                                                10                                                               3
+Figure 11. Evaluation on effectiveness of optimization tech-                                                                                                                                                     8
+                                                                                                                                                                                                                 6
+                                                                                                                                                                                                                                                      SME Utilization
+                                                                                                                                                                                                                                                                                 2
+niques within ASM-SpMM runtime kernel                                                                                                                                                                            4                                    Power Efficiency
+                                                                                                                                                                                                                 2                                                               1
+                                                                                                                                                                                                                     0.1   0.5   1    2      3     4    5     6      8     10
+                                                                                                                                                                                                                                          NNZ Ratio (%)
+4.3.3 Evaluation of SME Microkernel. We further eval-
+uate the effect of pipeline organization and data prefetching                                                                                                                                      Figure 12. SME utilization and power efficiency.
+by measuring the last-level cache (LLC) miss rate on the M4
+processor using the Perf tool. The results are shown in Fig-                                                                                                                         4.3.5 Hardware Efficiency and Correlation Analysis.
+ure 11-a. Compared with the version without pipeline and                                                                                                                             We conducted a micro-benchmark on a single performance
+prefetching, ASM-SpMM with these optimizations exhibits a                                                                                                                            core of the M4 processor, sweeping matrix densities from
+clear reduction in LLC misses, with the miss rate decreasing                                                                                                                         0.1% to 10% on a fixed 500×500 matrix. This experiment pro-
+from values in the range of 30%−61% to 23%−38% across the                                                                                                                            vides empirical evidence of how sparsity impacting SME
+tested datasets. This corresponds to reductions of roughly                                                                                                                           utilization and energy efficiency. As shown in Figure 12,
+20%–35%. The results demonstrate that pipeline organiza-                                                                                                                             SME utilization grows steadily with density, rising from 5%
+tion and data prefetching are effective in improving memory                                                                                                                          at 0.1% to 17% at 10%. This trend indicates that denser blocks
+efficiency, mitigating cache stalls, and thus sustaining higher                                                                                                                      provide sufficient arithmetic intensity for OP-MCF forming
+
+
+
+                                                                                                                                                                               241
+ASM-SpMM: Unleashing the Potential of Arm SME for SpMM Acceleration                                                                     PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+effective micro-tiles, reducing indexing overheads and im-                                                     M4 processor: no balancing, static allocation by core capac-
+proving pipeline occupancy. Power measurements collected                                                       ity, static allocation by sparsity, and ASM-SpMM’s dynamic
+viapowermetrics tool show a similar trends. Although total                                                     balancing. Across 12 datasets, the dynamic strategy consis-
+package power increases moderately with density, compu-                                                        tently achieves the best results. For example, it delivers up to
+tation throughput grows faster, leading to a rise in energy                                                    2.9× speedup on ppi and 1.48× on reddit, with steady gains
+efficiency from 2.32 GFLOPS/W to 4.31 GFLOPS/W. This                                                           (1.14–1.46×) on most others. Static schemes bring only lim-
+demonstrates that SME becomes increasingly efficient as the                                                    ited benefits and sometimes even hurt performance (e.g., Yt,
+effective arithmetic intensity increases, allowing compute-                                                    OH), since they cannot adapt to the heterogeneous core
+bound execution to amortize the static power cost of the core.                                                 configuration of M4 CPU. In contrast, ASM-SpMM’s dy-
+Overall, the results confirm a clear correlation: higher local                                                 namic balancing, which incorporates work stealing, adjusts
+density produces higher SME utilization and higher energy                                                      to runtime conditions and distributes workloads more evenly
+efficiency, validating ASM-SpMM’s preprocessing strategy                                                       across the four performance cores and six efficiency cores,
+for extracting dense compute tiles from sparse matrices.                                                       yielding 1.04 to 1.9x higher throughput.
+                          LX2 Processor                                          M4 Processor                                          3.0
+      12                                                      2.4                                                                                                             NoBalance           CoreAbility
+
+
+
+
+                                                                                                                  Normalized Speedup
+                ddi                                                     ddi                                                            2.5
+      10                                                      2.2                                                                                                             Sparsity            Dynamic
+                ppi                                                     ppi
+                                                              2.0       FY-RSR
+                                                                                                                                       2.0
+            8   FY-RSR
+  Speedup
+
+
+
+
+                                                    Speedup
+
+
+
+
+                rCA                                           1.8       rCA                                                            1.5
+            6
+                                                              1.6                                                                      1.0
+            4                                                 1.4
+            2
+                                                                                                                                       0.5
+                                                              1.2
+            0                                                 1.0                                                                      0.0
+                                                                                                                                             DD   Yt   WB   ppi   OH   YH   rPA   rCA   protein reddit   ddi   FY-RSR
+                2   4        6      8     10   12                   1      2     4      6       8   10
+                         Number of Thread                                   Number of Thread
+
+
+                                                                                                               Figure 14. Two static strategies, capability-based assign-
+Figure 13. Thread scalability evaluation of ASM-SpMM on                                                        ment that distributes nonzero elements proportionally to
+different datasets on M4 processor and LX2 processor.                                                          each core’s peak compute capability and sparsity-based as-
+4.4 Multi-core Breakdown Analysis                                                                              signment that evenly allocates nonzeros according to matrix
+                                                                                                               sparsity, are compared with dynamic load balancing.
+4.4.1 Scalability Evaluation. We evaluate the thread scal-
+ability of ASM-SpMM on both the M4 and LX2 processors
+                                                                                                               4.5 Case Study: End-to-End GNN Inference
+using four datasets, with the matrix dimension fixed to 𝑁 =
+1024. As shown in Figure 13, ASM-SpMM achieves near-                                                           The Graph Convolutional Neural Network (GCN) model[26]
+linear and even super-linear scalability on LX2. With 12                                                       and Graph Isomorphism Network(GIN) are two of the most
+threads, the performance reaches an 8× to 11× speedup com-                                                     widely used GNN models, consisting of several GraphConv
+pared with 2 threads. This behavior can be explained by two                                                    layers. GraphConv layer performs following computation:
+factors: First, each of the 12 cores on LX2 is equipped with                                                                                      𝐻𝑙+1 = 𝜎 [ (𝐴 × 𝐻𝑙 ) × 𝑊𝑙 + 𝑏𝑙 ] ,
+an SME unit, enabling true parallel scaling across all cores.
+                                                                                                               where 𝜎 denotes the activation function, 𝐴 is the adjacency
+Second, the super-linear effect partly arises from one-time
+                                                                                                               matrix, 𝐻 is the feature matrix, 𝑊 represents the weight
+initialization overheads of the threading runtime that are
+                                                                                                               matrix, and 𝑏 is the bias term. The core operation 𝐴 × 𝐻𝑙 cor-
+amortized as the number of threads increases. On the M4
+                                                                                                               responds to a sparse matrix–dense matrix multiplication
+processor, the trend is markedly different. Two threads al-
+                                                                                                               (SpMM). To evaluate the benefits of our proposed ASM-
+ready achieves a 1.4−1.6× improvement over a single thread,
+                                                                                                               SpMM, we integrate it into PyTorch via the CPU Extension
+but additional threads contribute only modest gains of 4%–
+                                                                                                               interface and implement both GCN and GIN models, referred
+8%. The underlying reason lies in the heterogeneous core
+                                                                                                               to as ASM-GCN and ASM-GIN, respectively. We measure the
+design of M4 CPU. It has 10 cores in total, including 4 per-
+                                                                                                               end-to-end inference time on four representative datasets:
+formance (P) cores and 6 efficiency (E) cores, but only two
+                                                                                                               ddi, rCA, ppi, and FY-RSR, which were also used in the pre-
+SME compute units. SME is implemented as an independent
+                                                                                                               vious operator-level evaluation. We compare against two
+accelerator, typically shared at the CPU-cluster level. The
+                                                                                                               widely adopted GNN frameworks, DGL and PyG on the M4
+P-core cluster integrates a larger SME unit, while the E-core
+                                                                                                               processor. Figure 15 summarizes the results.
+cluster contains a smaller one. Once both SME units are occu-
+                                                                                                                  Across all datasets and model configurations, ASM-GCN
+pied, further threads primarily exploit the vector units rather
+                                                                                                               and ASM-GIN consistently achieve substantial reductions in
+than additional SME capacity, leading to limited incremental
+                                                                                                               inference time. The degree of acceleration, however, strongly
+speedups. This underscores the robustness of ASM-SpMM
+                                                                                                               correlates with the proportion of SpMM within the overall
+in exploiting the full spectrum of compute resources across
+                                                                                                               computation. For instance, in the GCN model on FY-RSR,
+different processor designs.
+                                                                                                               SpMM accounts for 33.8% of the total inference time in DGL
+4.4.2 Effectiveness of Dynamic Workload Balance De-                                                            and 45.0% in PyG, whereas in ASM-GCN the fraction drops
+sign. Figure 14 compares four scheduling strategies on the                                                     to only 7.5%, leading to an end-to-end speedup of 1.3−1.6×.
+
+
+
+                                                                                                         242
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                              Jiazhi Jiang, Xijia Yao, Jiayu Chen, Jinhui Wei, Dan Huang, and Yutong Lu
+
+
+By contrast, in the GCN model on ddi, SpMM dominates the                                                                      5    Related Work
+workload, contributing 77.2% and 84.3% of total runtime in                                                                    SpMM Optimization on GPU Matrix Units: Recent work
+DGL and PyG, respectively. With ASM-SpMM, the SpMM                                                                            has optimized SpMM for Tensor Cores by leveraging GPU-
+share is reduced to 48.4%, yielding speedups of 2.0−2.9×. For                                                                 specific features. DTC-SpMM [1] and Acc-SpMM [28] ex-
+the GCN model on rCA, SpMM is a smaller bottleneck in                                                                         ploit data-affinity reordering, warp-level sparsity scheduling,
+this dataset. ASM-SpMM lowers the SpMM ratio from 11.9%                                                                       and pipelining, while Flash-LLM [23] and FlashSparse [18]
+in DGL and 26.4% in PyG to only 7.4%, thereby achieving                                                                       reduce memory traffic through Load-as-Sparse, Compute-as-
+slight reduction of overall inference latency by about 1.2×.                                                                  Dense and swap-and-transpose strategies. SMaT [15] and
+Comparable conclusions are also observed for GCN and GIN                                                                      TC-GNN [22] further optimize shared memory usage and in-
+across other datasets, further confirming robustness of ASM-                                                                  tegrate graph operations on Tensor Cores. These approaches
+SpMM as an effective acceleration primitive for GNN.                                                                          fundamentally depend on GPU characteristics such as inner-
+                           GCN Inference                                                    GIN Inference                     product execution, warp-level scheduling, and GPU-centric
+                   PyG-Other         PyG-SpMM     DGL-Other               PyG-Other          PyG-SpMM       DGL-Other
+                   DGL-SpMM          Ours-Other   Ours-SpMM               DGL-SpMM           Ours-Other     Ours-SpMM         memory hierarchies. ARM SME adopts an outer-product
+            2500                                                    800
+
+            2000
+                                                                                                                              execution model with CPU-oriented cache and memory de-
+                                                                    600
+                                                          Time/ms
+  Time/ms
+
+
+
+
+            1500
+                                                                    400
+                                                                                                                              signs. Consequently, GPU-oriented techniques are not di-
+            1000
+                                                                    200
+                                                                                                                              rectly transferable to SME, necessitating SME-specific opti-
+             500
+
+               0                                                      0
+                                                                                                                              mizations tailored to its hardware characteristics.
+                   rCA         ddi       FY-RSR    ppi                    rCA         ddi        FY-RSR      ppi
+                                                                                                                                 Optimization on SME Matrix Unit. OpenFFT-SME [25]
+                                                                                                                              introduces a specialized outer-product optimization strategy
+Figure 15. The end-to-end inference time of GCN and GIN                                                                       for the Cooley–Tukey FFT algorithm, evaluated on ARM
+models. “PyG-Other” and “PyG-SpMM” represent execution                                                                        processor simulators. Zhao [29] and Huang [7] proposes a
+time of the components in the GNN model, excluding SpMM                                                                       stencil computation algorithm utilizing vector outer prod-
+and the SpMM operation itself, respectively. The sum of these                                                                 ucts, together with optimizations targeting memory access,
+two parts constitutes the total inference time of the model.                                                                  execution pipelining, and data reuse. Among prior works
+The same method applies to both DGL and our design.                                                                           leveraging SME matrix units, ASM-SpMM is the first to opti-
+                                                                                                                              mize SpMM using SME acceleration and to provide compre-
+4.6 Overheads and Portability Analysis                                                                                        hensive evaluations on both LX2 and Apple M4 CPUs.
+In many practical workloads, SpMM is executed iteratively                                                                        Cooperation of Matrix and Vector Units Matrix and
+with the same sparse matrix 𝐴, often across thousands of                                                                      vector units are optimized for different computational pat-
+iterations. In such cases, the overhead of ASM-SpMM’s for-                                                                    terns but can deliver greater performance when used jointly.
+mat transformation is amortized and becomes negligible.                                                                       On NVIDIA GPUs, concurrent execution of Tensor Core and
+This assumption holds for mainstream sparse computing                                                                         CUDA Core kernels has been demonstrated [27], and recent
+frameworks (e.g., DGL and PyG) and widely used sparse ma-                                                                     work such as Jigsaw [24] and HR-SpMM [21] exploits both to
+trix repositories, including TC-GNN [22], OGB [19], SNAP                                                                      accelerate sparse matrix-vector multiplication. To our knowl-
+[13], and SuiteSparse [12], where each sparse matrix can be                                                                   edge, however, such cooperation has not yet been explored
+preprocessed only once and reused across iterations. Con-                                                                     on modern CPUs like ASM-SpMM.
+sequently, downstream applications such as sparse matrix                                                                      6    Conclusion
+factorization, GNN inference, and hyper-parameter optimiza-
+tion can fully benefit from ASM-SpMM’s performance gains.                                                                     In this paper, we present ASM-SpMM, a high-performance
+Similar one-time preprocessing assumptions have also been                                                                     SpMM library for ARM processors with SME. ASM-SpMM
+adopted and validated in prior GPU Tensor Core–oriented                                                                       combines sparse format design, optimized micro-kernels,
+SpMM systems, including DTC-SpMM [1], Acc-SpMM [28],                                                                          joint exploitation of ARM matrix and vector units, and dy-
+and TC-GNN [22], where the transformation cost is shown to                                                                    namic load balancing to accelerate SpMM. To our knowledge,
+be negligible when amortized over repeated executions. We                                                                     this is the first comprehensive study of SpMM on SME, and
+evaluate ASM-SpMM on two ARM processors and observe                                                                           the first evaluation on both LX2 and Apple M4 CPUs, demon-
+consistent performance improvements. Most optimizations,                                                                      strating consistent performance gains across architectures.
+including the SME-oriented compressed format, dynamic                                                                         Extensive experiments show substantial speedups over exist-
+load balancing, and SME kernels, are portable to other SME-                                                                   ing SpMM implementations and widely used ARM libraries.
+enabled ARM CPUs, as the core computation model remains                                                                       Acknowledgments
+unchanged. Nevertheless, achieving peak performance on
+                                                                                                                              This research is supported supported in part by Guangdong
+new platforms may require lightweight tuning. For instance,
+                                                                                                                              S&T Program under Grant No. 2024B0101040005, supported
+while the multi-tile execution strategy directly applies, tile
+                                                                                                                              in part by the Guangxi Key Research and Development Pro-
+sizes and resource allocation should be adjusted according
+                                                                                                                              gram under Grant GuikeAB25069495.
+to each CPU’s configuration.
+
+
+                                                                                                                        243
+ASM-SpMM: Unleashing the Potential of Arm SME for SpMM Acceleration                        PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+References                                                                               neural networks training. In Proceedings of the 29th ACM International
+                                                                                         Conference on Architectural Support for Programming Languages and
+ [1] Ruibo Fan, Wei Wang, and Xiaowen Chu. 2024. Dtc-spmm: Bridg-
+                                                                                         Operating Systems, Volume 2. 683–698.
+     ing the gap in accelerating general sparse matrix multiplication with
+                                                                                    [17] Stefan Remke and Alexander Breuer. 2024. Hello SME! Generating Fast
+     tensor cores. In Proceedings of the 29th ACM International Conference
+                                                                                         Matrix Multiplication Kernels Using the Scalable Matrix Extension. In
+     on Architectural Support for Programming Languages and Operating
+                                                                                         SC24-W: Workshops of the International Conference for High Performance
+     Systems, Volume 3. 253–267.
+                                                                                         Computing, Networking, Storage and Analysis. IEEE, 1443–1454.
+ [2] Matthias Fey and Jan Eric Lenssen. 2019. Fast graph representation
+                                                                                    [18] Jinliang Shi, Shigang Li, Youxuan Xu, Rongtian Fu, Xueying Wang,
+     learning with PyTorch Geometric. arXiv preprint arXiv:1903.02428
+                                                                                         and Tong Wu. 2025. Flashsparse: Minimizing computation redundancy
+     (2019).
+                                                                                         for fast sparse matrix multiplications on tensor cores. In Proceedings of
+ [3] Trevor Gale, Matei Zaharia, Cliff Young, and Erich Elsen. 2020. Sparse
+                                                                                         the 30th ACM SIGPLAN Annual Symposium on Principles and Practice
+     gpu kernels for deep learning. In SC20: International Conference for
+                                                                                         of Parallel Programming. 312–325.
+     High Performance Computing, Networking, Storage and Analysis. IEEE,
+                                                                                    [19] Minjie Wang, Lingfan Yu, Da Zheng, Quan Gan, Yu Gai, Zihao Ye,
+     1–14.
+                                                                                         Mufei Li, Jinjing Zhou, Qi Huang, Chao Ma, Ziyue Huang, Qipeng
+ [4] Yingxue Gao, Lei Gong, Chao Wang, Teng Wang, Xi Li, and Xuehai
+                                                                                         Guo, Hao Zhang, Haibin Lin, Junbo Zhao, Jinyang Li, Alexander J.
+     Zhou. 2023. Algorithm/hardware co-optimization for sparsity-aware
+                                                                                         Smola, and Zheng Zhang. 2019. Deep Graph Library: Towards Efficient
+     SpMM acceleration of GNNs. IEEE Transactions on Computer-Aided
+                                                                                         and Scalable Deep Learning on Graphs. CoRR abs/1909.01315 (2019).
+     Design of Integrated Circuits and Systems 42, 12 (2023), 4763–4776.
+                                                                                         arXiv:1909.01315 http://arxiv.org/abs/1909.01315
+ [5] Changwan Hong, Aravind Sukumaran-Rajam, Israt Nisa, Kunal Singh,
+                                                                                    [20] Minjie Yu Wang. 2019. Deep graph library: Towards efficient and
+     and Ponnuswamy Sadayappan. 2019. Adaptive sparse tiling for sparse
+                                                                                         scalable deep learning on graphs. In ICLR workshop on representation
+     matrix multiplication. In Proceedings of the 24th Symposium on Princi-
+                                                                                         learning on graphs and manifolds.
+     ples and Practice of Parallel Programming. 300–314.
+                                                                                    [21] Qi Wang, Yaobin Wang, Yi Luo, Rong Luo, and Pingping Tang. 2025.
+ [6] Weihua Hu, Matthias Fey, Marinka Zitnik, Yuxiao Dong, Hongyu
+                                                                                         HR-SpMM: Adaptive Row Partitioning and Hybrid Kernel Design for
+     Ren, Bowen Liu, Michele Catasta, and Jure Leskovec. 2021. Open
+                                                                                         Sparse Matrix Multiplication. In Proceedings of the 39th ACM Interna-
+     Graph Benchmark: Datasets for Machine Learning on Graphs.
+                                                                                         tional Conference on Supercomputing. 161–172.
+     arXiv:2005.00687 [cs.LG] https://arxiv.org/abs/2005.00687
+                                                                                    [22] Yuke Wang, Boyuan Feng, Zheng Wang, Guyue Huang, and Yufei Ding.
+ [7] Han Huang, Jiabin Xie, Guangnan Feng, Xianwei Zhang, Dan Huang,
+                                                                                         2023. {TC-GNN}: Bridging sparse {GNN} computation and dense
+     Zhiguang Chen, and Yutong Lu. 2025. HStencil: Matrix-Vector Stencil
+                                                                                         tensor cores on {GPUs}. In 2023 USENIX Annual Technical Conference
+     Computation with Interleaved Outer Product and MLA. In Proceed-
+                                                                                         (USENIX ATC 23). 149–164.
+     ings of the International Conference for High Performance Computing,
+                                                                                    [23] Haojun Xia, Zhen Zheng, Yuchao Li, Donglin Zhuang, Zhongzhu Zhou,
+     Networking, Storage and Analysis. 1816–1829.
+                                                                                         Xiafei Qiu, Yong Li, Wei Lin, and Shuaiwen Leon Song. 2023. Flash-
+ [8] Intel. 2021.       Intel® Advanced Matrix Extensions Overview.
+                                                                                         LLM: Enabling Cost-Effective and Highly-Efficient Large Generative
+     https://www.intel.com /content/www/us/en/products/docs/accelerator-
+                                                                                         Model Inference with Unstructured Sparsity. Proceedings of the VLDB
+     engines/advanced-matrix extensions/overview.html (2021).
+                                                                                         Endowment 17, 2 (2023), 211–224.
+ [9] Jiazhi Jiang, Jiangsu Du, Dan Huang, Zhiguang Chen, Yutong Lu, and
+                                                                                    [24] Kaige Zhang, Xiaoyan Liu, Hailong Yang, Tianyu Feng, Xinyu Yang,
+     Xiangke Liao. 2023. Full-stack optimizing transformer inference on
+                                                                                         Yi Liu, Zhongzhi Luan, and Depei Qian. 2024. Jigsaw: Accelerating
+     ARM many-core CPU. IEEE Transactions on Parallel and Distributed
+                                                                                         SpMM with Vector Sparsity on Sparse Tensor Core. In Proceedings of
+     Systems 34, 7 (2023), 2221–2235.
+                                                                                         the 53rd International Conference on Parallel Processing. 1124–1134.
+[10] Jiazhi Jiang, Jiangsu Du, Dan Huang, Dongsheng Li, Jiang Zheng, and
+                                                                                    [25] Ruge Zhang, Haipeng Jia, Yunquan Zhang, Baicheng Yan, Penghao Ma,
+     Yutong Lu. 2022. Characterizing and optimizing transformer inference
+                                                                                         Long Wang, and Wenxuan Zhao. 2024. OpenFFT-SME: An Efficient
+     on arm many-core processor. In Proceedings of the 51st International
+                                                                                         Outer Product Pattern FFT Library on ARM SME CPUs. In 2024 IEEE
+     Conference on Parallel Processing. 1–11.
+                                                                                         International Parallel and Distributed Processing Symposium (IPDPS).
+[11] Peng Jiang, Changwan Hong, and Gagan Agrawal. 2020. A novel data
+                                                                                         IEEE, 938–949.
+     transformation and execution strategy for accelerating sparse matrix
+                                                                                    [26] Si Zhang, Hanghang Tong, Jiejun Xu, and Ross Maciejewski. 2019.
+     multiplication on GPUs. In Proceedings of the 25th ACM SIGPLAN
+                                                                                         Graph convolutional networks: a comprehensive review. Computa-
+     symposium on principles and practice of parallel programming. 376–
+                                                                                         tional Social Networks 6, 1 (2019), 1–23.
+     388.
+                                                                                    [27] Wei Zhang, Weihao Cui, Kaihua Fu, Quan Chen, Daniel Edward
+[12] Scott P Kolodziej, Mohsen Aznaveh, Matthew Bullock, Jarrett David,
+                                                                                         Mawhirter, Bo Wu, Chao Li, and Minyi Guo. 2019. Laius: Towards
+     Timothy A Davis, Matthew Henderson, Yifan Hu, and Read Sandstrom.
+                                                                                         latency awareness and improved utilization of spatial multitasking
+     2019. The suitesparse matrix collection website interface. Journal of
+                                                                                         accelerators in datacenters. In Proceedings of the ACM international
+     Open Source Software 4, 35 (2019), 1244.
+                                                                                         conference on supercomputing. 58–68.
+[13] Jure Leskovec and Rok Sosic. 2016. SNAP: A General Purpose Network
+                                                                                    [28] Haisha Zhao, San Li, Jiaheng Wang, Chunbao Zhou, Jue Wang,
+     Analysis and Graph Mining Library. arXiv:1606.07550 [cs.SI] https:
+                                                                                         Zhikuang Xin, Shunde Li, Zhiqiang Liang, Zhijie Pan, Fang Liu, et al.
+     //arxiv.org/abs/1606.07550
+                                                                                         2025. Acc-SpMM: Accelerating General-purpose Sparse Matrix-Matrix
+[14] Nvidia. 2020.            NVIDIA V100 TENSOR CORE GPU.
+                                                                                         Multiplication with GPU Tensor Cores. In Proceedings of the 30th ACM
+     https://www.nvidia.com/enus /data-center/v100/ (2020).
+                                                                                         SIGPLAN Annual Symposium on Principles and Practice of Parallel Pro-
+[15] Patrik Okanovic, Grzegorz Kwasniewski, Paolo Sylos Labini, Maciej
+                                                                                         gramming. 326–338.
+     Besta, Flavio Vella, and Torsten Hoefler. 2024. High Performance
+                                                                                    [29] Wenxuan Zhao, Liang Yuan, Baicheng Yan, Penghao Ma, Yunquan
+     Unstructured SpMM Computation Using Tensor Cores. In SC24: In-
+                                                                                         Zhang, Long Wang, and Zhe Wang. 2024. Stencil Computation with
+     ternational Conference for High Performance Computing, Networking,
+                                                                                         Vector Outer Product. In Proceedings of the 38th ACM International
+     Storage and Analysis. IEEE, 1–14.
+                                                                                         Conference on Supercomputing. 247–258.
+[16] Hongwu Peng, Xi Xie, Kaustubh Shivdikar, Md Amit Hasan, Jiahui
+                                                                                    [30] Jiang Zheng, Jiazhi Jiang, Jiangsu Du, Dan Huang, and Yutong Lu.
+     Zhao, Shaoyi Huang, Omer Khan, David Kaeli, and Caiwen Ding. 2024.
+                                                                                         2023. Optimizing massively parallel sparse matrix computing on ARM
+     Maxk-gnn: Extremely fast gpu kernel design for accelerating graph
+                                                                                         many-core processor. Parallel Comput. 117 (2023), 103035.
+
+
+
+
+                                                                              244
+

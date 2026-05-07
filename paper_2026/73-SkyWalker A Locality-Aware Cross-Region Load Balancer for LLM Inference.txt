@@ -1,0 +1,1298 @@
+          SkyWalker: A Locality-Aware Cross-Region Load
+                   Balancer for LLM Inference
+                       Tian Xia† Ziming Mao† Jamison Kerney† Ethan J. Jackson† Zhifei Li§
+                                    Jiarong Xing†¶ Scott Shenker†⋄ Ion Stoica†
+                          † UC Berkeley § Renmin University of China ¶ Rice University ⋄ICSI
+
+Abstract                                                                              1   Introduction
+Serving Large Language Models (LLMs) efficiently in multi-                            Large Language Models (LLMs) have seen rapid growth in
+region setups remains a challenge. Due to cost and GPU avail-                         usage in recent years. With increasingly advanced capabili-
+ability concerns, providers typically deploy LLMs in multiple                         ties, they have been adopted across a wide range of domains,
+regions using instance with long-term commitments, like                               including virtual assistants [8, 28], code generation [16, 24,
+reserved instances or on-premise clusters, which are often un-                        49, 54, 57, 58], and information search [15, 46]. These appli-
+derutilized due to their region-local traffic handling and diur-                      cations now serve billions of users worldwide [47].
+nal traffic variance. In this paper, we introduce SkyWalker,
+a multi-region load balancer for LLM inference that aggre-
+gates regional diurnal patterns through cross-region traffic
+handling. By doing so, SkyWalker enables providers to
+reserve instances based on expected global demand, rather
+than peak demand in each individual region. Meanwhile,
+                                                                                            (a) Current Region-Local                             (b) Naive Approach:
+SkyWalker preserves KV-Cache locality and load balanc-                                            Deployment
+                                                                                                                           Cross-Region
+                                                                                                                                               Centralized Load Balancer
+                                                                                                                       Traffic Handling §3.1
+ing, ensuring cost efficiency without sacrificing performance.
+SkyWalker achieves this with a cache-aware cross-region                                                                                                  Prefix-Aware
+                                                                                             Load Balancer                                               Routing §3.2
+traffic handler and a selective pushing based load balancing
+                                                                                             Replica                                                      Selective
+mechanism. Our evaluation on real-world workloads shows                                                                                                  Pushing §3.3
+                                                                                             Client
+that it achieves 1.12-2.06× higher throughput and 1.74-6.30×
+lower latency compared to existing load balancers, while                                                                  (c) SkyWalker
+reducing total serving cost by 25%.
+                                                                                      Figure 1. (a) Current region-local deployment is cost ineffi-
+CCS Concepts: • Computing methodologies → Distributed                                 cient due to provisioning each region for its peak load. (b)
+artificial intelligence; Distributed computing methodolo-                             A naive centralized load balancer can reduce costs, but it in-
+gies.                                                                                 troduces high cross-region latency, performance bottlenecks,
+                                                                                      and single point of failure. (c) SkyWalker reduce multi-
+Keywords: Load Balancing, AI Serving, Multi-Region, Cloud                             region serving costs by enabling cross-region traffic handling
+Computing                                                                             without sacrificing performance.
+
+ACM Reference Format:                                                                    Serving LLMs at this scale requires operators to manage
+Tian Xia, Ziming Mao, Jamison Kerney, Ethan J. Jackson, Zhifei
+                                                                                      GPU scarcity while optimizing cost, latency, and through-
+Li, Jiarong Xing, Scott Shenker, Ion Stoica. 2026. SkyWalker: A
+                                                                                      put. To meet these demands, LLM providers often deploy
+Locality-Aware Cross-Region Load Balancer for LLM Inference. In
+21st European Conference on Computer Systems (EUROSYS ’26),                           infrastructure across multiple geographical regions. The most
+April 27–30, 2026, Edinburgh, Scotland Uk. ACM, New York, NY,                         common practice today is to deploy GPU instances with long-
+USA, 16 pages. https://doi.org/10.1145/3767295.3769353                                term commitments in each region, like reserved instances [26]
+                                                                                      or on-premise clusters [11, 50, 51], as shown in Figure 1(a).
+                                                                                      The long-term commitments reduce GPU costs compared to
+                                                                                      purchasing on-demand instances with autoscaling (§2.1) and
+                                                                                      ensure GPU availability at any time, while the region-local
+                                                                                      deployment improves service quality by placing compute
+This work is licensed under a Creative Commons Attribution 4.0 International          resources closer to end users.
+License.
+EUROSYS ’26, Edinburgh, Scotland Uk
+                                                                                         However, this approach introduces significant provisioning
+© 2026 Copyright held by the owner/author(s).
+                                                                                      and cost management challenges. These reserved instances or
+ACM ISBN 979-8-4007-2212-7/26/04                                                      on-premise clusters are inflexible—providers cannot increase
+https://doi.org/10.1145/3767295.3769353                                               or decrease capacity within a region as demand shifts. As
+
+
+
+                                                                               1349
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                            Xia et al.
+
+
+a result, providers must allocate enough instances in each                  to take into consideration two key challenges in multi-region
+region to meet peak demand, which can result in high and                    load balancing: Key-Value Cache (KV Cache) awareness and
+often wasted costs. This inefficiency arises from shifting re-              LLM inference load unpredictability. We discuss both briefly
+gional traffic patterns that follow distinct daily diurnal cycles:          below before expanding in the rest of the paper.
+each region experiences peak inference load at certain times                   KV Cache awareness. Modern LLM inference relies heav-
+of day, with lower demand during off-peak hours (Figure 2).                 ily on a KV Cache to reuse computation when requests
+The challenge is further exacerbated in multi-region deploy-                share a common prefix. Previous work has demonstrated that
+ments, where providers must provision for peak load in every                routing such requests to the same GPU is critical for max-
+region independently. This leads to resource fragmentation                  imizing KV Cache utilization and achieving high through-
+and underutilization during off-peak hours.                                 put [23, 33, 53, 71]. However, these approaches have pri-
+   Ideally, providers would perfectly meet capacity with de-                marily assumed single load balancer deployments within a
+mand while paying the lower costs of reserved instances or                  single zone. SkyWalker overcomes the challenge of coordi-
+on-premise clusters. However, achieving this ideal is difficult             nating prefix-aware routing across multiple regions. It offers
+when regional provisioning is viewed in isolation. Providers                two routing algorithms to preserve KV Cache locality in a
+must either provision for peak demand for all regions or pay                geo-distributed setting: a simple multi-region extension of
+for the flexibility of on-demand instances and take the risk of             consistent hashing based on user ID and session ID, and a
+GPU unavailability.                                                         more general multi-region prefix trie.
+   In this paper, we suggest relaxing the regional rigidity of
+                                                                               LLM inference load unpredictability. We observe that the
+current approaches. Instead of attempting to match regional
+                                                                            processing time and resource usage for LLM inference of a
+capacity to regional demand, providers make reservations for
+                                                                            particular request is highly variable and unpredictable [66,
+peak global demand and partition those reservations across
+                                                                            72]. A single request can complete within seconds that requir-
+the regions closest to their users. Following this approach,
+                                                                            ing very little resources, or takes tens of seconds to complete
+when a region is overloaded, it can offload requests to other
+                                                                            while requiring several gigabytes of GPU memory. To make
+regions with excess capacity. By reserving for global peak
+                                                                            matters worse, due to the auto-regressive nature of LLM de-
+demand and enabling cross-region traffic handling, a system
+                                                                            coding, it is hard to predict which end of this spectrum a
+can improve GPU utilization and reduce overall serving costs.
+                                                                            particular request will fall on [9]. As we show in section
+Unfortunately, this cannot be achieved by simply deploy-
+                                                                            §2.3, this property of LLMs makes traditional load balancing
+ing centralized load balancers in a single zone (Figure 1(b),
+                                                                            policies such as least load first or round robin highly inef-
+[1, 53]), as this introduces high latency due to cross-region
+                                                                            fective. To address this, SkyWalker implements selective
+communication and creates both a performance bottleneck
+                                                                            pushing based on pending requests, an algorithm we describe
+and a single point of failure.
+                                                                            in section §3.3, which improves performance by balancing
+   It is important to note that cross-region traffic handling, as
+                                                                            load based on each replica’s availability of admitting more
+proposed in this work, has not been a common practice for
+                                                                            requests in its continuous batch [65].
+traditional workloads such as webpage rendering or search
+                                                                               This paper proceeds as follows. In section §2, we describe
+engine queries. In these cases, the processing time per re-
+                                                                            the background of LLM serving, motivate the need for cross-
+quest is typically very short [41], often just several tens of
+                                                                            region routing to lower cost, and identify new challenges
+milliseconds, and usually smaller than the cross-region net-
+                                                                            in effectively doing so. In §3, we introduce the key design
+work latency that is up to 200 milliseconds [35]. As a result,
+                                                                            choices of SkyWalker, including cross-region traffic han-
+requests are handled entirely within the region closest to the
+                                                                            dling, multi-region prefix-aware routing, and selective push-
+client. In contrast, LLM requests often require seconds, if
+                                                                            ing to mitigate load imbalance. We evaluate SkyWalker on
+not tens of seconds to complete [66]. In this setting, cross-
+                                                                            three realworld workloads, and we observe that SkyWalker
+region latency represents only a small fraction of the total
+                                                                            achieves 1.12-2.06× higher throughput and 1.74-6.30× lower
+processing time. However, responsiveness remains important,
+                                                                            latency compared to existing load balancers. By using cross-
+and LLM providers still focus on optimizing Time-to-First-
+                                                                            region routing, we show that SkyWalker is able to reduce
+Token (TTFT) latency and aim to serve requests locally when
+                                                                            25% of total cost compared to region-local deployment. In
+capacity allows.
+                                                                            summary, this paper makes four contributions:
+   To enable cross-region traffic handling without sacrific-
+ing performance, we design SkyWalker, a cross-region                        • Identifying the need for cross-region traffic handling to
+load balancer for LLM inference. As shown in Figure 1(c),                     aggregate diurnal patterns across multiple geographical
+SkyWalker deploys at least one load balancer in each re-                      regions and reduce global serving cost.
+gion as the first point of contact for requests, ensuring low-              • Proposing two mechanisms to provide effective cross-region
+latency and avoiding centralized bottlenecks. These regional                  routing: prefix-aware routing to improve cache locality and
+load balancers collaboratively coordinate traffic across re-
+gions to handle load imbalances. Achieving this requires us
+
+
+
+                                                                     1350
+SkyWalker: A Locality-Aware Cross-Region Load Balancer for LLM Inference                                                             EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+      Number of Requests            United States                Russia                     China                                                                                      2.2x of
+                                                                                                                                     us-east-1      eu-west      us-east-2           Aggregated
+                           8000                      6000                      8000                               ×103               us-west        eu-central
+                           6000                                                6000                                 4
+
+
+
+
+                                                                                                                                                                             Estimated Cost ($)
+                                                     4000
+
+
+
+
+                                                                                                                 #Requests
+                                                                                                                                                                                                       40.5%
+                           4000                                                4000                                          3                                                                       reduction
+                                                     2000
+                           2000                                                2000
+                                                                                                                             2
+                              0                         0                         0
+                                  0 4 8 12 16 20            0 4 8 12 16 20            0 4 8 12 16 20
+                                                                                                                             1
+                                   United Kingdom               Germany                    France
+                                                                                                                             0
+      Number of Requests
+
+
+
+
+                           2000
+                                                                               2500
+                                                                                                                                 0    3     6 9 12 15 18 21
+                                                     1500                                                                                                                          On-Demand Region Aggregated
+                           1500                                                2000                                                         Hour of the Day                        Autoscaling Local
+                                                     1000                      1500
+                           1000
+                                                      500                      1000                                                       (a) Regional load.                         (b) Cost comparison.
+                            500
+                                                                                500
+                              0                         0                         0
+                                  0 4 8 12 16 20            0 4 8 12 16 20            0 4 8 12 16 20
+                                   Hour of the Day           Hour of the Day           Hour of the Day          Figure 3. (a) Aggregated load across five regions using a sub-
+                                                                                                                set of the WildChat trace [68]. Before aggregation, per-region
+Figure 2. Regional traffic demands shift over time in multi-                                                    load variance ranges from 2.88× to 32.64×; after aggregation,
+region LLM serving. Data is from the WildChat [68] trace.                                                       the variance is reduced to 1.29×. (b) Cost reduction achieved
+                                                                                                                by provisioning based on the aggregated global peak load,
+                                                                                                                using reserved instances. We also present the cost for perfect
+                                                                                                                on-demand autoscaling, assuming precise traffic prediction
+  performance, and selective pushing based on pending re-
+                                                                                                                and no provisioning delay. In practical scenarios, the actual
+  quests at each replica to reduce load imbalance.
+                                                                                                                cost of on-demand autoscaling would be even higher.
+• A comprehensive evaluation for SkyWalker, compared
+  to existing production and research systems across a variety
+  of workloads.                                                                                                    Provisioning GPUs via long-term commitments. The sub-
+• An open-source system SkyWalker to stimulate further                                                          stantial GPU demands of LLM serving, combined with on-
+  research on cross-region load balancing for LLMs.                                                             going GPU scarcity, have led providers to primarily deploy
+                                                                                                                reserved or on-premise GPU instances. Such long-term GPU
+2     Background and Motivation                                                                                 commitments not only ensure GPU availability at all times
+                                                                                                                but also offer lower prices over extended periods compared
+In this section, we first provide background on multi-region
+                                                                                                                to on-demand instances. For example, a three-year reserved
+LLM serving. We then introduce the global cost reduction
+                                                                                                                instance for 8 H100 GPUs (p5.48xlarge) on AWS costs
+problem, which motivates cross-region load balancing. Fi-
+                                                                                                                $37.56/hour, while the equivalent on-demand instance costs
+nally, we discuss the key challenges in enabling cross-region
+                                                                                                                $98.32/hour. On-premise deployments can offer even greater
+load balancing without sacrificing performance.
+                                                                                                                cost savings: as shown in [3], they can reduce costs by up
+                                                                                                                to 46.3% over time compared to reserved cloud instances
+2.1               Background: Multi-Region LLM Serving
+                                                                                                                when accounting for lifetime return on investment. As a re-
+LLM inference. LLM inference typically consists of two                                                          sult, this strategy has become the norm among today’s LLM
+stages: prefill and decode. During the prefill stage, the model                                                 service providers. For example, OpenAI has deployed tens
+processes the initial input prompt and generates an internal                                                    of thousands of GPUs in its data centers [39, 50]; similar de-
+KV Cache, which stores intermediate states necessary for                                                        ployments are also reported by ByteDance [51] and xAI [11].
+subsequent token generation. Following prefill, the decode                                                         Latency metric: Time-to-First-Token (TTFT). A critical
+stage generates tokens auto-regressively, one token at a time,                                                  performance metric for online serving is TTFT, defined as
+utilizing the KV Cache to accelerate inference. To improve                                                      the latency from when a request initiates until the first output
+GPU utilization and throughput, continuous batching [65]                                                        token is produced. When the client and model replica are in
+is commonly employed, which dynamically groups incom-                                                           the same region, TTFT primarily consists of prefill latency
+ing requests to reduce idle time. Due to strict latency SLOs,                                                   and queuing delay. For example, when deploying on a L4
+practitioners typically run online LLM serving on dedicated                                                     GPU, processing a 512-token prompt with meta-llama/
+clusters to prevent interference from other jobs (§6).                                                          Llama-3.1-8B-Instruct might incur around 300 ms
+   Scaling LLM serving to multiple regions. To scale effec-                                                     of prefill latency before generating the first token. In a multi-
+tively, major providers [39] leverage GPU resources across                                                      region deployment, TTFT additionally includes cross-region
+multiple geographical regions to serve their users, a practice                                                  network latency, which typically adds up to 200 ms.
+we refer to as multi-region serving in this paper. Multi-region
+serving offers two key benefits: (1) improved latency by de-                                                    2.2 New Problem: Global Cost Reduction
+ploying LLM replicas closer to users; (2) reduces the risk                                                      Multi-region LLM serving introduces new challenges for
+of GPU shortages in any single region by diversifying GPU                                                       reducing serving costs. Our trace analysis reveals that multi-
+usage across multiple regions [35, 63].                                                                         region LLM serving exhibits regional demand shifts over
+
+
+
+                                                                                                         1351
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                            Xia et al.
+
+
+time, often following a diurnal pattern. Specifically, Figure 2           this creates centralized bottlenecks and a single point of fail-
+illustrates the load patterns of six countries from the WildChat          ure, while also incurring non-trivial latency overhead due
+trace [68]. It shows clear diurnal trends—each region experi-             to cross-region communication for most requests. In typical
+ences peak inference traffic during specific hours, with lower            local deployments, the TTFT latency for LLMs is mainly
+load during the rest. These peak hours vary across regions                bottlenecked by prefill time and is usually several hundred
+due to time zone differences.                                             milliseconds [56], while cross-region latency can reach up to
+   The fluctuating load leads to time-varying GPU demand                  200 milliseconds [35]. This means that the straightforward ap-
+in each region, posing significant challenges for resource                proach may introduce additional latency nearly equivalent to
+provisioning and cost reduction. Ideally, providers would                 the prefill time, significantly impacting responsiveness. This
+provision just enough GPU resources in each region to meet                motivates us to design a geo-distributed load balancer for
+the required GPU demand and adjust allocations dynamically                LLM serving that can effectively reduce global serving costs
+as load varies. Recent studies attempt to approach this ideal by          without compromising TTFT. This involves addressing two
+auto-scaling resources using on-demand or spot instances [35,             key challenges:
+37, 45, 67]. However, as discussed in Section §2.1, to avoid                 KV Cache awareness. LLM serving systems reuse KV
+GPU shortages during demand spikes and to secure lower                    Cache between requests that share the same prefix to reduce
+instance pricing, current multi-region deployments typically              prefill time and saving compute resources. To maximize the
+rely on static provisioning via long-term commitments. This               KV Cache hit rate, prior work has explored making load
+makes them unable to scale flexibly with load fluctuations. As            balancers prefix aware [1, 12, 53]. These approaches typically
+a result, to maintain service quality, providers must provision           maintain a prefix tree for each replica, either precise, as in
+each region for its peak load. While this approach ensures                Preble [53], or approximate, as in SGLang Router [1] and
+low latency and high throughput, it inevitably leads to low               DLPM [12]. This line of work has shown strong potential,
+overall GPU utilization and higher operational costs.                     and we observed up to a 35% improvement in KV Cache hit
+   To illustrate this, Figure 3a shows the aggregated number              rate in the best case.
+of requests received across five regions at different hours of               However, extending them to multi-region deployments
+the day, using a subset of the WildChat trace [68]. It high-              presents several challenges. Achieving KV Cache awareness
+lights that while regional loads fluctuate significantly, the             requires maintaining a shared prefix tree, which is difficult
+aggregated global load remains relatively stable. As shown in             to coordinate across regions. As previously discussed, sim-
+Figure 3b, provisioning based on the peak aggregated global               ply maintaining a centralized global prefix tree will incur
+load can reduce costs by 40.5% compared to provisioning                   significant latency penalties due to frequent remote accesses.
+each region for its own peak independently. With on-premise               Alternatively, maintaining fully distributed prefix trees in each
+instances, the cost can be reduced even further compared to               region requires cross-region coordination on every request,
+reserved instances [3]. The figure also includes the cost of              which would become prohibitively expensive due to the high
+using on-demand instances. Due to their high pricing, even                coordination overhead.
+with perfect auto-scaling, where we assuming no provisioning
+                                                                             LLM inference load unpredictability. The length of LLM
+delay and instances are always available, this approach incurs
+                                                                          outputs can vary widely, and in some cases be very long, as
+2.2× the cost compared to provisioning the aggregated global
+                                                                          shown in real workloads (Figure 4a) and prior studies [60].
+load using reserved instances.
+                                                                          This variability, combined with the auto-regressive nature of
+   Insight. The cost reduction shown in Figure 3b suggests                LLMs, makes it difficult for load balancers to predict output
+that we should provision instances based on global demand                 lengths in advance and accurately estimate the GPU resources
+and share these resources across regions. Users can be routed             required for each request. Moreover, each LLM request can
+to access their geographically closest region, but when it                demand substantial resources. It is not uncommon for a single
+becomes overloaded, traffic can be rerouted to remote regions             request to consume several gigabytes of GPU memory, lim-
+to utilize otherwise unused capacity.                                     iting each model replica to handling only tens of concurrent
+                                                                          requests. Traditional load balancing polices, such as least-
+                                                                          load-first or round-robin, blindly push requests to replicas
+2.3 Cross-Region Load Balancing                                           without accounting for resource consumption, often result-
+                                                                          ing in long-running requests blocking all subsequent ones in
+Achieving global cost reduction requires cross-region load
+                                                                          the queue and causing severe load imbalance. These unique
+balancing, a direction that remains largely unexplored in the
+                                                                          characteristics of the LLM workload make the penalty of
+context of LLM serving. Today’s LLM load balancers are de-
+                                                                          misrouting much more severe than in traditional CPU-based
+signed for single-region deployments and cannot be directly
+                                                                          workloads. This motivates the need for a new system design
+extended to multi-region settings. As shown in Figure 1(b),
+                                                                          that is robust to the dynamic and resource-intensive nature of
+a straightforward approach is to deploy existing load bal-
+                                                                          LLM workloads.
+ancers in a specific zone as global coordinators. However,
+
+
+
+                                                                   1352
+SkyWalker: A Locality-Aware Cross-Region Load Balancer for LLM Inference                                         EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+          1.00        Input                                                                             i.e., one to reach the load balancer and another to reach the
+                                                                         Replica 1
+                      Output
+
+
+
+
+                                              Utilization (%)
+          0.75                                                  80       Replica 2                      assigned replica, leading to high cross-region latency.
+
+
+
+
+                                                 Memory
+    CDF
+
+
+
+
+          0.50                                                  60                                         Another approach is to replicate the load balancer across
+          0.25                                                  40                                      multiple regions, allowing each to route traffic to all available
+                                                                     0     20    40    60   80
+                                                                                                        replicas. In this deployment, clients send their requests to
+                 0   2500   5000 7500 10000
+                             Length                                        Time (seconds)               the nearest load balancer, which then decides which replica
+                                                                                                        should handle the request, potentially in any region. However,
+      (a) CDF for request length.                               (b) Load imbalance.
+                                                                                                        this approach requires non-trivial synchronization between
+                                                                                                        load balancers to make coordinated routing decisions. With-
+Figure 4. (a) The CDF of input length and output length in
+                                                                                                        out such coordination, multiple load balancers may indepen-
+WildChat dataset. (b) We observe load imbalance across repli-
+                                                                                                        dently select the same replica as hot spot, leading to degraded
+cas when routing requests using the Round Robin algorithm.
+                                                                                                        performance, particularly for affinity-aware load balancing
+The y-axis shows the percentage of KV Cache memory uti-
+                                                                                                        strategies. Such coordination can incur non-trivial overhead
+lization on each replica. The peak memory usage difference
+                                                                                                        for each load balancer, requiring 𝑂 (𝑁 LB × 𝑁 replica ) connec-
+between replicas reaches 2.64×.
+                                                                                                        tions or probes. Whenever a new replica is launched, it must
+                                                                                                        ensure that all load balancers are aware of its creation and
+                                                                                                        updated status, adding complexity and latency to the system.
+3          SkyWalker Design                                                                                Our approach: two-layer cross-region routing. Instead,
+                                                                                                        we adopt a two-layer approach. The key idea is to coordi-
+Overview. In this work, we introduce SkyWalker, a new
+                                                                                                        nate cross-region traffic between load balancers, rather than
+design that enables efficient cross-region load balancing for
+                                                                                                        directly between replicas. Specifically, each load balancer ei-
+LLM inference. With SkyWalker, LLM service providers
+                                                                                                        ther routes requests to local replicas or forwards them to other
+can reduce global costs by sharing a smaller pool of reserved
+                                                                                                        load balancers in remote regions, which then make the final
+or on-premise instances across regions without sacrificing per-
+                                                                                                        placement decisions within their region. This design com-
+formance. SkyWalker deploys load balancers in multiple
+                                                                                                        bines the strengths of the two approaches discussed earlier.
+regions as the first point of contact for local requests, and in-
+                                                                                                        It avoids introducing significant routing latency by allowing
+troduces a cross-region traffic handler that coordinates traffic
+                                                                                                        clients to connect to their nearest load balancer, while still
+between regional load balancers to mitigate cross-region load
+                                                                                                        enabling cross-region load balancing through coordination
+imbalance (§3.1). It preserves the benefits of prefix sharing
+                                                                                                        among load balancers. Comparing load balancers routing to
+by supporting prefix-aware routing in two ways (§3.2): (1) a
+                                                                                                        all replicas distributed across regions, this approach signifi-
+simple yet effective policy based on consistent hashing that
+                                                                                                        cantly reduces the probing overhead required to assess replica
+requires minimal changes to existing load balancers; and (2)
+                                                                                                        load. In addition, managing connections between a small
+prefix-aware routing using partial prefix tree snapshots main-
+                                                                                                        number of load balancers scales much better than maintain-
+tained at each load balancer. In addition, to address the chal-
+                                                                                                        ing connections to every replica, as the number of replicas
+lenge of LLM inference load unpredictability, SkyWalker
+                                                                                                        typically far exceeds the number of load balancers.
+introduces a novel selective pushing mechanism that balances
+load based on pending requests at each replica (§3.3). We
+detail each of these design choices in the following.
+
+3.1 Cross-Region Traffic Handling
+Since geographical regions could experience peak load at
+different times, we can exploit the traffic pattern by offloading
+workloads from high-demand regions to low-demand ones.                                                  3.2 Multi-Region Prefix-Aware Routing
+This mitigates the load imbalance caused by regional demand                                             The need for cross-region traffic routing presents new chal-
+shifts over time and reduces the total number of required GPU                                           lenges for prefix-aware routing (§2.3), especially with long
+instances compared to region-local deployment.                                                          cross-region latency. Achieving optimal prefix-aware rout-
+   There are multiple possible approaches to handling cross-                                            ing requires a global view of prefix states across all replicas.
+region traffic. One approach is to deploy load balancers in a                                           However, each load balancer only observes a subset of re-
+single zone that manage replicas across all regions. In this                                            quests, making it difficult to maintain a consistent global view
+setup, requests from all regions are first sent to the central                                          without incurring significant coordination overhead on every
+load balancer, which then routes them to replicas possibly in                                           request. Thus, we ask the question: How can we effectively
+different regions. However, as discussed in §2.3, this results                                          load balance across multiple regions with prefix awareness?
+in long round-trip times for users whose requests traverse                                              We answer this question by first understanding prefix sharing
+multiple regions: the request incurs two cross-region RTTs,                                             patterns in real workloads.
+
+
+
+                                                                                                 1353
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                                                                       Xia et al.
+
+
+                          Within-User               Within-Region    100 Randomly Selected Users
+                                                                                                   1.0
+                                                                                                                                                          Consistent Hashing    Optimal
+                          Across-User               Across-Region
+
+
+
+
+                                                                                                                              Cache Hit Rate (%)
+                      20.5%                                                                        0.8
+                 20                  19.0%
+                                                                                                                                                   80
+Similarity (%)
+
+
+
+
+                                                                                                   0.6
+                                                      10.9%                                                                                        60
+                 10           8.3%
+                                                                                                   0.4
+                                                                                                                                                   40
+                                             2.5%             2.5%
+                                                                                                   0.2                                             20
+                 0
+                       ChatBot        WildChat         WildChat
+                                                                                                                                                        Cross-User    Bursty Heterogeneous
+                        Arena           User            Region                                     0.0
+                                                                                                                                                         Sharing     Request    Program
+
+
+                        (a) Prefix similarity.                        (b) Similarity heatmap.
+                                                                                                                Figure 6. KV Cache hit rate, comparing consistent hashing
+Figure 5. (a) Average prefix similarity within and across users                                                 with optimal solution with a global view.
+and regions; (b) Heatmap of pairwise prefix similarity among
+100 randomly sampled users, in WildChat [68] and ChatBot
+                                                                                                                is assigned to a replica and each replica can have multiple vir-
+Arena [70] datasets. User information is retrieved directly
+                                                                                                                tual nodes, allowing balanced key distribution across replicas.
+from the metadata provided in each dataset (hashed IP in
+                                                                                                                We make two extensions to the traditional consistent hashing.
+WildChat and judge in ChatBot Arena).
+                                                                                                                First, due to SkyWalker’s two-layer load balancing design,
+                                                                                                                SkyWalker-CH performs consistent hashing at both layers:
+   Prefix similarity analysis. We analyze prefix similarity 1                                                   the load balancer routes requests to other balancers based
+using a subset of the WildChat [68] and ChatBot Arena [70]                                                      on consistent hashing, and each balancer applies consistent
+datasets. The goal is to quantify how much prefix reuse occurs                                                  hashing to assign the request to one of its managed replicas as
+in real-world workloads, which directly impacts the effective-                                                  well. Second, virtual nodes are skipped based on the availabil-
+ness of KV Cache reuse in LLM serving systems. This metric                                                      ity of its associated replica (detailed in §3.3, and Listing 1,
+measures the normalized length of the common prefix shared                                                      line 26). When that happens, the algorithm continues iterating
+between two requests. We compute prefix similarity across                                                       over successive virtual nodes on the ring. SkyWalker-CH
+all pairs of requests within the same user, and across different                                                requires minimal state maintained at load balancers, and can
+users. The results are shown in Figure 5a. We observe that the                                                  be easily incorporated into the existing software stack.
+average prefix similarity within the same user is significantly                                                    Since SkyWalker-CH focuses only on within-user prefix
+higher than that across different users (2.47-7.60× more). This                                                 similarity, there are cases where SkyWalker-CH falls short
+pattern is also evident in the heatmap (Figure 5b), which                                                       of being optimal. We discuss them in the following:
+shows the similarity among 100 randomly selected users, fur-
+                                                                                                                • Cross-User Prefix Sharing: Requests from different users
+ther confirming that within-user requests are more likely to
+                                                                                                                  can share common prefixes (Figure 5), but SkyWalker-
+share context and thus benefit from prefix caching. However,
+                                                                                                                  CH can route these requests to two different replicas, miss-
+there is still some degree of cross-user prefix similarity, and
+                                                                                                                  ing the benefits of routing these requests to the same replica
+the relative ratio between within-user and cross-user prefix
+                                                                                                                  to maximize KV Cache hit rate.
+similarity is workload-dependent (2.47× for ChatBot Arena
+                                                                                                                • Bursty Request: Consistent hashing either hashes a given
+and 7.60× for WildChat). This observation motivates us to
+                                                                                                                  key to a single replica, or to a replica set. In the former, a
+present the following two solutions: SkyWalker-CH and
+                                                                                                                  request burst can overload the single replica. In the latter,
+SkyWalker. SkyWalker-CH is simple and captures user-
+                                                                                                                  consistent hashing misses the opportunities to leverage
+level prefix similarity. SkyWalker captures both within-user
+                                                                                                                  prefix-sharing for requests sent by the same user to different
+and cross-user prefix similarity. We detailed the algorithm in
+                                                                                                                  replicas in the replica set.
+Listing 1.
+                                                                                                                • Heterogeneous User Program: If requests from a single
+   SkyWalker-CH. SkyWalker-CH uses consistent hash-                                                               user’s program contain multiple patterns and lack consistent
+ing [30] on user-provided keys (e.g., user ID, session ID) and                                                    prefix structures, using the user ID (or session/program ID)
+routes a user request to a corresponding replica (Listing 1,                                                      as the hash key fails to exploit prefix reuse. Worse, it may
+lines 23-26). SkyWalker-CH is implicitly prefix-aware: re-                                                        route dissimilar requests to the same replica, increasing the
+quests from the same user tend to share similar prefixes                                                          risk of overloading that replica.
+(e.g., context, chat history) and consistent hashing will map
+them to the same replica. SkyWalker-CH adopts a ring                                                               We illustrate these scenarios in Figure 6, which shows
+hash [55] scheme, where each virtual node on the hash ring                                                      the KV Cache hit rate under each setting, compared to an
+                                                                                                                optimal solution with a global view. The lack of cross-user
+1We
+                                                                                                                prefix sharing results in a 16.49% prefix hit rate drop. We
+      define the prefix similarity between two requests 𝑎 and 𝑏 as
+len(common_prefix(𝑎, 𝑏 ) )/min(len(𝑎), len(𝑏 ) ). We use the minimum
+                                                                                                                also study behaviors under bursty request patterns, where
+length in the denominator so that, for example, if 𝑎 is a prefix of 𝑏, the                                      the variance in a single user’s concurrent requests can reach
+prefix similarity of 𝑎 and 𝑏 should be 1.                                                                       4×. In this case, CH leads to 7.07% lower hit rate. A similar
+
+
+
+                                                                                                         1354
+SkyWalker: A Locality-Aware Cross-Region Load Balancer for LLM Inference                  EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+Algorithm 1 SkyWalker load balancing logic                                       enforces a configurable maximum tree size and evicts entries
+ 1: procedure M ONITOR AVAILABILITY                                              when the tree exceeds this limit, starting with the earliest in-
+ 2:    while true do                                                             serted records. SkyWalker filter targets based on whether it
+ 3:       for all 𝑟 ∈ LocalReplicas do                                           is available to serve requests and pick the available target with
+ 4:           𝑛 pending ← P ROBE R EPLICA (𝑟 )                                   the longest matching prefix (detailed in §3.3, and Listing 1,
+ 5:            if 𝑛 pending > 0 then                                             line 21). Specifically, for each trie traversal step, if there is
+ 6:                 R EMOVE(LocalAvail, 𝑟 )                                      no available matching load-balancing target in the current
+ 7:            else                                                              node, the traversal terminates early. This is because the set
+ 8:                 A DD(LocalAvail, 𝑟 )
+                                                                                 of targets stored in any child node is always a subset of its
+ 9:        for all 𝑙𝑏 ∈ RemoteLBs do                                             parent’s, implying that no available replicas can be found
+10:            (𝑛 avail_replica, 𝑠𝑖𝑧𝑒 q ) ← P ROBE LB(𝑙𝑏)
+                                                                                 further down the path.
+11:                       ⊲ 𝜏: small buffer for newly arriving requests
+12:            if 𝑛 avail_replica = 0 ∨ 𝑠𝑖𝑧𝑒 q > 𝜏 then
+                                                                                    Each load balancer maintains two prefix trees, one for local
+13:                 R EMOVE(RemoteAvail, 𝑙𝑏)                                     replicas it manages and one for a partial view (snapshot) of
+14:            else                                                              other load balancers in other regions. The latter keeps track
+15:                 A DD(RemoteAvail, 𝑙𝑏)                                        of all historical requests that the local region has sent to
+16:        S LEEP(ProbeInterval)                                                 remote regions. Regional snapshots do not strictly record all
+17: procedure S ELECT C ANDIDATE(Request, C)                                     prefixes reside in replicas of remote regions, which depends
+18:    if UsePrefixTree then                                                     on requests that are sent to the load balancer of that region,
+19:        Text ← (G ET T EXT(Request)                                           either directly or from other load balancers. Instead, it is an
+                       ReplicaTrie             if C is replicas                  approximation of prefixes that are possible to be utilized by
+20:        Trie ←                                                                local region forwarding to that remote region, as we observe
+                       LBSnapSnotTrie otherwise
+21:        return M AX P REFIX M ATCH(Trie, Text, C)                             empirically that the local region is unlikely to share prefixes
+22:    else                  (                                                   with requests that came from other regions: in Figure 5a,
+                                ReplicaRing if C is replicas                     requests across regions only have 2.5% prefix affinity. With
+23:        HashRing ←
+                                LBRing           otherwise                       that, we observe SkyWalker more closely approaches the
+24:        Key ← S ESSION I D(Request)                                           performance of an optimal solution.
+25:        HashValue ← H ASH(Key)
+26:        return N EXT(HashRing, HashValue, C)
+                                                                                 3.3 Selective Pushing to Mitigate Load Imbalance
+27: procedure( H ANDLE R EQUEST(Request)
+              LocalAvail            if 𝐿𝑜𝑐𝑎𝑙𝐴𝑣𝑎𝑖𝑙 ≠ ∅                            While leveraging prefix-affinity improves performance, it also
+28:    𝐶←                                                                        leads to load imbalance as requests are preferentially routed
+              RemoteAvail otherwise
+29:    𝑡 ← S ELECT C ANDIDATE (𝑅𝑒𝑞𝑢𝑒𝑠𝑡, 𝐶)                                       to specific replicas. To address this, prefix-aware routing must
+30:    ROUTE(Request, t)                                                         be combined with effective load balancing strategies—for ex-
+                                                                                 ample, switching to a load-balancing policy when the prefix
+                                                                                 sharing ratio falls below a certain threshold. However, tradi-
+trend is observed when users submit heterogeneous programs,                      tional load balancing strategies, such as blind pushing and
+resulting in a 8.78% gap. These limitations motivate us to                       selective pushing based on the maximum number of outstand-
+develop SkyWalker that is more general than SkyWalker-                           ing requests, do not work effectively for LLM workloads due
+CH by maintaining more states at the load balancer.                              to their load unpredictability (§2.3). We begin by analyzing
+   SkyWalker with regional snapshot. SkyWalker is ex-                            these two strategies and show how they lead to load imbalance
+plicitly prefix-aware: in this design, each load balancer main-                  when applied to LLM inference workloads. We then present
+tains prefix trees to keep an approximate view of prefix infor-                  our approach, selective pushing based on pending requests,
+mation on the load balancing targets. Between load balancers,                    as a solution to this problem.
+the targets are remote load balancers, and between the load                         Blind pushing. One traditional load balancing strategy
+balancer and the replica, the targets are local replicas managed                 is to route each request to a replica immediately upon ar-
+by that load balancer.                                                           rival [1, 17, 53], which we refer to as blind pushing. Blind
+   The prefix tree is a logical trie augmented with metadata to                  pushing performs well in CPU-based workloads or scenarios
+track active load balancing targets at each node. Each node                      with uniform request processing times, where simple strate-
+stores a set of active targets associated with the prefix formed                 gies like round-robin or least-load-first naturally result in a
+by the path from the root to that node. The tree is built in-                    balanced load. However, the processing time of LLM varies
+crementally from the requests the load balancer has served:                      from request to request, as it depends on the output length,
+when a new request is forwarded, a corresponding path is                         which is difficult to predict due to the auto-regressive na-
+added to the trie, and the selected target is recorded at every                  ture of decoding (§2.3). Naively assuming each request is
+node along that path. To bound memory usage, SkyWalker                           homogeneous can lead to a significant load differences across
+
+
+
+                                                                          1355
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                             Xia et al.
+
+
+replicas. For example, we find two replicas under round robin              replica to decide whether a replica is full or not. A background
+can have memory usage difference up to 2.64×, as shown in                  heartbeat probe is periodically sent to replicas to obtain their
+Figure 4b. This issue is especially problematic when routing               pending queue size (Listing 1, line 3-8). If a replica has no
+requests among multiple overloaded replicas. Replica over-                 pending request, it is ready to serve more requests.
+load can occur in practice, as replicas are kept at high utiliza-             Selective pushing and cross-region routing. Each load
+tion to achieve better cost efficiency. During sudden surges               balancer tracks the number of replicas it manages with full
+in demand, request queues may accumulate, and a replica                    continuous batches and periodically synchronizes this state
+with a seemingly short queue may still incur long processing               with peer load balancers through heartbeat messages (List-
+times if the requests in the queue takes long time to process.             ing 1, line 9-15). If a load balancer has at least one non-full
+Blindly pushing requests to such overloaded replicas can lead              replica and its request queue size does not exceed a small
+to cases where requests waiting in one replica’s queue while               buffer (line 12), it is considered available to accept additional
+other replicas have idle compute capacity, wasting compute                 requests. Whether a peer load balanacer is available to serve
+resources.                                                                 requests is used to guide cross-region routing. When at least
+   Selective pushing. To address the unpredictability of LLM               one local replica is not full, requests are always routed lo-
+inference, we suggest selective pushing, a strategy where re-              cally to maximize responsiveness. If all local replicas are full,
+quests are temporarily queued at the load balancer and sent                the system considers remote regions and forwards requests
+only to replicas that meet certain conditions. Specifically,               only to regions with available replicas and short load balancer
+the load balancer will only push requests to the replica that              queue (Listing 1, line 28). When multiple candidates are avail-
+has capacity (decided by a threshold), and in the event that               able, either among local replicas or remote load balancers,
+all replicas are full, queuing requests at the load balancer.              the system breaks ties using the consistent hashing key (for
+This approach prevents overloading any single replica while                SkyWalker-CH) or the prefix hit rate (for SkyWalker)
+maximizing overall utilization across all available replicas,              to select a candidate with more prefix sharing, as detailed in
+ensuring that no request waits in one replica’s queue while                Listing 1, line 17-26.
+others have idle compute capacity. We explain two thresh-
+olds, outstanding requests and pending requests for selective              4     SkyWalker Implementation
+pushing, and show that the latter is preferred in LLM serving.             We implemented SkyWalker (Figure 7), a prototype system
+   Selective pushing by limiting outstanding requests. In                  that leverages geo-distributed load balancers to achieve both
+this method, the load balancer selectively pushes to a replica             high throughput and low latency for online LLM serving
+only when the number of of outstanding requests for that                   across multiple geographical regions. SkyWalker is built
+replica is less than a fixed threshold [21, 32, 48]. Each replica          on top of SkyServe [35], an open-source multi-region serving
+will not exceed its desired level of load and the rest will                framework for AI models, which supports both on-premise
+be queued in the load balancer. That way, when the request                 and cloud-based replicas. SkyWalker extends SkyServe by
+finishes on a replica and releases free capacity, it will inform           adding geo-distributed load balancer with ≈ 3000 lines of
+the load balancer so that new requests are permitted to be                 Python code, and is compatible with any inference engine
+served at this replica. However, selective pushing based on a              with OpenAI API, such as vLLM [33] and SGLang [71].
+fixed number of outstanding requests is ineffective for LLM
+workloads, since the number of requests a replica can serve                4.1   Load Balancer
+depends on the total memory footprint of all outstanding                   Load balancer distribution. SkyWalker launches load bal-
+requests, which is proportional to the total number of input               ancers in user-specified regions, with the number of instances
+and output tokens. As the number of output tokens cannot be                configurable by the user. In cloud deployments, the regions
+predicted in advance, the same inference engine can host a                 are automatically inferred from the cloud region. SkyWalker
+small number of large requests or a large number of small                  creates an AWS Route53 [6] DNS record for each load bal-
+requests. We observed that for Llama 3.1 8B on a L4 GPU,                   ancer, all associated with the same domain name for a unified
+the max number of outstanding requests can range from 20                   endpoint. Under the hood, DNS resolution maps the domain
+to 50 for the same dataset. Therefore, statically setting the              name to the nearest load balancer based on the client’s source
+maximum threshold of outstanding requests delivers poor                    IP, thereby routing client requests to the nearest one.
+performance for LLM service (§5.2).
+                                                                              Request life cycle. A request first contacts the DNS server
+   Selective pushing by checking pending requests. We pro-                 to resolve the IP address of the nearest load balancer. It is
+pose selective pushing by checking pending requests. A pend-               then sent to the load balancer and placed in a first-come,
+ing request is a request that has not been scheduled to the                first-served (FCFS) request queue. When the request reaches
+continuous batch yet, which indicates that the current batch is            the head of the queue, available replicas in the local region
+full and cannot admit more requests, as constrained by GPU                 are prioritized. If no local replica is available, the request
+memory. We use the existence of pending requests in the                    is forwarded to an available remote region with the highest
+
+
+
+                                                                    1356
+SkyWalker: A Locality-Aware Cross-Region Load Balancer for LLM Inference                           EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+                                                                                              Failure recovery of load balancers. SkyWalker supports
+       sky.walker.net                                                                      automatic recovery for load balancers. Upon detecting an un-
+                                                          sky.walker.net
+                                                                                           expected failure via periodic health probes, the controller re-
+                                                                                           assigns the replicas in the affected region to a geographically
+                                                                                           closest load balancer. That load balancer will then temporarily
+                                        sky.walker.net                                     treat those replicas as local replicas. In parallel, a recovery
+                                                                                           process is initiated in the background. Once the failed load
+                                                                                           balancer is recovered, the associated replicas are transferred
+                                                                                           back to it. SkyWalker can tolerate multiple concurrent load
+         Controller     Load Balancer        DNS Server     Replica        Client
+                                                                                           balancer failures. For higher fault tolerance, users can deploy
+                                                                                           additional load balancers in any region.
+
+Figure 7. System architecture of SkyWalker. Clients across
+                                                                                           5   Evaluation
+different geographical regions issue requests to a unified do-
+main name (sky.walker.net in this example). The do-                                        We evaluate SkyWalker comprehensively across a variety
+main will be resolved to the nearest available load balancer                               of workloads and configurations to answer three questions:
+based on the client’s IP. Each load balancer maintains con-                                • Can SkyWalker maintain high throughput while preserv-
+nections to local replicas and other remote load balancers and                               ing low latency in a geo-distributed setup? (§5.1)
+performs request routing based on its load and shared prefix                               • What performance gains does selective pushing with pend-
+(§3.2). Load balancers coordinate with each other to handle                                  ing requests (§3.3) provide? (§5.2)
+load redistribution. A centralized controller manages system                               • What performance and cost benefits does SkyWalker
+updates, monitors health via periodic probes, and orchestrates                               provides for regionally imbalanced workloads compared to
+failure recovery across all load balancers and replicas. Note                                standard region-local deployments? (§5.2)
+that the placement of load balancers and replicas in the figure
+is illustrative; their geographic positions are abstracted for
+clarity and do not reflect exact deployment coordinates.                                   5.1 Macrobenchmarks
+                                                                                           We conducted end-to-end experiments using up to 12 replicas
+                                                                                           in a multi-region setup, where both replicas and clients are
+                                                                                           distributed across three geographical regions. We compare
+prefix hit ratio. If the request is routed to a remote region, its                         SkyWalker with several production and research systems:
+snapshot is updated using the input prompt of this request.
+                                                                                           • GKE Gateway [25]: GKE Gateway is a network gateway
+   Probe frequency. We set the probing interval for selective                                service that connects multiple GKE [2] clusters to provide
+pushing (§3.3) to 100ms. This choice is motivated by the ob-                                 a unified endpoint. Under the hood, each request is routed
+servation that each continuous batching step typically requires                              to and handled by one of the clusters.
+only tens of milliseconds to complete [20]. A 100ms interval                               • Round Robin (RR): A stateless load balancer that dis-
+achieves a balance between responsiveness and stability: it is                               tributes incoming requests in a round-robin fashion.
+short enough to capture meaningful changes in system load,                                 • Least Load (LL): A load balancer that tracks the number
+yet long enough to avoid excessive probing overhead.                                         of outstanding requests per replica and routes each new
+   Customized routing policy. SkyWalker supports cus-                                        request to the replica with the least load.
+tomizable routing policies that ensure compliance with GDPR                                • Consistent Hashing (CH): A ring hash [30, 55] based
+(§7). For instance, SkyWalker can restrict traffic offload-                                  consistent hashing algorithm, using the user’s IP address
+ing to occur only between GDPR-compliant regions, while                                      and session ID as hash key.
+regions outside the scope of GDPR may still offload traffic                                • SGLang Router [1] (SGL): A prefix-aware load balancer
+to GDPR-compliant regions when their replicas are underuti-                                  that routes requests based on a cache-aware routing algo-
+lized.                                                                                       rithm tailored to LLM workloads.
+                                                                                           • SkyWalker-CH: SkyWalker using a ring-hash based
+4.2   Serving System                                                                         consistent hashing policy.
+                                                                                           • SkyWalker: SkyWalker using the prefix tree policy.
+Service controller. SkyWalker employs a centralized con-
+troller to manage any updates to the system, such as adding                                   We modify SkyServe [35] to support our four global coor-
+or removing replicas and reconfiguring load balancers. It also                             dinator baselines: RR, LL, CH, and SGL. For those baselines,
+performs periodic probes to monitor the status and health of                               a single load balancer is deployed in the US. For both vari-
+all replicas and load balancers. The controller is fault-tolerant                          ants of SkyWalker and GKE Gateway, a load balancer is
+and can recover its state automatically in the event of a failure.                         deployed in each region.
+
+
+
+                                                                                    1357
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                                                                                                                                                                           Xia et al.
+
+
+               ×103                                                                                                                                                ×103                                                                      ×103
+
+                         8                                                                                                                                                   30                                                                        24
+                                                                                         ×103                                                                                27
+  Throughput (token/s)
+
+
+
+
+                                                                            Throughput (token/s)
+
+
+
+
+                                                                                                                                                      Throughput (token/s)
+
+
+
+
+                                                                                                                                                                                                                                Throughput (token/s)
+                                                                                                   5
+                         7                                                                                                                                                   24                                                                        21
+                                                                                                                                                                             21
+                         6                                                                         4                                                                         18                                                                        18
+                                                                                                                                                                             15
+                         5                                                                         3                                                                         12                                                                        15
+                         1                                                                                                                                                                                                                              3
+                         0                                                                         0                                                                          0                                                                         0
+                                GKE RR      LL   CH   SGL    Sky Sky                                      GKE RR      LL   CH   SGL    Sky Sky                                      GKE RR      LL   CH   SGL    Sky Sky                                      GKE RR         LL   CH   SGL    Sky Sky
+                              Gateway                       WalkerWalker                                Gateway                       WalkerWalker                                Gateway                       WalkerWalker                                Gateway                          WalkerWalker
+                                                             CH                                                                        CH                                                                        CH                                                                           CH
+
+
+
+                               (a) ChatBot Arena, Tpt.                                                      (b) WildChat, Tpt.                                                            (c) ToT, Tpt.                                                           (d) Mixed Tree, Tpt.
+                                                                                                                                                                                                                                                            1
+                                                                                                                                                                                                                                                       10
+                         101
+                                                                                                   101                                                                       101
+  TTFT (s)
+
+
+
+
+                                                                            TTFT (s)
+
+
+
+
+                                                                                                                                                      TTFT (s)
+
+
+
+
+                                                                                                                                                                                                                                TTFT (s)
+                         100                                                                                                                                                                                                                           100
+                                                                                                   100                                                                       100
+
+
+
+
+                                 GKE   RR   LL   CH   SGL     Sky   Sky                                    GKE   RR   LL   CH   SGL     Sky   Sky                                    GKE   RR   LL   CH   SGL     Sky   Sky                                       GKE   RR   LL   CH   SGL     Sky   Sky
+                               Gateway                       WalkerWalker                                Gateway                       WalkerWalker                                Gateway                       WalkerWalker                                   Gateway                       WalkerWalker
+                                                              CH                                                                        CH                                                                        CH                                                                           CH
+
+
+
+                          (e) ChatBot Arena, TTFT.                                                         (f) WildChat, TTFT.                                                           (g) ToT, TTFT.                                                         (h) Mixed Tree, TTFT.
+                                                                                                   80                                                                        60                                                                        35
+                         60
+                                                                                                                                                                             50                                                                        30
+  E2E Latency (s)
+
+
+
+
+                                                                            E2E Latency (s)
+
+
+
+
+                                                                                                                                                      E2E Latency (s)
+
+
+
+
+                                                                                                                                                                                                                                E2E Latency (s)
+                                                                                                   60
+                                                                                                                                                                             40                                                                        25
+                         40
+                                                                                                                                                                                                                                                       20
+                                                                                                   40                                                                        30
+                                                                                                                                                                                                                                                       15
+                         20                                                                                                                                                  20
+                                                                                                   20                                                                                                                                                  10
+                                                                                                                                                                             10
+                                                                                                                                                                                                                                                        5
+                          0
+                               GKE   RR     LL   CH   SGL     Sky   Sky                                  GKE   RR     LL   CH   SGL     Sky   Sky                                   GKE   RR    LL   CH   SGL     Sky   Sky                                   GKE   RR       LL   CH   SGL     Sky   Sky
+                             Gateway                         WalkerWalker                              Gateway                         WalkerWalker                               Gateway                        WalkerWalker                               Gateway                           WalkerWalker
+                                                              CH                                                                        CH                                                                        CH                                                                           CH
+
+
+
+  (i) ChatBot Arena, E2E Latency.                                                                  (j) WildChat, E2E Latency.                                                       (k) ToT, E2E Latency.                                          (l) Mixed Tree, E2E Latency.
+
+Figure 8. Service Throughput, TTFT Latency, and End-to-End Latency. We run meta-llama/Llama-3.1-8B-
+Instruct on one L4 GPU with up to 12 replicas and report service throughput along with the distributions of TTFT
+and end-to-end latency. The TTFT latency plot is log-scaled. For the box plot, the red line marks the median, the box marks 25𝑡ℎ
+and 75𝑡ℎ percentiles, the whiskers show 10𝑡ℎ and 90𝑡ℎ percentiles, and the inverted triangle marks the mean.
+
+   Experiment setup. We conduct our evaluation primarily on                                                                                                                    80 ongoing conversations per region. The real user ID in
+AWS [7], except for the GKE Gateway experiments which are                                                                                                                      the dataset is used as its consistent hashing key.
+performed on GCP [27]. To ensure a fair comparison, each                                                                                                                     • WildChat [68]: A large dataset of one million multi-turn
+system uses the same replica configuration. All replicas use                                                                                                                   conversations with demographic metadata such as state,
+one L4 GPU, hosting the meta-llama/Llama-3.1-8B-                                                                                                                               country, and hashed IP address. We evaluate a configuration
+Instruct model via SGLang [71]. Replicas are distributed                                                                                                                       with different numbers of clients across regions: 40 in the
+across three regions: the United States, Europe, and Asia. We                                                                                                                  US and 30 in both Europe and Asia. Each region issues
+vary replica’s geographical allocation and client workload                                                                                                                     requests only for conversations from its own geographical
+pattern to test a range of scenarios. For all experiments, we                                                                                                                  area, defined by the dataset’s metadata. The hashed IP in
+deploy clients in the US, Asia, and Europe to generate traffic,                                                                                                                the dataset is used as its consistent hashing key.
+representing all end users in its respective region. Each client
+issues one program at a time. In practice, GPU utilization is                                                                                                                   Tree of Thoughts. We also evaluate on the Tree of Thoughts
+kept high to maximize cost efficiency. In our evaluation, we                                                                                                                 [64] benchmark using the Grade School Math dataset [14]
+maintain replicas at high utilization to reflect this real-world                                                                                                             from OpenAI. In this setting, the replica configuration is bal-
+usage pattern. We use the following workloads:                                                                                                                               anced, with 12 replicas evenly distributed across all regions
+                                                                                                                                                                             (four per region). Tree of Thoughts exhibits high prefix reuse,
+   Multi-turn conversation. We evaluate all systems on sev-
+                                                                                                                                                                             as each question is solved via a tree structure where multiple
+eral multi-turn conversation datasets and vary the client con-
+                                                                                                                                                                             nodes share prefixes from root to their least common ances-
+figuration to reflect different deployment scenarios:
+                                                                                                                                                                             tors. Nodes in the same tree can be executed concurrently.
+• ChatBot Arena [35]: A real-world multi-turn LLM con-                                                                                                                       The tree has a depth of four, corresponding to a multi-step
+  versation dataset collected using anonymized user IDs. For                                                                                                                 math reasoning task. The question ID in the dataset is used as
+  each region, we maintain the same number of clients, with                                                                                                                  the consistent hashing key. We evaluate two workload types:
+
+
+
+
+                                                                                                                                                 1358
+SkyWalker: A Locality-Aware Cross-Region Load Balancer for LLM Inference              EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+• Tree of Thoughts (ToT): Each tree uses a 2-branch struc-                   significant overload with a variance in number of outstand-
+  ture (15 requests per tree). The US region runs 40 clients in              ing requests of 3.36×. SGL also suffers under this workload,
+  parallel, while Europe and Asia run 20 clients concurrently.               showing high variance of 2.22× as well. Non-cache-aware
+• Mixed Tree: A more complex scenario where US runs 4-                       policies such as LL and RR experience low cache hit rates
+  branch trees (85 requests per tree), with two clients sending              (58.66-59.32%) compare to SkyWalker’s 89.56-90.01%, and
+  such tree concurrently. The remaining regions continue                     consequently deliver suboptimal throughput.
+  to issue 2-branch trees, each with 20 clients in parallel.                    Across all experiments, the prefix tree variant (SkyWalker)
+  This setup reflects a mixed workload scenario where users                  consistently outperforms the CH variant (SkyWalker-CH)
+  generate heterogeneous traffic (e.g. setting different branch              by 1.34-8.21%. This is primarily because consistent hashing
+  sizes for different accuracy requirements), more accurately                can occasionally assign users with bursty request patterns to
+  representing real-world usage patterns.                                    the same replica (§3.2), leading to load imbalance—since CH
+                                                                             always routes requests to the same replica if it is available. In
+   We report end-to-end service throughput, TTFT latency
+                                                                             contrast, the prefix tree variant is more adaptive: when the pre-
+and end-to-end latency to evaluate system performance and
+                                                                             fix hit ratio is low (e.g., < 50%), it explores other underutilized
+responsiveness (Figure 8).
+                                                                             replicas and distributes requests more evenly these replicas.
+   Service throughput. We show the service throughput of                     This occasionally results in a slightly higher TTFT due to the
+multi-turn conversation datasets (ChatBot Arena and Wild-                    added prefill time (e.g., in Figure 8g), but it balances the load
+Chat) in Figrue 8a, 8b. Both variants of SkyWalker im-                       and delivers better overall throughput (Figure 8c).
+prove service throughput by 1.12-1.2× compared to single                        Compare to GKE Gateway, SkyWalker offers key advan-
+load balancer solutions. Prefix-aware baselines such as SGL                  tages through its KV Cache awareness and selective pushing
+and CH rely on blind pushing, which leads to overloading                     mechanisms, which together contribute to 1.43-2.06× higher
+some replicas while leaving others underutilized. In these                   service throughput. In contrast, a general-purpose gateway
+baselines, replicas experience high variance in outstanding                  like GKE Gateway may incur longer prefill and queuing de-
+request counts, ranging from 2.33-5.08× for SGL and 2.54-                    lays due to a lack of LLM-specific optimizations.
+4.92× for CH. Non-prefix-aware baselines perform worse in
+                                                                                TTFT and end-to-end latency. Regarding TTFT, the P50
+terms of prefix hit rate. RR achieves only 10.78-16.57%, while
+                                                                             and mean latency are primarily affected by cross-region la-
+LL performs better with 28.29-31.13%, though still below
+                                                                             tency and prefill latency. SkyWalker achieves the lowest
+SkyWalker ’s higher hit rate of 36.96-46.55%. Among the
+                                                                             P50 and mean latency, ranging from 15.87% to 57.63% of the
+single load balancer baselines, LL achieves the best through-
+                                                                             baseline values, across all evaluated systems (Figure 8e-8h).
+put, as load balancing plays a more dominant role when prefix
+                                                                             This improvement is attributed to its geo-distributed load
+similarity is relatively low. Nevertheless, it still falls short of
+                                                                             balancers, which reduce cross-region latency, and its high
+SkyWalker, reaching 97.38% of SkyWalker ’s through-
+                                                                             prefix hit rates, which reduce prefill time. The P90 latency,
+put. Compared to GKE Gateway, SkyWalker achieves a
+                                                                             largely determined by queuing delays, can reach several sec-
+throughput improvement of 1.43-1.62×. This gain is primar-
+                                                                             onds. Even under this constraint, SkyWalker maintains the
+ily due to SkyWalker ’s LLM-specific design. While GKE
+                                                                             lowest P90 TTFT (10.08-23.38% of baselines), owing to its
+Gateway offers robust, general-purpose multi-cluster load
+                                                                             selective pushing algorithm and reduced queuing delay.
+balancing, it lacks prefix-aware routing for KV Cache opti-
+                                                                                For end-to-end latency (Figures 8i-8l), SkyWalker con-
+mization and the selective pushing mechanism that adapts
+                                                                             sistently delivers the best performance, achieving 1.05-2.14×
+to the dynamic nature of LLM workloads. The absence of
+                                                                             improvements in P50 latency compared to baseline systems.
+these capabilities in a standard gateway solution results in
+                                                                             This demonstrates that SkyWalker effectively leverages
+lower cache hit rates (18.08-24.30%) and less efficient GPU
+                                                                             KV Cache locality while maintaining balanced load.
+utilization, thereby constraining overall service throughput.
+   In the Tree of Thoughts workload (Figrue 8c), when all                       Replica distribution. We observe that SkyWalker is ro-
+trees are of uniform size, the CH baseline slightly outper-                  bust to various replica distributions, including deployments
+forms SkyWalker with a marginal throughput gain of 2%.                       with different numbers of model replicas and varying replica
+CH also outperforms LL by 1.4× in ToT, due to substantial                    ratios across regions. In our end-to-end experiments, we eval-
+prefix sharing. CH hashes requests from the same tree (i.e., the             uated different configurations, such as an unbalanced distri-
+same question) to the same replica, enabling effective reuse                 bution (3 replicas in the US, 3 in Asia, and 2 in Europe) and
+of cached prefixes. However, this advantage disappears under                 a balanced distribution (4 replicas per region). SkyWalker
+heterogeneous workloads (e.g., 2-branch vs. 4-branch trees,                  consistently achieves strong performance across all scenarios.
+Figrue 8d), and user-generated request bursts can saturate indi-
+vidual replicas. In such cases, the CH policy continues routing              5.2   Microbenchmark
+requests from the same user to the same replica, leading to                  Selective pushing by checking pending requests. We evaluate
+                                                                             the effectiveness of the selective pushing mechanism (§3.3)
+
+
+
+                                                                      1359
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                                                                                               Xia et al.
+
+
+                                                                                 101                                         30                                 Diurnal pattern. We also evaluate SkyWalker under re-
+ Throughput (token/s)
+
+
+
+                    ×103
+
+
+
+
+                                                                                                           E2E Latency (s)
+                        9                                                                                                                                    gionally imbalanced workloads to assess its performance in
+
+
+
+                                                                      TTFT (s)
+                                                                                                                             20
+                                                                                                                                                             handling traffic patterns with diurnal pattern. We compare it
+                                                                                 100
+                                                                                                                             10                              against a region-local deployment strategy where each region
+                        6
+                        0
+                                                                                                                                                             handles requests exclusively within its own local replicas,
+                            BP   SP-O                      SP-P                         BP   SP-O   SP-P                           BP   SP-O   SP-P
+                                                                                                                                                             as is common among model providers (Figure 1(a)). Specif-
+                        (a) Throughput.                                                (b) TTFT.                             (c) E2E latency.                ically, we simulate a regionally skewed workload scenario
+                                                                                                                                                             representative of typical US working hours, where the US
+Figure 9. Service Throughput and Latency, comparing                                                                                                          region uses 120 clients, while both Asia and Europe have 40
+Blind Pushing (BP) with two variants of Selective Pushing:                                                                                                   clients. We vary the total number of replicas deployed in both
+fixed maximum outstanding requests per replica (SP-O) and                                                                                                    SkyWalker and the region-local baseline, with replicas are
+pending request (SP-P). The TTFT latency plot is log-scaled.                                                                                                 evenly distributed across the three regions.
+                                                                                                                                                                The throughput results for both systems are shown in Fig-
+                                                                                                                                                             ure 10. With an equal number of replicas, SkyWalker con-
+                                                               ×103
+                                    Throughput (token/s)
+
+
+
+
+                                                                                                                                                             sistently outperforms the region-local system by between
+                                                           6                                                                                                 1.07× and 1.18×, demonstrating the effectiveness of cross-
+                                                                                             -25%                                                            region traffic handling to offload traffic onto regions with
+                                                           4
+                                                                                                    SkyWalker                                                less load. Moreover, we observe that SkyWalker achieves
+                                                                                                    Region-Local                                             comparable throughput with only 9 replicas as the region-
+                                                           2
+                                                                  3              6       9      12     15                         18                         local deployment achieves with 12 replicas, translating into
+                                                                                     Number of Replicas                                                      a cost reduction of 25% while maintaining the same level of
+                                                                                                                                                             throughput.
+Figure 10. Service Throughput, comparing SkyWalker
+and Region-Local deployments. We evaluate the performance                                                                                                    6   Related Work
+using a regionally skewed workload, where the US region
+                                                                                                                                                             Load balancing for CPU workloads. Efficiently managing
+has 120 clients and both Asia and Europe have 40 clients. We
+                                                                                                                                                             CPU resources for latency-sensitive applications is a well-
+vary the number of replicas to measure throughput gains from
+                                                                                                                                                             studied problem in CPU workloads. Prior work proposes
+cross-region traffic offloading.
+                                                                                                                                                             load balancing policies that make task distribution decisions
+                                                                                                                                                             at microsecond-scale latencies. McClure et al. [36] classify
+                                                                                                                                                             these techniques into two categories: work stealing [10, 19,
+using one of our baseline systems, SGLang Router. We extend
+                                                                                                                                                             22, 31, 34, 42, 44] and work shedding [40]. In work stealing,
+the original router to incorporate two variants of selective
+                                                                                                                                                             idle CPU cores actively pull jobs from overloaded cores. In
+pushing: the standard one which is based on a fixed maximum
+                                                                                                                                                             contrast, work shedding involves overloaded cores pushing
+outstanding requests per replica (SP-O), and ours variant
+                                                                                                                                                             excess jobs to other cores. Empirical studies show that work
+which is based on checking pending requests (SP-P). We
+                                                                                                                                                             stealing generally outperforms work shedding in terms of
+compare both against the original version that uses blind
+                                                                                                                                                             both latency and CPU utilization.
+pushing (BP). To isolate the effect of selective pushing, the
+experiment is conducted entirely within a single region, where                                                                                                  Production systems. Amazon Bedrock [5] is a fully man-
+all components (clients, replicas, and load balancer) are co-                                                                                                aged LLM inference service that supports cross-region infer-
+located. In this setup, TTFT is primarily influenced by prefill                                                                                              ence to handle traffic spikes. However, its offloading is limited
+time and queuing delay.                                                                                                                                      to within the same continent, missing the opportunity to ag-
+   The experiment uses 4 replicas and 30 clients within a                                                                                                    gregate diurnal patterns. Additionally, Bedrock is a hosted
+single region, running the Tree of Thoughts (ToT) workload                                                                                                   solution operating at AWS scale, whereas SkyWalker is a
+with a branching factor of 2. Results are shown in Figure 9.                                                                                                 self-hosted serving system designed for broader accessibility.
+SP-P improves service throughput by 1.27× (Figure 9a) and                                                                                                    GCP Gateway [25] provides a unified endpoint for global
+significantly reduces P90 TTFT by 18.47× compared to BP                                                                                                      deployment by routing requests across multiple GKE [2] clus-
+(Figure 9b). This demonstrates that SP-P effectively mini-                                                                                                   ters. However, this solution is not tailored for LLM workloads.
+mizes queuing delay and improves prefill time by achieving a                                                                                                 Neither Bedrock nor GCP Gateway incorporates prefix aware-
+higher KV Cache hit rate: 89.86% compared to BP’s 68.89%.                                                                                                    ness, thereby failing to reuse KV Cache and reduce compute
+These gains translate into both lower latency (Figrue 9b, 9c)                                                                                                overhead. They also lack selective pushing based on pending
+and higher throughput. Compared to SP-O, SP-P achieves                                                                                                       requests, making them more susceptible to replica overload.
+similar TTFT but improves throughput by 1.4×, highlighting                                                                                                      Prefix-aware load balancing. Prior work has explored
+that the adaptive nature of SP-P leads to better replica utiliza-                                                                                            leveraging KV Cache reuse to improve the efficiency of LLM
+tion and overall performance under the same configuration.                                                                                                   request routing. Preble [53] achieves low latency and high
+
+
+
+                                                                                                                                                      1360
+SkyWalker: A Locality-Aware Cross-Region Load Balancer for LLM Inference             EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+throughput by maximizing prefix cache hit rates, but it relies              checking pending requests mechanism in SkyWalker is
+on a centralized global scheduler, limiting its applicability to a          inherently hardware-agnostic: it identifies overloaded repli-
+single-region setting. Similarly, SGLang Router [1] maintains               cas without relying on hardware-specific features, making it
+a global prefix tree across all replicas, incorporating more                naturally compatible with heterogeneous settings. However,
+fine-grained load balancing policies. DLPM [12] introduces                  the prefix-aware routing and overall load balancing policies
+a scheduling algorithm that improves upon Preble in both                    remain as an open question.
+latency and throughput while also offering fairness guaran-                    More advanced policies. Request characteristics, such as
+tees to clients. While these centralized approaches deliver                 prompt length, can influence ideal routing strategies. For
+high performance, their reliance on a single scheduler makes                instance, shorter prompts incur lower prefill costs, making
+them unsuitable for cross-region, production-grade deploy-                  it more advantageous to route them to replicas with slightly
+ments due to high inter-region communication latency and                    lower load instead of prioritize prefix reuse. SkyWalker
+the inherent risk of a single point of failure.                             can be extended to incorporate request-characteristic aware
+   Improving GPU utilization through job colocation. Many                   routing strategies, dynamically adapting its decision-making
+techniques has been proposed to improve GPU utilization by                  process based on each request.
+sharing resources either spatially or temporally [13, 18, 38,
+43, 61, 62, 66, 69]. These include strategies such as colocat-              8    Conclusion
+ing training and serving jobs or enabling multi-model serving
+                                                                            Shifting regional diurnal patterns make cost-efficient LLM
+on shared GPUs. However, due to the strict service-level ob-
+                                                                            deployment in multi-region setups challenging. To address
+jectives (SLOs) associated with serving tasks, job interference
+                                                                            this, we propose cross-region traffic handling and present
+remains a concern that can degrade performance. Moreover,
+                                                                            SkyWalker, a locality-aware cross-region load balancer
+in many real-world settings, users may only run serving work-
+                                                                            designed to overcome those limitations. By enabling cross-
+loads, limiting the opportunities for job colocation.
+                                                                            region coordination through geo-distributed load balancers,
+                                                                            SkyWalker improves GPU utilization and reduces serving
+7   Discussion and Future Work                                              costs, all while maintaining low latency and high throughput.
+                                                                            To achieve this, SkyWalker leverages prefix-aware routing
+GDPR and regulatory constraints. The General Data Pro-                      to maximize cache locality and selective pushing to adap-
+tection Regulation (GDPR) is an EU law that governs the                     tively avoid overloaded replicas. Together, these techniques
+collection, processing, and transfer of personal data, granting             provide robust load balancing under the inherently bursty
+individuals strong rights over their information. It prohibits              and unpredictable nature of LLM workloads. Through ex-
+transferring data outside EU regions without adequate protec-               tensive evaluation across real-world and synthetic scenarios,
+tions. In this context, while global traffic aggregation is not             we show that SkyWalker consistently outperforms exist-
+feasible, aggregating traffic within EU regions or offloading               ing production and research systems, achieving 1.12-2.06×
+non-EU traffic to EU regions can still yield substantial cost               higher throughput and 1.74-6.30× lower latency, and 25% cost
+savings.                                                                    savings compare to other systems.
+   Security risk for prefix sharing. Recent work demonstrates
+that optimizations in LLM serving can expose timing and size-               Acknowledgement
+based side channels exploitable by adversaries to infer sen-
+                                                                            We are grateful to our shepherd, Abhishek Chandra, and the
+sitive user information [52]. Similarly, KV cache sharing in
+                                                                            anonymous EuroSys reviewers for their constructive feedback
+multi-tenant serving environments enables cross-user leakage,
+                                                                            and thoughtful suggestions. This work is in part supported
+where an attacker can reconstruct private prompts by exploit-
+                                                                            by gifts from Accenture, AMD, Anyscale, Broadcom, Cisco,
+ing cache reuse [59]. While prefix sharing may introduce
+                                                                            Google, IBM, Intel, Intesa Sanpaolo, Lambda, Lightspeed,
+potential side-channel vulnerabilities, the problem suggested
+                                                                            Mibura, Microsoft, NVIDIA, Samsung SDS, and SAP.
+by these findings is orthogonal to the design of SkyWalker
+and pertains to all systems employing KV cache sharing, in-
+cluding single region or single inference engine deployments.               References
+Ongoing research continues to explore such risks and develop                 [1] 2024. SGLang v0.4: Zero-Overhead Batch Scheduler, Cache-Aware
+                                                                                 Load Balancer, Faster Structured Outputs. https://lmsys.org/blog/
+effective solutions.                                                             2024-12-04-sglang-v0-4/. Accessed: 2025-05-12.
+   Support for heterogeneous accelerators. Load balancing                    [2] 2025. Google Kubernetes Engine (GKE). https://cloud.google.com/
+is more challenging in heterogeneous environments. While                         kubernetes-engine?hl=en. Accessed: 2025-05-12.
+                                                                             [3] AIME. 2025. CLOUD VS. ON-PREMISE - Total Cost of Ownership
+SkyWalker currently focuses on homogeneous replicas, it
+                                                                                 Analysis. https://www.aime.info/blog/en/cloud-vs-on-premise-
+can be extended to support heterogeneous accelerators, such                      total-cost-of-ownership-analysis/ Accessed: 2025-05-13.
+as different GPU types or other hardware like TPUs [29]                      [4] Amazon Web Service. 2025. AWS Inferentia. https://aws.amazon.
+and AWS Inferentia [4]. Notably, the selective pushing by                        com/ai/machine-learning/inferentia/ Accessed: 2025-05-15.
+
+
+
+
+                                                                     1361
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                                    Xia et al.
+
+
+ [5] Amazon Web Services. 2025. Amazon Bedrock. https://aws.amazon.                     [23] In Gim, Guojun Chen, Seung-seob Lee, Nikhil Sarda, Anurag Khandel-
+     com/bedrock/ Accessed: 2025-05-09.                                                      wal, and Lin Zhong. 2024. Prompt cache: Modular attention reuse for
+ [6] Amazon Web Services. 2025. Amazon Route 53. https://aws.amazon.                         low-latency inference. Proceedings of Machine Learning and Systems
+     com/route53/ Accessed: 2025-05-12.                                                      6 (2024), 325–338.
+ [7] Amazon Web Services. 2025. Cloud Computing with AWS — Build,                       [24] GitHub. 2025. GitHub Copilot: Your AI pair programmer. https:
+     Deploy, and Manage Websites, Apps or Processes on AWS Secure,                           //github.com/features/copilot Accessed: 2025-05-12.
+     Reliable Network. https://aws.amazon.com/ Accessed: 2025-05-13.                    [25] Google Cloud. 2025. About the Gateway API | GKE network-
+ [8] Apple Inc. 2025.        Use ChatGPT with Apple Intelligence on                          ing. https://cloud.google.com/kubernetes-engine/docs/concepts/
+     iPhone. https://support.apple.com/guide/iphone/use-chatgpt-                             gateway-api Accessed: 2025-05-12.
+     with-apple-intelligence-iph00fd3c8c2/ios Accessed: 2025-05-12.                     [26] Google Cloud. 2025. Compute Engine Reservations Overview.
+ [9] Mohammad Beigi, Sijia Wang, Ying Shen, Zihao Lin, Adithya Kulka-                        https://cloud.google.com/compute/docs/instances/reservations-
+     rni, Jianfeng He, Feng Chen, Ming Jin, Jin-Hee Cho, Dawei Zhou,                         overview Accessed: 2025-05-12.
+     Chang-Tien Lu, and Lifu Huang. 2024. Rethinking the Uncertainty:                   [27] Google Cloud Platform. 2025. Google Cloud Platform — Future-
+     A Critical Review and Analysis in the Era of Large Language Models.                     proof infrastructure. Powerful data and analytics. No ops, just code.
+     arXiv:2410.20199 [cs.AI] https://arxiv.org/abs/2410.20199                               https://cloud.google.com/ Accessed: 2025-05-13.
+[10] Edouard Bugnion. 2017. ZygOS: Achieving Low Tail Latency for                       [28] Google LLC. 2025. Introducing Gemini: Your New Personal AI Assis-
+     Microsecond-scale Networked Tasks. In Proceedings of the 26th ACM                       tant. https://gemini.google/assistant/ Accessed: 2025-05-12.
+     Symposium on Operating Systems Principles.                                         [29] Norman P. Jouppi, George Kurian, Sheng Li, Peter Ma, Rahul Nagara-
+[11] Brian Buntz. 2024. Musk unveils world’s largest AI cluster, OpenAI                      jan, Lifeng Nai, Nishant Patil, Suvinay Subramanian, Andy Swing,
+     eyes premium subscriptions. https://www.rdworldonline.com/this-                         Brian Towles, Cliff Young, Xiang Zhou, Zongwei Zhou, and David
+     week-in-ai-musk-unveils-worlds-largest-ai-cluster-openai-                               Patterson. 2023. TPU v4: An Optically Reconfigurable Supercom-
+     eyes-2000-month-subscriptions/ Accessed: 2025-05-13.                                    puter for Machine Learning with Hardware Support for Embeddings.
+[12] Shiyi Cao, Yichuan Wang, Ziming Mao, Pin-Lun Hsu, Liangsheng                            arXiv:2304.01433 [cs.AR] https://arxiv.org/abs/2304.01433
+     Yin, Tian Xia, Dacheng Li, Shu Liu, Yineng Zhang, Yang Zhou, et al.                [30] David Karger, Eric Lehman, Tom Leighton, Rina Panigrahy, Matthew
+     2025. Locality-aware Fair Scheduling in LLM Serving. arXiv preprint                     Levine, and Daniel Lewin. 1997. Consistent hashing and random trees:
+     arXiv:2501.14312 (2025).                                                                distributed caching protocols for relieving hot spots on the World Wide
+[13] Seungbeom Choi, Sunho Lee, Yeonjae Kim, Jongse Park, Youngjin                           Web. In Proceedings of the Twenty-Ninth Annual ACM Symposium on
+     Kwon, and Jaehyuk Huh. 2021. Multi-model machine learning                               Theory of Computing (El Paso, Texas, USA) (STOC ’97). Association
+     inference serving with gpu spatial partitioning. arXiv preprint                         for Computing Machinery, New York, NY, USA, 654–663. doi:10.
+     arXiv:2109.01611 (2021).                                                                1145/258533.258660
+[14] Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Hee-                    [31] Martin Karsten and Saman Barghi. 2020. User-level threading: Have
+     woo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob                          your cake and eat it too. Proceedings of the ACM on Measurement and
+     Hilton, Reiichiro Nakano, Christopher Hesse, and John Schulman.                         Analysis of Computing Systems 4, 1 (2020), 1–30.
+     2021. Training Verifiers to Solve Math Word Problems. arXiv preprint               [32] Kubernetes Authors. 2025. Services, Load Balancing, and Network-
+     arXiv:2110.14168 (2021).                                                                ing. https://kubernetes.io/docs/concepts/services-networking/
+[15] Consensus. 2025. Consensus: AI-Powered Academic Search Engine.                          Accessed: 2025-05-13.
+     https://consensus.app/ Accessed: 2025-05-12.                                       [33] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+[16] Cursor. 2025. Cursor: The AI Code Editor. https://www.cursor.com/                       Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, and Ion Stoica.
+     en Accessed: 2025-05-15.                                                                2023. Efficient Memory Management for Large Language Model
+[17] Mark Van der Boor, Sem C. Borst, Johan S. H. Van Leeuwaarden, and                       Serving with PagedAttention. arXiv:2309.06180 [cs.LG] https://arxiv.
+     Debankur Mukherjee. 2022. Scalable Load Balancing in Networked                          org/abs/2309.06180
+     Systems: A Survey of Recent Advances. SIAM Rev. 64, 3 (Aug. 2022),                 [34] Jing Li, Kunal Agrawal, Sameh Elnikety, Yuxiong He, I-Ting Angelina
+     554–622. doi:10.1137/20m1323746                                                         Lee, Chenyang Lu, and Kathryn S McKinley. 2016. Work stealing
+[18] Aditya Dhakal, Sameer G Kulkarni, and KK Ramakrishnan. 2020.                            for interactive services to meet target latency. In Proceedings of the
+     Gslice: controlled spatial sharing of gpus for a scalable inference plat-               21st ACM SIGPLAN Symposium on Principles and Practice of Parallel
+     form. In Proceedings of the 11th ACM Symposium on Cloud Computing.                      Programming. 1–13.
+     492–506.                                                                           [35] Ziming Mao, Tian Xia, Zhanghao Wu, Wei-Lin Chiang, Tyler Griggs,
+[19] James Dinan, D Brian Larkins, Ponnuswamy Sadayappan, Sriram Kr-                         Romil Bhardwaj, Zongheng Yang, Scott Shenker, and Ion Stoica. 2025.
+     ishnamoorthy, and Jarek Nieplocha. 2009. Scalable work stealing.                        SkyServe: Serving AI Models across Regions and Clouds with Spot
+     In Proceedings of the Conference on High Performance Computing                          Instances. In Proceedings of the Twentieth European Conference on
+     Networking, Storage and Analysis. 1–11.                                                 Computer Systems (Rotterdam, Netherlands) (EuroSys ’25). Asso-
+[20] Doil Kim. 2025. Benchmarking LLM Serving Performance: A                                 ciation for Computing Machinery, New York, NY, USA, 159–175.
+     Comprehensive Guide.           https://medium.com/@kimdoil1211/                         doi:10.1145/3689031.3717459
+     benchmarking-llm-serving-performance-a-comprehensive-                              [36] Sarah McClure, Amy Ousterhout, Scott Shenker, and Sylvia Ratnasamy.
+     guide-db94b1bfe8cf Accessed: 2025-09-11.                                                2022. Efficient scheduling policies for Microsecond-Scale tasks. In 19th
+[21] Envoy Project. 2025. Load Balancers — Envoy Proxy Docu-                                 USENIX Symposium on Networked Systems Design and Implementation
+     mentation. https://www.envoyproxy.io/docs/envoy/latest/intro/                           (NSDI 22). 1–18.
+     arch_overview/upstream/load_balancing/load_balancers Ac-                           [37] Xupeng Miao, Chunan Shi, Jiangfei Duan, Xiaoli Xi, Dahua Lin, Bin
+     cessed: 2025-05-13.                                                                     Cui, and Zhihao Jia. 2024. Spotserve: Serving generative large language
+[22] Joshua Fried, Zhenyuan Ruan, Amy Ousterhout, and Adam Belay. 2020.                      models on preemptible instances. In Proceedings of the 29th ACM
+     Caladan: Mitigating interference at microsecond timescales. In 14th                     International Conference on Architectural Support for Programming
+     USENIX Symposium on Operating Systems Design and Implementation                         Languages and Operating Systems, Volume 2. 1112–1127.
+     (OSDI 20). 281–297.
+
+
+
+
+                                                                                 1362
+SkyWalker: A Locality-Aware Cross-Region Load Balancer for LLM Inference                        EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+[38] Jaiaid Mobin, Avinash Maurya, and M Mustafa Rafique. 2023. Colti:                [54] Steve Roberts. 2023. Amazon CodeWhisperer, Free for Individual
+     Towards concurrent and co-located dnn training and inference. In Pro-                 Use, is Now Generally Available. https://aws.amazon.com/blogs/
+     ceedings of the 32nd International Symposium on High-Performance                      aws/amazon-codewhisperer-free-for-individual-use-is-now-
+     Parallel and Distributed Computing. 309–310.                                          generally-available/ Accessed: 2025-05-12.
+[39] Evan Morikawa. 2023. Behind the Scenes Scaling ChatGPT. https:                   [55] Ion Stoica, Robert Morris, David Liben-Nowell, David R Karger,
+     //youtu.be/PeKMEXUrlq4?t=833. Accessed: 2025-05-25.                                   M Frans Kaashoek, Frank Dabek, and Hari Balakrishnan. 2003.
+[40] Malarvizhi Nandagopal, Kandaswamy Gokulnath, and V Rhymend                            Chord: a scalable peer-to-peer lookup protocol for internet applica-
+     Uthariaraj. 2010. Sender initiated decentralized dynamic load balancing               tions. IEEE/ACM Transactions on networking 11, 1 (2003), 17–32.
+     for multi cluster computational grid environment. In Proceedings of              [56] Jovan Stojkovic, Chaojie Zhang, Íñigo Goiri, Josep Torrellas, and Esha
+     the 1st Amrita ACM-W Celebration on Women in Computing in India.                      Choukse. 2024. DynamoLLM: Designing LLM Inference Clusters
+     1–4.                                                                                  for Performance and Energy Efficiency. arXiv:2408.00741 [cs.AI]
+[41] Ravi Netravali, Vikram Nathan, James Mickens, and Hari Balakrishnan.                  https://arxiv.org/abs/2408.00741
+     2018. Vesper: Measuring Time-to-Interactivity for Web Pages. In 15th             [57] Tabnine Inc. 2025. Tabnine: AI Code Assistant. https://www.tabnine.
+     USENIX Symposium on Networked Systems Design and Implementation                       com/ Accessed: 2025-05-12.
+     (NSDI 18). USENIX Association, Renton, WA, 217–231. https://www.                 [58] Windsurf. 2025. Windsurf: The Most Powerful AI Code Editor. https:
+     usenix.org/conference/nsdi18/presentation/netravali-vesper                            //windsurf.com/ Accessed: 2025-05-12.
+[42] Poornima Nookala, Kyle Chard, and Ioan Raicu. 2024.                  X-          [59] Guanlong Wu, Zheng Zhang, Yao Zhang, Weili Wang, Jianyu Niu,
+     OpenMP—eXtreme fine-grained tasking using lock-less work stealing.                    Ye Wu, and Yinqian Zhang. 2025. I Know What You Asked: Prompt
+     Future Generation Computer Systems 159 (2024), 444–458.                               Leakage via KV-Cache Sharing in Multi-Tenant LLM Serving. In
+[43] Gabriele Oliaro, Xupeng Miao, Xinhao Cheng, Vineeth Kada, Ruohan                      NDSS. https://www.ndss-symposium.org/ndss-paper/i-know-
+     Gao, Yingyi Huang, Remi Delacourt, April Yang, Yingcheng Wang,                        what-you-asked-prompt-leakage-via-kv-cache-sharing-in-
+     Mengdi Wu, et al. 2024. Flexllm: A system for co-serving large                        multi-tenant-llm-serving/
+     language model inference and parameter-efficient finetuning. arXiv               [60] Yuxing Xiang, Xue Li, Kun Qian, Wenyuan Yu, Ennan Zhai,
+     preprint arXiv:2402.18789 (2024).                                                     and Xin Jin. 2025. ServeGen: Workload Characterization and
+[44] Amy Ousterhout, Joshua Fried, Jonathan Behrens, Adam Belay, and                       Generation of Large Language Model Serving in Production.
+     Hari Balakrishnan. 2019. Shenango: Achieving high CPU efficiency for                  arXiv:2505.09999 [cs.DC] https://arxiv.org/abs/2505.09999
+     latency-sensitive datacenter workloads. In 16th USENIX Symposium on              [61] Wencong Xiao, Romil Bhardwaj, Ramachandran Ramjee, Muthian
+     Networked Systems Design and Implementation (NSDI 19). 361–378.                       Sivathanu, Nipun Kwatra, Zhenhua Han, Pratyush Patel, Xuan Peng,
+[45] Archit Patke, Dhemath Reddy, Saurabh Jha, Chandra Narayanaswami,                      Hanyu Zhao, Quanlu Zhang, et al. 2018. Gandiva: Introspective cluster
+     Zbigniew Kalbarczyk, and Ravishankar Iyer. 2025. Hierarchical Au-                     scheduling for deep learning. In 13th USENIX Symposium on Operating
+     toscaling for Large Language Model Serving with Chiron. arXiv                         Systems Design and Implementation (OSDI 18). 595–610.
+     preprint arXiv:2501.08090 (2025).                                                [62] Wencong Xiao, Shiru Ren, Yong Li, Yang Zhang, Pengyang Hou, Zhi
+[46] Perplexity AI. 2025. Perplexity: AI-powered answer engine that                        Li, Yihui Feng, Wei Lin, and Yangqing Jia. 2020. AntMan: Dynamic
+     provides accurate, trusted, and real-time answers to any question.                    scaling on GPU clusters for deep learning. In 14th USENIX Symposium
+     https://www.perplexity.ai Accessed: 2025-05-15.                                       on Operating Systems Design and Implementation (OSDI 20). 533–
+[47] PYMNTS. 2025. Sam Altman: OpenAI Has Reached Roughly 800 Mil-                         548.
+     lion Users. https://www.pymnts.com/artificial-intelligence-2/2025/               [63] Zongheng Yang, Zhanghao Wu, Michael Luo, Wei-Lin Chiang, Romil
+     sam-altman-openai-has-reached-roughly-800-million-users/ Ac-                          Bhardwaj, Woosuk Kwon, Siyuan Zhuang, Frank Sifei Luan, Gautam
+     cessed: 2025-05-13.                                                                   Mittal, Scott Shenker, et al. 2023. SkyPilot: An intercloud broker for
+[48] Ray Project. 2025. Ray Serve: Scalable and Programmable Serving                       sky computing. In 20th USENIX Symposium on Networked Systems
+     for ML Models. https://docs.ray.io/en/latest/serve/index.html Ac-                     Design and Implementation (NSDI 23). 437–455.
+     cessed: 2025-05-13.                                                              [64] Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Thomas L.
+[49] Replit Inc. 2025. Intro to Ghostwriter. https://replit.com/learn/intro-               Griffiths, Yuan Cao, and Karthik Narasimhan. 2023. Tree of
+     to-ghostwriter Accessed: 2025-05-12.                                                  Thoughts: Deliberate Problem Solving with Large Language Models.
+[50] Sherwood News. 2024. Just four companies are hoarding tens of bil-                    arXiv:2305.10601 [cs.CL] https://arxiv.org/abs/2305.10601
+     lions of dollars worth of Nvidia GPU chips. https://sherwood.news/               [65] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim,
+     tech/companies-hoarding-nvidia-gpu-chips-meta-tesla/                Ac-               and Byung-Gon Chun. 2022. Orca: A Distributed Serving System
+     cessed: 2025-05-14.                                                                   for Transformer-Based Generative Models. In 16th USENIX Sympo-
+[51] Anton Shilov. 2024.          TikTok owner ByteDance taps TSMC                         sium on Operating Systems Design and Implementation (OSDI 22).
+     to make its own AI GPUs to stop relying on Nvidia.                                    USENIX Association, Carlsbad, CA, 521–538. https://www.usenix.
+     https://www.tomshardware.com/tech-industry/artificial-                                org/conference/osdi22/presentation/yu
+     intelligence/tiktok-owner-bytedance-taps-tsmc-to-make-                           [66] Shan Yu, Jiarong Xing, Yifan Qiao, Mingyuan Ma, Yangmin Li, Yang
+     its-own-ai-gpus-to-stop-relying-on-nvidia-the-company-has-                            Wang, Shuo Yang, Zhiqiang Xie, Shiyi Cao, Ke Bao, et al. 2025. Prism:
+     reportedly-spent-over-dollar2-billion-on-nvidia-ai-gpus Accessed:                     Unleashing GPU Sharing for Cost-Efficient Multi-LLM Serving. arXiv
+     2025-05-12.                                                                           preprint arXiv:2505.04021 (2025).
+[52] Mahdi Soleimani, Grace Jia, In Gim, Seung seob Lee, and Anurag                   [67] Chengliang Zhang, Minchen Yu, Wei Wang, and Feng Yan. 2019.
+     Khandelwal. 2025. Wiretapping LLMs: Network Side-Channel At-                          MArk: Exploiting cloud services for Cost-Effective,SLO-Aware ma-
+     tacks on Interactive LLM Services. Cryptology ePrint Archive, Paper                   chine learning inference serving. In 2019 USENIX Annual Technical
+     2025/167. https://eprint.iacr.org/2025/167                                            Conference (USENIX ATC 19). 1049–1062.
+[53] Vikranth Srivatsa, Zijian He, Reyna Abhyankar, Dongming Li, and                  [68] Wenting Zhao, Xiang Ren, Jack Hessel, Claire Cardie, Yejin Choi,
+     Yiying Zhang. 2024. Preble: Efficient Distributed Prompt Scheduling                   and Yuntian Deng. 2024. WildChat: 1M ChatGPT Interaction Logs
+     for LLM Serving. (2024). arXiv:2407.00023 [cs.DC] https://arxiv.                      in the Wild. In The Twelfth International Conference on Learning
+     org/abs/2407.00023                                                                    Representations. https://openreview.net/forum?id=Bl8u7ZRlbM
+
+
+
+
+                                                                               1363
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                  Xia et al.
+
+
+[69] Yihao Zhao, Xin Liu, Shufan Liu, Xiang Li, Yibo Zhu, Gang Huang,
+     Xuanzhe Liu, and Xin Jin. 2023. Muxflow: Efficient and safe gpu
+     sharing in large-scale production deep learning clusters. arXiv preprint
+     arXiv:2303.13803 (2023).
+[70] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang,
+     Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan Li, Dacheng
+     Li, Eric. P Xing, Hao Zhang, Joseph E. Gonzalez, and Ion Stoica.
+     2023. Judging LLM-as-a-judge with MT-Bench and Chatbot Arena.
+     arXiv:2306.05685 [cs.CL]
+[71] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Livia Sun,
+     Jeff Huang, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion Stoica,
+     Joseph E Gonzalez, et al. 2024. Sglang: Efficient execution of structured
+     language model programs. Advances in Neural Information Processing
+     Systems 37 (2024), 62557–62583.
+[72] Zangwei Zheng, Xiaozhe Ren, Fuzhao Xue, Yang Luo, Xin Jiang, and
+     Yang You. 2023. Response length perception and sequence schedul-
+     ing: An llm-empowered llm inference pipeline. Advances in Neural
+     Information Processing Systems 36 (2023), 65517–65530.
+
+
+
+
+                                                                                 1364
+

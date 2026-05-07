@@ -1,0 +1,1046 @@
+                                                                                                                                                                                     2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+
+                                                                                                                                                                       QuCo: Efﬁcient and Flexible Hardware-Driven
+                                                                                                                                                                     Automatic Conﬁguration of Tile Transfers in GPUs
+                                                                                                                                                                            Nicolás Meseguer† Daoxuan Xu‡ Yifan Sun‡ Michael Pellauer∗ José L. Abellán† Manuel E. Acacio†
+                                                                                                                                                                                                              †
+                                                                                                                                                                                                         Universidad de Murcia, ‡ William & Mary, ∗ NVIDIA
+                                                                                                                                                                                 {n.mesegueriborra, jlabellan, meacacio}@um.es, {dxu05, ysun25}@wm.edu, mpellauer@nvidia.com
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408440
+
+
+
+
+                                                                                                                                                                        Abstract—The growing complexity and parallelism demands                     Why are ATTs so important? ATTs enable ﬁne-grained
+                                                                                                                                                                     of modern GPU workloads have driven architectural innovations               overlap of data movement with computation, turning what
+                                                                                                                                                                     toward asynchronous tile transfers (ATTs) to overlap computation            would be idle cycles into useful work and substantially
+                                                                                                                                                                     and data movement. While ATT units such as the NVIDIA’s
+                                                                                                                                                                     Tensor Memory Accelerator (TMA) introduce high-throughput                   improving utilization on memory-bound kernels. Crago et
+                                                                                                                                                                     memory transfers, programmers must deal with wavefront spe-                 al. [8] demonstrated these beneﬁts across a broad spec-
+                                                                                                                                                                     cialization, select tile sizes, queue slots, and synchronization            trum of domains—including machine learning, graph analyt-
+                                                                                                                                                                     primitives, all of which are hardware-speciﬁc and workload-                 ics, genomics, and scientiﬁc simulations—showing that any
+                                                                                                                                                                     dependent. Existing GPU libraries fall short—offering limited               workload can exploit asynchronous transfers to hide memory
+                                                                                                                                                                     ATT support and conﬁgurability—so developers still resort to
+                                                                                                                                                                     manual exploration of this vast parameter space, which is                   latency, boost throughput, and achieve more consistent perfor-
+                                                                                                                                                                     laborious, error-prone, and fundamentally limits performance                mance on modern GPUs.
+                                                                                                                                                                     portability across GPUs.                                                       What is the problem with ATTs? In practice, programming
+                                                                                                                                                                        In this work, we present QuCo (Queue Conﬁgurator), a single              ATTs efﬁciently is notoriously challenging [47]. On the one
+                                                                                                                                                                     lightweight hardware unit embedded in the GPU that fully auto-
+                                                                                                                                                                                                                                                 hand, different wavefronts1 must be assigned to speciﬁc tasks
+                                                                                                                                                                     mates the ATT conﬁguration process. Inspired by Blackwell GPU
+                                                                                                                                                                     design, QuCo includes a compact RISC-V processor, small mem-                to improve overlap between memory access and computa-
+                                                                                                                                                                     ory structures for instructions and data, and a GPU Speciﬁcation            tion [5], [8], [11], [26], technique termed wavefront specializa-
+                                                                                                                                                                     Table (GST) storing key architectural parameters. Using the                 tion. Typically, one wavefront issues the ATT requests while
+                                                                                                                                                                     GST and workload characteristics, along with built-in heuristics,           the rest perform computation, requiring careful synchroniza-
+                                                                                                                                                                     QuCo computes optimal queue conﬁgurations at kernel launch.
+                                                                                                                                                                                                                                                 tion to guarantee that data is ready in the on-chip scratchpad
+                                                                                                                                                                     This relieves the programmer of the tedious, time-consuming task
+                                                                                                                                                                     of tuning and ofﬂine proﬁling, while simultaneously increasing              (Local Data Share or LDS, from now on)—often through cus-
+                                                                                                                                                                     post-compilation performance portability.                                   tom barriers. On the other hand, workload characteristics such
+                                                                                                                                                                                                                                                 as data reuse, access patterns, and arithmetic intensity vary not
+                                                                                                                                                                                 I. I NTRODUCTION AND M OTIVATION                                only across applications but often within kernels. To simplify
+                                                                                                                                                                        GPUs are the primary compute platform in modern data                     this burden, NVIDIA provides a high-level abstraction for the
+                                                                                                                                                                     centers, accelerating diverse, compute-intensive applications               TMA (the cuda::pipeline), which wraps producer-consumer
+                                                                                                                                                                     such as deep learning, scientiﬁc computing, and large-scale                 wavefronts into reusable queues [34], but developers must still
+                                                                                                                                                                     analytics [19]. Despite their high memory bandwidth and                     manually tune and manage these descriptors (tile sizes, strides,
+                                                                                                                                                                     parallelism, modern GPUs still suffer from underutilization in              and LDS destinations) and explicitly specialize kernels at the
+                                                                                                                                                                     memory-bound workloads due to latency and transfer bottle-                  wavefront level to orchestrate producer (memory-transfer) and
+                                                                                                                                                                     necks [13], [21], [31], [32]. In particular, a prominent source             consumers (compute) wavefronts. Therefore, although a well-
+                                                                                                                                                                     of performance loss is the inefﬁcient overlap of memory oper-               tuned ATT program can yield substantial beneﬁts, the mech-
+                                                                                                                                                                     ations and computation, leaving GPU resources underutilized                 anism introduces signiﬁcant complexity, tightly couples code
+                                                                                                                                                                     and idle [16]. To try to remedy this, some recent GPU designs               to hardware and makes GPU programming more challenging,
+                                                                                                                                                                     incorporate support for asynchronous tile transfers (ATTs).                 less portable, and less maintainable [5].
+                                                                                                                                                                        What are ATTs? Traditional GPU data movement relies on                      To illustrate how the achieved performance is both kernel-
+                                                                                                                                                                     synchronous load/store instructions issued at cache-line granu-             and architecture-speciﬁc, we present two motivating experi-
+                                                                                                                                                                     larity involving a large number of registers (large bank register           ments (the experimental setup is detailed in Section IV). Fig-
+                                                                                                                                                                     and scoreboard for tracking dependencies). In contrast, ATTs                ure 1a shows that applying the best conﬁguration of ATTs from
+                                                                                                                                                                     allow the programmer to specify multidimensional “tiles” of                 one kernel to another can degrade performance by up to 1.2×,
+                                                                                                                                                                     data to be directly moved in bulk between global memory and                 underscoring the need for workload-speciﬁc tuning. Figure 1b
+                                                                                                                                                                     the on-chip scratchpad without involving vast register usage                shows similar sensitivity across architectures: using the best
+                                                                                                                                                                     and costly data dependency tracking, while simultaneously                   ATT setup optimized for one GPU (e.g., R9 Nano) on others
+                                                                                                                                                                     freeing issue slots and increasing energy efﬁciency. This                   (e.g., MI-100, Radeon 530) leads to performance drops of up
+                                                                                                                                                                     trend toward ATTs is exempliﬁed by state-of-the-art NVIDIA’s                to 1.4×. These results highlight the paramount importance of
+                                                                                                                                                                     Tensor Memory Accelerator (TMA) [6] originally introduced
+                                                                                                                                                                     in the Hopper architecture.                                                   1 We use AMD terminology for basic GPU concepts throughout this work.
+
+
+
+
+                                                                                                                                                                            Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+                                                                            die a single compact RISC-V microcontroller2 along with
+                                                                            small on-chip memories for microcode and runtime data, as
+                                                                            well as a GPU Speciﬁcation Table (GST) that stores key
+                                                                            architectural parameters. At kernel launch, the RISC-V core
+                                                                            executes lightweight ﬁrmware to dynamically compute optimal
+                                                                            parameters. By performing this computation entirely on-chip
+                                                                            and autonomously—without host intervention or exposure of
+               (a) Impact of kernel-speciﬁc tuning.
+                                                                            hardware details—QuCo delivers rapid, secure, and portable
+                                                                            ATT conﬁguration across evolving GPU architectures.
+                                                                               Overall, our key contributions are as follows:
+                                                                              • We propose QuCo, a dedicated mechanism that fully
+                                                                                automates the conﬁguration of ATTs, including tile sizing,
+                                                                                slot allocation, and LDS partitioning, eliminating the need
+                                                                                for manual tuning.
+    (b) Impact of platform-speciﬁc tuning in a Matrix-Matrix.
+                                                                              • We demonstrate that QuCo abstracts the intricate details of
+      Fig. 1: Lack of portability of ATT tuning effort.                         ATT conﬁguration and achieves near-optimal performance,
+                                                                                matching or outperforming ﬁne-tuned manual conﬁgura-
+                                                                                tions, while dramatically reducing programmer effort.
+adaptive, per-kernel and per-architecture conﬁguration to fully               • We evaluate QuCo across multiple GPU architectures,
+exploit ATT-based workloads.                                                    showcasing its portability, queue reuse, and design space
+                                                                                complexity to validate its efﬁciency and adaptability.
+   To bridge the gap between performance, programming effort
+and ﬂexibility on ATT-supported GPUs, we introduce QuCo                                               II. BACKGROUND
+(Queue Conﬁgurator), a lightweight mechanism that fully
+                                                                               In traditional GPU kernel designs, operations are highly
+automates conﬁguration of ATT in a low-effort, high perfor-
+                                                                            synchronous, with all wavefronts loading data from global
+mance, and portable manner. Speciﬁcally, QuCo abstracts the
+                                                                            memory into the Local Data Share (LDS) following ﬁxed ac-
+complex, kernel- and architecture-dependent tasks of selecting
+                                                                            cess patterns. Wavefront specialization [5] improves resource
+tile sizes, determining queues conﬁguration, and performing
+                                                                            utilization by assigning different roles to wavefronts within a
+LDS partitioning and allocation. By abstracting these low-level
+                                                                            workgroup. This deviates from the standard approach, where
+details, QuCo eliminates manual tuning, delivering optimized,
+                                                                            all threads execute the same instructions simultaneously. By
+workload- and hardware-speciﬁc conﬁgurations in a single
+                                                                            designating one wavefront for memory transfers and others
+execution and preserving the same post-compilation binary
+                                                                            for computation, wavefront specialization introduces compute
+portable across diverse GPU architectures (same family).
+                                                                            heterogeneity but demands precise synchronization to prevent
+   Should QuCo be implemented as hardware or software?                      stalls between data movement and execution. Porting kernels
+The mechanisms and algorithms we present are agnostic to                    to this style requires manually restructuring code, inserting
+implementation. While a vendor could deploy QuCo as a                       custom barriers, and verifying correctness across hardware
+software solution (e.g. within the JIT compiler or at library               variants—an inherently tedious and error-prone process.
+level), we advocate for a lightweight hardware realization:                    Building on the challenges of manual ATT programming,
+a single module per GPU die. This is for several reasons.                   the current state-of-the-art ATT engine is NVIDIA’s Tensor
+Existing libraries (such as CUTLASS [35] or cuBLAS [33])                    Memory Accelerator (TMA) introduced in the H100 [6]. TMA
+struggle to keep pace: static, ofﬂine-tuned implementations                 implements the same producer–consumer wavefront special-
+cannot adapt to new workloads or microarchitectures with-                   ization and asynchronous global-to-shared memory transfers
+out extensive reengineering, and closed-source “black-box”                  we target with ATT, but its primary optimization is to feed
+solutions offer limited conﬁgurability. In virtualized or multi-            Tensor Cores with operand tiles. By contrast, our work treats
+tenant environments [17], [38], each GPU partition may                      ATT as an orthogonal mechanism—equally applicable to ten-
+require its own ATT conﬁguration, exponentially increasing                  sor and non-tensor workloads—providing a general framework
+proﬁling overhead. Additionally, relying solely on a software               for any bulk transfer engine.
+solution risks exposing proprietary GPU micro-architectural                    The ATT is tightly integrated within the Compute Unit,
+details, something that some manufacturers may be reluctant                 bypassing the L1 cache to directly issue read memory requests
+to do. Finally, software solutions cannot adapt swiftly to DVFS             to global memory every clock cycle. It generates its own
+transitions or newly introduced microarchitectural features.                addresses and transfer counts, writing incoming data directly
+Ultimately, while our fundamental contributions are agnostic
+to this decision, the remainder of this paper focuses on                       2 This aligns with the trend of GPUs delegating non-compute tasks to
+
+hardware because of these additional beneﬁts.                               dedicated microcontrollers. For example, NVIDIA’s Blackwell architecture
+                                                                            introduces the AI Management Processor (AMP) [36], [37], a fully pro-
+  Speciﬁcally, our QuCo hardware solution adds to the GPU                   grammable RISC-V context scheduler at the front of the GPU pipeline.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+           Fig. 2: Use of the ATT unit with the Operand Queue library that constitutes the baseline in this work.
+
+
+to LDS without software-managed synchronization or thread                   data layout and workload, demanding precision in deﬁning
+involvement, as illustrated in Figure 2a.                                   parameters such as dimensions and memory strides.
+   ATT operations are initiated using a copy descriptor—a                      To reduce the programming complexity associated with
+compact structure that deﬁnes the global memory address, and                using ATTs, NVIDIA offers the cuda::pipeline API, which
+number of elements to transfer. Once triggered by a single                  enables efﬁcient usage of the TMA for asynchronous memory
+thread within a wavefront, ATT hardware takes over, man-                    operations via single- and multi-stage pipelines [34]. Inspired
+aging address generation, stride calculations, and boundary                 by these abstractions, we implement a high-level interface for
+conditions. This ofﬂoads complexity from the programmer,                    managing producer-consumer synchronization tailored to our
+enabling efﬁcient data transfer between global memory and                   evaluation framework, which we refer to as Operand Queues.
+shared memory (LDS).                                                           Operand Queues encapsulate the use of ATT descriptors,
+   A key innovation in the ATT mechanism is its synchro-                    and are initialized through a queue descriptor containing the
+nization model, which introduces specialized asynchronous                   key parameters required for asynchronous memory transfers.
+barriers to optimize coordination between producer and con-                 These include the global memory addresses, tile dimen-
+sumer threads. In particular, ATTs use asynchronous transac-                sions, memory strides, and LDS destination. Once conﬁgured,
+tion barriers, splitting synchronization into two phases: arrive            Operand Queues autonomously manage the low-level ATT
+and wait. Producer threads signal progress by executing a                   operations, further abstracting the details of data movement.
+non-blocking arrive command when shared data is ready,                         Notably, state-of-the-art libraries such as CUTLASS3+CuTe
+allowing them to continue independent work without stalling.                and ThunderKittens offer high-level ATT abstractions (TMA
+Consumer threads issue a wait command when they need the                    pipelines and asynchronous I/O, respectively) that help auto-
+data, blocking until all producers signal arrive. This two-step             mate data movement and computation overlap. However, to
+process allows early threads to use idle cycles for other tasks,            obtain hardware-speciﬁc peak ATT performance, they place
+avoiding the inefﬁciencies of busy-wait synchronization.                    the burden on the programmer [47]. As a result, effective use
+   By using these hardware-accelerated asynchronous barriers                of these libraries still demands a deep understanding of the
+and transaction-based synchronization, ATTs enable efﬁcient                 underlying GPU microarchitecture.
+overlapping of memory transfers and computation, enhancing                     Our Operand Queues implementation is based on a
+parallelism and performance. However, fully harnessing its po-              producer-consumer scheme where a dedicated wavefront (pro-
+tential still requires direct involvement from the programmer.              ducer) loads tiles into the LDS using functions like Push()
+Mismanaging dependencies, like ordering memory operations                   and synchronizes via Wait_For_Push(), while multiple
+incorrectly, can cause race conditions, deadlocks, or incor-                consumer wavefronts access these tiles using Peek() and
+rect results, complicating debugging. Additionally, conﬁguring              Pop(), coordinated through asynchronous transaction barri-
+ATT descriptors requires detailed knowledge of the underlying               ers. Figure 2b summarizes this interaction. Figure 2c shows
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+a detailed timeline of a queue with two slots (slot_0 and                                        $!                           P3/zc+:
+
+
+slot_1), highlighting the interaction between the ATT unit                                                         *)'
+                                                                                                                                  ¢
+                                                                                                                                  
+                                                                                                                                         ¡
+                                                                                                                                           ¨§¦¬©©¥
+                                                                                                                                  «©¨¤£¦¬ª¥
+
+
+
+and the producer and consumer wavefronts. It emphasizes how                                                                       
+
+
+
+
+memory transfers are decoupled from computation, allowing                                                                 6X63+)BB.d3/-zc+:3
+
+
+tiles to be early loaded and asynchronously consumed, thus                                                                                      vvv
+
+
+
+
+improving data availability and overall throughput.                                       
+                                                                                                                         P^4tp
+                                                                                                                                     <7934;.831650.3
+                                                                                              
+                                                                                                                                             /-,2+:
+
+                        III. Q U C O U NIT                                                                                <41
+                                                                                                                                  m <793gd.D).l8]
+
+                                                                                                                                  m 'Q;)X.39lcXV3/9Z
+
+
+   In this section, we introduce the Queue Conﬁgurator                                    
+                                                                                                                                  m 4^V3;.d3T
+
+                                                                                                                                  m )0Vb8\80.3;.d34^a
+
+
+(QuCo) unit, a hardware solution that automates the conﬁg-                                    
+                                                                                                                                  m 68J.30cl.3VcHe
+
+                                                                                                                                  m 76F.3VcHe
+
+
+uration of any ATT-enabled GPU and makes it completely                                                                            m 1J.'d.Xc8603+6lNCcNXI
+
+                                                                                                                                  m @6?.Bd'lX37''0U
+                                                                                    h-            h-                      h-
+transparent to the programmer, while ensuring portability.                                                                        m h434cHe
+
+                                                                                                                                  m h->3P3h6X.l8c.U
+
+
+QuCo abstracts away the low-level management of operand                           P           P                    P
+                                                                                                                                  m h->3P3gd.D).l8c.U
+
+                                                                                                                                  m P3+6l[V
+
+
+queues, tile sizes and LDS partitioning and allocation, provid-
+ing an architecture-agnostic and performance-aware solution                 Fig. 3: Overview of the GPU architecture with the QuCo unit.
+for efﬁcient utilization. Internally, the QuCo unit includes
+a customized RISC-V microcontroller aimed at executing a
+lightweight ﬁrmware that dynamically computes optimized                     with the ongoing kernel’s execution, maintaining the beneﬁts
+queue conﬁgurations—such as tile sizes and queue slots—                     of automatic tuning. These reconﬁgurations involve updating
+based on the particularities of both the target kernel and the              the ATT metadata—descriptor pointers, LDS base addresses,
+GPU architecture.                                                           and synchronization barrier indices—which QuCo modiﬁes in
+   Figure 3 provides an overview of the GPU architecture,                   place based on the new kernel’s needs. Notably, the contents
+illustrating where the QuCo unit, a single hardware block,                  of the operand queues do not need to be erased or reinitial-
+resides relative to key components such as the Command                      ized. Since the queues are pointer-based, resizing them only
+Processor (CP), the Asynchronous Compute Engine (ACE),                      requires adjusting memory offsets and slot counts, allowing
+the Compute Units (CUs), and the multi-banked shared L2                     QuCo to dynamically grow or shrink queues without incurring
+cache with its attached DRAM banks. A zoomed-in view                        signiﬁcant data movement or synchronization costs.
+of the QuCo unit reveals its internal structure: a lightweight                 A key strength of QuCo is its portability. The embedded
+RISC-V microcontroller, the GPU Speciﬁcation Table (GST)                    RISC-V microcontroller runs ﬁrmware that adapts to vari-
+containing essential architectural parameters, and a memory                 ous GPU conﬁgurations without requiring recompilation or
+subsystem for microcode and local variables. QuCo is in-                    manual tuning. This decoupling ensures consistent, optimized
+tegrated closely with the CP, allowing it to access kernel                  performance across different GPU models and future architec-
+launch parameters and architectural metadata early, enabling                tures. By centralizing the conﬁguration logic and abstracting
+conﬁguration before threads are scheduled for execution. This               hardware-speciﬁc details, QuCo hides the complexity of using
+ensures that all memory operands (e.g., queue descriptors, ATT              ATTs while maintaining high efﬁciency and scalability.
+descriptors, and barrier pointer) are ready in the LDS before
+                                                                            A. Microarchitecture
+compute begins, preventing stalls and enabling seamless kernel
+execution.                                                                     QuCo is implemented using a single compact in-order
+   As shown in Figure 4, QuCo acts as a control unit: the                   RISC-V processor supporting the RV32IMF instruction
+programmer speciﬁes the number of operand queues based                      set [39], which includes integer arithmetic and single-precision
+on the characteristics of the kernel (Figure 4a), and QuCo                  ﬂoating-point operations. This 32-bit ISA proves sufﬁcient for
+autonomously conﬁgures all low-level parameters—tile sizes,                 typical ATT-related operations (Section III-B), which involve
+slot counts, LDS allocation, and synchronization barriers—                  address arithmetic, offset calculations, and basic multiplication
+tuned to the kernel’s characteristics and the GPU capabilities              or division instructions for scaling and aligning memory
+(Figure 4b). Once initialized, these queues serve as the inter-             segments. This in-order design follows a simple ﬁve-stage
+face between QuCo and the execution pipeline. As shown in                   pipeline, signiﬁcantly limiting hardware complexity while re-
+Figure 4c, both the ATT Unit and the Sync Unit within each                  taining enough performance to handle the control logic needed
+CU retrieve their conﬁguration directly from the queues set up              for ATT initialization and reconﬁguration.
+by QuCo, enabling efﬁcient and autonomous data movement                        Upon GPU startup, QuCo fetches its ﬁrst instruction from
+and coordination. As a result, data movement through the                    an 8 KiB ROM containing compact ﬁrmware. This ﬁrmware
+ATT queues becomes transparent to the programmer, who is                    handles accessing architectural parameters, computing optimal
+no longer required to manage descriptors, compute offsets, or               queue conﬁgurations, and writing the resulting descriptors
+handle synchronization.                                                     into LDS memory. Operating independently from the GPU’s
+   In workloads with multiple kernels having different mem-                 wavefront scheduling, QuCo uses a 2 KiB local data buffer to
+ory demands, QuCo can reconﬁgure the LDS layout with                        store local variables, data structures, and previously computed
+minimal overhead by overlapping the reconﬁguration time                     conﬁgurations. The data buffer is addressable via QuCo’s
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+                                                          
+1   // Init QuCo with CI, WG Size, and #CUs
+2   driver.InitQuCo(HIGH, 512, 64)
+3
+4   // Register Queues with size, data-type, and vector-
+           type
+5   driver.RegisterQueue(K, 4, TYPE_STREAMING)
+6   driver.RegisterQueue(K, 4, TYPE_STATIONARY)
+7
+8   // Launch the Kernel
+9   driver.EnqueueLaunchKernel(binary, kernArg)
+                                                          
+    (a) High-Level Host Code example for a                 (b) QuCo dynamically allocates LDS space           (c) Compute Unit with ATT and LDS conﬁg-
+    GEMM kernel.                                           and sets queue metadata.                           ured by QuCo.
+    Fig. 4: Example of QuCo for two operand queues (Queue 0 and 1) at: (a) software-level (b) queue level; (c) hardware level.
+
+
+    private address space, supporting repeated invocations and                     B. Implemented Conﬁguration Strategy
+    persistent metadata.
+                                                                                      The conﬁguration logic executed by the QuCo ﬁrmware
+       A key data structure accessible to QuCo is the GPU Speci-                   takes as input both static architectural parameters—retrieved
+    ﬁcation Table (GST), a 256-byte read-only block populated                      from the GPU Speciﬁcation Table (GST)—and dynamic work-
+    by the vendor at manufacturing time3 . The GST contains                        load information such as compute intensity, vector sizes, and
+    essential architectural parameters such as memory latencies,                   the number of queues requested by the user, including their
+    clock frequency, LDS size, number of compute units, and                        intended usage (streaming or stationary), dimensional length
+    arithmetic throughput (e.g., FP32 fused-multiply-accumulate                    (e.g., K dimension in a matrix), and data type size. Using
+    operations per cycle). During boot, the QuCo’s ﬁrmware reads                   this information, the QuCo unit, is able to deliver a per-kernel
+    these values into local registers and data buffers to initialize               conﬁguration that maximizes memory throughput and com-
+    the subsequent conﬁguration process.                                           putational overlap while respecting architectural constraints.
+       Once QuCo has gathered the necessary architectural data, it                 These include LDS capacity, hardware barrier limits, and
+    conﬁgures the ATT units by calculating optimal tile sizes and                  maximum tile sizes supported by the ATT.
+    queue slots for the number of ATT queues requested by the                         The ﬁrst step is to determine the optimal tile size (Algo-
+    user (Figure 4a). The LDS is logically partitioned, reserving                  rithm 1). QuCo explores tile sizes ranging from a minimum
+    a small region for metadata and ATT descriptors, with the                      of 64 elements—the cache line size—up to 8,192 elements, a
+    remaining space allocated to operand queues (Figure 4b).                       limit based on design-space exploration and bounded by the
+    QuCo writes all the required ATT descriptors, tile parameters,                 LDS size speciﬁed in the GST. For each candidate tile size,
+    and slot pointers to the LDS, making them accessible to the                    it evaluates a merit factor: the ratio of tile processing time
+    ATT units. After completing the conﬁguration, QuCo signals                     to memory transfer time. Processing time is estimated using
+    each ATT unit to load the updated descriptors and begins                       kernel-speciﬁc compute intensity (CI)5 —ratio of operations to
+    loading data from main memory to the LDS. This enables                         memory trafﬁc—wavefront utilization, and compute through-
+    seamless operation, where the programmer interacts with the                    put (e.g., MACs per cycle), plus a scheduling roundtrip over-
+    LDS using a queue structure (as introduced in Section II),                     head due to wavefront dispatch limitations (e.g., the scheduler
+    while the ATT and the Sync Unit handle the low-level and                       waiting a full roundtrip before issuing the next instruction).
+    complex asynchronous data movement behind the scenes.                             Transfer time is based on memory latency, DRAM band-
+       After conﬁguration, QuCo enters an idle state but remains                   width, ATT latency, and L2 cache behavior; the 2× factor in
+    ready for reactivation. In dynamic workloads with multiple                     the cache transfer time models the bidirectional nature of data
+    kernels, particularly those with heterogeneous memory de-                      movement between global memory and LDS—accounting for
+    mands, QuCo can be re-invoked to recompute queue layouts                       both read and potential write trafﬁc during tile transfers. All
+    and update descriptors.                                                        parameters are hardware-speciﬁc and retrieved from the GST,
+                                                                                   ensuring the algorithm is tuned to the target GPU. The merit
+      Importantly, the RISC-V processor is decoupled from the
+                                                                                   factor effectively models the rate at which tiles are processed
+    main compute pipeline, ensuring that conﬁguration tasks do
+                                                                                   versus the rate at which they are fetched, a critical factor in
+    not interfere with wavefront scheduling, memory requests, or
+                                                                                   GPU performance (see Algorithm 2 for more details).
+    execution ﬂow, following the trend of some recent GPUs to
+                                                                                      In addition to the merit factor, the algorithm computes a cost
+    ofﬂoad conﬁguration logic to specialized hardware 4 [37].
+                                                                                   function to evaluate resource usage for transferring a tile, con-
+                                                                                   sidering latency, bandwidth, and cache-line constraints. The
+      3 The fact that QuCo is a hardware block implemented within the GPU
+                                                                                   cost function aggregates the memory system costs into a nor-
+    ensures that data in the GST is not exposed.
+                                                                                   malized score. It combines tile-dependent latency—estimated
+      4 To further minimize microarchitectural overhead, QuCo could be embed-
+    ded as part of existing RISC-V conﬁguration cores, such as the AMP already       5 To avoid confusion with Artiﬁcial Intelligence, we deliberately avoid using
+    included in NVIDIA Blackwell.                                                  the acronym AI for Arithmetic Intensity.
+
+
+
+
+              Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+ Algorithm 1: Optimal Tile Size Calculation                                    Algorithm 3: Optimal Number of Slots Calculation
+  Input: Range of tile sizes: [min, max], Consumer Wfs, CI, GST                 Input: Streaming and stationary queues, CI, Compute Units
+  Output: Optimal tile size                                                     Output: Optimal number of slots for each Queue
+  Function optimal_tile_size()                                                  Function optimal_num_slots()
+      for tile ∈ [min, max] do                                                      count streaming and stationary queues;
+           meritF actor ← evaluate(processing vs memory                             if there are streaming queues then
+             efﬁciency for tile);                                                        numSlots ← useLittlesLaw();
+           costF unction ← estimate(memory usage for tile);                              numSlots ← roundToPowerOfTwo(numSlots);
+           weightedM erit ← meritF actor × costF unction;                                numSlots ← roundBasedOnCUs(numSlots);
+           if tile is better than the best then                                          if sufﬁcient space in LDS then
+                 update best;                                                                 allocate(streaming queues);
+           end                                                                           else
+      end                                                                                     numSlots ← useComputeIntensity();
+      best ← adjust(based on scaling factor and CI);                                          reduce numSlots if necessary to ﬁt the data;
+  end                                                                                         allocate(streaming queues);
+                                                                                         end
+                                                                                    end
+                                                                                    if there are stationary queues then
+ Algorithm 2: Function for calculating the Merit Factor                                  calculate available space for each stationary queue;
+  Input: Tile Size, Consumer Wfs, GST, WfPools = 4                                       determine how many slots can ﬁt into the remaining space;
+  Output: Merit Factor                                                                   numSlots ← roundToPowerOfTwo(numSlots);
+  Function evaluate()                                                                    numSlots ← roundBasedOnCUs(numSlots);
+      // Step 1: Compute the best-case latency                                           reduce numSlots if necessary to ﬁt the data;
+          time for processing the tile                                                   allocate(stationary queues);
+      bestLatency ← SIMDMulsPerCycle×ConsumerWfs
+                                 TileSize                                           end
+      // Step 2: Calculate processing time,                                     end
+          including scheduling        roundtrip overhead
+                                                        
+      procT ime ← bestLatency + bestLatency − 1 ×
+        min(ConsumerWfs − 1, WfPools)
+      // Step 3: Compute memory transfer latencies                           queues to maximize performance, while reserving remaining
+      latencyT otal ← ATTCycles + DRAMLatency + L2Latency
+      memT ransf erT ime ← TileSize×ElementSize                              resources for stationary queues.
+                                     Bandwidth
+      cacheT ransf erT ime ← 2 × TileSize×ElementSize
+                                          CacheLineSize
+                                                                                For streaming queues, QuCo uses a hardware-aware adap-
+      // Step 4: Aggregate memory transfer time                              tation of Little’s Law to balance queue depth with kernel
+      memT ime ← latencyT otal + memT ransf erT ime +
+        cacheT ransf erT ime
+                                                                             latency and tile throughput. Little’s Law provides a relation-
+      // Step 5: Return the merit factor as the                              ship between the rate at which items enter a system, the time
+          ratio of processing time to memory time                            they spend being processed, and the average number of items,
+              procTime
+      return memTime                                                         and has been widely applied within the ﬁelds of operations
+  end
+                                                                             management and computer architecture [28]. Using this ap-
+                                                                             proach, the ideal number of slots required for a streaming
+                                                                             queue is derived directly from the ratio of memory transfer
+as the sum of ATT, DRAM, and L2 latencies divided by the tile                time (i.e., the rate at which tiles are loaded into the LDS by
+size—with two additive penalties: one inversely proportional                 ATT transfers) to the total time needed to compute a tile. This
+to DRAM bandwidth and another inversely proportional to                      ratio determines the number of slots to ensure the queues are
+cache-line size. This models the relative impact of limited                  neither underutilized nor overly provisioned (this is calculated
+bandwidth and ﬁne-grained cache-line usage on tile transfers.                by useLittlesLaw() in Algorithm 3).
+   Together, the merit factor and cost function are combined                    The number is then further adjusted based on the number of
+into a weighted merit score, computed as the product of both                 compute units. Speciﬁcally, the algorithm reduces the number
+values, which determines the suitability of a given tile size.               of tiles when more CUs are active, as higher CU utilization
+This ensures that the selected tile provides the optimal balance             increases pressure on the memory system. This adjustment
+between computational efﬁciency and memory efﬁciency.                        mitigates memory contention and balances workload distribu-
+   After iterating over possible tile sizes, the algorithm adjusts           tion, ensuring that queues operate efﬁciently under varying
+for the kernel’s CI: scaling up the tile size for low-CI kernels,            compute loads.
+CI<1 (i.e., Elementwise or Dot-Product) to improve memory                       Subsequently, the last step ensures that the calculated num-
+throughput and scaling down for high-CI kernels, CI>4 (i.e.,                 ber of slots ﬁts within the available LDS capacity. If the
+Matrix-Matrix multiplication) to balance memory and compu-                   required slots exceed the LDS constraints—due to tile size or
+tation overlap (Section IV describes the complete list of the                memory limitations—an alternative strategy is employed. In
+kernels and benchmarks used in our evaluation). This ensures                 this fallback approach, the number of slots is re-evaluated and
+the tile size aligns with the kernel’s characteristics.                      scaled based on the workload’s CI. For low-CI workloads (e.g.,
+   After determining the tile size, the QuCo unit computes                   Elementwise), more slots are allocated to improve memory
+the optimal number of slots for each queue (Algorithm 3).                    throughput. For high-CI workloads (e.g., Matrix-Matrix mul-
+This step begins by counting the number of streaming and sta-                tiplication), fewer slots are chosen to reduce memory pressure
+tionary queues, as the allocation strategy prioritizes streaming             and better overlap computation and memory accesses. Once
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+                               TABLE I: Kernels and benchmarks with their design-space saved by using QuCo.
+  Applications (Acronym)    Description                                                        Dimensions                Layers   # Queues   # Tiles   # Slots   # Combinations
+  ElementwiseK (EK)         Operations optimized for high throughput [45]                       16777216                   –         1         5         5            25
+  Elementwise (E)           General element-wise operations [45]                                16777216
+  Sumvectors (SV)           Vector summation, a basic building block [10]                                                  –         2         5         5            625
+  Dot-Product (DP)          Critical workload linear algebra [10]                                2097152
+  Matrix-Vector (MV)        A staple in scientiﬁc computing [14], [45]                     [2048, 2048] × 2048
+  Matrix-Matrix (MM)        Fundamental for dense linear algebra and ML [14], [45]      [512, 2048] × [2048, 128]          –        8+1        8         5         2.6 × 1014
+  MM+Reduction (MM+R)       Fused operation common in attention models [47]              [1024, 1024] × [1024, 4]
+  Batched MM (B-MM)         Fundamental in inference and batching [47]               L = 4, [[1024, 1024] × [1024, 4]]
+
+  AlbertV2                  Efﬁcient BERT for NLP tasks [24]                                   Transformer                74                                      1.92 × 1016
+  T5-Small                  Text-to-text Transformer [41]                                        (Linear)                  96       8+1        8         5         2.5 × 1016
+  Whisper Tiny              Multilingual ASR model [40]                                                                   827                                      2.1 × 1017
+  Norm-Project              LayerNorm with channel-wise scaling [7], [46]                       16777216                   2         2         5         5            1250
+  Attention-Score           Attention score computation [9], [20]                                                           2        2         5         5            1250
+  Residual-MLP              Projection layer with residual connection [15]                 [2048, 2048] × 2048             2        8+1        8         5        2.5 × 1014
+
+
+
+
+TABLE II: Speciﬁcations of the three different GPUs modeled.                                global-to-shared memory transfers to beneﬁt from QuCo’s
+                                          Property, Amount                                  automated conﬁguration. Moreover, performance primarily
+ Parameter           R9 Nano               MI100                      Radeon 530            depends on general GPU characteristics (e.g., bandwidth, com-
+ Frequency           1.0 GHz               1.5 GHz                    1.0 GHz               pute throughput) rather than ISA-speciﬁc features, ensuring
+ CUs                 64                    120                        6
+ SIMDs               64 Muls/cycle         64 Muls/cycle              64 Muls/cycle         broad applicability. The performance trends from our ATT
+ L1V $               64x16KB 4w            120x16KB 4w                6x16KB 4w             evaluations align closely with results reported for other ATT
+ L1I $               16x32KB 4w            8x32KB 4w                  32KB 4w
+ L1S $               16x16KB 4w            8x16KB 4w                  16KB 4w               hardware, such as NVIDIA TMA-enabled GPUs [29], [30],
+ L2 $                16x256KB 16w          32x256KB 16w               8x256KB 16w           [47], conﬁrming the validity and generality of our approach.
+ DRAM                8x512MB               32x1GB                     8x256MB
+ Mem. Lat.α          190, 300, 450 [3]     100, 250, 300 [12]         80, 200, 400β
+                                                                                            B. Linear Algebra Kernels and Benchmarks
+α L1, L2 (CU roundtrip) and DRAM (CU roundtrip), respectively.
+β No ofﬁcial documentation; projected from comparable mobile GPUs [27].                        We evaluate QuCo and validate our ATT implementation us-
+                                                                                            ing wavefront-specialized kernels—spanning both fundamen-
+                                                                                            tal linear-algebra kernels and state-of-the-art workloads [47]—
+streaming queues have been conﬁgured, QuCo proceeds to
+                                                                                            that cover diverse data-access patterns and compute intensities
+assign resources to stationary queues using the remaining LDS
+                                                                                            across domains such as machine learning, analytics, genomics,
+capacity evenly. This two-stage allocation ensures that latency-
+                                                                                            and signal processing (Table I). To compute the CI of each
+sensitive transfers are prioritized.
+                                                                                            kernel, we calculate the ratio of ﬂoating-point operations to
+   After computing the optimal tile size and number of slots
+                                                                                            global memory trafﬁc without ATT acceleration. This method
+for each queue, QuCo proceeds to physically allocate and
+                                                                                            captures the compute-to-memory balance of each workload
+initialize the queues in the LDS. Next to the already allocated
+                                                                                            without interference from asynchronous transfers. Since CI
+space used for ATT metadata, it allocates contiguous blocks
+                                                                                            is an algorithmic property, its value remains constant across
+for each queue, setting up their corresponding ATT descriptors
+                                                                                            architectures and conﬁgurations, and it is used by QuCo to
+pointers (see the example in Figure 4b). Each queue includes
+                                                                                            classify the kernel, as described in Section III-B.
+its tile size, number of slots, and synchronization barriers.
+                                                                                               Workloads range from element-wise operations to dense
+These descriptors are written directly into memory regions
+                                                                                            matrix multiplications, exposing memory- and compute-bound
+that are visible to the ATT units, enabling immediate use. By
+                                                                                            scenarios. Some require precise queue tuning and others test
+embedding this decision logic directly into the GPU hardware,
+                                                                                            ATT’s ability to overlap data movement with computation.
+QuCo transforms what is a complex developer-managed task
+                                                                                               These kernels demand explicit wavefront specialization
+into a fully autonomous process.
+                                                                                            and ﬁne-grained synchronization support and no existing
+                    IV. E VALUATION M ETHODOLOGY                                            benchmark suites (e.g., Rodinia, Parboil, Polybench) have
+A. Simulation Environment                                                                   yet been adapted or speciﬁcally designed to utilize modern
+                                                                                            asynchronous memory transfers in GPUs, whether in software
+   We evaluate QuCo using MGPUSim [44], a cycle-accurate                                    or via hardware mechanisms like NVIDIA’s TMA6 .
+GPU simulator calibrated with an AMD R9 Nano (GCN3
+ISA), representative of mid-range GPUs. All main results                                                           V. E XPERIMENTAL R ESULTS
+(Section V-B) use this setup, while portability tests cover two
+                                                                                               To demonstrate QuCo’s practical impact, we evaluate full
+additional GPUs: the high-end MI-100 and low-power Radeon
+                                                                                            deep learning models and composite kernel blocks built
+530 (Table II; results in Section V-E). We extended MGPUSim
+                                                                                            from the linear algebra kernels. These workloads, shown
+to support ATTs between global memory and LDS, modeling
+                                                                                            in Table I, reﬂect modern neural architectures and expose
+background data movement, operand queue management, and
+                                                                                            QuCo to complex, layered execution patterns where dynamic
+LDS coordination accurately at functional and cycle levels.
+Despite building upon an AMD platform, our ATT design                                        6 Recent studies on TMA in NVIDIA Hopper [29], [30] rely on microbench-
+is architecture-neutral, allowing any GPU with asynchronous                                 marks, while [47] evaluates only four kernels, three of which we include.
+
+
+
+
+          Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+          (a) ElementwiseK                         (b) Elementwise                        (c) Sumvectors                   (d) MM+Reduction
+
+
+
+
+           (e) DotProduct                          (f) Matrix-Vector                     (g) Matrix-Matrix                   (h) Batched MM
+                                     Fig. 5: DRAM activity over time for NoATT/Fine-Tuned and QuCo.
+
+
+                                                                                   i) NoATT/Non-Tuned; ii) NoATT/Fine-Tuned; iii) ATT/Non-
+                                                                                   Tuned; iv) ATT/Informed-Tuned; v) ATT/Fine-Tuned; and vi)
+                                                                                   QuCo. As detailed below, each case represents a different level
+                                                                                   of optimization and complexity in kernel execution. All the
+                                                                                   results are normalized to an ideal ATT implementation, where
+                                                                                   the ATT operates with an unlimited LDS, allowing all data to
+                                                                                   ﬁt into the LDS and enabling continuous tile loading without
+                                                                                   LDS constraints (an ideal-scenario performance bound).
+  Fig. 6: Kernel execution normalized to the ideal scenario.
+                                                                                      The ﬁrst two cases, NoATT/Non-Tuned and NoATT/Fine-
+                                                                                   Tuned, evaluate kernels that do not take advantage of the
+                                                                                   ATT. NoATT/Non-Tuned corresponds to a naive implementa-
+queue reconﬁguration is critical. The DNN models—AlbertV2,
+                                                                                   tion, where memory operations and computations are poorly
+T5 Small, and Whisper-Tiny—are Transformer-based and
+                                                                                   optimized, using small tile sizes, and as a result, issuing
+memory-intensive, composed largely of matrix operations.
+                                                                                   more memory requests, leading to suboptimal application
+We also evaluate three composite workloads: Norm-Project
+                                                                                   performance (see Figure 6). In contrast, NoATT/Fine-Tuned is
+(normalization + projection), Attention-Score (dot product +
+                                                                                   the conﬁguration obtained through extensive design space ex-
+activation), and Residual-MLP (projection + residual update).
+                                                                                   ploration to optimize kernel parameters—such as tile size and
+These tasks involve multiple operand queues and varying
+                                                                                   queue slots—resulting in signiﬁcantly improved performance
+shared memory demands, making them ideal for testing
+                                                                                   across all cases, particularly for simpler workloads such as
+QuCo’s ability to adapt tile sizes and queue slots across layers
+                                                                                   ElementwiseK and Dot-Product.
+with non-uniform dimensions.
+                                                                                      Among the ATT-based implementations, ATT/Non-Tuned
+A. Design Space                                                                    serves as a baseline case where the ATT unit is used without
+                                                                                   proper tuning of tile sizes and queue slots. This lack of opti-
+   QuCo addresses the combinatorial complexity of ATT-
+                                                                                   mization leads to poor performance across all kernels. Without
+enabled kernels, where selecting tile sizes and queue slot
+                                                                                   informed parameter selection, tile sizes may be too small
+counts across multiple operand queues leads to a vast design
+                                                                                   to leverage memory bandwidth or too large to ﬁt efﬁciently
+space. The number of valid conﬁgurations grows exponentially
+                                                                                   into LDS memory, causing stalls. Similarly, the number of
+with the number of queues and tuning parameters. Table I
+                                                                                   queue slots may be insufﬁcient to overlap memory transfers
+summarize the possible conﬁgurations for each workload. For
+                                                                                   and compute, leading to idle cycles and creating substantial
+our evaluation, we constrain the search space to practical
+                                                                                   performance gaps compared to the upper bound. While this
+ranges: tile sizes from 64 to 8,192 elements7 , and queue
+                                                                                   approach achieves competitive results on lightweight work-
+slots from 1 to 8. This results in billions to quadrillions of
+                                                                                   loads, it struggles with more sensitive kernels that require
+possible combinations. Manually exploring this space would
+                                                                                   precise alignment between memory transfers and computation.
+be prohibitively expensive, but QuCo simpliﬁes the process by
+                                                                                   For example, in Dot-Product and Elementwise, the lack of
+automatically identifying high-performing conﬁgurations in a
+                                                                                   tuning not only prevents overlap but can introduce wavefront
+single pass, eliminating the need for manual tuning.
+                                                                                   scheduling stalls or memory contention.
+B. Kernels                                                                            ATT/Informed-Tuned incorporates heuristic-based conﬁgu-
+                                                                                   rations inspired by NVIDIA guidelines, using tile sizes be-
+  For the eight kernels listed in Table I, Figure 6 com-
+                                                                                   tween 64 and 256 elements and queue slots between 2 and 4
+pares the performance obtained for six execution cases:
+                                                                                   (double or quadruple buffering) [30]. This approach delivers
+  7 For kernels like Elementwise or Dot-Product, the tile size range is reduced,   strong performance for simpler kernels like ElementwiseK, El-
+yielding 5 discrete options.                                                       ementwise, Sumvectors, and Dot-Product, but its performance
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+Fig. 7: Ablation study showing kernel execution normalized
+to ATT/Fine-Tuned, see Section V-C for details.                             Fig. 8: Speedup over the ATT/Fine-Tuned baseline for several
+                                                                            DNN models and composite kernel workloads
+
+for Matrix-Vector, Matrix-Matrix, Matrix-Matrix+Reduction
+and Batched-Matrix-Matrix remains suboptimal due to the in-                 on par with optimized cuBLAS and Triton implementations.
+creased complexity and resource demands of these workloads.                 This benchmark serves as a representative case illustrating
+   The ATT/Fine-Tuned represents an exhaustive design space                 that while QuCo enables automated conﬁguration, not all
+exploration for each kernel, identifying the best possible tile             workloads beneﬁt equally from the ATT.
+and slot conﬁgurations through repeated proﬁling. This ap-                     To understand the memory-level effects of QuCo’s au-
+proach requires substantial computational effort, with the GPU              tomated conﬁguration, we analyzed DRAM request activity
+kernel executed once per conﬁguration, and requiring manual                 during kernel execution. Figure 5 shows a complete trace of
+tuning. Obviously, this optimized execution case provides                   DRAM requests for the kernels. In the NoATT/Fine-Tuned case
+the best performance, particularly for Matrix-Vector, Matrix-               (blue line), memory accesses occur abruptly and irregularly,
+Matrix, Matrix-Matrix+Reduction and Batched-Matrix-Matrix                   with idle periods between request spikes. This behavior indi-
+workloads, since these kernels can now make better use of                   cates poor overlap between memory access and computation,
+GPU resources, achieving performance closer to the ideal.                   as global memory loads are issued synchronously by the
+However, the complexity of this approach makes it impractical               kernel.
+for complex kernels like these four (as shown in Table I,                      In contrast, the QuCo-enabled conﬁguration (red line) main-
+2.6e+14 kernel launches would be required for Matrix-Matrix                 tains a consistently high level of DRAM activity through-
+or Batched-Matrix-Matrix workloads). This situation is even                 out execution. As previously discussed, the Batched-Matrix-
+worse for real-world applications (e.g., Whisper Tiny with                  Matrix kernel reﬂects the synchronization overhead and its
+2.1e+17 kernel launches).                                                   impact at the memory level.
+   In contrast, the ability of the QuCo unit to automatically                  This sustained throughput is the result of asynchronous
+select values for the conﬁguration parameters of the queues                 tile transfers using Operand Queues, which are conﬁgured
+based on architectural characteristics and kernel properties,               and allocated by QuCo, to later load data tiles into the
+fully eliminates the need for this impractical exhaustive tuning.           LDS. Because memory and compute are overlapped more
+As shown in Figure 6, QuCo achieves performance that is                     effectively, the kernel completes signiﬁcantly earlier than its
+slightly below ATT/Fine-Tuned but consistently outperforms                  no ATT counterpart. This result demonstrates QuCo’s ability
+NoATT/Fine-Tuned, ATT/Non-Tuned, and ATT/Informed-Tuned                     to exploit the available DRAM bandwidth and better hide
+across all the kernels. Without requiring any manual tuning or              memory latency even without programmer intervention.
+host-side intervention, QuCo provides near-optimal conﬁgura-
+tions with signiﬁcantly reduced complexity.                                 C. Ablation Study
+   For the challenging matrix kernels (Matrix-Matrix,                          To further understand the impact of each heuristic used
+Matrix-Matrix + Reduction and Batched-Matrix-Matrix), all                   by QuCo, we conducted an ablation study over the linear
+methods—QuCo included—fall signiﬁcantly short of the ideal                  algebra kernels. Figure 7 compares QuCo against progressively
+performance due to limited data reuse and large working                     degraded versions of its design, each removing a key heuristic:
+set sizes that exceed the LDS capacity. In this case, the K                 i) CU-aware slot scaling; ii) Little’s Law-based slot sizing; and
+tile dimension cannot fully reside in LDS, requiring frequent               iii) CI-based tile and slot scaling. All results are normalized to
+re-fetches from global memory and increasing pressure on                    the ATT/Fine-Tuned baseline. For simpler kernels (e.g., Ele-
+the L2 cache. This effect is especially pronounced when                     mentwiseK, Elementwise, Dot-Product), removing Little’s Law
+compared to the theoretical unlimited-LDS baseline, which                   occasionally improves performance due to coincidental align-
+manages to retain all tile fragments in on-chip memory.                     ment between CI-scaling and queue pressure—e.g., 4 slots
+   Interestingly, the Batched-Matrix-Matrix kernel presents a               versus 8. However, for more complex kernels (e.g., Matrix-
+special case where ATT/Fine-Tuned and QuCo slightly outper-                 Vector, Matrix-Matrix, Matrix-Matrix + Reduction, Batched-
+forms the NoATT/Fine-Tuned implementation. We observe this                  Matrix-Matrix), disabling CU-aware rounding leads to over-
+is largely due to the overhead of managing a high number of                 allocation of slots—4, or even 8 slots instead of 2—causing
+asynchronous barriers. This behavior is consistent with prior               increased memory contention and reducing performance by up
+work [47], where the authors report achieving performance                   to 25%. Disabling CI scaling further worsens this, as larger
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+                                                                            TABLE III: Optimal ATT setup (DSE vs. QuCo) for 3 GPUs.
+                                                                              Kernel                           Size       GPU       Fine-Tuned     QuCo
+                                                                                                                                       TileSize/#Slots
+
+                                                                                               1 Op. Queue     30M       High-end     4096/4     4096/4
+                                                                              ElementwiseK                     16M       Mid-end      2048/2     2048/2
+                                                                                                Low C. I.     1.25M      Low-end      2048/4     2048/8
+                                                                                              2 Op. Queues     30M       High-end     4096/2     4096/4
+                                                                              Elementwise                      16M       Mid-end      2048/8     2048/4
+                                                                                                Low C. I.     1.25M      Low-end      8192/4     2048/4
+                                                                                              2 Op. Queues     30M       High-end     4096/2     4096/4
+                                                                              Sumvectors                       16M       Mid-end      2048/8     2048/4
+                                                                                                Low C. I.     1.25M      Low-end      4096/4     2048/4
+Fig. 9: Layer-wise speedup in the Whisper-Tiny model (singu-                                                             High-end     2048/4     4096/4
+                                                                                              2 Op. Queues
+lar layers) compared to the ATT/Fine-Tuned baseline                           Dot-Product
+                                                                                                Low C. I.
+                                                                                                                2M       Mid-end
+                                                                                                                         Low-end
+                                                                                                                                      1024/2
+                                                                                                                                      1024/4
+                                                                                                                                                 2048/4
+                                                                                                                                                 2048/4
+                                                                                              9 Op. Queues   [2K, 2K]    High-end     512/2      1024/2
+                                                                              Matrix-Vector                              Mid-end      512/2      512/4
+                                                                                                Low C. I.      2K        Low-end      512/2      512/2
+tiles and excessive slots overload the memory system—e.g.,                                                               High-end     512/2      1024/2
+                                                                                              9 Op. Queues    [1K, 2K]
+tile sizes of 1024 or 2048 with 4 or 8 slots, compared to 512                 Matrix-Matrix
+                                                                                                High C. I.   [2K, 128]
+                                                                                                                         Mid-end      512/2      512/4
+                                                                                                                         Low-end      512/2      512/2
+with 2 slots—leading to slowdowns of nearly 40% (notably                                                                 High-end     512/2      512/2
+                                                                                              9 Op. Queues   [1K, 1K]
+in Matrix-Matrix + Reduction). See Table III for the optimal                  MM+Reduction
+                                                                                                High C. I.    [1K, 4]
+                                                                                                                         Mid-end      512/2      512/2
+                                                                                                                         Low-end      512/2      256/4
+conﬁgurations selected by QuCo.                                                                                          High-end     512/2      512/2
+                                                                                              9 Op. Queues   [1K, 1K]
+                                                                              Batched MM                                 Mid-end      512/2      512/2
+                                                                                                High C. I.    [1K, 4]    Low-end      512/2      256/4
+D. Benchmarks
+   Figure 8 shows the efﬁciency of QuCo in the context of the               column, QuCo achieves the highest average speedup across
+six benchmarks listed in Table I. In particular, we present a               all benchmarks, underscoring its practicality as a robust and
+performance comparison of three ATT-based implementations:                  architecture-aware solution for real-world GPU workloads.
+i) ATT/Semi-Tuned, where only the ﬁrst layer is tuned and                      To further explore the performance beneﬁts of per-layer or
+its ATT conﬁguration is reused for all subsequent layers—a                  per-kernel queue reconﬁguration in QuCo, we conduct an abla-
+realistic but suboptimal programmer strategy; ii) ATT/Fine-                 tion study on the Whisper-Tiny model, analyzing speedups on a
+Tuned, our baseline for this evaluation, which uses exhaustive              layer-by-layer basis across the four different implementations.
+per-layer tuning of tile size and queue slots within the subset             Although the full model contains over 827 layers, many of
+of the design space we covered to obtain the results for the                them are structurally identical. For this evaluation, we extract
+ATT/Fine-Tuned conﬁguration in Figure 8; and iii) QuCo,                     the set of unique layer types and evaluate them individu-
+which automatically conﬁgures queues and descriptors for                    ally. These layers are not executed sequentially in practice,
+each layer.                                                                 but are isolated here to understand how QuCo behaves un-
+   As shown, QuCo consistently outperforms all other im-                    der different conﬁgurations and compute patterns. Figure 9
+plementations, highlighting its ability to automatically adapt              shows the speedup over the ATT/Fine-Tuned baseline. The
+to heterogeneous layers and varying memory requirements                     the x-axis denotes individual layers—both convolutional and
+without any programmer intervention. In the full-model bench-               fully connected—while the y-axis shows the relative speedup
+marks, QuCo performs comparably to or better than the                       achieved by each conﬁguration. This ﬁne-grained comparison
+ATT/Fine-Tuned baseline with an average improvement of up                   highlights how ATT performance varies depending on layer
+to 1.15×. In some cases, such as AlbertV2 or Whisper-Tiny,                  size, properties, and queue conﬁgurations across layers.
+the ATT/Semi-Tuned conﬁguration performs notably worse                         Although the ATT/Fine-Tuned conﬁguration leverages ex-
+due to insufﬁcient overlap between memory transfers and                     haustive tuning to achieve strong performance across many
+computation (suboptimal tile sizes and number of slots in the               layers, it is inherently limited by the scope and granularity
+queue), conﬁrming that reuse of early-layer tuning is not robust            of the design space explored manually. In practice, evaluating
+across a full model execution path.                                         even a modest set of tile sizes and queue slots for each layer
+   The beneﬁts of QuCo become more subtle for composite                     results in an overwhelming number of combinations, making
+kernels when compared to the ATT/Fine-Tuned baseline. Un-                   per-layer tuning prohibitively expensive. For large models like
+like full DNN models with highly heterogeneous layers, these                Whisper-Tiny, which consists of hundreds of unique layers,
+kernels consist of fewer and more uniform layers. As a result,              maintaining optimal queue conﬁgurations across all of them
+static conﬁgurations tend to perform reasonably well, and                   becomes infeasible without automation.
+the performance gap between manual tuning and automatic                        Additionally, the ATT/Semi-Tuned conﬁguration highlights
+conﬁguration narrows. Still QuCo dynamically allocates queue                the pitfall of the one size does not ﬁt all approach, where a
+slots and tiles based on each layer’s properties, consistently              static ATT setup is reused across all the different layers. This
+matching or slightly outperforming the ATT/Fine-Tuned im-                   ﬁxed conﬁguration, selected early in the tuning process based
+plementation across the full execution range.                               on initial performance proﬁling, consists of a tile size of [256]
+   Despite QuCo being a fully automated mechanism, it deliv-                elements with [4] slots. While this conﬁguration performs
+ers performance consistently comparable to or better than the               reasonably well in the ﬁrst few initial layers Conv1d-1 or FC-
+best manually tuned approach. As reﬂected in the Geomean                    2, it signiﬁcantly degrades in later layers such as FC-5, FC-8
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+                  (a) MI-100                                         (b) R9 Nano                                       (c) Radeon 530
+
+     Fig. 10: Portability study: same post-compilation QuCo binary on GPUs with different compute and memory specs.
+
+
+or FC-12, where resource demands shift toward either bigger
+tiles or less occupancy. This behavior reinforces that optimal
+queue conﬁguration is not only workload-architecture-speciﬁc
+but also layer-speciﬁc, and ﬁxed strategies fail to generalize
+across an entire model.
+   In contrast, QuCo dynamically reconﬁgures the queues for
+each layer based on runtime parameters and architectural
+constraints, allowing it to navigate a vastly larger design space.
+As shown in Figure 9, it consistently outperforms both Semi-                 Fig. 11: Variance of QuCo parameters in the DNN models and
+Tuned and Fine-Tuned approaches, delivering the highest                      composite kernels for the three GPUs.
+speedup across layers. In deeper, more compute-intensive
+layers, QuCo demonstrates its ability to identify high-impact
+conﬁgurations. For instance, in Conv1d-2, it selects a tile size
+                                                                             to 2× speedup, highlighting the importance of overlapping
+of [1024] elements and allocates [2] slots—reducing pressure
+                                                                             computation with memory transfers for hiding memory latency
+on the memory system and increasing compute throughput—
+                                                                             under severe resource constraints.
+while for FC-3 and FC-4, it conﬁgures a more conservative
+tile size of [256] elements with [2] slots—to increase both                     QuCo’s ability to deliver optimal or near-optimal conﬁg-
+memory occupancy and compute throughput—outperforming                        urations without any tuning effort and preserving the same
+both baselines signiﬁcantly.                                                 post-compilation binary—regardless of the architecture—
+                                                                             demonstrates its portability and robustness. The variability of
+E. Portability                                                               conﬁgurations selected by QuCo is illustrated in Table III,
+                                                                             where tile sizes and queue slots are shown to differ across
+   To evaluate the portability of QuCo across a range of GPU
+                                                                             kernels and devices, reinforcing that optimal choices are
+hardware platforms, we execute the same set of kernels—
+                                                                             architecture-dependent and validating the need for QuCo’s
+exact same compiled binary in case of QuCo—presented in
+                                                                             dynamic, on-device conﬁguration strategy.
+Section V-B on three distinct GPU architectures: a high-end
+GPU (MI-100), a desktop-class GPU (R9 Nano, our baseline),                      To further prove QuCo’s adaptability to workloads with
+and a mobile-like low-power GPU (Radeon 530) implementing                    varying characteristics, in Figure 11 we plot the distribution
+asynchronous tile transfer operations. Details in Table II.                  of the unique combinations selected by QuCo when the DNN
+   Figure 10 shows the speedup achieved comparing three im-                  models and composite kernels are executed on the three GPUs.
+plementations: the NoATT/Fine-Tuned baseline, an ATT/Fine-                      Lastly, to underscore the importance of portability, we high-
+Tuned setup (exhaustively selected for each kernel and device),              light two dynamic execution scenarios where QuCo proves
+and QuCo. Despite differences in architectural scale, QuCo                   especially valuable: dynamic voltage and frequency scaling
+consistently delivers near-optimal performance across all plat-              (DVFS) and multi-tenancy. First, in environments with DVFS,
+forms without requiring any manual tuning.                                   GPU parameters may vary during runtime, breaking assump-
+   On the MI-100 (Figure 10a), the most compute-rich device,                 tions made by statically tuned conﬁgurations. Although QuCo
+QuCo performs within range of the best tuned conﬁgura-                       performs setup only at kernel launch, it adapts at each in-
+tion across all kernels, conﬁrming its ability to scale to                   vocation, allowing reconﬁguration between kernels without
+large architectures. On the R9 Nano (Figure 10b), our base                   intervention. Second, in multi-tenant systems, cloud-shared
+platform, QuCo again matches ATT/Fine-Tuned performance,                     GPUs or virtually partitioned GPUs, available compute and
+with nearly identical trends to those reported in Section V-B.               memory resources may be partitioned or shared across con-
+Finally, on the resource-constrained Radeon 530 (Figure 10c),                current workloads. High-level libraries typically fail to adjust
+QuCo demonstrates a key strength: when compute resources                     under these constraints. In contrast, QuCo dynamically infers
+are scarce, the baseline NoATT implementation is unable to                   and adjusts queue conﬁgurations based on actual resource
+overlap memory and compute effectively. In contrast, the                     availability at runtime, ensuring robust performance without
+ATT-based implementations, and especially QuCo, achieve up                   sacriﬁcing portability.
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+                                                                            G. Incurred Latency, Area and Energy Overhead
+                                                                               QuCo includes a simple RISC-V microcontroller imple-
+                                                                            menting the RV32IMF instruction set. At the 28 nm FDSOI
+                                                                            technology node from ST Microelectronics and operating
+                                                                            frequency of 700 MHz, the area estimate for the core is
+                                                                            0.027 mm2 [42]. As for the memory structures, the combined
+Fig. 12: QuCo-HW VS QuCo-SW over three different scenar-
+                                                                            memory subsystem of QuCo of 8 KiB (ﬁrmware)+2 KiB
+ios with varying frequency, see Section V-F for details.
+                                                                            (data)+256-byte GST, occupies a physical footprint of ap-
+                                                                            proximately 0.014 mm2 , and, according to CACTI, delivers
+                                                                            an access latency of 0.37 ns with a dynamic energy cost of
+F. DVFS
+                                                                            0.0032 nJ per read and 0.0061 nJ per write. Assuming an
+   To further prove QuCo’s adaptability, we conduct a                       IPC=1, we estimate QuCo reconﬁguration takes 6,300–8,300
+frequency-aware evaluation of the Whisper-Tiny DNN on                       cycles—much less than kernel execution time. These results
+the MI100 GPU under three dynamic voltage and frequency                     demonstrate that QuCo adds negligible area overhead, latency
+scaling (DVFS) scenarios, inspired by prior work [1]. For each              and energy consumption, making it suitable for integration into
+scenario, we adjust the operating frequency layer by layer.                 modern GPU designs.
+Each layer is evaluated under two queue conﬁguration policies:
+QuCo-SW, which always assumes the default GPU frequency                                             VI. R ELATED W ORK
+(1500 MHz), and QuCo-HW, which adapts to the current GPU                       Several wavefront scheduling methods have been proposed
+frequency when each layer is executed. Results are normalized               to optimize GPU performance [8], [22], [23], [25], [31],
+per layer to the corresponding QuCo-SW baseline scenario.                   [43]. Early techniques, such as Loose Round-Robin (LRR)
+   The ﬁrst scenario (Decreasing Freq.) explores a monotonic                and Greedy Then Oldest (GTO), are widely adopted for
+frequency decrease, starting at 1500 MHz and gradually                      intra-group and inter-group wavefront scheduling [22], [23],
+reducing to 900 MHz. This exposes a signiﬁcant beneﬁt                       [25]. However, not a single method uniformly outperforms
+for QuCo-HW in later layers. Interestingly, at FC-5 (1300                   others across diverse workloads, and scheduling efﬁciency
+MHz), a seemingly minor adjustment—e.g., reducing the tile                  typically depends on workload characteristics [2] and heavily
+size from 512 to 256—leads to measurable speedups. QuCo-                    programmer-dependant. Recent research has tackled wavefront
+HW achieves up to 11% performance improvement over its                      scheduling inefﬁciencies through innovative approaches. For
+software-based counterpart.                                                 instance, QoS-aware wavefront scheduling (QAWS) [43] dy-
+   The second one (Decreasing-Increasing Freq.) simulates a                 namically prioritizes kernels based on Quality-of-Service, sig-
+U-shaped frequency curve, decreasing from 1500 MHz to 950                   niﬁcantly reducing response time in simultaneous multi-kernel
+MHz by layer 7, then increasing back to 1500 MHz. Here,                     scenarios without sacriﬁcing overall throughput. Additionally,
+early and late layers show negligible differences, but layers               to mitigate GPU memory latency issues, Snake [31] introduced
+with intermediate frequency drops (e.g., FC-3,4,5, and 11)                  a chain-based prefetching mechanism that captures stride
+beneﬁt from QuCo-HW’s adaptive queue sizing. Across all                     patterns within and across threads and wavefronts, thereby
+layers, QuCo-HW delivers up to 10% performance improve-                     enhancing memory efﬁciency and reducing cache contention.
+ment compared to QuCo-SW.                                                      Wavefront specialization is another promising optimization
+   The third one (Decreasing-Holding Freq.) decreases the                   technique mentioned and used in this proposal. Recent works
+frequency progressively until layer 6, and then, holds it                   exploring wavefront specialization typically rely on hardware
+constant at 1000 MHz for the rest of the layers. While the                  enhancements [4], [8], [18]. Huang et al. [18] adopt an ant
+early layers see little change, QuCo-HW consistently improves               colony system algorithm to implement a producer-consumer
+performance in the later layers by adapting to the sustained                wavefront model, increasing computational efﬁciency. Simi-
+low frequency, demonstrating cumulative gains. This results in              larly, CudaDMA [4] introduces specialized DMA wavefronts
+a speedup of up to 17% compared to QuCo-SW.                                 to optimize GPU memory bandwidth by exclusively handling
+   Overall, across the three scenarios, performance differences             data transfers between shared and global memory. A closely
+between QuCo-SW and QuCo-HW are negligible in the ﬁrst                      related effort is WASP [8], which proposes compiler and hard-
+few layers, since both operate at the same frequency, and                   ware support for automatic wavefront specialization. WASP’s
+therefore, generate identical queue conﬁguration. Similarly, in             techniques are completely orthogonal and complementary to
+many intermediate layers, although the queue conﬁgurations                  QuCo: while WASP makes wavefront specialization transpar-
+may differ, the layers themselves tend to be linear and exhibit             ent to the programmer, QuCo automates ATT.
+low CI, making them less sensitive to tuning. Despite this,                    Compared to prior solutions, QuCo delivers dynamic, per-
+QuCo-HW consistently outperforms the static software-based                  kernel ATT conﬁguration without requiring compiler changes
+approach in most layers, thanks to its ability to adapt queue               or invasive hardware redesign, offering low integration effort,
+conﬁgurations dynamically based on the actual operating fre-                and runtime adaptability—all while maintaining transparent
+quency during execution.                                                    usage and low area footprint via its RISC-V microcontroller.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+                         VII. C ONCLUSION                                       [5] M. Bauer, S. Treichler, and A. Aiken, “Singe: leveraging warp
+                                                                                    specialization for high performance on gpus,” in Proceedings of the
+                                                                                    19th ACM SIGPLAN Symposium on Principles and Practice of Parallel
+   As GPUs become more heterogeneous, programming com-                              Programming, ser. PPoPP ’14. New York, NY, USA: Association
+plexity increases. A key example is asynchronous tile transfers                     for Computing Machinery, 2014, p. 119–130. [Online]. Available:
+(ATTs) between global and shared memory (e.g., NVIDIA’s                             https://doi.org/10.1145/2555243.2555258
+TMA). Leveraging ATT effectively requires careful producer-                     [6] J. Choquette, “Nvidia hopper h100 gpu: Scaling performance,” IEEE
+                                                                                    Micro, vol. 43, no. 3, p. 9–17, May 2023. [Online]. Available:
+consumer coordination and precise conﬁguration based on                             https://doi.org/10.1109/MM.2023.3256796
+GPU architecture and kernel behavior. Although frameworks                       [7] R. Chowdhury, F. Silvestri, and F. Vella, “A computational model for
+such as NVIDIA’s SDK, CUTLASS3+CuTe or ThunderKittens                               tensor core units,” 2020. [Online]. Available: https://arxiv.org/abs/1908.
+                                                                                    06649
+provide useful abstractions, they do not eliminate the burden                   [8] N. C. Crago, S. Damani, K. Sankaralingam, and S. W. Keckler, “Wasp:
+of manually selecting optimal parameters, wavefront special-                        Exploiting gpu pipeline parallelism with hardware-accelerated automatic
+ization, or ﬁne-grained synchronization barriers.                                   warp specialization,” in 2024 IEEE International Symposium on High-
+                                                                                    Performance Computer Architecture (HPCA), 2024, pp. 1–16.
+   To address this, we introduce Queue Conﬁgurator (QuCo),                      [9] T. Dao, D. Y. Fu, S. Ermon, A. Rudra, and C. Ré, “Flashattention:
+a novel, lightweight hardware unit embedded in the GPU.                             Fast and memory-efﬁcient exact attention with io-awareness,” 2022.
+                                                                                    [Online]. Available: https://arxiv.org/abs/2205.14135
+At kernel launch, QuCo ﬁrmware transparently automates                         [10] J. J. Dongarra, J. Du Croz, S. Hammarling, and I. S. Duff, “A set of level
+ATT conﬁguration by inferring optimal queue setups from                             3 basic linear algebra subprograms,” ACM Transactions on Mathematical
+static GPU speciﬁcation data (GST) provided by the ven-                             Software, vol. 16, no. 1, pp. 1–17, 1990.
+                                                                               [11] A. ElTantawy and T. M. Aamodt, “Warp scheduling for ﬁne-grained
+dor, combined with dynamic kernel features. Our evaluation                          synchronization,” in 2018 IEEE International Symposium on High
+across multiple GPU platforms and linear algebra kernels                            Performance Computer Architecture (HPCA), 2018, pp. 375–388.
+shows QuCo achieves performance within 1.04% of expert                         [12] D. Ernst, M. Holzer, G. Hager, M. Knorr, and G. Wellein, “Analytical
+                                                                                    performance estimation during code generation on modern gpus,”
+hand-tuned ATT conﬁgurations. Further, for state-of-the-art                         Journal of Parallel and Distributed Computing, vol. 173, p. 152–167,
+DNN models and composite kernels—where manual tuning                                Mar. 2023. [Online]. Available: http://dx.doi.org/10.1016/j.jpdc.2022.
+is even less feasible—QuCo consistently outperforms manual                          11.003
+attempts, highlighting its potential as a general framework for                [13] H. Falahati, M. Peyro, H. Amini, M. Taghian, M. Sadrosadati, P. Lotﬁ-
+                                                                                    Kamran, and H. Sarbazi-Azad, “Data-aware compression of neural
+automated memory-transfer optimization.                                             networks,” IEEE Computer Architecture Letters, vol. 20, no. 2, pp. 94–
+                                                                                    97, 2021.
+                                                                               [14] G. H. Golub and C. F. Van Loan, Matrix Computations, 4th ed.
+                      ACKNOWLEDGEMENTS                                              Baltimore, Maryland: The Johns Hopkins University Press, 2013.
+                                                                               [15] K. He, X. Zhang, S. Ren, and J. Sun, “Deep residual learning for image
+   We would like to thank Neal Crago, Timothy Rogers and                            recognition,” 2015. [Online]. Available: https://arxiv.org/abs/1512.03385
+                                                                               [16] P. Hijma, S. Heldens, A. Sclocco, B. van Werkhoven, and
+the reviewers for their valuable feedback. This work has been                       H. E. Bal, “Optimization techniques for gpu programming,” ACM
+funded by the MCIN/AEI/10.13039/501100011033/ and the                               Comput. Surv., vol. 55, no. 11, Mar. 2023. [Online]. Available:
+“ERDF A way of making Europe”, EU, under grant PID2022-                             https://doi.org/10.1145/3570638
+                                                                               [17] C.-H. Hong, I. Spence, and D. S. Nikolopoulos, “Gpu virtualization
+136315OB-I00; by MICIU/AEI/10.13039/501100011033 and                                and scheduling methods: A comprehensive survey,” ACM Comput.
+the “European Union NextGenerationEU/PRTR”, under grant                             Surv., vol. 50, no. 3, Jun. 2017. [Online]. Available: https:
+RYC2021-031966-I; and partially supported by NSF (US)                               //doi.org/10.1145/3068281
+                                                                               [18] Z.-b. Huang, G.-T. Fu, T.-H. Fa, D.-Y. Dong, P. Bai, and C. Xiao, “High
+under award 2246035 and 2402804. Nicolás Meseguer is                               performance ant colony system based on gpu warp specialization with
+supported by the FPI 21803/FPI/22 fellowship from Fundación                        a static–dynamic balanced candidate set strategy,” Future Generation
+Séneca.                                                                            Computer Systems, vol. 125, pp. 136–150, 2021.
+                                                                               [19] Intel, “Why Data Center GPUs Are Essential to Innovation,”
+                                                                                    https://www.intel.com/content/www/us/en/products/docs/discrete-
+                                                                                    gpus/data-center-gpu/what-is-data-center-gpu.html, 2024, [Online;
+                            R EFERENCES                                             accessed 13-December-2024].
+                                                                               [20] Z. Jia, O. Padon, J. J. Thomas, T. Warszawski, M. A. Zaharia, and
+[1] G. Ali, M. Side, S. Bhalachandra, T. Dang, A. Sill, and Y. Chen,                A. Aiken, “Taso: optimizing deep learning computation with automatic
+    “Understanding the efﬁcacy of power proﬁles: A case study of amd                generation of graph substitutions,” Proceedings of the 27th ACM
+    instinct mi100 gpu,” in 2024 IEEE High Performance Extreme Comput-              Symposium on Operating Systems Principles, 2019. [Online]. Available:
+    ing Conference (HPEC), 2024, pp. 1–7.                                           https://api.semanticscholar.org/CorpusID:202726856
+[2] M. Awatramani, X. Zhu, J. Zambreno, and D. Rover, “Phase aware warp        [21] S. Kamil, A. Cheung, S. Itzhaky, and A. Solar-Lezama, “Veriﬁed lifting
+    scheduling: Mitigating effects of phase behavior in gpgpu applications,”        of stencil computations,” SIGPLAN Not., vol. 51, no. 6, p. 711–726, Jun.
+    in 2015 International Conference on Parallel Architecture and Compi-            2016. [Online]. Available: https://doi.org/10.1145/2980983.2908117
+    lation (PACT). IEEE, 2015, pp. 1–12.                                       [22] M. Khairy, A. Jain, T. M. Aamodt, and T. G. Rogers, “A detailed model
+[3] Y. Bao, Y. Sun, Z. Feric, M. T. Shen, M. Weston, J. L. Abellán,                for contemporary gpu memory systems,” in 2019 IEEE International
+    T. Baruah, J. Kim, A. Joshi, and D. Kaeli, “Navisim: A highly                   Symposium on Performance Analysis of Systems and Software (ISPASS).
+    accurate gpu simulator for amd rdna gpus,” in Proceedings of the                IEEE, 2019, pp. 141–142.
+    International Conference on Parallel Architectures and Compilation         [23] M. Khairy, Z. Shen, T. M. Aamodt, and T. G. Rogers, “Accel-sim:
+    Techniques, ser. PACT ’22. New York, NY, USA: Association                       An extensible simulation framework for validated gpu modeling,” in
+    for Computing Machinery, 2023, p. 333–345. [Online]. Available:                 2020 ACM/IEEE 47th Annual International Symposium on Computer
+    https://doi.org/10.1145/3559009.3569666                                         Architecture (ISCA). IEEE, 2020, pp. 473–486.
+[4] M. Bauer, H. Cook, and B. Khailany, “Cudadma: optimizing gpu               [24] Z. Lan, M. Chen, S. Goodman, K. Gimpel, P. Sharma, and
+    memory bandwidth via warp specialization,” in Proceedings of 2011               R. Soricut, “Albert: A lite bert for self-supervised learning of language
+    international conference for high performance computing, networking,            representations,” 2020. [Online]. Available: https://arxiv.org/abs/1909.
+    storage and analysis, 2011, pp. 1–11.                                           11942
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+[25] S.-Y. Lee, A. Arunkumar, and C.-J. Wu, “Cawa: Coordinated warp                   D. Kaeli, “Mgpusim: Enabling multi-gpu performance modeling and
+     scheduling and cache prioritization for critical warp acceleration of            optimization,” in Proceedings of the 46th International Symposium
+     gpgpu workloads,” ACM SIGARCH Computer Architecture News,                        on Computer Architecture, ser. ISCA ’19. New York, NY, USA:
+     vol. 43, no. 3S, pp. 515–527, 2015.                                              Association for Computing Machinery, 2019, p. 197–209. [Online].
+[26] S.-Y. Lee and C.-J. Wu, “Caws: criticality-aware warp scheduling for             Available: https://doi.org/10.1145/3307650.3322230
+     gpgpu workloads,” in Proceedings of the 23rd International Conference       [45] F. G. Van Zee and R. A. van de Geijn, “Blis: A framework for rapidly
+     on Parallel Architectures and Compilation, ser. PACT ’14. New York,              instantiating blas functionality,” ACM Transactions on Mathematical
+     NY, USA: Association for Computing Machinery, 2014, p. 175–186.                  Software, vol. 41, no. 3, pp. 1–30, 2015.
+     [Online]. Available: https://doi.org/10.1145/2628071.2628107                [46] Y. Wu and K. He, “Group normalization,” 2018. [Online]. Available:
+[27] R. Liang, T. Cao, J. Wen, M. Wang, Y. Wang, J. Zou, and Y. Liu,                  https://arxiv.org/abs/1803.08494
+     “Romou: rapidly generate high-performance tensor kernels for mobile         [47] R. Yadav, M. Garland, A. Aiken, and M. Bauer, “Task-based tensor
+     gpus,” in Proceedings of the 28th Annual International Conference on             computations on modern gpus,” Proc. ACM Program. Lang., vol. 9, no.
+     Mobile Computing And Networking, ser. MobiCom ’22. New York,                     PLDI, Jun. 2025. [Online]. Available: https://doi.org/10.1145/3729262
+     NY, USA: Association for Computing Machinery, 2022, p. 487–500.
+     [Online]. Available: https://doi.org/10.1145/3495243.3517020
+[28] J. D. C. Little, “Little’s law as viewed on its 50th anniversary,”
+     Operations Research, vol. 59, no. 3, p. 536–549, May 2011. [Online].
+     Available: https://doi.org/10.1287/opre.1110.0940
+[29] W. Luo, R. Fan, Z. Li, D. Du, H. Liu, Q. Wang, and X. Chu,
+     “Dissecting the nvidia hopper architecture through microbenchmarking
+     and multiple level analysis,” 2025. [Online]. Available: https:
+     //arxiv.org/abs/2501.12084
+[30] W. Luo, R. Fan, Z. Li, D. Du, Q. Wang, and X. Chu, “Benchmarking
+     and dissecting the nvidia hopper gpu architecture,” 2024. [Online].
+     Available: https://arxiv.org/abs/2402.13499
+[31] S. Mostoﬁ, H. Falahati, N. Mahani, P. Lotﬁ-Kamran, and H. Sarbazi-
+     Azad, “Snake: A variable-length chain-based prefetching for gpus,” in
+     Proceedings of the 56th Annual IEEE/ACM International Symposium on
+     Microarchitecture, ser. MICRO ’23. New York, NY, USA: Association
+     for Computing Machinery, 2023, p. 728–741. [Online]. Available:
+     https://doi.org/10.1145/3613424.3623782
+[32] N. Nematollahi, M. Sadrosadati, H. Falahati, M. Barkhordar, and
+     H. Sarbazi-Azad, “Neda: Supporting direct inter-core neighbor data
+     exchange in gpus,” IEEE Computer Architecture Letters, vol. PP, pp.
+     1–1, 10 2018.
+[33] NVIDIA, “cublas,” https://developer.nvidia.com/cublas.
+[34] NVIDIA, “Cuda c++ programming guide. version 12.4,” https://docs.
+     nvidia.com/cuda/cuda-c-programming-guide/index.html.
+[35] NVIDIA, “Cutlass,” https://github.com/NVIDIA/cutlass.
+[36] NVIDIA, “The engine behind ai factories — nvidia blackwell
+     architecture,” 2025, accessed: 2025-04-08. [Online]. Available: https://
+     www.nvidia.com/en-us/data-center/technologies/blackwell-architecture/
+[37] NVIDIA, “Nvidia rtx pro blackwell gpu architecture,” 2025,
+     accessed: 2025-04-08. [Online]. Available: https://www.nvidia.
+     com/content/dam/en-zz/Solutions/design-visualization/quadro-product-
+     literature/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1.0.pdf
+[38] M. Pavlidakis, G. Vasiliadis, S. Mavridis, A. Argyros, A. Chazapis, and
+     A. Bilas, “Guardian: Safe gpu sharing in multi-tenant environments,”
+     in Proceedings of the 25th International Middleware Conference,
+     ser. Middleware ’24. New York, NY, USA: Association for
+     Computing Machinery, 2024, p. 313–326. [Online]. Available: https:
+     //doi.org/10.1145/3652892.3700768
+[39] C. Peng, A. Jambek, S. Dass, L. Wah, L. Laudis, A. Yadlapati, G. Udari,
+     and B. Reddy, “Performance evaluation of risc-v microcontroller system
+     on fpga: A study of the neorv32 core,” International Journal of Inte-
+     grated Engineering, vol. 16, 04 2024.
+[40] A. Radford, J. W. Kim, T. Xu, G. Brockman, C. McLeavey,
+     and I. Sutskever, “Robust speech recognition via large-scale weak
+     supervision,” 2022. [Online]. Available: https://arxiv.org/abs/2212.04356
+[41] C. Raffel, N. Shazeer, A. Roberts, K. Lee, S. Narang, M. Matena,
+     Y. Zhou, W. Li, and P. J. Liu, “Exploring the limits of transfer learning
+     with a uniﬁed text-to-text transformer,” 2023. [Online]. Available:
+     https://arxiv.org/abs/1910.10683
+[42] S. Rokicki, D. Pala, J. Paturel, and O. Sentieys, “What you simulate
+     is what you synthesize: Designing a processor core from c++ speciﬁca-
+     tions,” in 2019 IEEE/ACM International Conference on Computer-Aided
+     Design (ICCAD), 2019, pp. 1–8.
+[43] J. Singh, I. S. Olmedo, N. Capodieci, A. Marongiu, and M. Caccamo,
+     “Reconciling qos and concurrency in nvidia gpus via warp-level schedul-
+     ing,” in 2022 Design, Automation & Test in Europe Conference &
+     Exhibition (DATE), 2022, pp. 1275–1280.
+[44] Y. Sun, T. Baruah, S. A. Mojumder, S. Dong, X. Gong, S. Treadway,
+     Y. Bao, S. Hance, C. McCardwell, V. Zhao, H. Barclay, A. K.
+     Ziabari, Z. Chen, R. Ubal, J. L. Abellán, J. Kim, A. Joshi, and
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:43:58 UTC from IEEE Xplore. Restrictions apply.
+

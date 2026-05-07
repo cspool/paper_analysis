@@ -1,0 +1,1238 @@
+                                                                                                                                                                                        2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+
+
+                                                                                                                                                                        VectorLiteRAG: Latency-Aware and Fine-Grained
+                                                                                                                                                                            Resource Partitioning for Efficient RAG
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408552
+
+
+
+
+                                                                                                                                                                                                                         Junkyum Kim and Divya Mahajan
+                                                                                                                                                                                                                          Georgia Institute of Technology
+                                                                                                                                                                                                                    {jun-kyum.kim, divya.mahajan}@gatech.edu
+
+
+                                                                                                                                                                                                                                                                           CPU MEM            GPU MEM
+                                                                                                                                                                        Abstract—Retrieval-Augmented Generation leverages vector
+                                                                                                                                                                     similarity search to enhance large language models with up-
+                                                                                                                                                                                                                                                                                Vector
+                                                                                                                                                                     to-date, external knowledge, enabling accurate and reliable re-                                            Index
+                                                                                                                                                                     sponses. While CPU-only vector search incurs high latency on                                                                  KV Cache
+                                                                                                                                                                     large, high-dimensional indices, co-locating the retriever and the
+                                                                                                                                                                     LLM on the GPU leads to resource sharing that can create
+                                                                                                                                                                     resource contention. Specifically, vector search is memory and
+                                                                                                                                                                                                                                                   𝓦𝓱𝓪𝓽 𝓲𝓼 𝓽𝓱𝓮
+                                                                                                                                                                                                                                                                                                                       𝓟𝓪𝓻𝓲𝓼 𝓲𝓼 …
+                                                                                                                                                                                                                                                   𝓬𝓪𝓹𝓲𝓽𝓪𝓵 …
+                                                                                                                                                                     I/O intensive, placing it in direct conflict with LLM inference,
+                                                                                                                                                                     which demands memory for KV cache and compute for higher
+                                                                                                                                                                     throughput. We present V ECTOR L ITE RAG, a latency-aware
+                                                                                                                                                                                                                                                     User        Embedding     Similarity      Large Language           Output
+                                                                                                                                                                     RAG serving system that explicitly orchestrates data placement                  Query         Model        Search             Models
+                                                                                                                                                                     and execution across retrieval and inference to meet strict end-
+                                                                                                                                                                                                                                                                                                              𝓦𝓱𝓪𝓽 𝓲𝓼 𝓽𝓱𝓮
+                                                                                                                                                                     to-end SLOs. V ECTOR L ITE RAG is driven by access-pattern
+                                                                                                                                                                                                                                                                                                              𝓬𝓪𝓹𝓲𝓽𝓪𝓵 …
+                                                                                                                                                                     analysis and performance estimation to regulate how retrieval                                                                                          User
+                                                                                                                                                                                                                                                                   Knowledge                                                Query
+                                                                                                                                                                                                                                                                     Base                      Relevant
+                                                                                                                                                                     variability can be mitigated and managed in the system with                                                             Information
+                                                                                                                                                                     LLM inference, enabling SLO-compliant execution under skewed
+                                                                                                                                                                     and dynamic workloads. By jointly modeling search latency
+                                                                                                                                                                                                                                                  Fig. 1. End-to-end pipeline of a RAG system, where the input query
+                                                                                                                                                                     and query hit-rate distributions, V ECTOR L ITE RAG identifies
+                                                                                                                                                                                                                                                  is indexed into the vector database stored in memory, while the
+                                                                                                                                                                     an optimal index partitioning point across CPU and GPU that
+                                                                                                                                                                                                                                                  knowledge corpus resides in storage. The LLM prefill and decode
+                                                                                                                                                                     minimizes contention and stabilizes batching behavior, thereby
+                                                                                                                                                                                                                                                  execute on the GPU.
+                                                                                                                                                                     maximizing sustained throughput under skewed access pat-
+                                                                                                                                                                     terns. A low-overhead online index update mechanism allows
+                                                                                                                                                                     V ECTOR L ITE RAG to continuously adapt to evolving request                  massive matrix multiplications and benefits significantly from
+                                                                                                                                                                     distributions, preserving batching efficiency and throughput as              GPU acceleration, whereas retrieval has traditionally been seen
+                                                                                                                                                                     access patterns evolve. Our evaluations demonstrate that V EC -              as a lighter task suited for CPUs. Offloading retrieval to CPUs
+                                                                                                                                                                     TOR L ITE RAG consistently expands the range of SLO-compliant                allows GPUs to be dedicated to the more compute-intensive
+                                                                                                                                                                     request rate across all tested configurations. Without increasing            generation phase. CPU-based vector search may be sufficient
+                                                                                                                                                                     the generation latency or requiring additional hardware, V EC -
+                                                                                                                                                                     TOR L ITE RAG outperforms both naive and existing alternative
+                                                                                                                                                                                                                                                  for small vector databases, however, as the dimensionality of
+                                                                                                                                                                     frameworks, improving attainable SLO-bound throughput by up                  the embeddings and the size of the dataset grow, retrieval
+                                                                                                                                                                     to 1.5×.                                                                     becomes increasingly compute- and memory- bound. CPUs,
+                                                                                                                                                                                                                                                  with limited parallelism, narrower vector units, and lower
+                                                                                                                                                                                             I. I NTRODUCTION                                     memory bandwidth, struggle to handle high-throughput simi-
+                                                                                                                                                                        Retrieval-Augmented Generation (RAG) is a powerful sys-                   larity search at scale.
+                                                                                                                                                                     tem in natural language processing, particularly for domain-                    This latency imbalance creates a bottlenecked pipeline
+                                                                                                                                                                     specific question answering and information retrieval tasks [7],             where the relatively slow CPU-based retrieval delays the GPU-
+                                                                                                                                                                     [8], [10], [22], [33]. Its key strength lies in combining para-              accelerated generation phase, reducing the benefits of fast
+                                                                                                                                                                     metric memory, encoded in the weights of a large language                    LLM inference and degrading overall system responsiveness.
+                                                                                                                                                                     model, with non-parametric memory retrieved from an external                 In our observations, CPU-based retrieval can take up to twice
+                                                                                                                                                                     knowledge corpus. Although parametric memory provides                        as long as the LLM prefill phase, increasing the total Time-to-
+                                                                                                                                                                     strong generalization, it is expensive to train and difficult                First-Token (TTFT) from 197ms to 606ms when using a large
+                                                                                                                                                                     to update. To mitigate this, RAG pipelines first perform                     database with 128M vectors, compared to a language model
+                                                                                                                                                                     similarity search using approximate nearest neighbor search                  (Llama3-8B) operating without retrieval.
+                                                                                                                                                                     (ANNS) algorithms to retrieve relevant documents from a large                   Although the retrieval operation is computationally lighter
+                                                                                                                                                                     database. The retrieved documents are then fed into the LLM’s                than the generation phase, it can still benefit significantly from
+                                                                                                                                                                     context to generate up-to-date and reliable responses.                       GPU acceleration for two reasons: (1) GPUs feature wide and
+                                                                                                                                                                        RAG frameworks [20], [24], [38] typically adopt heteroge-                 powerful vector units that enable highly parallelized distance
+                                                                                                                                                                     neous hardware configurations, where vector retrieval is exe-                computations, offering superior performance for similarity
+                                                                                                                                                                     cuted on CPUs and LLM generation is served by GPUs. This                     calculations on long embedding vectors. (2) The retrieval
+                                                                                                                                                                     is driven by the system characteristics: LLM inference requires              process involves scanning intermediate distance tensors to
+                                                                                                                                                                             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+identify the closest data points in the vector space. These                                                                                       2                      1               2               3               4
+                                                                                     1
+                                                                                                                                                            1      2.1       1.9   1.0 -4.4 0.0              1.9   4.1 -6.6
+operations are typically implemented as memory lookups a                                                     (2)
+                                                                                                                                                            2      -7.2 4.5 -1.1 2.9 -1.9 8.5                      7.0       1.4
+                                                                                                         C4                                                 3      5.3 -0.2 -2.1 5.6               5.4       2.3   2.1       2.8
+task where GPUs outperform CPUs due to their vectorized                                   X2                                                                4      -8.7 1.3        0.1       7.7   6.0 -1.8 5.2              1.9
+
+memory access and higher I/O.                                                   X1
+                                                                                                                                  (2)
+                                                                                                                                 C1                                                          X
+                                                                                               (2)                                                          Q[1] Q[2] Q[3] Q[4] Q[5] Q[6] Q[7] Q[8]
+    In addition to compute and bandwidth demands, vector                                      C1
+
+
+retrieval introduces significant memory pressure. To reduce                              X3                        C2
+                                                                                                                       (2)
+
+                                                                                                                                                             1                     2                    3                     4
+                                                                                                                                                   1    Q[1:2] C[1,1]         Q[3:4] C[1,2]        Q[5:6] C[1,3]         Q[7:8] C[1,4]
+memory footprint and speed up the search process, vec-                                                                                             2    Q[1:2] C[2,1]         Q[3:4] C[2,2]        Q[5:6] C[2,3]         Q[7:8] C[2,4]
+                                                                                                                                                   3    Q[1:2] C[3,1]         Q[3:4] C[3,2]        Q[5:6] C[3,3]         Q[7:8] C[3,4]
+tor databases are commonly compressed into vector indexes                                                                                          4    Q[1:2] C[4,1]         Q[3:4] C[4,2]        Q[5:6] C[4,3]         Q[7:8] C[4,4]
+
+using quantization techniques such as product quantization                               3
+(PQ) [13]. Nevertheless, even after compression, vector in-
+                                                                                     X1              4   1         2         4
+dexes still occupy significant memory space, often exceeding                         X2              2   3         1         4
+                                                                                                                                                 1                   2                  3                     4
+                                                                                                                                        1   Q[1:2] C[1,1]       Q[3:4] C[1,2]      Q[5:6] C[1,3]         Q[7:8] C[1,4]
+the memory capacity of a GPU. Furthermore, intermediate                              X3              1   1         1         3          2   Q[1:2] C[2,1]       Q[3:4] C[2,2]      Q[5:6] C[2,3]         Q[7:8] C[2,4]
+                                                                                     …                                                  3   Q[1:2] C[3,1]       Q[3:4] C[3,2]      Q[5:6] C[3,3]         Q[7:8] C[3,4]
+data structures such as distances between cluster centroids and                      Xn              1   3         3         2
+                                                                                                                                        4   Q[1:2] C[4,1]       Q[3:4] C[4,2]      Q[5:6] C[4,3]         Q[7:8] C[4,4]
+
+queries consume additional memory.
+    These compute and memory pressures create a resource                                                                         Q . X1 = Q[1:2] C[4,1] + Q[3:4] C[1,2] + Q[5:6] C[2,3] + Q[7:8] C[4,4]
+
+
+tension between the retrieval and generation stages, especially
+                                                                            Fig. 2. Three stages of vector search in IVF–based index: (1) coarse
+as the vector database grows and CPU-based search fails                     quantization to identify clusters most semantically similar to the
+to meet strict latency requirements. GPU memory is already                  query, (2) construction of a LUT containing partial distances between
+constrained, with most of it reserved for model weights and                 the query and codewords, and (3) scanning the LUT and re-ranking
+KV cache for the LLM. Naively sharding the vector index                     candidates from the selected clusters based on aggregated distances.
+across all GPUs can lead to memory contention and reduced
+overall throughput. Alternatively, assigning a disaggregated                fixed retrieval configurations across devices fail to account
+GPU for retrieval can prevent direct interference between                   for this variability and often over-allocate GPU threads. V EC -
+stages, but degrades overall system throughput by reducing the              TOR L ITE RAG introduces query- and shard- aware routing to
+number of available LLM instances, in particular when models                avoid such inefficiencies. After determining the most relevant
+require multiple GPUs, enforcing rigid allocation schemes.                  clusters, it dispatches work to CPU or GPU based on their ac-
+    Motivated by these challenges, this work explores a holistic            tual expected contribution. It also monitors per-query progress,
+approach to optimizing distributed RAG pipelines through                    forwarding early-finishing queries to reduce straggler-induced
+joint resource allocation between vector search and LLM                     delays and improve batching efficiency.
+generation. We present V ECTOR L ITE RAG, a system that par-                Our contributions are summarized as follows:
+titions the vector index between GPU and CPU-based on query                 • Access-skew modeling and hit-rate estimation. We char-
+access patterns and LLM deployment configurations, aiming to                   acterize access skew in IVF-based retrieval systems and
+maximize throughput while meeting latency targets by exploit-                  develop a hit-rate estimation method based on observed
+ing the compute power of GPUs across both stages of the RAG                    cluster access patterns.
+pipeline. By analytically modeling similarity search latency,               • Analytical latency model and SLO-aware partitioning.
+we determine the smallest index portion that needs to be placed                We construct a latency model that accounts for inter-query
+on the GPU to satisfy the latency requirement under a given                    variance and use it to determine the optimal CPU-GPU
+system configuration. Accordingly, V ECTOR L ITE RAG offers                    index partitioning point that meets latency targets.
+a latency-aware, throughput-optimized solution that requires                • Distributed retrieval pipeline. We design a distributed re-
+no additional hardware resources. This approach is grounded                    trieval pipeline that adaptively allocates search tasks across
+in two key insights:                                                           CPUs and GPUs by exploiting inter-device hit rate vari-
+Access-Skew-Aware Data Layout. V ECTOR L ITE RAG lever-                        ance, improving efficiency and avoiding unnecessary GPU
+ages a key characteristic of Inverted File (IVF) based retrieval               resource usage.
+systems [46], that query accesses exhibit skew across clusters.
+To take advantage of this, V ECTOR L ITE RAG incorporates                                          II. R ETRIEVAL AUGMENTED G ENERATION
+an analytical model that determines the optimal partitioning                   In a RAG system, user queries are first transformed into
+point and corresponding layout for a multi-GPU system. While                vector embeddings using embedding models [30], [34], [36],
+the coarse quantizer and cold clusters remain on the CPU,                   [42]. These embeddings capture the semantics of the input
+a small subset of hot clusters are cached and distributed                   and enable similarity search by comparing query vectors to
+across GPUs. The system allocates just enough hot clusters to               a vector database constructed from the knowledge corpus,
+the GPUs, avoiding both oversubscription of GPU resources                   typically encoded using the same embedding model. State-of-
+during retrieval.                                                           the-art embedding models produce vectors of several thousand
+Inter/Intra-Query Variance-Aware Routing. When hot clus-                    dimensions for higher quality, but this increased dimensional-
+ters are distributed across GPUs, hit rates vary both across                ity raises the cost of distance computations.
+queries (inter-query variance) and across device shards within                 Since exhaustive pairwise search is computationally infeasi-
+a query (intra-query variance). Existing systems that enforce               ble at scale, large vector retrieval relies on approximate nearest
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+                                  IVF           IVF-FS                       CQ       LUT Cmp      LUT Scan                                                                   1.00
+
+
+
+
+                                                                                                              Search Time (ms)
+
+
+
+
+                                                                                                                                                             LLM Throughput
+Normalized Latency
+                                                                       0.3                                                       200
+
+
+
+
+                                                                                                                                                               Normalized
+                     1.0                                                                                                                                                      0.75
+
+
+
+
+                                                         Latency (s)
+                                                                       0.2                                                       100                                          0.50
+                     0.5                                               0.1
+                                                                                                                                   0                                          0.25
+                     0.0                                               0.0                                                              CPU IVF    GPU IVF                           0.4       0.2     0.0
+                              4                  16                               2                8                                   Fast Scan   Search                            Relative KV Space
+                                   Batch Size                                         Batch Size
+                                                                                                                    Fig. 4. Left: While fast scanning accelerates IVF-based vector search
+       Fig. 3. Left: Search latency comparison between standard IVF and                                             on CPU(64 core Xeon 8462Y+), GPU(H100)-based IVF search offers
+       IVF with fast scan (IVF-FS). Except for the fast scan optimization,                                          superior performance. Right: Relationship between KV cache size
+       both indexes share identical configurations. IVF-FS achieves signifi-                                        and LLM throughput for the Qwen3-30B model on two H100 GPUs.
+       cantly faster search speed. Right: Latency breakdown of IVF-FS on                                            Reducing KV cache space leads to a significant drop in throughput.
+       a 128M vector index. Lookup table operations dominate the overall
+       search time.
+                                                                                                                    LUTs are used to accumulate approximate distances and
+       neighbor search to efficiently identify relevant documents.                                                  retrieve the top-k nearest vectors.
+       The retrieved vectors are mapped back to their corresponding                                                    A deeper analysis of IVF search, shown in Figure 3, reveals
+       documents, which are provided as additional context to the                                                   that the large portion of the search time is spent on construct-
+       LLM alongside the original query.                                                                            ing and scanning the distance lookup table. This highlights
+                                                                                                                    the LUT stage as a key bottleneck in retrieval latency. To
+       A. Inverted List Index IVF                                                                                   mitigate this overhead, fast scanning techniques [4] have been
+          There are several approaches for structuring a vector                                                     proposed and implemented in libraries such as Faiss [6] and
+       database into a searchable index. Among them, HNSW and                                                       ScaNN [43]. These methods leverage SIMD instructions and
+       IVF are the most widely used.                                                                                CPU vector registers to accelerate distance lookup operations.
+          HNSW [27] (Hierarchical Navigable Small World) is a                                                       By carefully organizing lookup tables and quantization codes
+       graph-based structure where each vector forms a node con-                                                    into memory-aligned layouts, they significantly outperform
+       nected to its nearest neighbors. It enables rapid search via                                                 conventional IVF scan routines, particularly in CPU-based
+       hierarchical traversal and offers fast index construction. How-                                              environments.
+       ever, the additional edge information significantly increases                                                   Motivated by their superior latency-performance trade-off,
+       memory usage as the dataset grows.                                                                           we adopt fast scanning in our system to enable efficient
+          In contrast, the Inverted File (IVF) index [46] organizes the                                             and low-latency vector retrieval. However, despite the SIMD
+       index as a hierarchical clustering structure. A subset of vectors                                            capabilities of modern CPUs, CPU-based search can still
+       is first clustered via K-Means to obtain centroids. Then, each                                               become a bottleneck, ultimately degrading the responsiveness
+       database vector is assigned to the closest centroid, forming                                                 of the end-to-end RAG system.
+       an inverted list. This structure narrows the search space using
+                                                                                                                       III. C HALLENGES AND O PPORTUNITIES IN RAG SERVING
+       only centroid metadata, resulting in low memory overhead and
+       high scalability. As such, IVF is widely adopted and studied in                                              A. GPU search vs. CPU search
+       retrieval systems for large knowledge corpora [6], [11], [14],                                                  While fast scan indexes significantly improve the latency
+       [21], [35], [43]. To further reduce memory usage, quantization                                               of vector similarity search on CPUs, GPU-based retrieval
+       techniques are applied on top of IVF. Scalar quantization (SQ)                                               can offer even greater speedups, due to their wider vector
+       reduces each vector element to a smaller numerical type (e.g.,                                               processing units and higher memory bandwidth. As shown in
+       float32 to int8), offering simplicity but limited com-                                                       Figure 4 (left), GPU-accelerated IVF search can outperform
+       pression. For higher compression ratios, product quantization                                                fast scan methods by nearly an order of magnitude.
+       (PQ) [13] is commonly used.                                                                                     Thus, offloading retrieval to the GPU can offer higher
+                                                                                                                    speedups for large-scale vector databases where CPU-based
+       B. Search Operation in IVF Index                                                                             search remains a bottleneck. However, this comes with a fun-
+          Figure 2 illustrates the search process in an IVF-PQ index,                                               damental trade-off: GPU memory is already heavily utilized by
+       where an inverted list structure is combined with product                                                    LLMs, particularly for storing KV cache and model weights.
+       quantization. When a query is received, the retriever first                                                  Allocating additional memory for the vector index can reduce
+       identifies the closest clusters, narrowing the search space. The                                             available cache space, ultimately degrading LLM throughput,
+       number of clusters searched is controlled by the parameter                                                   as illustrated in Figure 4 (right).
+       nprobe, which trades off speed and accuracy.                                                                    Beyond memory capacity, GPU retrieval additionally incurs
+          Next, a distance lookup table is constructed. Since each                                                  scheduling overheads due to increased contention for compute
+       vector is quantized into discrete sub-vector codes, each code                                                resources. Shared memory is used to stage partial distance
+       maps to a representative value, trained and stored in the code-                                              lookup tables, and each query–cluster pair typically maps to
+       book. By pre-computing distances between the query vector                                                    a thread block. As the number of probed clusters increases,
+       and these representative values, the system avoids computing                                                 so does the occupancy and scheduling pressure on the GPU,
+       full distances to every vector. During the scan stage, these                                                 further impacting performance.
+
+
+
+
+                           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+      1.0           Wiki-All                1.0           ORCAS                           1.0
+                                                     0.93
+      0.8                                   0.8
+
+
+
+
+                                                                               Hit Rate
+      0.6      0.59                         0.6                                           0.5
+CDF
+
+
+
+
+                                      CDF
+      0.4                                   0.4                                                                                                      Wiki-All
+      0.2                                   0.2                                                                                                      ORCAS
+      0.0                                   0.0                                           0.0
+        0.00 0.25 0.50 0.75 1.00              0.00 0.25 0.50 0.75 1.00                            5%                  10%                     20%
+            Percentile of Clusters                Percentile of Clusters                                         Cache Coverage
+ Fig. 5. CDF of cluster access frequency for queries from the Wiki-               Fig. 6. Violin plot of hit rate distribution at different cache-coverages.
+ All [37] and ORCAS [5] datasets. While the two distributions exhibit             The width of the violin indicates the density of queries with similar
+ different levels of skewness, in both cases, the top 20% of clusters             hit rates, while the white dot and black bar denote the median and
+ account for over 50% of the total distance computations.                         inter-quartile range, respectively. This highlights that increasing cache
+                                                                                  coverage improves overall hit rates but does not eliminate tail queries
+ Takeaway 1. GPU-based retrieval can substantially out-                           with poor hit rates.
+ perform even the fastest CPU-based methods, but due to
+                                                                                  As a result, skew in our setting emerges more prominently at
+ contention with LLM inference workloads, careful memory
+                                                                                  the cluster level rather than the vector level.
+ and compute allocation is essential.
+                                                                                     Consequently, although both domains benefit from tiered
+ B. Opportunity of Tiered Search Structure                                        designs, the unit of optimization and the manifestation of skew
+                                                                                  differ substantially. Our approach explicitly targets cluster-
+    The distribution of query access patterns in IVF indexes                      level skew in large-scale retrieval workloads, enabling effective
+ reveals the presence of hot clusters, a small subset that                        tiered placement and latency-aware resource allocation that are
+ dominates retrieval traffic.                                                     not directly addressed by prior embedding-centric designs.
+    As shown on the left of Figure 5, the cumulative distribution
+ of coarse quantization results exhibits a strong skew: the                       C. Variance of Hit Rate across Queries
+ top 20% of clusters account for nearly 60% of accesses in                           While tiered resource allocation strategies can accelerate
+ Wiki-All [37] and over 93% in ORCAS [5]. This skew is                            vector search by caching frequently accessed clusters, their
+ especially pronounced in ORCAS, which reflects real-world                        effectiveness in deployment is often hindered by query-level
+ query behavior through unfiltered click-through logs, capturing                  variance in hit rates. Long-tail queries with less cache hits can
+ both popularity bias and the imbalance introduced by k-means                     significantly limit the overall performance gains.
+ quantization.                                                                       Figure 6 presents a violin plot of hit rate distributions across
+    This imbalance results in inefficient memory usage, as                        queries, measured by counting the number of clusters (among
+ significant resources are allocated to rarely accessed clusters                  the total nprobe) that fall within the cached hot cluster
+ with limited contribution to retrieval quality.                                  set. As cache coverage increases from 5% to 20% of total
+ Takeaway 2. IVF index access patterns are highly skewed:                         clusters, the average hit rate improves accordingly. However,
+ a small number of clusters account for the vast majority                         the variance remains substantial, especially in highly skewed
+ of retrievals. This motivates a tiered index design, where                       datasets such as ORCAS, where a long tail of queries exhibits
+ frequently accessed clusters are prioritized for acceleration                    minimal cache benefit.
+ (e.g., GPU caching), and cold clusters are offloaded to lower-                      This variance introduces a deployment challenge. Since
+ tier compute and storage.                                                        vector search throughput scales with batch size, retrievers are
+    Embedding access patterns in recommendation systems are                       typically deployed with batching enabled. However, in the
+ also known to exhibit significant skew, where a small subset of                  presence of low-hit queries within a batch, the entire batch’s
+ items or users dominates embedding lookup frequency. This                        processing time is effectively bounded by the slowest query.
+ observation has motivated several tiered architecture designs                    As a result, even if the average per-query latency is reduced
+ that prioritize popular embeddings for faster access [1]–[3],                    by GPU acceleration, end-to-end latency improvements are
+ [19], [25], [25], [29]. Inspired by this insight, our work offers                constrained. Therefore, to fully realize the benefits of tiered
+ tiered acceleration to vector similarity search. However, a                      or cached retrieval in real-world deployments, it is essential
+ key distinction lies in the granularity of memory accesses. In                   to account for such hit rate variance and long-tail behavior
+ recommendation systems, embedding look-ups are performed                         during system design.
+ via embedding IDs. In contrast, vector similarity search sys-                    Takeaway 3. Variance in hit rate across queries poses a
+ tems conduct fully content-based retrieval, where relevant                       challenge in latency-critical deployments, due to long-tail
+ vectors must be located by computing distances to hundreds                       queries as batching amplifies the impact of long-tail queries,
+ or thousands of candidates per query. To identify the nearest                    limiting the effectiveness of caching.
+ vector, the search must access not only the target vector but                       In summary, while GPU-based retrieval can vastly out-
+ also neighboring vectors within the cluster.                                     perform CPU methods, it introduces a resource contention
+    Moreover, even if each embedding is uniformly accessed,                       problem when co-located with LLMs, due to limited GPU
+ clusters can contain varying numbers of vectors, exacerbating                    memory and compute capacity. Meanwhile, query access pat-
+ the access skew. This imbalance causes certain clusters to                       terns exhibit strong skew: a small fraction of clusters account
+ dominate query traffic, creating hot regions in memory access.                   for most retrieval traffic, making selective caching and tiered
+
+
+
+
+           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+                     Hybrid Index Construction                                                         Distributed VectorLiteRAG Pipeline
+
+            Profiling                  Latency Bounded Partitioning                                                              CPU              GPU 0
+                                                                                            Coarse Quantizer                 Queries
+                                                                                                                                            LLM
+                     Serving
+    LLM                                                        SLO
+                     Capacity                                                                                                Router
+                                       Performance
+          Training                        Model                                          Access Counter
+          Queries                                        Throughput                     SLOCidCompl. Rate    Mapping Table                        GPU 1
+                     Search                                                                               Cid New Cid Shard id
+                                                                                          Avg Hit Rate
+   Vector
+                     Latency                                                                                                                LLM
+   Index
+                     Access                                                             CPU nprobe   GPU 0   GPU 1   GPU 2   GPU 3
+
+
+
+
+                                                                       Update Mapping
+                                         Hit Rate        Cache Size
+                     Pattern
+                                                                                                         CPU Distance Scanning                    GPU 0
+                                   Refresh Access Statistics
+                                                                                                                        SIMD                LLM
+                                Index Splitter                                                                        Processor
+
+                                                                                                                      Dispatcher
+                                                                                                                                                  GPU 3
+
+                                                                                                                                            LLM
+                                                                                                       Knowledge
+                                                                                                         Base
+            Cold Clusters               Hot Clusters / Mapping Table
+                                                                                              Hot Clusters Migration
+
+Fig. 7. System architecture of V ECTOR L ITE RAG. The system has two stages, Left: offline hybrid index construction and Right: runtime
+distributed pipeline. Profiling guides latency-bounded partitioning to determine cache size and split point, producing sharded indices and
+mapping tables. At runtime, queries are routed via coarse quantizer and mapping tables, hot clusters run on GPUs, cold clusters on CPUs. A
+dynamic dispatcher forwards early-finished queries to LLM workers in a timely manner. Blue trails and boxes indicate runtime index refresh
+and update procedures.
+
+search strategies effective. However, significant variance in hit                         or GPU shards using mapping tables generated during index
+rates across queries, especially long-tail queries, poses a major                         construction, allowing each shard to operate with a flexi-
+challenge in latency-sensitive deployments, as batching magni-                            ble nprobe budget and reducing contention with LLM. A
+fies the bottleneck introduced by slow queries. These insights                            dynamic dispatcher further improves batching efficiency by
+motivate the design of V ECTOR L ITE RAG, which adaptively                                advancing early-completing queries to mitigate tail latency.
+partitions the index across GPU and CPU tiers, accounting                                    The partitioning scheme and runtime pipeline are indepen-
+for workload skew, hit rate variance, and end-to-end latency                              dent of the distance metric or compression method. As long as
+constraints to optimize throughput and responsiveness.                                    the index exhibits clustered structure and benefits from GPU
+                                                                                          acceleration, V ECTOR L ITE RAG can identify an effective hy-
+                         IV. V ECTOR L ITE RAG                                            brid configuration and deliver SLO-compliant RAG service.
+    V ECTOR L ITE RAG is an optimized RAG system that de-
+termines the optimal configuration for a CPU–GPU hybrid                                   A. Hybrid Index Construction
+vector index. It is organized around tightly integrated com-                                 1) Profiling-based Performance Modeling: Since GPU re-
+ponents: (1) performance modeling and latency-aware hybrid                                sources are limited, accurately modeling performance is criti-
+index construction, and (2) a distributed runtime pipeline for                            cal for determining the optimal index partitioning point. To
+inference serving. Given the latency constraint, LLM, index,                              construct these models, V ECTOR L ITE RAG profiles latency
+and system configuration, V ECTOR L ITE RAG computes a par-                               and access statistics using calibration queries from a training
+titioning point for tiered search, constructs the hybrid index,                           set. Specifically, it collects: (1) latency breakdown of CPU-
+and serves inference requests through a tailored pipeline.                                based vector search and (2) cluster access frequency distribu-
+    Hybrid Index Construction. The first component of V EC -                              tions. Additionally, throughput of the bare LLM is measured to
+TOR L ITE RAG focuses on understanding the performance                                    guide partitioning decisions under joint CPU-GPU execution.
+characteristics of the underlying system. This stage profiles                                As described in Section II-B, IVF index search latency is
+CPU-based search latency, query-to-cluster access patterns,                               dominated by two components: coarse quantization (CQ) and
+and standalone LLM throughput to characterize contention                                  LUT operations. We profile both stages across varying batch
+between retrieval and generation. These measurements drive a                              sizes and construct independent models for each. However,
+performance model and cache-coverage estimator, enabling a                                in our design, only the LUT stage, which corresponds to
+latency-bounded partitioning algorithm to select hot clusters.                            the individual distance computation and scanning step, is
+The hot clusters are then sharded into GPU sub-indexes.                                   considered for GPU offloading for two main reasons:
+    Distributed V ECTOR L ITE RAG Pipeline. The second                                       First, CQ is a similarity search over the quantizer (centroid)
+component is the runtime pipeline that operationalizes the                                vectors, which is often implemented using memory-intensive
+hybrid index. At runtime, batched queries are routed to CPU                               graph-based structures such as HNSW. Offloading CQ to GPU
+
+
+
+
+          Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+would require additional memory for the graph and complicate                              0.3       CQ        LUT      Search              0.03
+
+
+
+
+                                                                            Latency (s)
+memory management. Second, if CQ were distributed across
+
+
+
+
+                                                                                                                                Variance
+GPU shards, the resulting search path would involve repeated                              0.2                                              0.02
+device transitions: CPU → GPU (quantization) → CPU (merge                                                                                  0.01
+and routing) → GPU (search) → CPU (final merge). This in-                                 0.1
+duces costly inter-device communication and synchronization                                     0        10     20       30                       0.2     0.4   0.6     0.8
+overheads. Moreover, our objective is to ensure stable per-                                               Batch Size                                    Mean Hit Rate
+formance within the latency budgets rather than to minimize
+absolute latency. Thus, for our purpose, we retain CQ on the                    Fig. 8. Left: Search latency of ORCAS queries on a 64-core Intel
+CPU and use GPUs for distance computations, as this offers                      Xeon 8426Y CPU. Right: Empirical variance of hit rates across
+                                                                                queries in the Wiki-All dataset as a function of mean hit rate. The
+performance benefits while simplifying the optimization space.                  observed parabolic shape supports our variance approximation model.
+   Empirically, as shown in Figure 8 (left), CPU search latency
+exhibits a piecewise linear relationship with batch size. Initial               η̄ = 0.5, and becomes more uniform as η̄ → 0 or η̄ → 1.
+steps appear as the system transitions from single-threaded                     This mirrors the variance behavior of the Beta distribution;
+(single query) to multi-threaded execution (batched queries).                   Var(X) ∝ η̄(1− η̄). Thus, by empirically profiling the variance
+                            CPU        CPU                                                            2
+Accordingly, we model TCQ        and TLUT    as piecewise linear                at η̄ = 0.5, denoted σmax , we can approximate the variance
+functions of batch size.                                                        at arbitrary η̄ as:
+   When hot clusters are cached, the overall search time
+reduces accordingly. LUT operations offloaded to GPUs are
+                                                                                                                           2
+                                                                                                                σ 2 ≈ 4 · σmax · η̄(1 − η̄)
+fully hidden under CPU’s execution, and the CPU processing                         Figure 8 (right) validates the approximation. This allows
+time decreases in proportion to the number of hits. As a result,                instantiating a Beta distribution f (x) with inferred mean and
+we model the latency of the hybrid partitioned index as:                        variance for any cache coverage configuration.
+                                                                                   Finally, using Eq. 2, we compute the minimum hit rate
+                       CPU                  CPU
+             τs (b) = TCQ  (b) + (1 − η) · TLUT (b)                   (1)       within a batch for a given cache coverage. Inverting this
+                                                                                relation numerically yields the function:
+   where η denotes the hit rate, in particular the minimum hit
+rate among all queries in the batch.                                                                      ρ = HitRate2Converge(B, ηmin )
+   2) Tail Query Hit Rate Estimation: As discussed in Sec-                         which is used in the main partitioning algorithm to identify
+tion III-C, caching hot clusters leads to varying hit rates across              the optimal cache coverage that satisfies latency constraints.
+queries. Because, CPU side LUT workload is proportional to                         3) Latency-Bounded Partitioning Algorithm: In the hybrid
+the miss rate (1 − η), this variance directly translates into                   RAG pipeline, LLM throughput decreases as more GPU mem-
+differences in search latency. Moreover, since vector search                    ory is allocated to the vector index, due to contention between
+is typically executed in batches to maximize throughput,                        KV cache and index storage. To balance these competing
+the completion time of the entire batch is dictated by the                      demands, we introduce an iterative algorithm that determines
+slowest query, one with the fewest hits. Therefore, modeling                    an index partitioning point satisfying the latency constraint.
+the minimum hit rate within a batch is critical for accurate                       Algorithm 1 outlines the proposed latency-bounded parti-
+performance estimation.                                                         tioning algorithm. It takes the following inputs: the latency
+   We model the distribution of per-query hit rates using a Beta                target, the baseline KV cache memory footprint when no
+distribution f (x), which is widely used in Bayesian statistics                 vector index is loaded, and the peak bare LLM throughput.
+for variables constrained to the [0, 1] range. For a batch of                   The goal is to find the largest feasible cache coverage for the
+size b, the expected minimum hit rate ηmin , i.e., the first-order              GPU index (partitioning point ρ) that satisfies SLO constraint.
+statistic, is computed as:                                                         We first compute the latency bound for the hybrid vector
+                    Z 1                                                         search stage. To account for queuing delay, the analysis
+         ηmin (B) =     B · x · f (x) · (1 − F (x))B−1 dx      (2)              considers a worst-case scenario in which a request arrives
+                       0
+                                                                                immediately after the previous batch begins processing. Under
+   where F (x) is the cumulative distribution function of f (x).                steady-state load with uniformly arriving requests, this tail
+   The mean hit rate η̄ can be obtained directly from the                       query experiences full batch latency W (b) as queuing delay.
+query–cluster access profile, which reflects the cumulative                     To maintain the total response time within the latency budget,
+fraction of accesses covered by the cached clusters. Estimating                 the search latency must satisfy τs ≤ SLOsearch − W (b).
+the variance is more challenging, as it would require re-                          To avoid circular dependency (as W (b) depends on τs ), we
+running queries through the quantizer and counting individual                   approximate this term using a queuing factor , leading to:
+hits after masking hot clusters, a process that is both computa-
+tionally expensive and incompatible with iterative partitioning                                              SLOsearch
+                                                                                                                       τs =                 (3)
+algorithm.                                                                                                     1+
+   Instead, we approximate the hit rate variance as a function                    In our setting, we set  = 1, as it represents the worst case
+of the mean. We observe that hit/miss variance peaks when                       where the queuing delay equals one batch latency. This choice
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+is empirically supported from the CPU-only baseline, where                 Algorithm 1 Latency Bounded Partitioning
+ranged between 0.9 and 1.0.                                                  Input: SLOsearch , M EMKV cache , µLLM 0
+Search iteration. The algorithm then performs a binary search               Output: ρ
+over possible values of ρ using the modeled latency and hit rate              1: τs ←
+                                                                                         SLOsearch
+                                                                                           1+ε
+behavior. For each candidate ρ, the reduced LLM throughput                    2: ρlow ← 0, ρhigh ← 1
+is estimated based on the corresponding decrease in KV cache                  3: while ρhigh − ρlow > δ do
+capacity. Although this interpolation is coarse, it provides                                ρlow +ρhigh
+a conservative lower bound because the throughput–cache                       4:      ρm ←       2
+                                                                                                          −M EMIndex (ρ)
+curve is generally convex. The I NFER PARTITION function is                   5:      µLLM ← M EMKVMcache
+                                                                                                        EMKV cache       µLLM 0
+subsequently invoked to compute the expected batch size,                      6:     ρ ← I NFER PARTITION(ts , µLLM )
+given by B = µ · τs , where µ is the current throughput bound.                7:     if ρ > ρm then
+Since batch size B must be an integer, two rounding strategies                8:         ρlow ← ρ
+are considered:                                                               9:     else
+   - Rounding up. This implies longer latency and thus                       10:         ρhigh ← ρm
+requires more cache coverage to meet τs . From the hybrid                    11:     end if
+latency model (Eq. 1), we solve for η1 and convert it to                     12: end while
+coverage ρ1 via the H ITRATE 2C OVERAGE function.                            13: return ρ
+   - Rounding down. This yields a smaller batch size (shorter                14:
+latency), but may not meet the required throughput. To ensure                15: function I NFER PARTITION (τs , µ)
+throughput µ is met, we solve for η2 using the adjusted latency              16:    B ← dτs · µe
+bound B/µ from the throughput constraint.                                    17:        CPU
+                                                                                      Tsearch       CPU
+                                                                                              (B), TLUT (B) ← P ERF M ODEL(B)
+   At the end of the iteration, the smaller of ρ1 and ρ2 is                                   T CPU (B) τ
+                                                                                                       − s
+selected, as it requires less GPU memory. This value is used                 18:      η1 ← searchCPU (B)
+                                                                                                TLUT
+to update the binary search interval.                                        19:      ρ1 ← H ITRATE 2C OVERAGE(η1 , B)
+                                                                             20:      B ← bτs · µc
+Convergence. If the newly computed partitioning point ρ                                 CPU           CPU
+increases, the resulting drop in throughput leads to a smaller               21:      Tsearch (B), TLUT   (B) ← P ERF M ODEL(B)
+                                                                                                CPU
+                                                                                              Tsearch (B)−B/µ
+batch size in the next iteration, which in turn drives ρ                     22:      η2 ←        TLUTCPU (B)
+back down. Conversely, if ρ shrinks, the throughput bound                    23:    ρ2 ← H ITRATE 2C OVERAGE(η2 , B)
+increases, allowing for more cache coverage. This feedback                   24:    return min(ρ1 , ρ2 )
+loop ensures convergence of the algorithm within a limited                   25: end function
+number of iterations. In practice, convergence takes less than
+one minute as shown in Figure 9.
+   4) Index Splitter: Once the partitioning point ρ is deter-               customized retrieval pipeline tailored for hybrid CPU-GPU
+mined, it is passed to the final stage of index construction,               execution. We now describe each component in detail.
+which is the index splitter. The splitter first identifies the                 1) Router: To support efficient vector retrieval on a dis-
+hot clusters based on the access profile and the target cache               tributed multi-GPU system, V ECTOR L ITE RAG implements a
+coverage ρ. These hot clusters are then sorted by size and                  custom routing mechanism rather than relying on Faiss’s built-
+distributed to GPU shards in a round-robin fashion to balance               in IndexIVFShards. The default implementation in Faiss is
+memory usage across sub-indexes.                                            suboptimal in constrained environments for two main reasons.
+   Alongside the construction of each sub-index, the splitter               (1) IndexIVFShards partitions the index uniformly by
+generates a set of mapping tables. These tables encode the                  vector or cluster ID, ignoring access frequency. While, con-
+correspondence between original cluster IDs and their assigned              venient for implementation, it retains centroid metadata even
+shard as well as the remapped local cluster IDs, enabling                   for clusters that are not locally resident, causing unnecessary
+efficient routing during query execution.                                   memory overhead, especially problematic when the number
+                                                                            of clusters is large. (2) During search, each sub-index is
+B. Distributed VectorLiteRAG Pipeline
+                                                                            instructed to probe the same number of clusters, even if many
+  The right side of Figure 7 illustrates the runtime architecture           of them are not resident on that shard. Although certain probes
+of V ECTOR L ITE RAG. At initialization, memory is allocated                are ultimately skipped at runtime, the batched execution of
+sequentially for the index and then for the LLM to prevent                  cluster scanning kernels still launches GPU thread blocks
+memory interference between the vector search and LLM en-                   for them. These launches consume scheduling bandwidth and
+gines. The two components operate through different processes               shared memory resources, regardless of whether the actual
+and thus use separate GPU streams for concurrency.                          computation is needed. Since shared memory usage increases
+  Similar to other IVF-based indexes, the pipeline begins                   with nprobe, this results in inefficient kernel launches and
+with coarse quantization to identify candidate clusters. How-               exacerbates resource contention, especially in large-scale vec-
+ever, from this point on, V ECTOR L ITE RAG introduces a                    tor databases.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+   To address these issues, V ECTOR L ITE RAG uses the map-                               60   Profiling   Algorithm   Splitting   Loading   200ms
+
+
+
+
+                                                                            Latency (s)
+ping tables generated during index splitting to route each
+query to the appropriate GPU shards and prune irrelevant                                  40                                                         300ms
+                                                                                               100ms 150ms             150ms 200ms
+probes, thereby accounting for the device-level variance. This                            20
+substantially reduces the effective nprobe per shard, lowering
+both memory pressure and kernel scheduling overhead. At                                    0
+                                                                                                    Wiki-All             ORCAS 1K             ORCAS 2K
+runtime, only GPU workers holding relevant clusters receive                     Fig. 9. Time consumed for re-building the GPU index shards using
+and execute the search request, while the remaining portion                     updated query access data. Numbers above the bars denote the search
+of the search is handled by the CPU. This hybrid execution                      time SLO constraints applied for the system.
+minimizes contention and enables more efficient use of GPU
+memory and compute resources.                                                   generating shards, and loading the updated indices onto GPUs.
+   2) Dynamic Dispatcher: Because hit rates vary across                            All stages, from profiling to loading, complete in under a
+queries, the effective nprobe differs even within a batch. As                   minute, allowing updates to run in the background. At the
+batch size increases, the minimum hit rate tends to decrease,                   per-shard level, index generation and loading take less than
+increasing the search latency for the entire batch. To mitigate                 ten seconds. The detailed timing breakdown for each stage is
+this issue, V ECTOR L ITE RAG employs a dynamic dispatcher                      shown in Figure 9. While a GPU shard is being refreshed,
+that accelerates early query completion.                                        the router temporarily redirects queries for those clusters to
+   When search is initiated, a separate dispatcher thread is                    CPU paths, preserving the service continuity. Once the updated
+launched. Each GPU worker sets a completion flag once its                       shard is loaded, routing automatically returns to the GPU.
+assigned clusters are scanned. After all GPU flags are set, the                    Per-cluster updates are avoided because clusters are stored
+dispatcher begins polling for queries that have completed their                 contiguously to enable high-bandwidth access. Since clusters
+full search. To facilitate timely query promotion, a callback                   vary in size, updating clusters individually would lead to
+mechanism connects the CPU search loop and the dispatcher,                      memory fragmentation and inefficient data placement. Instead,
+as CPU processes clusters one-by-one, grouped by related                        V ECTOR L ITE RAG performs full-shard updates, as migration
+queries. At the end of each iteration, the current scan count is                of each shard takes only a few seconds, providing robustness
+compared with the expected nprobe for each query. When                          and simplicity.
+all assigned clusters for a query are scanned, the callback is                     According to our observations, profiling with only 0.5% of
+invoked, and the query and its results are inserted into a thread-              the queries from a separate training set successfully captured
+safe queue.                                                                     the distribution of 10M ORCAS queries. We therefore assume
+   The dispatcher polls this queue at short intervals. Once a                   that a single index update can sustain stable service for roughly
+completed query is available, it merges the CPU and GPU                         one hour under steady traffic, given the system throughput
+results, re-ranks them to obtain the final top-k vectors, and                   measured in our experiments.
+forwards the result to the downstream document retriever.
+                                                                                                               V. M ETHODOLOGY
+This proactive execution reduces head-of-line blocking within
+batches and improves end-to-end latency, particularly for high-                 A. Experiment Setup
+hit-rate queries. It also enhances batching continuity by en-                      To evaluate V ECTOR L ITE RAG, we conduct experiments
+abling smoother transitions between retrieval and generation                    across various datasets, models, and hardware configurations.
+stages, which already employs continuous batching schemes.                      This section describes the datasets, models, evaluation metrics,
+   3) Adaptive Runtime Index Update: Our model is built                         and system setup.
+upon the distributional characteristics of queries aggregated                   Datasets and Models. We use two datasets: Wiki-All and OR-
+across batches. While correlations among queries may tem-                       CAS. We construct the IVF index following the configuration
+porarily shift access patterns, they primarily reduce the number                guidelines provided by the Faiss library. The Wiki-All [37]
+of statistically independent samples rather than altering the                   vector database contains 88M 768-dimensional vectors derived
+overall distributional trend. Nevertheless, temporal bias can                   from Wikitext [28] and Cohere Wikipedia embeddings, yield-
+arise in practice, and to mitigate potential performance degra-                 ing a compressed IVF index with a footprint of 18GB. We
+dation caused by such drift, V ECTOR L ITE RAG employs an                       also construct two additional indexes from chunked Wikipedia
+adaptive re-profiling and update process.                                       documents [40] using the Stella [42] embedding model of
+   V ECTOR L ITE RAG can swiftly react to shifts in query                       dimensions 1024 and 2048, and queries from the Microsoft
+distribution without interrupting service. During runtime, the                  ORCAS dataset [5]. ORCAS consists of real Bing queries and
+router monitors (1) average hit rates and (2) per-cluster access                preserves duplicates to reflect realistic query distributions. The
+frequencies. For every few minutes or after a few thousand                      ORCAS 1K and ORCAS 2K indexes occupy 40GB and 80GB
+requests, it periodically resets the counters to detect distribu-               of memory, respectively.
+tional drift. When the average SLO attainment falls below a                        Our retrieval pipeline builds on Faiss v1.9.0 [6], [17],
+threshold and observed hit rates diverge from their expected                    with internal extensions for flexible nprobe settings and
+values, an update cycle is triggered: re-profiling query access                 dispatcher callbacks. The overall system, including the profiler
+patterns, rerunning the latency-bounded partitioning algorithm,                 and latency-aware scheduler, is implemented in Python.
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+   For generation, we evaluate three models—Llama3-8B,                                                                                              0.8                 Wiki-All
+
+
+
+
+                                                                                                                              Tail Query Hit Rate
+                                                                           Search Time (ms)
+Qwen3-32B, and Llama3-70B [9], [41]—served using vLLM                                         150                                                   0.7                 ORCAS 1K
+v0.9.1 [18]. The retriever and LLM run as separate subpro-                                                                                          0.6                 ORCAS 2K
+                                                                                                                                                    0.5
+cesses, with the main process coordinating request generation                                 100                                                   0.4
+and document fetching to integrate the full RAG pipeline.                                                                                           0.3
+   To evaluate system performance, we sample queries from                                      50                                                   0.2
+a dedicated test set that is disjoint from the profiling set.                                       1   4       7 10     13                               1   4       7 10     13
+The request arrival process follows a Poisson distribution, a                                               Batch Size                                            Batch Size
+                                                                                 Fig. 10. Comparison of measured (solid line) vs estimated (dotted
+commonly adopted modeling choice in prior work [18], [31],                       line) values from V ECTOR L ITE RAG’s performance model. Left:
+[45]. For each query, the top-25 documents are retrieved, and                    Search latency across batch sizes. Right: Tail hit rates within a batch.
+a 1024-token input is constructed and passed to the LLM,
+which then generates a 256-token output, following the setup                        The left panel compares the predicted latency of the hybrid
+in [35]. The initial nprobe is set to 2048, which is sufficient                  index search with the measured latency. While the predictions
+to achieve an average retrieval quality of 0.91 Normalized                       generally follow the same trend, a noticeable offset exists
+Discounted Cumulative Gain (NDCG) [39] at 50.                                    between the two. This deviation mainly results from the dis-
+SLO Settings. The SLOs for retrieval and generation stages                       patcher’s early-query handling, as discussed in Section VI-E1.
+were defined separately and then combined. For retrieval, since                     Precisely capturing the dispatcher’s impact would require
+no standard criteria exist, we set the SLOs heuristically, relax-                evaluating full order statistics to model per-request completion
+ing them for larger databases (see Table I). For generation,                     times, which greatly increases complexity while providing
+the SLO was defined as the latency measured at the model’s                       only marginal benefit. Despite these approximations, the re-
+throughput limit. These capacity values were also used in                        sulting configurations perform robustly in practice, as shown
+building our performance model.                                                  in the following sections.
+                       TABLE I                                                   B. SLO Attainment
+     SLO TARGET VALUES USED IN THE MAIN EVALUATION
+                                                                                    Figure 11 presents SLO attainment curves across all nine
+      Vector Index    SLOsearch       LLM             SLOLLM
+      Wiki-All          150ms         Llama3-8B        217ms
+                                                                                 combinations of vector databases and LLMs. In each subplot,
+      ORCAS 1K          200ms         Qwen3-32B        191ms                     the horizontal dashed line marks the 90th percentile latency
+      ORCAS 2K          300ms         Llama3-70B       311ms                     target, and the vertical dashed line indicates the standalone
+                                                                                 LLM throughput. All experiments use on-demand dynamic
+System Configuration. We conduct our experiments on two                          batching, where retrieval requests are served immediately after
+types of nodes, each equipped with eight NVIDIA GPUs. The                        the previous search completes, allowing throughput to scale
+L40S node includes L40S GPUs with 48GB GDDR memory                               with arrival rate through adaptive batch sizing.
+and dual Xeon 6426Y CPUs. The H100 node uses H100 GPUs                              Across all configurations, V ECTOR L ITE RAG sustains the
+with 80GB HBM and Xeon Platinum 8462Y CPUs. We use                               extended SLO budget (SLOLLM + SLOSearch , defined in Ta-
+the L40S node for smaller models (Llama3-8B), while larger                       ble I) over the widest input rate ranges among evaluated base-
+models requiring model parallelism (Qwen3-32B, Llama3-                           lines. CPU-based fast scan can support relatively high request
+70B) are run on the H100 node for maximum throughput.                            per second (RPS) rates, its limited per-request performance
+Baseline Configurations. We compare V ECTOR L ITE RAG                            leads to consistent SLO violations even under light traffic. As
+against several key baselines. Since V ECTOR L ITE RAG builds                    arrival rate increases, batch sizes grow (up to 9–10 under >40
+on FAISS, we use vanilla FAISS-CPU IVF FastScan (CPU-                            RPS), incurring high latency and poor tail response.
+Only), FAISS-GPU IVF on a dedicated GPU (DED-GPU),                                  Dedicated GPU retrieval performs poorly with large mod-
+and a sharded FAISS-GPU IVF index distributed across all                         els due to rigid model parallelism constraints. For instance,
+GPUs (ALL-GPU). To further demonstrate the strength of our                       Llama3-70B requires a tensor parallelism degree of 4 for
+approach, we also compare against HedraRAG [11] in section                       efficient execution. While it fits within 2 H100 GPUs, the
+VI-D, which also uses a skew-aware caching strategy.                             achievable LLM throughput drops from 8 RPS to less than 2
+                                                                                 RPS. In such settings, dedicating GPU(s) to retrieval results in
+                       VI. E VALUATIONS
+                                                                                 resource oversubscription, harming overall system throughput.
+A. Performance Model and Hit Rate Estimator                                         For small vector databases and under light loads, ALL-
+   Figure 10 evaluates the accuracy of V ECTOR L ITE R AG’s                      GPU configurations can satisfy SLOs over wide traffic ranges.
+performance model. The right panel compares the predicted                        However, as the arrival rate approaches its reduced throughput,
+and actual minimum hit rates within each batch. As expected                      latency increases sharply. Although V ECTOR L ITE RAG is
+from order statistics, the minimum hit rate declines rapidly as                  subject to this limitation as well, its optimized partitioning
+batch size increases, and the rate of decline gradually flattens                 algorithm extends the SLO-attainable region nearly up to the
+in the large-batch regime. Close alignment of two curves con-                    standalone LLM throughput limit.
+firms that our Beta-distribution-based approximation reliably                       To better illustrate the dynamics of RAG systems, we
+captures caching effectiveness.                                                  present a detailed TTFT breakdown in Figure 12 for the
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+                          Llama3-8B               Qwen3-32B                Llama3-70B                                                    Llama3-8B             Qwen3-32B                         Llama3-70B
+                 1.0                                                                                                             50
+                 0.8
+      Wiki-All
+
+
+
+
+                                                                                                                      Wiki-All
+                 0.6
+                 0.4
+                 0.2
+                 0.0                                                                                                              0
+                    20      30        40     20         30         40 10           15         20                                   20       30       40 20         30        40 10       14       18
+
+
+
+
+                                                                                               End-to-End Latency (s)
+                                                                                                                                     Arrival Rate (req/s) Arrival Rate (req/s) Arrival Rate (req/s)
+SLO Attainment
+
+
+
+
+                 1.0                                                                                                             50
+                 0.8
+  ORCAS 1K
+
+
+
+
+                                                                                                     ORCAS 1K
+                 0.6
+                 0.4
+                 0.2
+                 0.0                                                                                                              0
+                    20      30        40     20         30         40 10           15         20                                   20       30       40 20         30        40 10       14       18
+                                                                                                                                     Arrival Rate (req/s) Arrival Rate (req/s) Arrival Rate (req/s)
+                 1.0                                                                                                             50
+                 0.8
+      ORCAS 2K
+
+
+
+
+                                                                                                          ORCAS 2K
+                 0.6
+                 0.4
+                 0.2
+                 0.0                                                                                                              0
+                    20       30       40 20         30        40 10      15        20                                              20        30       40 20         30        40 10       14       18
+                      Arrival Rate (req/s) Arrival Rate (req/s) Arrival Rate (req/s)                                                  Arrival Rate (req/s) Arrival Rate (req/s) Arrival Rate (req/s)
+                                                          CPU Only        DED-GPU                                                   ALL-GPU            vLiteRAG
+    Fig. 11. Left: TTFT SLO attainment and Right: end-to-end latency of RAG pipeline under increasing arrival rates across different LLMs
+    (columns) and datasets (rows). Our work (vLiteRAG) achieves higher SLO attainment across all regimes compared to baselines.
+
+                 Queuing Delay   DED-GPU      ALL-GPU        vLiteRAG   CPU Only    Prefill                              6             HedraRAG
+
+
+
+
+                                                                                                                                                                E2E Latency (s)
+              0.4                                                                                                                      vLiteRAG                                   30
+                                                                                                                         4
+                                                                                                    TTFT (s)
+Latency (s)
+
+
+
+
+              0.2                                                                                                        2                                                        20
+
+                                                                                                                         0                                                        10
+              0.0                                                                                                         20                 30           40                        20         30           40
+                      19           32        38            19        32        38                                                      Arrival Rate (req/s)                              Arrival Rate (req/s)
+                    Wiki-All - Arrival Rate (req/s)     ORCAS 1K - Arrival Rate (req/s)
+                                                                                                            Fig. 13. Comparison with HedraRAG. HedraRAG exhibits lower
+    Fig. 12. TTFT breakdown for Wiki-All and ORCAS 1K indexes with
+                                                                                                            TTFT at low request rates, but latency increases sharply once the
+    Qwen3-32B. Each group shows results from four configurations. Bars
+                                                                                                            system exceeds its throughput limit. V ECTOR L ITE RAG is config-
+    are stacked to show the contribution of queuing delay, vector search
+                                                                                                            ured with SLOsearch = 400ms.
+    latency (colored segments), and LLM prefill latency (grey)
+
+    Qwen3-32B model with Wiki-All and ORCAS 1K indices                                                      its low throughput ceiling causes TTFT to diverge before
+    under varying input rates. As search latency increases, espe-                                           retrieval-induced interference becomes the dominant factor.
+    cially with CPU-based retrieval, queuing delays compound,                                                  In contrast, V ECTOR L ITE RAG matches CPU-based re-
+    further inflating TTFT. While both dedicated and ALL-GPU                                                trieval in end-to-end latency. This demonstrates that its parti-
+    shared baselines perform well under low traffic, they exhibit                                           tioning strategy and distributed execution pipeline effectively
+    latency spikes at higher rates due to resource contention.                                              minimizes interference by carefully limiting GPU memory and
+    In contrast, V ECTOR L ITE RAG sustains stable latency by                                               usage of GPU threads for retrieval, thereby preserving LLM
+    balancing throughput and latency, enabling finer control over                                           generation performance, while maintaining latency lower than
+    resource allocation across the RAG stages.                                                              SLO requirements.
+
+    C. End-to-End Latency                                                                                   D. Comparison with HedraRAG
+       Since GPU resources are shared between retrieval and                                                    We compare V ECTOR L ITE RAG with HedraRAG [11],
+    generation, interference with the decoding phase is inevitable.                                         which also exploits skewed cluster access patterns in RAG
+    To assess the impact of such interference, we present the end-                                          pipelines. While both systems adopt tiered caching strategies
+    to-end latency results from the nine configurations discussed                                           for vector indices, their partitioning principles and target
+    earlier, shown in Figure 11.                                                                            objectives differ fundamentally.
+       Retrieval contention is most severe for smaller models that                                             HedraRAG selects GPU-resident clusters by identifying the
+    can sustain higher loads, whereas large models saturate com-                                            maximum KV cache size that can sustain the throughput of
+    pute resources before retrieval pressure dominates. In the low-                                         the slower stage, either the LLM or the retriever. Although this
+    traffic regime, contention is minimal, except in DED-GPU,                                               approach is simple and throughput-aware, it does not account
+    which reduces the number of GPUs available to the LLM.                                                  for latency constraints that are critical for real-time serving.
+    However, under high traffic and with large vector databases,                                            In configurations where the LLM stage exhibits lower peak
+    contention becomes significant. This is evident in the more                                             throughput than retrieval, as in 11, HedraRAG allocates the
+    than 2× increase in end-to-end latency observed in ALL-GPU                                              entire GPU memory to LLMs and performs vector search on
+    baselines for ORCAS 2K with Llama3-8B and Qwen3-32B.                                                    the CPU. As noted in their paper, HedraRAG is most effective
+    Although Llama3-70B involves more intensive computation,                                                when retrieval becomes extremely heavy.
+
+
+
+
+                     Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+                        Disp. On            5.7                                                                          Input Length Ablation              Output Length Ablation
+
+
+
+
+                                                P90 Time (ms)
+Avg Time (ms)
+                140                      5.4
+
+
+
+
+                                                                                              P90 TTFT (ms)
+                        Disp. Off               5
+
+
+
+
+                                                  Batch Size
+
+
+
+
+                                                                                               Llama-3-8B
+                                3.94.0         4                150                                           500
+                120
+                      2.62.8                   3
+                100                                             100                                             0
+                       24        32       41                          24        32       41                         11     25     39    53       67    12      23     34       45   56
+                        Arrival Rate (req/s)                           Arrival Rate (req/s)
+
+
+
+
+                                                                                              P90 TTFT (ms)
+                                                                                               Llama-3-70B
+     Fig. 14. Left: Average search latency and batch sizes. Right: P90 tail                                   500
+     latency on ORCAS 2K index with dispatcher enabled and disabled.
+                                                                                                                0
+        To enable a fair comparison, we replicate      the HedraRAG                                                 5      10 15 20 25                 6       10 14 18 22
+                                                 √                                                                        Arrival Rate (req/s)                Arrival Rate (req/s)
+     setting by building an IVF index with Nvector clusters and                                                CPU Only      vLiteRAG    ALL-GPU      CPU Only      vLiteRAG    ALL-GPU
+     measuring retrieval throughput using batch sizes below 64.                                                2048/256      1024/256    512/256      1024/512      1024/256    1024/128
+     At nprobe = 256, CPU-only retrieval achieves 35 RPS at
+     0.94 NDCG@50; we increase nprobe to 6144 in our system                                      Fig. 15. Left: P90 TTFT across different input and Right: output
+     to match this accuracy. Since HedraRAG does not support                                     lengths. Darker curves represent longer input/output sequences, while
+                                                                                                 brighter curves correspond to shorter ones. Experiments were con-
+     distributed retrieval, we apply their GPU caching scheme using                              ducted using the ORCAS-2K index.
+     IndexIVFShard without our optimized pipeline.
+        Figure 13 summarizes the results. HedraRAG places 73%                                       Longer inputs increase prefill cost, raising TTFT and shift-
+     of index clusters in GPU memory, whereas V ECTOR L IT-                                      ing SLO violations to lower arrival rates as compute resources
+     E RAG identifies a partitioning point of 31.5% under a 400,ms                               saturate. Similarly, longer outputs reduce the SLO-compliant
+     SLO. While HedraRAG achieves lower retrieval latency under                                  range due to extended generation time and higher KV cache
+     low traffic, its operable range narrows as input rates increase.                            usage. Across both dimensions, V ECTOR L ITE RAG maintains
+     In contrast, V ECTOR L ITE RAG maintains latency near the                                   serviceability over a wider range than the baselines, highlight-
+     target constraint across a wider traffic range and achieves lower                           ing the robustness of its partitioning scheme.
+     overall end-to-end latency through its distributed pipeline.                                   3) Sensitivity study on SLOsearch : To evaluate the robust-
+        The key distinction lies in how partitioning decisions are                               ness of our system under varying service constraints, we
+     made. V ECTOR L ITE RAG allows operators to specify a target                                test V ECTOR L ITE RAG across multiple SLOsearch targets. All
+     SLO and computes the largest GPU-resident index region                                      plots in Figure16 use P95 TTFT as the primary metric, with
+     that satisfies this constraint, whereas HedraRAG balances                                   P90 results additionally shown as dashed lines for V ECTOR -
+     throughput between stages without explicit latency objectives,                              L ITE RAG. Changing the quantile slightly expands or shrinks
+     which can lead to suboptimal GPU allocation.                                                the SLO-compliant range; in our evaluation, the difference
+                                                                                                 between P90 and P95 was at most 1 RPS.
+     E. Ablation Studies                                                                                                    TABLE II
+                                                                                                         SLO TARGETS AND CORRESPONDING INDEX SHARD SIZES .
+        1) Dynamic Dispatcher: Figure 14 illustrates the effective-
+     ness of the dynamic dispatcher in the distributed V ECTOR L IT-                                          SLO (ms)          Index (GB)   Param (GB)          KV Cache (GB)
+                                                                                                                100                3.80                              33.24
+     E RAG pipeline. By polling the scanning loop and dispatching                                               150                2.95                              34.09
+                                                                                                                                                   30.59
+     queries immediately upon completion, the dispatcher reduces                                                200                2.47                              34.57
+     search latency by up to 16%, improving both average and                                                    250                2.21                              34.83
+     tail latency. This gain is achieved by overlapping the merging                                 Table II summarizes the target SLOs and their associ-
+     and re-ranking of early-completed queries with the ongoing                                  ated memory allocations. Under relaxed SLO constraints,
+     scanning of slower queries, avoiding bulk merging at the end.                               the latency-bounded partitioning algorithm assigns a smaller
+        Figure 14 also reports average batch sizes under varying                                 fraction of the index to GPU shards, yielding latency behavior
+     arrival rates. With adaptive batching, requests are grouped                                 closer to the CPU-only baseline. As the SLO becomes stricter,
+     dynamically based on current pipeline load. Since vector                                    the latency curve moves toward the all-GPU configuration.
+     search has higher throughput capacity than the LLM, it absorbs                              While tighter SLOs reduce available KV-cache space and
+     higher arrival rates by increasing batch size while maintaining                             modestly shrink the operable region, V ECTOR L ITE RAG still
+     stable service time. In contrast, fixed or capped batch sizes                               delivers a wider SLO-compliant throughput range than the
+     lead to request backlogs and performance degradation.                                       baselines, highlighting the adaptability of its partitioning strat-
+        2) Impact of LLM Input and Output Lengths: Figure 15                                     egy and the effectiveness of its execution pipeline.
+     illustrates latency sensitivity to varying input and output                                    4) Robustness to Hardware Capacity: Finally, we eval-
+     lengths for Llama3-8B and Llama3-70B. The red dashed line                                   uate how V ECTOR L ITE RAG adapts to different hardware
+     denotes the combined SLO target of vector search and LLM                                    capacities of the system. Following the provisioning policy
+     stages, corresponding to the 1024/256 setting in Table I. For                               commonly adopted by cloud providers, which allocates ad-
+     consistency, SLOLLM is fixed across configurations.                                         ditional CPU cores as more GPUs are added, we test three
+
+
+
+
+                      Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+                1000         Search SLO: 100 ms                Search SLO: 150 ms                                 CPU Only           ALL-GPU       vLiteRAG                       4GPUs       6GPUs    8GPUs
+                         CPU Only    vLiteRAG                                                               1.0
+
+
+
+
+                                                                                           SLO Attainment
+P95 TTFT (ms)
+
+
+
+
+                                                                                                                                                               E2E Latency (s)
+                         ALL-GPU     vLiteRAG P90                                                                                                                                30
+
+
+
+
+                                                                                                                         4GPUs Cap
+
+
+                                                                                                                                       6GPUs Cap
+
+
+                                                                                                                                                   8GPUs Cap
+                 500                                                                                        0.5                                                                  20
+                                                                                                                                                                                 10
+                   0                                                                                        0.0
+                             Search SLO: 200 ms                Search SLO: 250 ms                                 10        20       30     40                                        10        20       30     40
+                1000                                                                                                   Arrival Rate (req/s)                                                Arrival Rate (req/s)
+P95 TTFT (ms)
+
+
+
+
+                                                                                                Fig. 17. Left: SLO attainment (the vertical dashed line denotes bare
+                 500                                                                            LLM capacity) and Right: end-to-end latency measured on 4-, 6-,
+                                                                                                and 8-GPU systems. Evaluated using the Qwen3-32B model and the
+                   0                                                                            ORCAS 2K index.
+                        20     25 30 35 40                20     25 30 35 40
+                             Arrival Rate (req/s)              Arrival Rate (req/s)             solution to provide fine-grained resource control for co-located
+     Fig. 16. P95 tail latency (and P90 for V ECTOR L ITE RAG) under                            RAG pipelines.
+     different search-stage SLO constraints. Results are obtained using                            Future work may extend our approach to prefill–decode
+     the Qwen3-32B model and the ORCAS 1K index.                                                disaggregation frameworks [31], [45], where bandwidth-bound
+                                                                                                retrieval may run alongside compute-intensive prefill. This
+     configurations: 4 GPUs + 32 cores, 6 GPUs + 48 cores, and                                  would require jointly modeling vector search and the through-
+     8 GPUs + 64 cores. For each configuration, we re-profile the                               put of both stages, but our framework offers a natural basis
+     CPU-only search latency and apply the same latency-bounded                                 for such integration.
+     partitioning algorithm. Aside from the number of compute
+     devices, all experiments use identical model and index setups.                                                                           VIII. CONCLUSION
+        The results in Figure 17 show that V ECTOR L ITE RAG sus-
+     tains the target SLO across all configurations while extending                                This paper presents V ECTOR L ITE RAG, a latency-aware
+     the SLO-compliant throughput roughly in proportion to the                                  orchestration framework for Retrieval-Augmented Generation
+     number of GPUs. While the reduced memory capacity in the                                   (RAG) systems that explicitly manages the tight coupling be-
+     GPU baseline causes decoding latency to grow rapidly with                                  tween vector retrieval and LLM inference. We show that under
+     scale, V ECTOR L ITE RAG effectively contains this growth,                                 skewed access patterns, variability in retrieval latency interacts
+     keeping decoding latency comparable to CPU-only search                                     with inference batching, causing tail effects amplification that
+     cases. This demonstrates that V ECTOR L ITE RAG can be read-                               cannot be mitigated by optimizing either stage in isolation.
+     ily deployed across clusters of different sizes with minimal                                  V ECTOR L ITE RAG is driven by the insight that meeting
+     setup effort while maintaining consistent latency behavior.                                strict RAG SLOs requires balancing batching behavior rather
+                                                                                                than maximizing instantaneous GPU utilization. By coordinat-
+                                    VII. R ELATED W ORKS                                        ing retrieval progress with inference scheduling, V ECTOR L IT-
+        RAG applications with iterative retrieval or multi-stage                                E RAG suppresses tail cascades and sustains predictable end-
+     generation often exhibit semantic similarity across successive                             to-end latency under bursty workloads. This enables SLO com-
+     queries. Motivated by this observation, several optimization                               pliance across a substantially wider operating regime, support-
+     techniques have been proposed, including prefetching [23],                                 ing up to 1.5× higher request rates than baseline RAG systems.
+     speculative retrieval [44], and pipelined execution [15]. In                               Across extensive evaluation, we demonstrate that these benefits
+     contrast, our work builds upon application-agnostic, generic                               generalize across latency targets, hardware configurations, and
+     retrieval–generation pipelines without relying on semantic pri-                            LLM input/output lengths. V ECTOR L ITE RAG further exposes
+     ors or intermediate signals. RagCache [16] improves through-                               explicit control knobs that allow RAG operators to trade
+     put by managing KV cache reuse between tenants, focusing                                   throughput for tail latency under constrained GPU memory
+     on scheduling and reuse optimizations on the LLM side.                                     budgets, making it practical for real-world deployment.
+     Hermes [35], on the other hand, scales via disaggregation by
+     adding CPU nodes to offload vector search.                                                                                       IX. ACKNOWLEDGMENT
+        Efforts such as [12], [14], [21], [26], [32] propose spe-
+     cialized hardware or memory-centric architectures to accel-                                   This research was supported in part through cyber-
+     erate RAG pipelines. While these approaches offer significant                              infrastructure research resources and services provided by the
+     performance gains, they often rely on custom infrastructure,                               Partnership for an Advanced Computing Environment (PACE)
+     which may limit deployability in general-purpose environ-                                  at the Georgia Institute of Technology, Atlanta, Georgia, USA.
+     ments. Among prior works, HedraRAG [11] also co-locates                                    This work was partially supported by gifts from Google and
+     retrieval and generation on GPUs. Our work builds on this                                  AMD. The views and conclusions contained herein are those
+     direction with an analytical model for latency and hit rate,                               of the authors and should not be interpreted as representing the
+     enabling principled GPU memory partitioning under explicit                                 official policies or endorsements, either expressed or implied,
+     SLOs. To our knowledge, V ECTOR L ITE RAG is the first                                     of Georgia Tech.
+
+
+
+
+                       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+                     A RTIFACT A PPENDIX                                    D. Installation and Testing
+A. Abstract                                                                    1) Installation:
+   The artifact includes the complete source code of the                       # Create conda environment
+coreV ECTOR L ITE RAG system, together with our modified                       cd VectorLiteRAG
+                                                                               conda create -n vlite -f ./scripts/env.yml
+FAISS library used for hybrid CPU–GPU vector search. To                        conda activate vlite
+ensure reproducibility of both preprocessing and evaluation,
+we also provide a collection of shell scripts and Python util-                 # Build faiss library
+                                                                               git submodule update --init --recursive
+ities that automate the full experimental workflow, including                  ./scripts/build.sh
+dataset preparation, index construction, performance profiling,
+and end-to-end RAG pipeline evaluation. These scripts are                      2) Preprocessing:
+designed to reproduce all major results reported in the paper.                 # Download a samll dataset for testing
+   All code and supporting materials are publicly available                    ./database/download.sh test
+on GitHub https://github.com/sitar-lab/VectorLiteRAG-AE and                    # Chunk documents and run embedding model
+Zenodo https://zenodo.org/records/18195323                                     ./database/encode.sh test
+
+B. Artifact Check-list                                                         # Train index and construct base IVF
+                                                                               ./scripts/train.sh test
+  • Program: Modified FAISS library, vLLM
+  • Compilation: gcc-11.3, nvcc-12.1, cmake.                                   3) Testing:
+  • Models: Llama-3 8B, Llama-3 70B, and Qwen-3 32B.
+                                                                               # Run a round of short cpu search based RAG
+  • Datasets: MS ORCAS and NVIDIA Wiki-All.                                    # Output csv files will appear under results/test
+  • Run-time Environment: RHEL 9 with Anaconda3.                               ./scripts/test.sh
+  • Hardware: Single node equipped with 8 NVIDIA L40S
+    GPUs and 8 NVIDIA H100 GPUs.                                            E. Experiment Workflow
+  • Metrics: SLO attainment, end-to-end latency, vector
+                                                                              We provide scripts for evaluation along with correspond-
+    search hit rate estimation.
+                                                                            ing plotting utilities. The workflow is straightforward. After
+  • Output: CSV logs and visualization plots.
+                                                                            completing the preprocessing steps, execute the following
+  • Disk Space Required: ∼256 GB for evaluation; ∼1.5
+                                                                            commands from the project’s root directory:
+    TB for preprocessing and index construction.
+  • Workflow Preparation Time: 40–50 hours.                                  (1) Download the datasets: ./database/download.sh
+  • Experiment Completion Time: 10 hours.                                    (2) Perform preprocessing and train the base indexes:
+  • Publicly Available?: Yes.                                                     ./database/encode.sh <dataset>
+  • Code Licenses?: CC BY 4.0                                                     ./scripts/train.sh <dataset>
+  • Archived(DOI)?: https://zenodo.org/records/18195323                      (3) Run all experiments sequentially:
+                                                                                  ./scripts/runall.sh
+C. Description                                                                   For running experiments individually, please refer to the
+  1) How to access: All source cod and scripts are accessible                    repository README.
+via github repository.                                                       (4) After all experiments are completed, generate the figures:
+  2) Hardware dependencies: All experiments were con-                             ./scripts/plotall.sh
+ducted on a single L40S node or a single H100 node, each                          Individual plotting options are also documented in the
+equipped with 8 GPUs. Because larger language models rely                         README.
+on tensor model parallelism, the H100 system is expected to
+provide NVLink connectivity to ensure reproducible perfor-                  F. Evaluation and Expected Results
+mance. The L40S node was configured with a 32-core Intel
+CPU, and the H100 node with a 64-core Intel CPU. CPU core                      This artifact reproduces the primary experimental results
+count is an important factor, as a substantial portion of the               presented in Figures 10–17 of the paper. During evaluation,
+workload executes on the host processor.                                    latency logs are saved under results/<datasets>, and
+  3) Software dependencies: The evaluation environment was                  all vector indexes and their associated metadata are stored in
+run on RHEL 9 (or a compatible Linux distribution) using                    database/<dataset>. After the evaluation completes, the
+Anaconda3. Successful compilation of the FAISS library de-                  provided plotting scripts generate the corresponding figures
+pends on specific toolchain versions, including Python 3.10,                and place them in figures directory.
+GCC 11.3, and NVCC 12.1. Intel MKL is also required to                         The reproduced results are expected to closely align with
+support vectorized CPU operations.                                          those reported in the paper, though minor variations may occur
+  4) Datasets: The Wikiall benchmark is directly download-                  due to system-level factors. Individual evaluation runs for
+able. The ORCAS 1K and ORCAS 2K benchmarks require                          each data point are also supported pyand documented in the
+both the MS ORCAS dataset and the English Wikipedia dump,                   repository, enabling users to verify and assess any deviation.
+which are publicly accessible but require long preprocessing.                  Von
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+                             R EFERENCES                                              A. Chowdhury, A. Gabriel, A. Bharambe, A. Eisenman, A. Yazdan,
+                                                                                      B. James, B. Maurer, B. Leonhardi, B. Huang, B. Loyd, B. D.
+[1] M. Adnan, Y. E. Maboud, D. Mahajan, and P. J. Nair, “Accelerating                 Paola, B. Paranjape, B. Liu, B. Wu, B. Ni, B. Hancock, B. Wasti,
+    recommendation system training by leveraging popular choices,” Proc.              B. Spence, B. Stojkovic, B. Gamido, B. Montalvo, C. Parker, C. Burton,
+    VLDB Endow., vol. 15, no. 1, p. 127–140, sep 2021.                                C. Mejia, C. Liu, C. Wang, C. Kim, C. Zhou, C. Hu, C.-H. Chu,
+[2] M. Adnan, Y. E. Maboud, D. Mahajan, and P. J. Nair, “Ad-rec: Advanced             C. Cai, C. Tindal, C. Feichtenhofer, C. Gao, D. Civin, D. Beaty,
+    feature interactions to address covariate-shifts in recommendation                D. Kreymer, D. Li, D. Adkins, D. Xu, D. Testuggine, D. David,
+    networks,” 2023. [Online]. Available: https://arxiv.org/abs/2308.14902            D. Parikh, D. Liskovich, D. Foss, D. Wang, D. Le, D. Holland,
+[3] M. Adnan, Y. E. Maboud, D. Mahajan, and P. J. Nair, “Heteroge-                    E. Dowling, E. Jamil, E. Montgomery, E. Presani, E. Hahn, E. Wood,
+    neous acceleration pipeline for recommendation system training,” in               E.-T. Le, E. Brinkman, E. Arcaute, E. Dunbar, E. Smothers, F. Sun,
+    2024 ACM/IEEE 51st Annual International Symposium on Computer                     F. Kreuk, F. Tian, F. Kokkinos, F. Ozgenel, F. Caggioni, F. Kanayet,
+    Architecture (ISCA). IEEE, 2024, pp. 1063–1079.                                   F. Seide, G. M. Florez, G. Schwarz, G. Badeer, G. Swee, G. Halpern,
+[4] F. André, A.-M. Kermarrec, and N. Le Scouarnec, “Cache locality is               G. Herman, G. Sizov, Guangyi, Zhang, G. Lakshminarayanan, H. Inan,
+    not enough: High-performance nearest neighbor search with product                 H. Shojanazeri, H. Zou, H. Wang, H. Zha, H. Habeeb, H. Rudolph,
+    quantization fast scan,” in 42nd International Conference on Very Large           H. Suk, H. Aspegren, H. Goldman, H. Zhan, I. Damlaj, I. Molybog,
+    Data Bases, vol. 9, no. 4, 2016, p. 12.                                           I. Tufanov, I. Leontiadis, I.-E. Veliche, I. Gat, J. Weissman, J. Geboski,
+[5] N. Craswell, D. Campos, B. Mitra, E. Yilmaz, and B. Billerbeck, “Orcas:           J. Kohli, J. Lam, J. Asher, J.-B. Gaya, J. Marcus, J. Tang, J. Chan,
+    18 million clicked query-document pairs for analyzing search,” arXiv              J. Zhen, J. Reizenstein, J. Teboul, J. Zhong, J. Jin, J. Yang,
+    preprint arXiv:2006.05324, 2020.                                                  J. Cummings, J. Carvill, J. Shepard, J. McPhie, J. Torres, J. Ginsburg,
+[6] M. Douze, A. Guzhva, C. Deng, J. Johnson, G. Szilvasy, P.-E. Mazaré,             J. Wang, K. Wu, K. H. U, K. Saxena, K. Khandelwal, K. Zand,
+    M. Lomeli, L. Hosseini, and H. Jégou, “The faiss library,” arXiv preprint        K. Matosich, K. Veeraraghavan, K. Michelena, K. Li, K. Jagadeesh,
+    arXiv:2401.08281, 2024.                                                           K. Huang, K. Chawla, K. Huang, L. Chen, L. Garg, L. A, L. Silva,
+[7] W. Fan, Y. Ding, L. Ning, S. Wang, H. Li, D. Yin, T.-S. Chua, and                 L. Bell, L. Zhang, L. Guo, L. Yu, L. Moshkovich, L. Wehrstedt,
+    Q. Li, “A survey on rag meeting llms: Towards retrieval-augmented large           M. Khabsa, M. Avalani, M. Bhatt, M. Mankus, M. Hasson, M. Lennie,
+    language models,” in Proceedings of the 30th ACM SIGKDD Conference                M. Reso, M. Groshev, M. Naumov, M. Lathi, M. Keneally, M. Liu,
+    on Knowledge Discovery and Data Mining, 2024, pp. 6491–6501.                      M. L. Seltzer, M. Valko, M. Restrepo, M. Patel, M. Vyatskov,
+[8] Y. Gao, Y. Xiong, X. Gao, K. Jia, J. Pan, Y. Bi, Y. Dai, J. Sun, and              M. Samvelyan, M. Clark, M. Macey, M. Wang, M. J. Hermoso,
+    H. Wang, “Retrieval-augmented generation for large language models:               M. Metanat, M. Rastegari, M. Bansal, N. Santhanam, N. Parks,
+    A survey,” arXiv preprint arXiv:2312.10997, 2023.                                 N. White, N. Bawa, N. Singhal, N. Egebo, N. Usunier, N. Mehta,
+[9] A. Grattafiori, A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-                 N. P. Laptev, N. Dong, N. Cheng, O. Chernoguz, O. Hart, O. Salpekar,
+    Dahle, A. Letman, A. Mathur, A. Schelten, A. Vaughan, A. Yang,                    O. Kalinli, P. Kent, P. Parekh, P. Saab, P. Balaji, P. Rittner, P. Bontrager,
+    A. Fan, A. Goyal, A. Hartshorn, A. Yang, A. Mitra, A. Sravankumar,                P. Roux, P. Dollar, P. Zvyagina, P. Ratanchandani, P. Yuvraj, Q. Liang,
+    A. Korenev, A. Hinsvark, A. Rao, A. Zhang, A. Rodriguez,                          R. Alao, R. Rodriguez, R. Ayub, R. Murthy, R. Nayani, R. Mitra,
+    A. Gregerson, A. Spataru, B. Roziere, B. Biron, B. Tang, B. Chern,                R. Parthasarathy, R. Li, R. Hogan, R. Battey, R. Wang, R. Howes,
+    C. Caucheteux, C. Nayak, C. Bi, C. Marra, C. McConnell, C. Keller,                R. Rinott, S. Mehta, S. Siby, S. J. Bondu, S. Datta, S. Chugh, S. Hunt,
+    C. Touret, C. Wu, C. Wong, C. C. Ferrer, C. Nikolaidis, D. Allonsius,             S. Dhillon, S. Sidorov, S. Pan, S. Mahajan, S. Verma, S. Yamamoto,
+    D. Song, D. Pintz, D. Livshits, D. Wyatt, D. Esiobu, D. Choudhary,                S. Ramaswamy, S. Lindsay, S. Lindsay, S. Feng, S. Lin, S. C. Zha,
+    D. Mahajan, D. Garcia-Olano, D. Perino, D. Hupkes, E. Lakomkin,                   S. Patil, S. Shankar, S. Zhang, S. Zhang, S. Wang, S. Agarwal,
+    E. AlBadawy, E. Lobanova, E. Dinan, E. M. Smith, F. Radenovic,                    S. Sajuyigbe, S. Chintala, S. Max, S. Chen, S. Kehoe, S. Satterfield,
+    F. Guzmán, F. Zhang, G. Synnaeve, G. Lee, G. L. Anderson, G. Thattai,            S. Govindaprasad, S. Gupta, S. Deng, S. Cho, S. Virk, S. Subramanian,
+    G. Nail, G. Mialon, G. Pang, G. Cucurell, H. Nguyen, H. Korevaar,                 S. Choudhury, S. Goldman, T. Remez, T. Glaser, T. Best, T. Koehler,
+    H. Xu, H. Touvron, I. Zarov, I. A. Ibarra, I. Kloumann, I. Misra,                 T. Robinson, T. Li, T. Zhang, T. Matthews, T. Chou, T. Shaked,
+    I. Evtimov, J. Zhang, J. Copet, J. Lee, J. Geffert, J. Vranes, J. Park,           V. Vontimitta, V. Ajayi, V. Montanez, V. Mohan, V. S. Kumar,
+    J. Mahadeokar, J. Shah, J. van der Linde, J. Billock, J. Hong,                    V. Mangla, V. Ionescu, V. Poenaru, V. T. Mihailescu, V. Ivanov, W. Li,
+    J. Lee, J. Fu, J. Chi, J. Huang, J. Liu, J. Wang, J. Yu, J. Bitton,               W. Wang, W. Jiang, W. Bouaziz, W. Constable, X. Tang, X. Wu,
+    J. Spisak, J. Park, J. Rocca, J. Johnstun, J. Saxe, J. Jia, K. V.                 X. Wang, X. Wu, X. Gao, Y. Kleinman, Y. Chen, Y. Hu, Y. Jia, Y. Qi,
+    Alwala, K. Prasad, K. Upasani, K. Plawiak, K. Li, K. Heafield,                    Y. Li, Y. Zhang, Y. Zhang, Y. Adi, Y. Nam, Yu, Wang, Y. Zhao,
+    K. Stone, K. El-Arini, K. Iyer, K. Malik, K. Chiu, K. Bhalla,                     Y. Hao, Y. Qian, Y. Li, Y. He, Z. Rait, Z. DeVito, Z. Rosnbrick,
+    K. Lakhotia, L. Rantala-Yeary, L. van der Maaten, L. Chen, L. Tan,                Z. Wen, Z. Yang, Z. Zhao, and Z. Ma, “The llama 3 herd of models,”
+    L. Jenkins, L. Martin, L. Madaan, L. Malo, L. Blecher, L. Landzaat,               2024. [Online]. Available: https://arxiv.org/abs/2407.21783
+    L. de Oliveira, M. Muzzi, M. Pasupuleti, M. Singh, M. Paluri,                [10] K. Guu, K. Lee, Z. Tung, P. Pasupat, and M. Chang, “Retrieval
+    M. Kardas, M. Tsimpoukelli, M. Oldham, M. Rita, M. Pavlova,                       augmented language model pre-training,” in International conference
+    M. Kambadur, M. Lewis, M. Si, M. K. Singh, M. Hassan, N. Goyal,                   on machine learning. PMLR, 2020, pp. 3929–3938.
+    N. Torabi, N. Bashlykov, N. Bogoychev, N. Chatterji, N. Zhang,               [11] Z. Hu, V. Murthy, Z. Pan, W. Li, X. Fang, Y. Ding, and Y. Wang,
+    O. Duchenne, O. Çelebi, P. Alrassy, P. Zhang, P. Li, P. Vasic,                   “Hedrarag: Coordinating llm generation and database retrieval in het-
+    P. Weng, P. Bhargava, P. Dubal, P. Krishnan, P. S. Koura, P. Xu,                  erogeneous rag serving,” arXiv preprint arXiv:2507.09138, 2025.
+    Q. He, Q. Dong, R. Srinivasan, R. Ganapathy, R. Calderer, R. S.              [12] J. Jang, H. Choi, H. Bae, S. Lee, M. Kwon, and M. Jung, “Cxl-
+    Cabral, R. Stojnic, R. Raileanu, R. Maheswari, R. Girdhar, R. Patel,              anns:software-hardware collaborative memory disaggregation and com-
+    R. Sauvestre, R. Polidoro, R. Sumbaly, R. Taylor, R. Silva, R. Hou,               putation for billion-scale approximate nearest neighbor search,” in 2023
+    R. Wang, S. Hosseini, S. Chennabasappa, S. Singh, S. Bell, S. S. Kim,             USENIX Annual Technical Conference (USENIX ATC 23), 2023, pp.
+    S. Edunov, S. Nie, S. Narang, S. Raparthy, S. Shen, S. Wan, S. Bhosale,           585–600.
+    S. Zhang, S. Vandenhende, S. Batra, S. Whitman, S. Sootla, S. Collot,        [13] H. Jegou, M. Douze, and C. Schmid, “Product quantization for nearest
+    S. Gururangan, S. Borodinsky, T. Herman, T. Fowler, T. Sheasha,                   neighbor search,” IEEE transactions on pattern analysis and machine
+    T. Georgiou, T. Scialom, T. Speckbacher, T. Mihaylov, T. Xiao, U. Karn,           intelligence, vol. 33, no. 1, pp. 117–128, 2010.
+    V. Goswami, V. Gupta, V. Ramanathan, V. Kerkez, V. Gonguet, V. Do,           [14] W. Jiang, M. Zeller, R. Waleffe, T. Hoefler, and G. Alonso, “Chameleon:
+    V. Vogeti, V. Albiero, V. Petrovic, W. Chu, W. Xiong, W. Fu, W. Meers,            a heterogeneous and disaggregated accelerator system for retrieval-
+    X. Martinet, X. Wang, X. Wang, X. E. Tan, X. Xia, X. Xie, X. Jia,                 augmented language models,” arXiv preprint arXiv:2310.09949, 2023.
+    X. Wang, Y. Goldschlag, Y. Gaur, Y. Babaei, Y. Wen, Y. Song,                 [15] W. Jiang, S. Zhang, B. Han, J. Wang, B. Wang, and T. Kraska, “Piperag:
+    Y. Zhang, Y. Li, Y. Mao, Z. D. Coudert, Z. Yan, Z. Chen, Z. Papakipos,            Fast retrieval-augmented generation via algorithm-system co-design,”
+    A. Singh, A. Srivastava, A. Jain, A. Kelsey, A. Shajnfeld, A. Gangidi,            arXiv preprint arXiv:2403.05676, 2024.
+    A. Victoria, A. Goldstand, A. Menon, A. Sharma, A. Boesenberg,               [16] C. Jin, Z. Zhang, X. Jiang, F. Liu, X. Liu, X. Liu, and X. Jin, “Ragcache:
+    A. Baevski, A. Feinstein, A. Kallet, A. Sangani, A. Teo, A. Yunus,                Efficient knowledge caching for retrieval-augmented generation,” arXiv
+    A. Lupu, A. Alvarado, A. Caples, A. Gu, A. Ho, A. Poulton,                        preprint arXiv:2404.12457, 2024.
+    A. Ryan, A. Ramchandani, A. Dong, A. Franco, A. Goyal, A. Saraf,             [17] J. Johnson, M. Douze, and H. Jégou, “Billion-scale similarity search
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+     with GPUs,” IEEE Transactions on Big Data, vol. 7, no. 3, pp. 535–            [33] O. Ram, Y. Levine, I. Dalmedigos, D. Muhlgay, A. Shashua, K. Leyton-
+     547, 2019.                                                                         Brown, and Y. Shoham, “In-context retrieval-augmented language mod-
+[18] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. Gonzalez,              els,” Transactions of the Association for Computational Linguistics,
+     H. Zhang, and I. Stoica, “Efficient memory management for large                    vol. 11, pp. 1316–1331, 2023.
+     language model serving with pagedattention,” in Proceedings of the 29th       [34] N. Reimers, “Sentence-bert: Sentence embeddings using siamese bert-
+     Symposium on Operating Systems Principles, 2023, pp. 611–626.                      networks,” arXiv preprint arXiv:1908.10084, 2019.
+[19] Y. Kwon and M. Rhu, “Training personalized recommendation systems             [35] M. Shen, M. Umar, K. Maeng, G. E. Suh, and U. Gupta, “Hermes:
+     from (gpu) scratch: Look forward not backwards,” in Proceedings of the             Algorithm-system co-design for efficient retrieval-augmented generation
+     49th Annual International Symposium on Computer Architecture, 2022,                at-scale,” in Proceedings of the 52nd Annual International Symposium
+     pp. 860–873.                                                                       on Computer Architecture, 2025, pp. 958–973.
+[20] LangChain-Team, “Langchain: Context-aware reasoning framework,”               [36] K. Song, X. Tan, T. Qin, J. Lu, and T.-Y. Liu, “Mpnet: Masked and
+     https://github.com/langchain-ai/langchain, 2025, accessed: 2025-07-24.             permuted pre-training for language understanding,” Advances in neural
+[21] Y. Lee, H. Choi, S. Min, H. Lee, S. Beak, D. Jeong, J. W. Lee, and T. J.           information processing systems, vol. 33, pp. 16 857–16 867, 2020.
+     Ham, “Anna: Specialized architecture for approximate nearest neighbor         [37] R. A. Team, “Wiki-all dataset,” https://docs.rapids.ai/api/cuvs/stable/
+     search,” in 2022 IEEE International Symposium on High-Performance                  cuvs bench/wiki all dataset/, 2024, accessed: 2025-07-31.
+     Computer Architecture (HPCA). IEEE, 2022, pp. 169–183.                        [38] J. Wang, X. Yi, R. Guo, H. Jin, P. Xu, S. Li, X. Wang, X. Guo, C. Li,
+[22] P. Lewis, E. Perez, A. Piktus, F. Petroni, V. Karpukhin, N. Goyal,                 X. Xu, K. Yu, Y. Yuan, Y. Zou, J. Long, Y. Cai, Z. Li, Z. Zhang, Y. Mo,
+     H. Küttler, M. Lewis, W.-t. Yih, T. Rocktäschel, S. Riedel, and D. Kiela,        J. Gu, R. Jiang, Y. Wei, and C. Xie, “Milvus: A purpose-built vector
+     “Retrieval-augmented generation for knowledge-intensive nlp tasks,” in             data management system,” in Proceedings of the 2021 International
+     Proceedings of the 34th International Conference on Neural Information             Conference on Management of Data, ser. SIGMOD ’21. New York,
+     Processing Systems, ser. NIPS ’20.        Red Hook, NY, USA: Curran                NY, USA: Association for Computing Machinery, 2021, p. 2614–2627.
+     Associates Inc., 2020.                                                             [Online]. Available: https://doi.org/10.1145/3448016.3457550
+                                                                                   [39] Y. Wang, L. Wang, Y. Li, D. He, and T.-Y. Liu, “A theoretical analysis of
+[23] C.-Y. Lin, K. Kamahori, Y. Liu, X. Shi, M. Kashyap, Y. Gu,
+                                                                                        ndcg type ranking measures,” in Conference on learning theory. PMLR,
+     R. Shao, Z. Ye, K. Zhu, S. Wang, A. Krishnamurthy, R. Kadekodi,
+                                                                                        2013, pp. 25–54.
+     L. Ceze, and B. Kasikci, “Telerag: Efficient retrieval-augmented
+                                                                                   [40] Wikimedia Foundation, “Wikipedia dumps,” https://dumps.wikimedia.
+     generation inference with lookahead retrieval,” 2025. [Online].
+                                                                                        org/enwiki/latest/, accessed: 2025-12-01.
+     Available: https://arxiv.org/abs/2502.20969
+                                                                                   [41] A. Yang, A. Li, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Gao,
+[24] J. Liu, “Llamaindex,” https://github.com/jerryjliu/llama index, Nov.               C. Huang, C. Lv, C. Zheng, D. Liu, F. Zhou, F. Huang, F. Hu, H. Ge,
+     2022, released on November 1, 2022. [Online]. Available: https:                    H. Wei, H. Lin, J. Tang, J. Yang, J. Tu, J. Zhang, J. Yang, J. Yang,
+     //github.com/jerryjliu/llama index                                                 J. Zhou, J. Zhou, J. Lin, K. Dang, K. Bao, K. Yang, L. Yu, L. Deng,
+[25] Y. E. Maboud, M. Adnan, D. Mahajan, and P. J. Nair, “Slipstream:                   M. Li, M. Xue, M. Li, P. Zhang, P. Wang, Q. Zhu, R. Men, R. Gao,
+     Semantic-based training acceleration for recommendation models,” in                S. Liu, S. Luo, T. Li, T. Tang, W. Yin, X. Ren, X. Wang, X. Zhang,
+     2025 Design, Automation & Test in Europe Conference (DATE), 2025,                  X. Ren, Y. Fan, Y. Su, Y. Zhang, Y. Zhang, Y. Wan, Y. Liu, Z. Wang,
+     pp. 1–7.                                                                           Z. Cui, Z. Zhang, Z. Zhou, and Z. Qiu, “Qwen3 technical report,”
+[26] R. Mahapatra, H. Santhanam, C. Priebe, H. Xu, and H. Esmaeilzadeh,                 2025. [Online]. Available: https://arxiv.org/abs/2505.09388
+     “In-storage acceleration of retrieval augmented generation as a service,”     [42] D. Zhang, J. Li, Z. Zeng, and F. Wang, “Jasper and stella: distillation
+     in Proceedings of the 52nd Annual International Symposium on Com-                  of sota embedding models,” arXiv preprint arXiv:2412.19048, 2024.
+     puter Architecture, 2025, pp. 450–466.                                        [43] J. Zhang, Q. Liu, D. Lian, Z. Liu, L. Wu, and E. Chen, “Anisotropic
+[27] Y. A. Malkov and D. A. Yashunin, “Efficient and robust approxi-                    additive quantization for fast inner product search,” in Proceedings of
+     mate nearest neighbor search using hierarchical navigable small world              the AAAI conference on Artificial Intelligence, vol. 36, no. 4, 2022, pp.
+     graphs,” IEEE transactions on pattern analysis and machine intelligence,           4354–4362.
+     vol. 42, no. 4, pp. 824–836, 2018.                                            [44] Z. Zhang, A. Zhu, L. Yang, Y. Xu, L. Li, P. M. Phothilimthana, and
+[28] S. Merity, C. Xiong, and R. Socher, “Pointer sentinel mixture models,”             Z. Jia, “Accelerating retrieval-augmented language model serving with
+     arXiv preprint arXiv:1609.07843, 2016.                                             speculation,” arXiv preprint arXiv:2401.14021, 2024.
+[29] D. Mudigere, Y. Hao, J. Huang, Z. Jia, A. Tulloch, S. Sridharan, X. Liu,      [45] Y. Zhong, S. Liu, J. Chen, J. Hu, Y. Zhu, X. Liu, X. Jin, and
+     M. Ozdal, J. Nie, J. Park, L. Luo, J. A. Yang, L. Gao, D. Ivchenko,                H. Zhang, “Distserve: Disaggregating prefill and decoding for goodput-
+     A. Basant, Y. Hu, J. Yang, E. K. Ardestani, X. Wang, R. Komuravelli,               optimized large language model serving,” in 18th USENIX Symposium
+     C.-H. Chu, S. Yilmaz, H. Li, J. Qian, Z. Feng, Y. Ma, J. Yang,                     on Operating Systems Design and Implementation (OSDI 24), 2024, pp.
+     E. Wen, H. Li, L. Yang, C. Sun, W. Zhao, D. Melts, K. Dhulipala,                   193–210.
+     K. Kishore, T. Graf, A. Eisenman, K. K. Matam, A. Gangidi, G. J.              [46] J. Zobel and A. Moffat, “Inverted files for text search engines,” ACM
+     Chen, M. Krishnan, A. Nayak, K. Nair, B. Muthiah, M. khorashadi,                   computing surveys (CSUR), vol. 38, no. 2, pp. 6–es, 2006.
+     P. Bhattacharya, P. Lapukhov, M. Naumov, A. Mathews, L. Qiao,
+     M. Smelyanskiy, B. Jia, and V. Rao, “Software-hardware co-design for
+     fast and scalable training of deep learning recommendation models,” in
+     Proceedings of the 49th Annual International Symposium on Computer
+     Architecture, ser. ISCA ’22. New York, NY, USA: Association
+     for Computing Machinery, 2022, p. 993–1011. [Online]. Available:
+     https://doi.org/10.1145/3470496.3533727
+[30] A. Neelakantan, T. Xu, R. Puri, A. Radford, J. M. Han, J. Tworek,
+     Q. Yuan, N. Tezak, J. W. Kim, C. Hallacy, J. Heidecke, P. Shyam,
+     B. Power, T. E. Nekoul, G. Sastry, G. Krueger, D. Schnurr, F. P. Such,
+     K. Hsu, M. Thompson, T. Khan, T. Sherbakov, J. Jang, P. Welinder,
+     and L. Weng, “Text and code embeddings by contrastive pre-training,”
+     2022. [Online]. Available: https://arxiv.org/abs/2201.10005
+[31] P. Patel, E. Choukse, C. Zhang, A. Shah, Í. Goiri, S. Maleki, and
+     R. Bianchini, “Splitwise: Efficient generative llm inference using phase
+     splitting,” in 2024 ACM/IEEE 51st Annual International Symposium on
+     Computer Architecture (ISCA). IEEE, 2024, pp. 118–132.
+[32] D. Quinn, M. Nouri, N. Patel, J. Salihu, A. Salemi, S. Lee, H. Za-
+     mani, and M. Alian, “Accelerating retrieval-augmented generation,” in
+     Proceedings of the 30th ACM International Conference on Architectural
+     Support for Programming Languages and Operating Systems, Volume 1,
+     2025, pp. 15–32.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:35:53 UTC from IEEE Xplore. Restrictions apply.
+

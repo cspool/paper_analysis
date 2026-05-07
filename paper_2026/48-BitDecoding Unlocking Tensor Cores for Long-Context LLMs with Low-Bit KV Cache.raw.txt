@@ -1,0 +1,1558 @@
+BitDecoding: Unlocking Tensor Cores for
+Long-Context LLMs with Low-Bit KV Cache
+Dayou Du1†, Shijie Cao2∗, Jianyi Cheng1, Luo Mai1, Ting Cao3, Mao Yang2
+1University of Edinburgh 2Microsoft Research
+3Institute for AI Industry Research (AIR), Tsinghua University
+{dayou.du, jianyi.cheng, luo.mai}@ed.ac.uk, {shijiecao, maoyang}@microsoft.com, tingcao@mail.tsinghua.edu.cn
+Abstract—The rise of long-context Large Language Models
+(LLMs) amplifies memory and bandwidth demands during au-
+toregressive decoding, as the Key–Value (KV) cache grows with
+each generated token. Low-bit KV-cache quantization (e.g., 4-bit
+or 2-bit) can reduce memory footprint while preserving accuracy,
+but existing systems suffer from slow decoding due to their
+exclusive reliance on CUDA cores, neglecting Tensor Cores—the
+primary source of compute on modern GPUs.
+We present BitDecoding, a new long-context LLMs inference
+system with low-bit KV cache. BitDecoding enables efficient
+low-bit KV cache decoding by cooperatively leveraging CUDA
+Cores and Tensor Cores. It introduces methods for automati-
+cally inducing optimized layouts to exploit Tensor Cores, along
+with novel warp-level parallelization strategies for dequantiza-
+tion. For unified system support, BitDecoding includes a query
+transformation module supporting diverse attention variants, a
+quantization kernel to support both tensor-wise and channel-
+wise scaling used in various quantization algorithms with high
+performance, and a dequantization kernel with a software-
+defined pipeline to coordinate CUDA and Tensor Cores execution
+for mix-precision operations. In addition, architecture-specific
+optimizations leverage Hopper’s warpgroup tensor instructions
+and Blackwell’s native low-precision tensor formats to maximize
+decoding throughput on the latest GPU generations.
+Evaluated on Blackwell, Hopper, Ada, and Ampere architec-
+tures, BitDecoding attains on average a 7.5× decoding speedup
+over FP16 FlashDecoding-v2, and further reaches up to 8.6×
+with native MXFP4 formats on Blackwell, while surpassing
+the state-of-the-art low-bit system QServe by up to 4.3×. On
+LLaMA-3.1-8B with a 128K context, BitDecoding reduces single-
+batch decoding latency by 3×, demonstrating substantial im-
+provements for long-context generation, and is open sourced at
+https://github.com/OpenBitSys/BitDecoding.
+I. INTRODUCTION
+The ability of Large Language Models (LLMs) to process
+long contexts [7], [23], [30] has unlocked new capabilities,
+such as book summarization [4], multi-modal understanding
+[35], and test-time scaling [11], [22]. However, these ad-
+vancements come with significant memory and computational
+challenges, primarily due to the large size of the Key-Value
+(KV) cache in long-context scenarios. During autoregressive
+decoding, LLMs must repeatedly access this growing cache
+for each generated token, which increases memory usage
+and slows down decoding. The problem worsens with larger
+batch sizes, as the KV cache scales linearly with the number
+†Work partially done during an internship at Microsoft Research.
+∗Corresponding author.
+of concurrent queries. For example, a 7B model requires
+approximately 14GB GPU memory for its parameters, but with
+a 32K context length and a batch size of 8, the KV cache alone
+consumes 128GB GPU memory [12], creating a significant
+memory bottleneck.
+To address this growing bottleneck, KV cache quanti-
+zation has emerged as a promising solution. By reducing
+the bit-width of the KV cache, quantization lowers memory
+overhead and improves overall efficiency. Recent quantization
+algorithms have shown that low-bit KV cache can retain
+high accuracy. QServe [16] demonstrates 4-bit KV cache
+improves throughput on models like LLaMA-3 and Qwen-1.5
+while maintaining strong accuracy, even together with 4-bit
+weight and 8-bit activation. Further research [13], [18], [27]
+shows that 2-bit KV cache can achieve near fp16 accuracy.
+Kivi [18], for instance, incurs only a 0.6% accuracy drop
+on LongBench [3] with a 2-bit KV cache on LLaMA-2-
+7B-Chat. Recent studies [29], [36] explore 1-bit quantization
+for KV cache, maintaining acceptable accuracy under specific
+conditions. These results confirm that KV cache quantization
+strikes an effective balance between efficiency and accuracy,
+making it viable for long-context LLM deployment.
+Despite the memory savings, current system support for
+low-bit KV cache struggles to deliver the expected speedup.
+Previous implementations [16], [18], [37] remain preliminary
+and case-specific, with significant room for further systematic
+optimization. A major bottleneck lies in the overhead intro-
+duced by quantization and dequantization. Although the KV
+cache is low-bit, the query (Q) values and attention scores
+remain in high precision. This results in mixed-precision
+matrix multiplications (mpGEMM), which existing hardware
+does not natively support, requiring dequantization before
+multiplication. Previous mpGEMM kernels like Ladder [33]
+and Marlin [9] are designed for low-bit weights but cannot
+be directly applied to low-bit KV caches. This is because
+weights are static and stored offline, while KV caches are
+dynamic and generated online. In autoregressive decoding,
+each newly generated token requires quantization, packing,
+and dequantization of the low-bit KV cache, introducing
+significant overhead and complexity in GPU kernel design,
+as illustrated in Fig. 1.
+To address this, our insight is to leverage Tensor Cores
+for intensive matrix multiplications while efficiently utilizing
+2026
+IEEE
+International
+Symposium
+on
+High
+Performance
+Computer
+Architecture
+(HPCA)
+|
+979-8-3315-9302-5/26/$31.00
+©2026
+IEEE
+|
+DOI:
+10.1109/HPCA68181.2026.11408481
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+(a) Low-bit weight (b) Low-bit KV cache
+Fig. 1: Comparison of mixed-precision matrix multiplication
+for low-bit weight and low-bit KV cache. (a) Quantized
+weights can be preprocessed offline. (b) KV cache requires
+online quantization and packing for each newly generated
+token.
+CUDA cores for KV cache dequantization. Previous work
+either implemented with separated kernels or fused attention
+operations relied solely on CUDA cores, leaving Tensor Cores
+underutilized, as shown in Fig. 2. Our approach is based on
+three key observations: First, modern language models employ
+Grouped-Query Attention (GQA) and Multi-Query Attention
+(MQA), which share a group of keys across multiple queries,
+enabling Tensor Cores to accelerate dot products in the self-
+attention mechanism. Second, leveraging Tensor Cores can al-
+leviate computational pressure on CUDA cores, enabling more
+efficient execution of low-bit operations. Finally, newer GPU
+architectures provide distinct mechanisms: Hopper’s support
+for asynchronous execution and warp specialization allows
+low-bit operations to overlap with computation [19], while
+Blackwell’s native support for low-precision formats (e.g.,
+MXFP4) reduces these overheads by minimizing the need for
+on-the-fly data conversion.
+Efficiently leveraging Tensor Cores for decoding with low-
+bit KV caches poses significant challenges. First, Tensor Cores
+require dequantized low-bit data to be aligned with high-
+precision formats, which is difficult in autoregressive decod-
+ing as the KV cache grows dynamically and must conform
+to Tensor Cores-specific layouts. Without optimized layouts,
+Tensor Cores may exhibit poor utilization or even produce
+incorrect results. Second, the high cost of dequantization can
+stall Tensor Cores execution, reducing GPU occupancy due
+to mismatched workloads between CUDA cores and Tensor
+Cores. Third, supporting low-bit KV caches across diverse
+attention mechanisms and quantization algorithms—with vary-
+ing tensor-wise and channel-wise scaling—demands a general
+yet highly optimized implementation. Without careful design,
+either CUDA cores or Tensor Cores become performance
+bottlenecks during long-context generation.
+To address the above challenges, we have designed and
+implemented BitDecoding, a high-performance long-context
+Fig. 2: Comparison of different low-bit KV cache systems
+against half-precision FlashAttention. Each system follows
+the attention formulation Out = softmax(Q D(K′⊤
+)) D(V ′
+),
+where K′
+and V ′
+are low-bit quantized Key and Value tensors,
+and D(·) denotes the dequantization function.
+LLMs inference system with low-bit KV cache. The design
+of BitDecoding delivers several contributions essential for
+exploiting Tensor Cores, including: (i) inducing low-bit op-
+timized layouts based on hardware instructions, (ii) aligning
+warps with residual buffer to saturate Tensor Cores, (iii) re-
+mapping layouts for faster dequantization, and (iv) coordinat-
+ing kernels for quantization and dequantization. In addition,
+we contribute new strategies for parallelizing GPU warps
+to mitigate low-bit operations overhead, including (i) effi-
+cient warp parallelism layout, and (ii) enhancing attention
+algorithms for fast warp synchronization leveraging the GPU
+memory hierarchy.
+We further contribute implementation techniques in BitDe-
+coding for LLMs inference, including: (i) a query transfor-
+mation approach that enables efficient execution of diverse
+attention variants, allowing BitDecoding to be easily adopted
+in existing LLMs; (ii) a high-performance quantization ker-
+nel that supports both channel-wise and tensor-wise scal-
+ing, ensuring generality across quantization algorithms; and
+(iii) a dequantization kernel with a software-defined pipeline
+that coordinates CUDA and Tensor Cores for GEMM and
+dequantization, while overlapping data movement, including
+extra low-bit metadata; furthermore, BitDecoding incorporates
+architecture-specific optimizations that unlock Hopper’s warp-
+group tensor operations and Blackwell’s native low-precision
+tensor formats to maximize decoding performance on the latest
+GPU generations.
+BitDecoding is evaluated at both the kernel and end-
+to-end levels across Blackwell, Hopper, Ada, and Ampere
+GPU architectures. At the kernel level, it outperforms FP16
+FlashDecoding-v2 by up to 8.6× on Blackwell (e.g., RTX
+5090, using native MXFP4 format support), 8.0× on Hopper,
+7.5× on Ada, and 4.8× on Ampere, while surpassing QServe
+by up to 4.3×. At the end-to-end model level, BitDecoding
+reduces single-batch decoding latency by 3× on LLaMA-3.1-
+8B with a 128K sequence length and achieves over 4× higher
+serving throughput than QServe.
+II. BACKGROUND AND MOTIVATION
+LLMs inference and low-bit KV cache. LLMs inference
+comprises two stages: (i) Prefill, which processes the prompt
+and computes Key (K) and Value (V) tensors for caching;
+and (ii) Decode, which updates the KV cache token-by-token
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+for autoregressive generation. For a model with n layers,
+hkv KV heads, and hidden size d, the KV cache requires
+2 · 16 · n · hkv · d · b · l bits (assuming FP16), where b
+is the batch size and l is the sequence length. Because
+this requirement grows linearly with both b and l, the KV
+cache often dominates memory usage, especially for long-
+context and large-batch workloads. In batched inference, each
+sequence has an independent past context, so there is little
+batch-level parallelism or reuse when loading cached Keys and
+Values; consequently, KV-cache access is typically bound by
+memory bandwidth. These constraints have spurred extensive
+research and industrial efforts on lower-bit KV caches [12],
+[18], [36] to reduce memory footprint and improve throughput
+while preserving accuracy close to non-quantized baselines.
+Tensor Cores and CUDA cores on modern GPUs. When
+optimizing LLM inference and low-bit KV caches on GPUs,
+it is crucial to exploit both Tensor Cores and CUDA cores.
+Tensor Cores deliver the majority of compute FLOPS in
+modern GPUs but are specialized for matrix operations (e.g.,
+GEMM), whereas CUDA cores provide more flexible vector,
+scalar, and control-flow capabilities at substantially lower peak
+FLOPS. For example, on the A100, Tensor Cores deliver up to
+312 TFLOPS in FP16/BF16—far exceeding the 19.5 TFLOPS
+FP32 offered by CUDA cores.
+This performance gap has widened significantly in re-
+cent generations. The Hopper architecture introduces Warp-
+group Matrix Multiply-Accumulate (WGMMA) instructions
+and warp-specialized pipelines to maximize asynchronous
+execution efficiency. The Blackwell architecture further ex-
+acerbates this disparity by supporting native micro-scaling
+formats (e.g., MXFP4, NVFP4), delivering up to 20 PFLOPS.
+For fast LLM inference, substantial effort has gone into
+optimizing attention variants to exploit Tensor Cores. SOTA
+LLMs [10], [17], [34] increasingly adopt MQA [26] and
+GQA [1], which reduce memory bandwidth by reusing KV
+heads across multiple queries. This reuse increases arithmetic
+intensity and improves compute efficiency [28], aligning well
+with the high-throughput, matrix-centric design of Tensor
+Cores. Consequently, leveraging Tensor Cores is becoming
+essential for efficient inference in long-context and grouped-
+attention LLMs.
+Limitations of existing low-bit KV cache systems. To
+support low-bit KV caches for long-context LLM inference,
+a number of systems have been proposed [16], [18], [37].
+However, they often leave GPUs underutilized, leading to sub-
+optimal performance. We summarize the key reasons below.
+• Attention with separated low-bit KV-cache kernels: The
+most straightforward approach, exemplified by Kivi [18],
+decomposes mixed-precision attention into multiple stan-
+dalone kernels and embeds them in a non-fused attention
+implementation. This design is highly flexible and readily
+supports many attention variants [1], [26]. Yet the isolated
+launches repeatedly load and store intermediate data, in-
+flate global-memory traffic, and break on-chip data reuse.
+The result is high launch overhead, increased memory
+bandwidth pressure, and lower effective throughput.
+• Fused attention with low-bit KV-cache kernels on CUDA
+cores solely: Given the generality of CUDA cores
+for mixed-precision operations, a natural extension of
+FlashAttention-style fusion [6] is a CUDA-cores–only
+implementation of low-bit KV caches. While this out-
+performs non-fused designs, it still underutilizes Tensor
+Cores. In these systems, both dequantization and ma-
+trix operations (GEMV/GEMM) are executed on CUDA
+cores via fused multiply–add (FMA) instructions. Under
+mixed precision, CUDA cores must handle expensive
+dequantization (e.g., int4/8 → FP16/BF16), scaling, and
+element-wise ops—tasks that are memory-bound and
+consume instruction slots, register bandwidth, and L1/L2
+capacity. This reduces occupancy and limits tile sizes,
+leaving fewer resources for the compute-heavy matrix
+multiplications. Consequently, running both dequantiza-
+tion and matmul on CUDA cores introduces significant
+overhead, especially for attention variants with higher
+arithmetic intensity.
+III. PROPOSED SOLUTIONS AND CHALLENGES
+A. Solution: Cooperative use of Tensor Cores & CUDA Cores
+In this paper, we want to explore a solution that can
+achieve a cooperative use of Tensor Cores and CUDA cores
+to support low-bit KV caches during long-context LLMs
+inference. Our design introduces new designs and implementa-
+tions that (i) construct and schedule matrix multiplications on
+Tensor Cores, and (ii) execute non-matrix-multiplication oper-
+ations—quantization, packing and dequantization—efficiently
+on CUDA cores. To make this cooperation effective, we
+balance workloads across the Tensor Cores and CUDA cores
+and carefully orchestrate data movement so that dequantization
+feeds Tensor-Core GEMM without stalls, memory traffic is
+minimized, and end-to-end decoding throughput is maximized.
+To ensure broad adoption, we aim to realize this cooperative
+design as a system that (i) supports low-bit KV caches
+across multiple attention variants (including MHA, MQA, and
+GQA), and (ii) spans multiple GPU generations. The former
+requires a clean interface that integrates with existing attention
+implementations; the latter requires designs that are easy to
+adapt, enabling rapid targeting of different GPU backends
+while sustaining high decoding throughput.
+We expect significant benefits from this proposed solution.
+For example, by enabling low-bit decoding that builds on
+FlashAttention-3 (FA-3) [25], we can leverage SM90-specific
+features—such as warp-specialized pipelines—that yield up
+to 6× speedups over prior implementations, avoiding the 35%
+throughput penalty associated with legacy SM80 instructions.
+Furthermore, this design anticipates the architectural capa-
+bilities of Blackwell, where native support for low-precision
+formats will drive even more substantial throughput improve-
+ments.
+B. Open challenges
+Although promising, the cooperative use of Tensor Cores
+and CUDA cores for low-bit KV caches is particularly chal-
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+(a) FP16 Fragment layout (b) Int4 Fragment layout
+Fig. 3: (a) mma.m16n8k16 fragment layout for matrix B.
+Each thread (Ti) is assigned a specific set of values based
+on the instruction-defined interleaved mapping. (b) For INT4,
+quantization packs values contiguously per thread. After de-
+quantization, the layout misaligns with the expected inter-
+leaved pattern.
+lenging to implement for several reasons:
+Challenge 1: Tensor Cores often suffer from low-bit
+layout mismatches. Aligning low-bit data layouts with Tensor
+Cores requirements is difficult, especially in autoregressive
+generation where KV caches expand dynamically.
+At runtime, after quantization and packing, the low-bit
+KV cache must dequantize into a half-precision layout that
+matches what Tensor Cores expect. This matching is chal-
+lenging for three reasons.
+First, fragment layouts vary across instructions and GPU
+generations. After using the optimized data-movement in-
+struction ldmatrix, the fragment residing in registers en-
+forces a strict value-to-thread mapping. Fig. 3a illustrates
+the registers read by each thread (T) for mma.m16n8k16
+with repeat tiling along the N dimension. However, this
+mapping differs from other Tensor Core instructions (e.g.,
+mma.m16n8k8) and from Hopper’s wgmma family (e.g.,
+wgmma.m64n64k16).
+Second, low-precision bitwidths exacerbate alignment is-
+sues. Although Tensor Cores instructions require specific
+compute types, their rigid, interleaved register layout makes
+lower-precision data hard to match directly. Without a layout
+transform, the low-bit register layout becomes an invalid
+layout for MMA execution due to misalignment with the
+interleaved access patterns. As shown in Fig. 3b, two FP16
+values originally computed by Thread 0 (T0) may be quantized
+and packed as eight consecutive low-bit values in the KV
+cache; after unpacking and dequantization, they no longer
+align with the expected Tensor Core register layout, yielding
+incorrect values. Even with native low-precision formats in
+Blackwell, hardware support remains limited, especially for
+the KV cache, which still depends on continuous quantization
+and packing; software must therefore carefully handle low-
+precision values and micro-scaling factors [20].
+Finally, dequantization can bottleneck execution: naive low-
+(a) Original Warp Design
+Com. Throughput TCs utilization Memory. Stalls
+0
+10
+20
+30
+40
+Proportion
+(%)
+W/O Dequant
+W/ Dequant
+(b) Micro-level Analysis
+Fig. 4: (a) A single warp along N for register-level operations
+will experience stalls due to dequantization (DQ) (b) Micro-
+level comparision with and without dequantization.
+bit→FP16 casts are slow [14] and require a friendly layout to
+run efficiently. Prior work such as Ladder [33] and Marlin [9]
+mitigates mismatch for static weights by inserting separate
+layout-transformation kernels, but this adds substantial over-
+head and is unsuitable for dynamic decoding. Experimental
+details are given in Table II.
+Challenge 2: Frequent stalls limit Tensor Cores uti-
+lization. We observe that empirically tuned warp layouts
+and partitioning in high-performance attention kernels often
+inadvertently degrade low-bit KV-cache performance.
+Under FlashAttention’s original warp partitioning, the addi-
+tional dequantization (DQ) can substantially reduce throughput
+and Tensor Core utilization. As shown in Fig. 4a, FlashAt-
+tention assigns a single warp along the N dimension to
+perform register-level softmax and the matrix multiplication
+PV , with P stored in registers aligned to the Tensor Core
+layout. When DQ is inserted before the matmul, this strategy
+becomes inefficient: small warp tiles of K or V must traverse
+N sequentially, so DQ frequently stalls the warp. Nsight
+Compute profiling [21] in Fig. 4b confirms that the added
+DQ overhead increases memory-access stalls and depresses
+compute throughput and Tensor Cores utilization, consistent
+with prior observations [8].
+Furthermore, native low-precision formats introduce their
+own overhead despite eliminating dequantization. Specifically,
+to utilize low-precision Tensor Cores for the second matrix
+multiplication (PV ), the probability matrix P must be dy-
+namically re-quantized after the softmax operation: Pf16 =
+softmax(Qf4KT
+f4), Of16 = Quant(Pf16)Vf4. This on-
+the-fly quantization creates a new computational bottleneck
+that can similarly stall Tensor Cores execution.
+Challenge 3: Lack of generalizable system optimizations
+for different low-bit KV-cache methods. Popular KV-cache
+quantization methods use diverse scaling granularities for the
+Key tensor—tensor-wise [12], [37] and channel-wise [13],
+[18]—which complicates building a unified system that sup-
+ports them all. Online quantization and packing require reduc-
+tions and element-wise transforms, adding nontrivial runtime
+overhead. Moreover, auxiliary metadata (scale and zero-point)
+increases memory traffic and, without careful scheduling, dis-
+rupts the load–compute pipeline. Prior mixed-precision kernel
+optimizations [9], [33] target static weight quantization and
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+Fig. 5: Overview of methods for optimizing low-bit layout
+on Tensor Cores. (1) Fused computation and quantization
+within Tensor Cores fragments. (2) The low-bit packing data
+preserves FP16 values. (3) Low-bit Layout matches with the
+dequantized half-precision layout. (4) Layout remapping for
+faster dequantization.
+do not generalize to the dynamic, step-by-step nature of KV
+caches. To date, generalizable system-level optimization tech-
+niques for high-performance, low-bit KV-cache quantization
+are lacking.
+IV. BITDECODING DESIGN
+In this section, we present the design of BitDecoding system
+which realizes the cooperative use of Tensor Cores and CUDA
+cores in supporting low-bit KV cache. The design primarily
+contains (i) new methods and principles for optimizing the
+low-bit layout in using Tensor Cores, and (ii) new strategies for
+parallelizing and coordinating GPU warps that can minimize
+the stalls due to dequantization.
+A. Methods for optimizing low-bit layout on Tensor Cores
+The first challenge our design aims to address is to ensure
+BitDecoding can automatically generate an optimized layout
+that can fully utilize Tensor Cores across different GPU
+generations and different configurations of the low-bit KV
+caches. For this, we have designed the following principles
+and methods:
+(1) Inducing low-bit optimized layout with hardware
+instructions. Our design is motivated by a novel insight:
+the thread-to-register mapping of ldmatrix loads data in
+Tensor Core’s interleaved fragment layout. As shown in Fig. 5-
+(2), if each thread then quantizes and packs locally, the re-
+sulting low-bit packing implicitly preserves the half-precision
+(FP16) interleaved layout. On unpacking and dequantization,
+values already match Tensor Core registers—no global re-
+shape is required. Thus, rather than relying on heavyweight
+global transforms via manual implementations [9] or iterative
+search [33] as in prior methods, we use hardware instructions
+to automatically induce a valid low-bit packing layout while
+computing. This yields zero-overhead remapping that is ef-
+ficient, compatible with Tensor Cores execution, and avoids
+extra data movement.
+Building on this insight, we design a dedicated GPU Resid-
+ual Kernel that fuses computation, quantization, and packing
+for newly generated FP16 KV tensors. Using ldmatrix, we
+load the high-precision KV tensor into registers structured for
+Tensor Cores, perform the matrix operation (e.g., QK⊤
+or
+PV ), and then have each thread quantize and pack its portion
+in registers (see Fig. 5-(1)). The result is interleaved, layout-
+compatible low-bit data written directly to global memory,
+updating the low-bit KV cache.
+To consume this cache, we introduce a Packing Kernel that
+fuses dequantization with computation. To guarantee correct
+register layout during unpacking, it mirrors the Residual
+Kernel’s instruction configuration which (i) uses the same
+ldmatrix variant and (ii) follows the same mma variant
+and warp-tiling configuration. Consequently, when the Pack-
+ing Kernel loads packed low-bit data via ldmatrix, the
+unpacked values are inherently aligned with Tensor Core reg-
+isters and can participate in matrix multiplication immediately,
+without explicit layout correction.
+(2) Aligning warps with residual KV cache to saturate
+Tensor Cores. Tensor Cores execute warp-tiled matrix op-
+erations, which require input tiles to be fully populated to
+achieve optimal throughput. Based on this, our insight is that
+by allocating a residual buffer with size matching the tiling
+capacity of Tensor Cores, we ensure that low-bit data aligns
+with the compute granularity of the hardware to fully utilize
+the computing ability of the computing unit.
+To implement this idea, we introduce a half-precision resid-
+ual KV cache with a residual block size Nr. Let X ∈ RL×d
+denote the entire KV cache. We partition X into:
+X = Xpack ∪ Xres, where
+(
+Xpack = X[: L − Nr]
+Xres = X[L − Nr :]
+We define β as the bit-width for low-bit quantization (e.g.,
+β = 4 or 2), and ω as the word size used for packed storage
+(e.g., ω = 16 for INT16). The corresponding packing ratio
+is given by R = ω/β. Let Wn denote the number of warps
+along the N dimension, and Pn the number of elements each
+warp tile processes (e.g., Pn = 8 under mma.m16n8k16).
+To ensure each Tensor Cores fragment is fully populated for
+each warp, the residual block size is computed as:
+Nr = Pn × Wn × R (1)
+This guarantees that low-bit KV cache fragments align pre-
+cisely with the warp-level tiling of Tensor Core operations,
+enabling dense, layout-compatible packing and maximizing
+compute unit occupancy.
+(3) Re-mapping layout for faster dequantization. Though
+compatible with Tensor Cores layout, the layout is inefficient
+to dequantization due to directly casting low-bit values to FP16
+using static_cast introduces significant overhead.
+To mitigate this inefficiency, we further design a faster
+dequantization mapping approach based on low-level bitwise
+operations and instructions inspired by [14]. After loading
+packed data into registers using ldmatrix, we cast them
+to INT32 before mapping them to the interleaved Tensor Core
+layout following the 75316420 pattern. This layout enables
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+efficient conversion of INT4/INT2 data to FP16 using the
+lop3 instruction for bitwise manipulation while aligning with
+the Tensor Core computation pattern.
+(4) Coordinating Residual and Packing Kernels with
+Configuration Setup. This design is executed by coordinating
+the Residual and Packing kernels under a unified instruc-
+tion configuration. First, the hardware instruction configura-
+tion—including ldmatrix and mma variants—can be deter-
+mined based on GPU architectures. With this configuration,
+the residual block size Nr is computed based on the bit-
+width of the low-bit KV cache. As shown in Fig. 5, the
+Residual kernel loads high-precision KV entries into registers
+via ldmatrix, performs computation using Tensor Cores,
+and then fuses quantization and packing before storing the
+results into the low-bit KV cache. The Packing kernel, using
+the same instruction configuration, loads the packed data into
+registers, performs efficient dequantization, and proceeds with
+Tensor Core computation.
+B. Strategies for parallelizing warps
+The second challenge is ensuring BitDecoding avoids the
+pitfalls of existing warp-parallelization strategies for mixed-
+precision attention, which suffer from low hardware utilization
+due to frequent warp stalls. Our key insight is that low-bit
+data moves at much higher bandwidth than full precision,
+shifting the bottleneck from memory to compute. We therefore
+design a warp layout that exploits the GPU memory hierarchy
+to parallelize low-precision operations efficiently, minimizing
+data movement and substantially improving Tensor Cores
+utilization (Table III demonstrates minimal overhead).
+(1) Enhancing warps parallelism for low-precision oper-
+ations. We introduce a novel warps layout to enable parallel
+operations of multiple packed data chunks. Using dequantiza-
+tion as an example, we modify the warp partitioning strategy to
+better exploit parallelism. As illustrated in Fig. 6, instead of the
+original strategy that allocates multiple warps along the M di-
+mension, we constrain the allocation to Wm = 1—leveraging
+the fact that the decoding query length is typically small
+(< 16)—and reallocate resources to increase the number of
+warps along the N dimension (Wn).
+By increasing Wn, dequantization stalls can be effectively
+mitigated by the Streaming Multiprocessor (SM) warp sched-
+uler [24], as multiple warps concurrently execute dequantiza-
+tion on packed data before proceeding to Tensor Cores-based
+matrix multiplication.
+Similarly, this parallelism strategy alleviates the stalls in-
+troduced by on-the-fly quantization in native low-precision
+attention, ensuring that neither quantization nor dequantization
+becomes a serialization bottleneck.
+(2) Leveraging memory hierarchy for warps synchro-
+nization. However, with results now distributed across dif-
+ferent registers and warps, the original register-level softmax
+becomes infeasible. Moreover, a key challenge emerges due
+to the incompatibility between the new warp layout and the
+expected format for MMA operations on PV .
+Fig. 6: Enhancing parallism for efficient Tensor Cores utiliza-
+tion with (1) new warp layout design reduces dequantization
+stalls and (2) cooperative softmax leverages data movement
+between GPU register and shared memory for cross-warp
+reduction with minimal overhead.
+To address this, we leverage a multi-level memory hierar-
+chy—spanning registers and shared memory—to enable cross-
+warp reduction and synchronization for the softmax computa-
+tion. As illustrated in Algorithm 1, we extend existing high-
+performance attention algorithms, such as FlashAttention, by
+introducing two additional shared memory buffers: sTMP ∈
+RWn
+and sAcc ∈ RTm×Tn
+. The buffer sTMP facilitates
+cross-warp reduction for computing the row-wise maximum
+during softmax. This is achieved by first performing intra-warp
+reduction within registers, followed by inter-warp reduction
+via shared memory. The buffer sAcc temporarily stores the
+attention scores P computed in Tensor Core registers and later
+reloads them via ldmatrix, ensuring proper alignment for
+subsequent Tensor Core mma operations.
+Since Wn is typically small, we reuse the shared memory
+pointer of sTMP for sAcc to minimize memory overhead.
+Moreover, on Hopper Tensor Cores, WGMMA supports direct
+shared memory access, eliminating the need for explicit data
+movement from shared memory to registers.
+Algorithm 1 Multi-warps Cooperative Softmax
+Require: sTMP ∈ RWn
+and sAcc ∈ RTm×Tn
+in SMEM.
+Require: Load Qi ∈ RTm×d
+and Ki, Vi ∈ RTn×d
+to REG.
+1: Si = QiKT
+j where Si ∈ RTm×Tn
+.
+2: mnew
+i = max(mi, rowmax(Si, sTMP)).
+3: Pi = exp(Si − mnew
+i ) where Pi ∈ RTm×Tn
+.
+4: sAcc = tiled copy r2s(Pi).
+5: P′
+i = tiled copy s2r(sAcc)
+6: Onew
+i = P′
+i Vj + diag(emi−mnew
+i )Oi.
+V. SYSTEM IMPLEMENTATION
+In this section, we describe how we implement BitDecod-
+ing, as illustrated in Fig. 7. Our implementation consists of
+three major components: (i) a query transformation component
+that supports diverse attention variants in LLMs; (ii) a Residual
+Kernel that performs low-cost quantization and packing while
+remaining general to both tensor-wise and channel-wise scal-
+ing across quantization algorithms; and (iii) a Packing Kernel
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+Fig. 7: System overview of BitDecoding. (1) Query Transformation restructures the query tensor layout to enable efficient
+warp-level execution for attention variants on Tensor Cores. (2) Residual Kernel performs quantization and packing with
+minimal overhead, supporting both tensor-wise and channel-wise scaling. (3) Packing Kernel executes dequantization and
+matrix multiplication using a fine-grained, asynchronous pipeline, maximizing Tensor Cores and CUDA Cores utilization with
+low-bit parameters.
+with a fine-grained pipeline that fully utilizes both Tensor
+Cores and CUDA cores. Finally, we discuss architecture-
+specific optimizations that leverage the advanced features of
+the latest GPU generations (e.g., Hopper and Blackwell) to
+further enhance decoding throughput.
+A. Query Transformation
+Modern LLMs adopt diverse attention variants [10], [17],
+[34] with different key–value (KV) sharing patterns. BitDe-
+coding aims to support all these variants.
+For instance, in GQA and MQA, multiple query heads
+share a KV head, reducing the number of KV projections
+and memory accesses. The degree of sharing is measured by
+gq = hq/hkv, where hq and hkv are the numbers of query and
+KV heads, respectively: gq = 1 corresponds to MHA, gq > 1
+denotes GQA, and hkv = 1 (i.e., gq = hq) characterizes MQA.
+A challenge arises in decoding: since Q len = 1 (one token
+at a time), the query tensor has a very small batch dimension,
+and a naive Q · K⊤
+underfills Tensor Cores, yielding poor
+warp occupancy and low throughput.
+To address this, we perform a query transformation that
+reorganizes the query layout to better match Tensor Core tiling.
+As illustrated in Fig. 7 (left), we reshape the query tensor
+from [1, (gq, hkv)] to [gq, hkv], effectively forming a larger Q
+tile without changing the semantics of attention or its KV-
+sharing pattern. Grouped query heads are then processed in
+parallel as a larger GEMM block, fully populating Tensor
+Core fragments, improving warp occupancy, and increasing
+throughput.
+B. Residual Kernel
+A primary challenge in low-bit KV-cache design is support-
+ing diverse quantization algorithms—especially differing scal-
+ing granularities (e.g., tensor-wise, channel-wise)—without
+sacrificing performance. Quantization involves reductions and
+element-wise operations to compute scale and zero-point, fol-
+lowed by bit-packing; during decoding these must run online,
+adding runtime overhead and risking misalignment with the
+rigid layouts expected by Tensor Cores. To address this, we
+design the Residual Kernel with two key optimizations:
+(1) Partitioning KV cache based on residual block
+size. During prefill with context length L, we split the KV
+cache based on a Tensor Cores-aligned residual block size
+Nr (see Eq. 1). The first Np = L − (L mod Nr) entries
+are quantized and packed into the low-bit KV cache using a
+fused quantization and packing operation. The remaining KV
+Tensor with size res_len = L mod Nr are stored in the
+half-precision residual KV cache. At each decode step, the
+newly generated K, V tensors are appended to the residual
+cache and used for attention computation. This cache grows
+incrementally until it reaches the residual block size Nr. Once
+per token generation, the Residual Kernel computes attention
+using the half-precision residual KV cache and optionally
+quantizes it (when res_len = Nr) into packed format.
+With this KV cache partitioning during decoding, we can
+naturally perform channel-wise quantization along the seq len
+and tensor-wise quantization along the hidden dimension
+within the residual block.
+(2) Optimizing reduction with warp-level instructions.
+As shown in Fig. 7 (mid), once the half-precision KV data
+is computed, it remains in registers as Tensor Cores frag-
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+ments—structured in the native interleaved layout used by mma
+operations. To efficiently compute the quantization parameters
+(scale and zero-point), we first perform thread-level reductions
+to obtain local min/max statistics within each group.
+These local results are then aggregated across the warp using
+the PTX instruction __shfl_xor_sync, enabling efficient
+warp-level reduction without shared memory. When the warp
+repetition factor Wn > 1, we introduce a small shared memory
+buffer to coordinate the final reduction across warps.
+After computing the quantization parameters, each thread
+performs in-register quantization and packs the low-bit values
+into INT16 format. This avoids extra memory movement
+and keeps data in a computation-ready state. To minimize
+overhead, both the scale and zero-point are stored in a compact
+half2 format, enabling efficient memory access and fused
+multiply-add during dequantization in the decode phase.
+C. Packing Kernel
+Another challenge is the auxiliary low-bit metadata (scale
+and zero-point), which increases memory traffic, while de-
+quantization still runs on CUDA cores. Without careful
+scheduling, this disrupts the load–compute pipeline and pre-
+vents overlap with Tensor Core operations. We therefore de-
+sign a fine-grained asynchronous pipeline: CUDA cores handle
+dequantization, Tensor Cores execute matrix multiplications,
+and both are orchestrated to overlap with memory trans-
+fers through the GPU hierarchy—enabling efficient mixed-
+precision computation.
+(1) Optimizing asynchronous data movement. From
+Global to Shared Memory, we follow FlashAttention [6] via
+block-wise tiling [32] and strategic recomputation. It processes
+input matrices Q ∈ RTm×d
+, K, V ∈ RTn×d
+in tiles within
+shared memory, using block sizes Tm and Tn. The number of
+key-value tiles is Cn = ⌈L/Tn⌉.
+To efficiently manage quantization parameters, we introduce
+dedicated shared memory buffers for quantization paramenter
+Kpack params (Kp) and Vpack param (Vp), facilitating efficient
+tiling for memory copy. These buffers store scale and
+zeros in the half2 format, allowing them to be loaded
+in a single instruction.
+The shape of Kp is determined by the quantization granu-
+larity setting, and the Vp follows a Tensor-wise layout:
+• Channel-wise: (Tn/group size, d).
+• Tensor-wise: (Tn, d/group size).
+To achieve optimal memory overlapping, all global-to-
+shared memory transfers are executed asynchronously using
+the cp.async intrinsic, ensuring efficient pipeline execution,
+as shown in Fig. 7 (right). We optimize memory transactions
+using instructions with different caching strategies:
+• cp.async.cg: Used for Q, Kpack, and Vpack, which
+cache only in global memory as they are not reused within
+the same kernel.
+• cp.async.ca: Applied to Kp and Vp, ensuring smaller
+byte-level alignment for fine-grained memory access.
+In Hopper architecture, we follow FA3, leveraging the
+tma.copy instruction for data loading. This facilitates warp-
+specialized scheduling, improving data locality and reducing
+memory latency across multiple warps.
+From Shared Memory to Register, we use the PTX instruc-
+tion ldmatrix to efficiently load Kpack, Vpack and sAcc
+from shared memory into registers with the Tensor Cores
+tiling layout. To eliminate bank conflicts, we use a sizzling
+scheme [5] defined as:
+colid = rowid ⊕ colid (2)
+achieve bank conflict-free access. Additionally, we restructure
+the shared memory layout of Kp and Vp to further reduce bank
+conflict and maximize throughput efficiency.
+(2) Asynchronous pipeline for overlapping CUDA Cores
+and Tensor Cores. To fully utilize both CUDA cores and
+Tensor Cores, we implement a register-level, asynchronous
+pipeline that overlaps computation with memory operations.
+In this pipeline, shared-memory loads via ldmatrix and
+dequantization (Dequant) run concurrently with Tensor Core
+matrix multiplications (mma) under the SM warp scheduler.
+As shown in Fig. 7 (right), while the i-th slice is being
+processed by mma on Tensor Cores, the (i + 1)-th slice is
+simultaneously loaded from shared memory (ldmatrix) and
+dequantized. This sustains a continuous producer–consumer
+flow, improving instruction throughput and maximizing uti-
+lization of both CUDA cores and Tensor Cores.
+D. Latest Architectures Support
+While the design presented thus far effectively targets
+pre-Hopper architectures (e.g., Ampere), newer generations
+introduce distinct hardware features that require tailored opti-
+mization strategies. Below, we detail how our approach adapts
+to leverage the specialized instructions and native data formats
+of the Hopper and Blackwell architectures.
+(1) Unlocking Hopper for warpgroup acceleration ca-
+pabilities via smart uses of PTX-level instructions. Hop-
+per Tensor Cores, increasingly introduce Warpgroup Matrix
+Multiply-Accumulate (wgmma) instruction. This instruction
+however imposes a key constraint: in a matrix multiplication
+C = AB, only A and C can be sourced from registers, while
+B must reside in shared memory. This presents a challenge
+for low-bit quantized data, as values are typically upconverted
+to FP16 in registers before computation. To resolve this, we
+leverage Hopper’s STSM PTX instruction to store dequantized
+FP16 values in shared memory efficiently, accessible for
+wgmma_SS operations. Remarkably, the asynchronous nature
+of WGMMA overlaps storage with computation, optimizing
+performance.
+(2) Accelerating Blackwell with native low-precision
+format. The Blackwell architecture introduces native support
+for low-precision tensor operations, eliminating the need for
+explicit dequantization. Consequently, the lop3-based reg-
+ister remapping described earlier is bypassed in favor of
+direct execution. We target Blackwell’s low-precision mma
+instructions—specifically those supporting the micro-scaling
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+8k 32k 128k
+Seq Len
+0.0
+1.0
+2.0
+3.0
+4.0
+Speed
+Up
+bs=1, h_q=128, h_k=8, d=128
+Single
+Flash-decoding-v2
+KIVI-4
+BitDecoding-mxfp4
+8 32 128
+Batch Size
+0.0
+2.0
+4.0
+6.0
+8.0
+10.0
+Speed
+Up
+len_kv=8k, h_q=32, h_k=8, d=128
+Batches
+Flash-decoding-v2
+KIVI-4
+BitDecoding-mxfp4
+(a) RTX 5090
+8k 32k 128k
+Seq Len
+0.0
+1.0
+2.0
+3.0
+Speed
+Up
+bs=1, h_q=32, h_k=8, d=128
+Single
+Flash-decoding-v2
+KIVI-4
+BitDecoding-mxfp4
+8 32 128
+Batch Size
+0.0
+2.0
+4.0
+6.0
+Speed
+Up
+len_kv=8k, h_q=32, h_k=8, d=128
+Batches
+Flash-decoding-v2
+KIVI-4
+BitDecoding-mxfp4
+(b) RTX PRO 6000
+Fig. 8: Kernel performance with mxfp4 on Blackwell architectures.
+formats (e.g., mxfp4 / nvfp4)—to execute GEMM oper-
+ations directly on packed 4-bit data. While these instructions
+enforce rigid layout constraints for both the packed values and
+their block-scaling factors, the layout transformation strategy
+proposed in Section IV-A is designed to be layout-agnostic. It
+automatically aligns the packed KV data with the hardware-
+mandated format, ensuring seamless integration with Black-
+well’s native tensor pipelines.
+VI. EVALUATION
+In this section, we comprehensively evaluate BitDecoding
+against state-of-the-art approaches and systems. Our evaluation
+highlights the following key results:
+1) BitDecoding outperforms FP16 FlashDecoding-v2 by
+significant margins across GPU generations, achieving
+speedups of up to 8.6× on Blackwell (using native
+MXFP4), 8.0× on Hopper, and 7.5× on Ada archi-
+tectures, while surpassing the state-of-the-art low-bit
+system QServe by up to 4.3× (Section VI-A).
+2) In end-to-end long-context inference, BitDecoding re-
+duces single-batch latency by 3x (on LLaMA-3.1-8B
+with 128K context) and achieves over 4x higher serving
+throughput than QServe, demonstrating superior scala-
+bility in GQA settings where prior CUDA Core-only
+methods degrade (Section VI-B).
+3) BitDecoding preserves near-FP16 accuracy while de-
+riving significant performance gains from each system
+component, demonstrating only a 0.2% accuracy degra-
+dation with 4-bit quantization, while our ablation study
+confirms that every design module contributes to the
+overall speedup (Section VI-C).
+A. Kernels Performance Across GPU Architectures
+Kernels Settings. Since different LLM serving scenarios
+require varying workloads and attention kernel designs, we
+evaluate performance under the following three representative
+settings:
+• Single: A scenario where batch size = 1, representing
+inference for edge users with long context.
+• Batches: A setting with a larger batch size, maintaining
+the same input length while applying simple padding.
+1k 10k 100k
+Seq Len
+1.0
+1.5
+2.0
+2.5
+3.0
+3.5
+Speed
+Up
+Single
+Flash-attn-v2
+Flash-attn-v3
+BitDecoding-KT-4 (v2)
+BitDecoding-KC-4 (v2)
+BitDecoding-KC-2 (v2)
+BitDecoding-KT-4 (v3)
+BitDecoding-KC-4 (v3)
+BitDecoding-KC-2 (v3)
+0 25 50 75 100 125
+Batch Size
+2.0
+4.0
+6.0
+8.0
+Speed
+Up
+Batches
+bs = 1, h_q = 128, h_k = 32, d = 128 len = 32k, h_q = 128, h_k = 32, d = 128
+Fig. 9: Kernel performance on Hopper (H100).
+• Page: A high-throughput scenario where a larger
+batch size is managed using the page management tech-
+nique [15].
+Baselines. We compare BitDecoding against several rep-
+resentative attention kernel implementations. For FP16 KV
+cache, we use FlashDecoding [6], [25]—a split-partitioned
+variant of FlashAttention optimized for long-context decod-
+ing—as our baseline for speedup normalization. For low-bit
+KV cache, we evaluate Kivi [18], a non-fused kernel support-
+ing 4-bit and 2-bit quantization; Atom [37] and QServe [16],
+both fused-kernel implementations with CUDA Cores-only
+approach and supporting 4-bit cache with page management.
+Notably, Atom does not support GQA.
+Quantization Settings. We evaluate BitDecoding under
+various quantization configurations, supporting 4-bit and 2-bit
+Key tensors with both Channel-wise (KC) and Tensor-wise
+(KT) schemes.
+Results on MXFP4 (RTX5090, RTX PRO 6000). The
+Blackwell architecture provides native support for low-
+precision data formats, eliminating on-the-fly dequantization
+overhead while delivering very high compute throughput on
+low-bit operations. As shown in Fig. 8a, BitDecoding achieves
+remarkable performance, reaching up to 8.6× speedup in
+batched scenarios and over 4.3× in single-batch long-context
+decoding (128k), significantly outpacing the non-fused atten-
+tion baseline. Similarly, Fig. 8b demonstrates that the RTX
+PRO 6000 attains substantial gains, peaking at 6.5× speedup
+with large batch sizes.
+Results on Advanced Tensor Cores Acceleration (H100).
+Newer GPU architectures often introduce advanced compute
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+2.0
+4.0
+6.0
+Speed
+Up
+Single
+FlashDecoding-v2
+KIVI-4
+KIVI-2
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+2.0
+4.0
+6.0
+8.0
+Batches
+FlashDecoding-v2
+KIVI-4
+KIVI-2
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+2.0
+4.0
+6.0
+Pages
+FlashDecoding-v2
+Atom
+Qserve
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+1k 10k 100k
+Seq Len
+0.5
+1.0
+1.5
+2.0
+2.5
+Speed
+Up
+bs = 1, h_q = 32, h_k = 8, d = 128 (GQA)
+FlashDecoding-v2
+KIVI-4
+KIVI-2
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+0 20 40 60 80 100 120
+Batch Size
+1.0
+1.5
+2.0
+2.5
+len = 4k, h_q = 32, h_k = 8, d = 128 (GQA)
+FlashDecoding-v2
+KIVI-4
+KIVI-2
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+2 3 4 5 6 7 8
+Batch Size
+0.5
+1.0
+1.5
+2.0
+2.5
+3.0
+len = 2k, h_q = 32, h_k = 8, d = 128 (GQA)
+FlashDecoding-v2
+Qserve
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+bs = 1, h_q = 32, h_k = 32, d = 128 (MHA) len = 4k, h_q = 32, h_k = 32, d = 128 (MHA) len = 2k, h_q = 32, h_k = 32, d = 128 (MHA)
+Fig. 10: Kernel performance on RTX4090.
+instructions that significantly accelerate kernel execution. As
+illustrated in Fig. 9, FlashDecoding-v3, optimized for Hopper
+Tensor Cores, delivers notable performance gains over its
+v2 counterpart. While BitDecoding-v2 reaches up to 4.1×
+speedup, the v3 implementation further boosts performance
+to 8.0×. This is enabled by BitDecoding’s use of Hopper’s
+wgmma and asynchronous memory instructions, ensuring high
+Tensor Cores utilization even in mixed-precision settings.
+Results on Bandwidth-constrained GPU (RTX 4090).
+Leveraging low-precision data is critical for accelerating infer-
+ence on bandwidth-constrained GPUs. As shown in Fig. 10,
+BitDecoding achieves roughly 4× (4-bit) and over 7× (2-
+bit) speedups over FlashDecoding-v2 in Single and Batches
+settings, gains that stem directly from alleviating DRAM
+bottlenecks via low-bit KV caching.
+BitDecoding significantly outperforms baselines across all
+scenarios; unlike the non-fused KIVI, which relies on separate
+kernels and suffers severe degradation in GQA, BitDecod-
+ing’s fully fused design maintains high efficiency. In Page
+settings, it surpasses fused CUDA-core baselines: for MHA,
+BitDecoding achieves over 6× speedup compared to QServe’s
+3.5×. Crucially, in compute-intensive GQA, it maintains a
+3× speedup while QServe drops to 1.4×, confirming that
+leveraging Tensor Cores provides robust acceleration where
+CUDA-only approaches falter.
+Results on High-Bandwidth GPU (A100). On architec-
+tures with high memory bandwidth like the A100, compu-
+tation pressure becomes more pronounced, as performance
+bottlenecks shift from memory access to compute utiliza-
+tion—especially when kernel designs fail to fully exploit
+available compute resources. As shown in Fig. 11, both KIVI
+and QServe suffer from poor performance—KIVI due to its
+non-fused kernel design, and QServe due to underutilization of
+Tensor Cores—even performing worse than the FP16 baseline.
+In contrast, BitDecoding consistently outperforms all baselines
+across workloads, achieving up to 3× speedup, thanks to
+its efficient utilization of Tensor Cores and fused execution
+pipeline. An interesting observation is that the performance
+gap between 4-bit and 2-bit variants narrows on A100, as
+the increased DRAM bandwidth reduces memory bottlenecks
+and shifts the performance balance toward compute-bound
+execution.
+B. Performance across LLMs Inference Systems
+Model settings. We evaluate on a range of LLMs, including
+LLaMA-2-7B, LLaMA-3.1-8B, LLaMA-3.1-70B, Qwen3-8B,
+and Qwen3-14B. Among them, only LLaMA-2-7B adopts
+MHA, while the others use GQA. All models are run on a
+single A100 GPU, except LLaMA-3.1-70B, which is evaluated
+on 8×A100 GPUs.
+Quantization settings. We choose channel-wise quantiza-
+tion for LLMs KV cache as it brings better accuracy and aligns
+with the Kivi.
+Compared with Non-fused Attention. As illustrated in
+Fig. 12, in the Single setting, BitDecoding achieves up to 3.3×
+speedup at a 128K context length, where KV cache loading
+becomes the dominant bottleneck in LLMs inference. In con-
+trast, Kivi suffers from limited scalability and encounters out-
+of-memory (OOM) failures at 128K due to the lack of block-
+tiling kernel support. For the Batches setting, BitDecoding sig-
+nificantly outperforms KIVI in throughput: BitDecoding-KC-
+4 and KC-2 reach up to 900 and 1200 tokens/s, respectively,
+while KIVI-4 and KIVI-2 peak below 700 tokens/s.
+Compared with CUDA Cores-only fused Attention. We
+compare BitDecoding with Qserve for page-setting inference,
+as Qserve supports both MHA and GQA attention structures.
+The maximum throughput is evaluated under the largest batch
+sizes available within GPU memory. As illustrated in Fig. 13,
+Qserve achieves higher throughput than FlashDecoding-v2
+on LLaMA-2-7B but suffers from degraded performance on
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+1k 10k 100k
+Seq Len
+0.0
+1.0
+2.0
+Speed
+Up
+Single
+Flash-attn-v2
+KIVI-4
+KIVI-2
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+0 20 40 60 80 100 120
+Batch Size
+0.0
+1.0
+2.0
+3.0
+4.0
+Batches
+Flash-attn-v2
+KIVI-4
+KIVI-2
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+0 10 20 30 40 50 60
+Batch Size
+1.0
+2.0
+3.0
+Pages
+Flash-attn-v2
+Qserve
+BitDecoding-KT-4
+BitDecoding-KC-4
+BitDecoding-KC-2
+bs = 1, h_q = 128, h_k = 16, d = 128 (GQA) len = 32k, h_q = 128, h_k = 16, d = 128 (GQA)
+OOM
+len = 2k, h_q = 32, h_k = 8, d = 128 (GQA)
+Fig. 11: Kernel performance on A100.
+32K 64K 128K
+Sequence Length
+1.0
+1.5
+2.0
+2.5
+3.0
+Latency
+Speedup
+OOM
+Single
+Kivi-4
+Kivi-2
+BitDecoding-KC-4
+BitDecoding-KC-2
+10 20 30 40 50
+Batch Size
+0
+250
+500
+750
+1000
+1250
+Throughput
+(Token/s)
+Batches (seq len = 4k)
+FlashDecoding-v2
+BitDecoding-KC-4
+BitDecoding-KC-2
+Kivi-4
+Kivi-2
+Comparison with Non-fused Attention (LLaMA-3.1-8B)
+Fig. 12: Comparing Kivi with (a) end-to-end generation time
+and (b) decoding throughput.
+llama-2-7B llama-3.1-8B llama-3.1-70B Qwen3-8B Qwen3-14B
+Models
+0
+20
+40
+60
+80
+100
+120
+140
+Throughput
+(Token/s)
+13.92
+48.50
+11.12
+51.14
+43.95
+59.71
+32.81
+8.05
+45.19
+32.74
+130.00
+147.21
+28.23
+128.39
+99.52
+Pages (seq len = 32k)
+FlashDecoding-v2
+Qserve
+Bitdecoding
+Fig. 13: Comparing Qserve with decoding throughput.
+all other models due to inefficiencies in handling GQA. In
+contrast, BitDecoding consistently outperforms QServe across
+both LLaMA and Qwen architectures, under both single-
+GPU and multi-GPU settings, achieving more than 2× higher
+maximum throughput compared to QServe.
+C. Accuracy, Overhead and Performance Breakdown
+Accuracy analysis. As shown in Table I, we evaluate
+throughput and accuracy across different bit widths. The 2-
+bit quantization reduces memory consumption significantly,
+enabling larger batch sizes and achieving a 4.25× higher
+throughput compared to FP16. Meanwhile, the 4-bit quanti-
+zation achieves a 2.98× speedup while maintaining near full-
+precision accuracy with only a minimal 0.2% degradation.
+These results highlight the trade-off, with 4-bit quantization
+offering balance and 2-bit maximizing throughput at a slight
+accuracy cost.
+Half-precision Residual Kernel Overhead. Half-precision
+residual KV Cache would introduce quite a small portion
+TABLE I: Efficiency and accuracy tradeoff with low-bit KV
+cache. We use Llama-3.1-8B-Instruct with seq len = 32K,
+and evaluate average accuracy on longbench [3].
+KV Cache Throughput Longbench Acc
+FP16 49.25 48.25
+INT4 147.21 (+2.98x) 48.16 (-0.2%)
+INT2 209.48 (+4.25x) 47.38 (-2.7%)
+TABLE II: Latency (ms) comparison of quantization and
+packing during inference.
+Inference Phase Marlin Ladder BitDecoding
+Prefill 58.02 4.79 0.0599
+Decode 0.41 0.65 0.008
+TABLE III: Impact of cooperative softmax and warps on
+performance and validity.
+Wn Coop. Soft Latency (ms) TCs Utilization (%) Valid
+1 ✕ 3.746 10.91 ✓
+4 ✕ 0.610 19.71 ✕
+4 ✓ 0.613 19.66 ✓
+memory overhead as seq len >> Nr, while seq len would
+be more than 32K and Nr is always less than 256. The
+half-precision residual KV cache introduces only a slight
+runtime overhead due to an extra kernel launch, as shown
+in Fig. 14. Moreover, this overhead becomes increasingly
+negligible as the sequence length grows, since the residual
+portion constitutes a smaller fraction of the total KV cache.
+Quantization and Packing Overhead. We evaluate the
+latency of quantization and packing under a sequence length of
+seq len = 128K, comparing BitDecoding with Marlin [9] and
+Ladder [33]. As shown in Table II, the pre-transformation and
+packing step in previous mixed-precision computing methods
+introduce significant overhead, which cannot be ignored. Our
+kernel incurs minimal overhead after the Prefill phase, primar-
+ily due to kernel launch overhead. Moreover, during decoding,
+we achieves nearly negligible overhead, as it is fully fused into
+kernel computation.
+Dequantization Overhead. Fig. 15a illustrates the high
+computational overhead of dequantization in Atom and
+QServe, consuming nearly half the kernel execution time. In
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+4K 16K 32K 64K 128K
+Sequence Length
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+1.2
+1.4
+Latency
+(ms)
+0.087
+0.0410.057
+0.220
+0.0940.112
+0.400
+0.1620.180
+0.764
+0.2910.309
+1.487
+0.5550.572
+FP16 FlashDecoding-v2
+INT4 W/O Residual
+INT4 W/ Residual
+Fig. 14: Runtime overhead of the residual KV cache.
+Atom Qserve B-KT-4 B-KC-4 B-KC-2
+0.0
+0.2
+0.4
+0.6
+0.8
+Latency
+(ms)
+Dequant Overhead
+(a) Dequantization Overhead
+Mem. T. Tensor Core FMA ALU
+0
+20
+40
+60
+80
+Percentage
+(%)
+72.24
+0.0
+19.0
+32.5
+88.31
+24.0
+13.0 12.5
+Atom
+BitDecoding
+(b) Micro Analysis
+Fig. 15: Dequantization overhead analysis.
+contrast, BitDecoding significantly reduces this overhead to
+less than 15% (4-bit) and 35% (2-bit), thanks to better Tensor
+Cores overlap.
+A further microbenchmark comparing Atom and BitDe-
+coding (Fig. 15b) reveals BitDecoding’s superior memory
+throughput from effective Tensor Core usage. Conversely,
+Atom relies heavily on CUDA cores, increasing pressure on
+FMA and ALU operations.
+Multi-warps Cooperative Softmax Overhead. Table III
+shows that increasing Wn improves Tensor Cores utilization
+and reduces latency, but breaks correctness without coopera-
+tive softmax. Enabling cooperative softmax restores correct-
+ness with only 0.5% overhead. Although it introduces shared
+memory access, the overhead is minimal since low-bit data
+reduces memory bandwidth pressure and shifts the kernel from
+memory-bound to compute-bound.
+BreakDown Analysis. To further analyze the performance
+gains of BitDecoding, we decompose our optimizations in
+Fig. 16. Following [2], we use a continuous-packing baseline
+that quantizes and packs the KV cache at every generation
+step, which introduces substantial overhead and requires man-
+ual effort to maintain valid layouts. In contrast, our layout
+design automatically induces Tensor Core–compatible layouts
+for arbitrary low-bit formats, fully unlocking the compute
+potential of Tensor Cores. On top of this, the warp-parallelism
+strategy contributes significant additional speedups, while
+the pipeline optimizations further enhance end-to-end perfor-
+mance.
+VII. RELATED WORKS
+a) KV Cache Quantization Algorithms: KV cache quan-
+tization reduces memory usage in LLMs with long contexts
+A100 H100 5090
+Architecture
+0
+2
+4
+6
+8
+10
+Speed
+Up
+Baseline (Continuous Packing)
+Layout
+Layout + Warps
+Layout + Warps + Pipeline
+Fig. 16: Breakdown of BitDecoding optimizations across ar-
+chitectural generations.
+while maintaining performance. Recent works explore 4-bit,
+2-bit, and even 1-bit KV cache quantization, aiming to push
+the limits of compression. Methods like KIVI [18], Gear [13],
+and KVQuant [12] use per-channel quantization to handle key-
+value outliers, while RotateKV [27] applies rotation to smooth
+channel-wise distributions. Although effective at higher com-
+pression ratios, these methods lack efficient system implemen-
+tations, leading to suboptimal performance.
+b) Mixed-precision Matrix Multiplication: Low-bit
+weight and low-bit KV cache in LLMs create a unique
+requirement for mixed-precision matrix multiplication
+(mpGEMM), where one input matrix is in lower precision
+(e.g., INT4/2/1) while the other matrix remains in
+higher precision (e.g., FP16/8). Optimized kernels like
+Ladder [33] and Marlin [9] improve performance via layout
+transformations and efficient dequantization. However, these
+methods require pre-packing and pre-transforming weights,
+limiting applicability to low-bit KV cache in autoregressive
+decoding.
+c) System Implementation for Low-bit KV Cache:
+KIVI [31] uses Triton with separate kernels for low-bit
+KV Cache implementation. Atom [37] integrates quantization
+within the preceding linear layer, while QServe [16] fuses
+quantization directly into FlashAttention kernels. However,
+they both rely on GEMV operations with fused multiply–add
+(FMA) instructions, missing Tensor Core acceleration.
+VIII. CONCLUSION
+In this paper, we introduce BitDecoding, a GPU-optimized
+computing framework supporting low-bit KV cache decoding
+with Tensor Cores. We effectively resolve the layout mis-
+matches imposed by rigid hardware patterns and propose fine-
+grained optimizations to maximize computational utilization.
+Extensive evaluations demonstrate that BitDecoding achieves
+speedups of up to 8.6× on Blackwell, 8.9× on Hopper,
+7.5× on Ada, and 4.8× on Ampere architectures compared
+to FP16 FlashDecoding-v2. Furthermore, on LLaMA-3.1-8B
+with a 128K sequence length, BitDecoding reduces single-
+batch decoding latency by 3× and improves serving through-
+put by 4× over state-of-the-art methods. By providing a
+high-performance system foundation, BitDecoding opens new
+avenues for algorithm-system co-design—paving the way for
+efficient, near-lossless test-time scaling in next-generation
+long-context models.
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+REFERENCES
+[1] J. Ainslie, J. Lee-Thorp, M. De Jong, Y. Zemlyanskiy, F. Lebrón, and
+S. Sanghai, “Gqa: Training generalized multi-query transformer models
+from multi-head checkpoints,” arXiv preprint arXiv:2305.13245, 2023.
+[2] S. Ashkboos, A. Mohtashami, M. L. Croci, B. Li, P. Cameron, M. Jaggi,
+D. Alistarh, T. Hoefler, and J. Hensman, “Quarot: Outlier-free 4-bit
+inference in rotated llms,” Advances in Neural Information Processing
+Systems, vol. 37, pp. 100 213–100 240, 2024.
+[3] Y. Bai, X. Lv, J. Zhang, H. Lyu, J. Tang, Z. Huang, Z. Du, X. Liu,
+A. Zeng, L. Hou, Y. Dong, J. Tang, and J. Li, “LongBench: A bilingual,
+multitask benchmark for long context understanding,” in Proceedings
+of the 62nd Annual Meeting of the Association for Computational
+Linguistics (Volume 1: Long Papers). Bangkok, Thailand: Association
+for Computational Linguistics, Aug. 2024, pp. 3119–3137. [Online].
+Available: https://aclanthology.org/2024.acl-long.172
+[4] Y. Chang, K. Lo, T. Goyal, and M. Iyyer, “Booookscore: A systematic
+exploration of book-length summarization in the era of llms,” arXiv
+preprint arXiv:2310.00785, 2023.
+[5] N. Corporation, “Cutlass: Cuda templates for linear algebra subroutines
+and solvers,” 2024, 3.6). [Online]. Available: https://github.com/
+NVIDIA/cutlass
+[6] T. Dao, “FlashAttention-2: Faster attention with better parallelism and
+work partitioning,” in International Conference on Learning Represen-
+tations (ICLR), 2024.
+[7] Y. Ding, L. L. Zhang, C. Zhang, Y. Xu, N. Shang, J. Xu, F. Yang, and
+M. Yang, “Longrope: Extending llm context window beyond 2 million
+tokens,” arXiv preprint arXiv:2402.13753, 2024.
+[8] G. Fan, M. Zhang, F. Zheng, S. Fan, T. Zhou, X. Deng, W. Tang,
+L. Kong, Y. Song, and S. Yan, “Warpdrive: Gpu-based fully homo-
+morphic encryption acceleration leveraging tensor and cuda cores,” in
+2025 IEEE International Symposium on High Performance Computer
+Architecture (HPCA). IEEE, 2025, pp. 1187–1200.
+[9] E. Frantar, R. L. Castro, J. Chen, T. Hoefler, and D. Alistarh, “Marlin:
+Mixed-precision auto-regressive parallel inference on large language
+models,” arXiv preprint arXiv:2408.11743, 2024.
+[10] A. Grattafiori, A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-Dahle,
+A. Letman, A. Mathur, A. Schelten, A. Vaughan et al., “The llama 3
+herd of models,” arXiv preprint arXiv:2407.21783, 2024.
+[11] D. Guo, D. Yang, H. Zhang, J. Song, R. Zhang, R. Xu, Q. Zhu, S. Ma,
+P. Wang, X. Bi et al., “Deepseek-r1: Incentivizing reasoning capability
+in llms via reinforcement learning,” arXiv preprint arXiv:2501.12948,
+2025.
+[12] C. Hooper, S. Kim, H. Mohammadzadeh, M. W. Mahoney, Y. S.
+Shao, K. Keutzer, and A. Gholami, “Kvquant: Towards 10 million
+context length llm inference with kv cache quantization,” arXiv preprint
+arXiv:2401.18079, 2024.
+[13] H. Kang, Q. Zhang, S. Kundu, G. Jeong, Z. Liu, T. Krishna, and
+T. Zhao, “Gear: An efficient kv cache compression recipefor near-
+lossless generative inference of llm,” arXiv preprint arXiv:2403.05527,
+2024.
+[14] Y. J. Kim, R. Henry, R. Fahim, and H. H. Awadalla, “Who says elephants
+can’t run: Bringing large scale moe models into cloud scale production,”
+arXiv preprint arXiv:2211.10017, 2022.
+[15] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. E.
+Gonzalez, H. Zhang, and I. Stoica, “Efficient memory management
+for large language model serving with pagedattention,” in Proceedings
+of the 29th ACM Symposium on Operating Systems Principles, 2023.
+[Online]. Available: https://dl.acm.org/doi/10.1145/3600006.3613165
+[16] Y. Lin, H. Tang, S. Yang, Z. Zhang, G. Xiao, C. Gan, and S. Han,
+“Qserve: W4a8kv4 quantization and system co-design for efficient llm
+serving,” arXiv preprint arXiv:2405.04532, 2024.
+[17] A. Liu, B. Feng, B. Xue, B. Wang, B. Wu, C. Lu, C. Zhao, C. Deng,
+C. Zhang, C. Ruan et al., “Deepseek-v3 technical report,” arXiv preprint
+arXiv:2412.19437, 2024.
+[18] Z. Liu, J. Yuan, H. Jin, S. Zhong, Z. Xu, V. Braverman, B. Chen, and
+X. Hu, “Kivi: A tuning-free asymmetric 2bit quantization for kv cache,”
+arXiv preprint arXiv:2402.02750, 2024.
+[19] W. Luo, R. Fan, Z. Li, D. Du, Q. Wang, and X. Chu, “Benchmarking
+and dissecting the nvidia hopper gpu architecture,” arXiv preprint
+arXiv:2402.13499, 2024.
+[20] NVIDIA and OpenAI, “OpenAI Triton on NVIDIA
+Blackwell Boosts AI Performance and Programmability,”
+https://developer.nvidia.com/blog/openai-triton-on-nvidia-blackwell-
+boosts-ai-performance-and-programmability/, 2025, accessed: 2025-
+12-01.
+[21] NVIDIA Corporation, “Nsight Compute - Get Started,” 2025, accessed:
+2025-03-11. [Online]. Available: https://developer.nvidia.com/tools-
+overview/nsight-compute/get-started
+[22] OpenAI, “Openai o3-mini,” 2025, accessed: 2025-02-14. [Online].
+Available: https://openai.com/index/openai-o3-mini/
+[23] B. Peng, J. Quesnelle, H. Fan, and E. Shippole, “Yarn: Efficient
+context window extension of large language models,” arXiv preprint
+arXiv:2309.00071, 2023.
+[24] S. Sandokji, F. Essa, and M. Fadel, “A survey of techniques for warp
+scheduling in gpus,” in 2015 IEEE Seventh International Conference on
+Intelligent Computing and Information Systems (ICICIS). IEEE, 2015,
+pp. 600–606.
+[25] J. Shah, G. Bikshandi, Y. Zhang, V. Thakkar, P. Ramani, and T. Dao,
+“Flashattention-3: Fast and accurate attention with asynchrony and low-
+precision,” Advances in Neural Information Processing Systems, vol. 37,
+pp. 68 658–68 685, 2024.
+[26] N. Shazeer, “Fast transformer decoding: One write-head is all you need,”
+arXiv preprint arXiv:1911.02150, 2019.
+[27] Z. Su, Z. Chen, W. Shen, H. Wei, L. Li, H. Yu, and K. Yuan, “Rotatekv:
+Accurate and robust 2-bit kv cache quantization for llms via outlier-
+aware adaptive rotations,” arXiv preprint arXiv:2501.16383, 2025.
+[28] L. Sun, J. Jiang, C. Deng, X. Wu, H. Zhang, L. Chen, L. Ni, and J. Wang,
+“Gta: Grouped-head latent attention,” arXiv preprint arXiv:2506.17286,
+2025.
+[29] Q. Tao, W. Yu, and J. Zhou, “Asymkv: Enabling 1-bit quantization of
+kv cache with layer-wise asymmetric quantization configurations,” arXiv
+preprint arXiv:2410.13212, 2024.
+[30] G. Team, P. Georgiev, V. I. Lei, R. Burnell, L. Bai, A. Gulati, G. Tanzer,
+D. Vincent, Z. Pan, S. Wang et al., “Gemini 1.5: Unlocking multimodal
+understanding across millions of tokens of context,” arXiv preprint
+arXiv:2403.05530, 2024.
+[31] P. Tillet, H.-T. Kung, and D. Cox, “Triton: an intermediate language and
+compiler for tiled neural network computations,” in Proceedings of the
+3rd ACM SIGPLAN International Workshop on Machine Learning and
+Programming Languages, 2019, pp. 10–19.
+[32] L. Wang, Y. Cheng, Y. Shi, Z. Tang, Z. Mo, W. Xie, L. Ma, Y. Xia,
+J. Xue, F. Yang et al., “Tilelang: A composable tiled programming model
+for ai systems,” arXiv preprint arXiv:2504.17577, 2025.
+[33] L. Wang, L. Ma, S. Cao, Q. Zhang, J. Xue, Y. Shi, N. Zheng, Z. Miao,
+F. Yang, T. Cao et al., “Ladder: Enabling efficient {Low-Precision} deep
+learning computing through hardware-aware tensor transformation,” in
+18th USENIX Symposium on Operating Systems Design and Implemen-
+tation (OSDI 24), 2024, pp. 307–323.
+[34] A. Yang, A. Li, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Gao,
+C. Huang, C. Lv et al., “Qwen3 technical report,” arXiv preprint
+arXiv:2505.09388, 2025.
+[35] X. Yang, W. Wu, S. Feng, M. Wang, D. Wang, Y. Li, Q. Sun,
+Y. Zhang, X. Fu, and S. Poria, “Mm-bigbench: Evaluating multimodal
+models on multimodal content comprehension tasks,” arXiv preprint
+arXiv:2310.09036, 2023.
+[36] T. Zhang, J. Yi, Z. Xu, and A. Shrivastava, “Kv cache is 1 bit per
+channel: Efficient large language model inference with coupled quan-
+tization,” Advances in Neural Information Processing Systems, vol. 37,
+pp. 3304–3331, 2024.
+[37] Y. Zhao, C.-Y. Lin, K. Zhu, Z. Ye, L. Chen, S. Zheng, L. Ceze,
+A. Krishnamurthy, T. Chen, and B. Kasikci, “Atom: Low-bit quantization
+for efficient and accurate llm serving,” Proceedings of Machine Learning
+and Systems, vol. 6, pp. 196–209, 2024.
+Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:29:20 UTC from IEEE Xplore. Restrictions apply.
+

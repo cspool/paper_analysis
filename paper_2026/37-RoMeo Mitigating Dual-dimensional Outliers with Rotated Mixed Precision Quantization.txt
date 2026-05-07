@@ -1,0 +1,1132 @@
+   RoMeo: Mitigating Dual-dimensional Outliers with
+       Rotated Mixed Precision Quantization
+                Qihao Zhang                                   MingLiang Tang                                    Mingshu Zhai
+            Tsinghua University                             Tsinghua University                            Tsinghua University
+               Beijing, China                                  Beijing, China                                 Beijing, China
+        zqh23@mails.tsinghua.edu.cn                     tml23@mails.tsinghua.edu.cn                   zhaims22@mails.tsinghua.edu.cn
+
+                                         Kinman Lei                                        Jidong Zhai
+                                     Tsinghua University                                Tsinghua University
+                                        Beijing, China                                     Beijing, China
+                               jw-li22@mails.tsinghua.edu.cn                        zhaijidong@tsinghua.edu.cn
+
+Abstract                                                                        with Rotated Mixed Precision Quantization. In Proceedings of the
+Mixed precision quantization has been adopted to acceler-                       31st ACM SIGPLAN Annual Symposium on Principles and Prac-
+                                                                                tice of Parallel Programming (PPoPP ’26), January 31 – February
+ate large language models (LLMs) serving by leveraging
+                                                                                4, 2026, Sydney, NSW, Australia. ACM, New York, NY, USA, 15 pages.
+high-throughput low-precision compute units in GPUs while                       https://doi.org/10.1145/3774934.3786419
+preserving outliers in higher precision to maintain model
+accuracy. However, existing methods focus on mitigating
+single-dimensional channel-wise outliers, leading to model                      1    Introduction
+accuracy degradation when scaled to 4-bit precision.
+   In this paper, we present an algorithm-system co-design                      With the rapid evolution of large language models (LLMs),
+to effectively handle dual-dimensional outliers across both                     the latest models now comprise tens to hundreds of billions
+channel and token dimensions in LLMs. We introduce a novel                      of parameters [5, 9, 12, 44], placing severe pressure on GPU
+rotation-based mixed precision quantization algorithm that                      memory capacity and serving efficiency.
+suppresses and migrates channel-wise outliers to the token                         Quantization [15, 16, 45, 50] has emerged as a promis-
+dimension. Based on this algorithm, we propose RoMeo,                           ing solution for serving these huge models. By compress-
+an efficient LLM serving system designed to overcome the                        ing tensor representations from high-precision formats (e.g.,
+unique system challenges posed by sparse computation pat-                       FP16/BF16) to lower-precision types (e.g., INT8/INT4), it re-
+tern and dynamic outlier detection inherent in token-wise                       duces memory footprint and enables the use of low-precision
+outlier handling. Extensive evaluations across various LLMs                     Tensor Core instructions, which offer substantially higher
+demonstrate that RoMeo improves quantized model accu-                           computational throughput on modern GPUs [3, 24, 42].
+racy by up to 5.17% compared to state-of-the-art methods                           To enable low bit-width quantization while preserving
+QuaRot and MixQ, while maintaining efficiency comparable                        model accuracy, recent works have prioritized computation
+to uniform precision quantizations, achieving up to 2.10×                       for outliers through mixed precision quantization [7, 10,
+end-to-end speedup over half-precision baseline. RoMeo is                       11, 25, 48]. These methods leverage the activation sparsity
+available at https://github.com/thu-pacman/RoMeo.                               property that widely observed in LLMs [2, 33], where a small
+                                                                                fraction of outlier values significantly exceed others in ac-
+CCS Concepts: • Computing methodologies → Parallel                              tivation. By adaptively allocating higher precision to these
+computing methodologies; Natural language processing.                           error-sensitive regions while maintaining lower precision
+                                                                                for majority values, mixed precision quantization achieves
+Keywords: Large Language Model, Mixed Precision Quanti-
+                                                                                improved accuracy without pronounced runtime overhead.
+zation, Algorithm-System Co-design
+                                                                                   Reducing quantization bit-widths from 8-bit to 4-bit halves
+ACM Reference Format:                                                           memory consumption and doubles computational efficiency
+Qihao Zhang, MingLiang Tang, Mingshu Zhai, Kinman Lei, and Ji-                  for model serving on modern GPUs. Although effective at
+dong Zhai. 2026. RoMeo: Mitigating Dual-dimensional Outliers
+                                                                                8-bit precision, existing mixed precision quantization meth-
+                                                                                ods fail to preserve satisfactory accuracy under 4-bit preci-
+                                                                                sion due to their incomplete characterization of outliers.
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         While current methods operate along the channel dimen-
+tional License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                sion to mitigate outliers in specific embedding positions,
+© 2026 Copyright held by the owner/author(s).                                   our empirical analysis reveals that substantial outliers still
+ACM ISBN 979-8-4007-2310-0/2026/01                                              persist after channel-wise outliers removal. These remain-
+https://doi.org/10.1145/3774934.3786419                                         ing outliers do not exhibit channel-wise concentration but
+
+
+
+                                                                          273
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia     Qihao Zhang, MingLiang Tang, Mingshu Zhai, Kinman Lei, and Jidong Zhai
+
+
+are distributed in a token-wise manner. They cannot be ad-               system further employs fine-grained asynchronous execu-
+equately represented within 4-bit data types, resulting in               tion to parallelize non-dependent tasks in the quantization
+significant quantization error in current channel-wise mixed             workflow, effectively hiding quantization operations and
+precision quantization methods.                                          improving hardware utilization. Additionally, RoMeo im-
+   In this paper, we propose Rotated Token-wise Mixed Pre-               plements highly optimized cross-precision multiplication
+cision Quantization (RTMPQ) to address outliers in both                  kernels with software pipelining, alongside efficient fused
+channel and token dimensions, thereby improving model ac-                kernels for online outlier detection and data packing.
+curacy. Instead of directly applying mixed precision quantiza-              RoMeo is evaluated for both accuracy and efficiency across
+tion to channel dimension, RTMPQ first employs Hadamard                  a wide range of LLMs, compared against the uniform preci-
+rotation to suppress channel-wise outliers. The rotation                 sion quantization baseline QuaRot [3] and the channel-wise
+smooths irregularities across channels and migrates them to              mixed precision quantization baseline MixQ [7]. Experimen-
+the token dimension, where they are subsequently resolved                tal results demonstrate that RoMeo achieves higher accuracy
+through token-wise mixed precision quantization.                         than QuaRot at low outlier ratios, outperforms MixQ under
+   However, efficiently implementing RTMPQ presents great                equivalent outlier constraints, and maintains computational
+system challenges, as RTMPQ employs mixed precision quan-                efficiency comparable to QuaRot.
+tization to address token-wise outliers rather than channel-                Our main contributions can be summarized as follows:
+wise ones. Two unique characteristics of token-wise outliers
+hinder the direct application of existing channel-wise mixed                   • We conduct an empirical analysis identifying dual-
+precision quantization techniques:                                               dimensional outliers as the fundamental bottleneck in
+(1) Non-reduction Dimension Computation. Existing                                existing mixed precision quantization methods.
+mixed precision methods depend on the mathematical prop-                       • We propose a novel quantization algorithm that ad-
+erty to decompose matrix multiplication along the reduc-                         dresses outliers in both channel and token dimen-
+tion dimension, where channel-wise outliers reside. This                         sions through rotation-based smoothing and token-
+property allows computations at different precisions to be                       wise mixed precision computation.
+densified and executed separately. In contrast, token-wise                     • We design an efficient permutation-free approach to
+outliers correspond to the non-reduction dimension in ma-                        handle token-wise outlier computation, combining
+trix multiplication and cannot benefit from this optimiza-                       specialized kernel implementation and asynchronous
+tion. Consequently, token-wise mixed precision computation                       concurrent execution for optimal performance.
+must occur in a sparse pattern, introducing challenges for                     • Comprehensive evaluation demonstrates that our sys-
+efficient task mapping on GPUs and creating fundamental                          tem achieves superior model accuracy preservation
+incompatibilities with Tensor Core instruction requirements.                     while delivering competitive speedup compared to
+(2) Unpredictable Outlier Distribution. Current mixed                            state-of-the-art baselines.
+precision methods rely on static offline activation analysis to
+detect channel-wise outliers, which exhibit relatively stable
+patterns [7, 43]. In contrast, token-wise outliers lack such
+                                                                         2     Background
+statistical regularity and follow a significantly more unpre-
+dictable distribution. This unpredictability stems from the              2.1    Quantized Large Language Models
+fact that token-wise outliers arise from specific linguistic             Model quantization reduces the precision of tensor repre-
+features of words or phrases within the input natural lan-               sentations from high-precision formats (e.g., FP32, FP16) to
+guage sentences, making their occurrence difficult to forecast.          low-precision formats (e.g., INT8, INT4), thereby decreas-
+Consequently, identifying these outliers requires dynamic                ing memory requirements and accelerating computation
+online detection mechanisms, which could introduce non-                  through specialized low-precision hardware units [3, 24, 43].
+negligible runtime overhead.                                             This paper focuses on joint weight-activation quantization
+   To address these challenges, we propose RoMeo, a LLM                  for large language models, which applies quantization to
+serving system for efficient token-wise mixed precision quan-            both weights and activations and is widely adopted in data
+tization execution, enabling accurate and performant 4-bit               center model serving deployments [9].
+quantization via our RTMPQ algorithm. The core idea is to                  Quantized model inference introduces two additional pro-
+reorganize dynamic token-wise outliers to facilitate                     cesses: an online quantization process that compresses input
+efficient parallel execution with minimal overhead.                      activation to lower precision, and a dequantization process
+RoMeo tackles the sparse memory layout of quantized mixed                restores multiplication result to the original precision.
+precision data through a lightweight permutation-free ap-                  The quantization process typically computes the maxi-
+proach that restructures data into contiguous and unified                mum absolute value of the input activation and scales it to fit
+precision blocks, enabling dense matrix computation. The                 the target precision value range. Formally, given input acti-
+                                                                         vation tensor 𝑋 and target integer bit-width 𝑏, the quantized
+
+
+
+                                                                   274
+RoMeo: Mitigating Dual-dimensional Outliers with Rotated Mixed Precision ...                      PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+           An
+                    Channel Dim.
+                                         INT4           INT4         Activation            varied, forming two primary types: tensor-wise and channel-
+                                       Activation
+  Token apple
+   Dim.     a
+                                                        Weight
+                                                                                           wise mixed precision quantization.
+          day
+                                                    ×                                         Tensor-wise approaches [11, 39], shown in Figure 1b, em-
+                Activation Tensor                                     Linear
+                                                                                           ploy coarse-grained mixed precision by assigning different
+   (a) Activation Dimensions
+                                                                                           precisions to distinct model modules. While computations in
+                                         INT8
+      INT4 + FP16
+       Activation
+                        INT4 + FP16
+                          Weight
+                                       Activation
+                                                        INT8
+                                                        Weight
+                                                                      Linear               different modules are performed at varying precisions, the
+                                                                                           precision within each individual tensor remains uniform.
+                                                    ×
+                    ×                                                                         Channel-wise methods [7, 10, 25, 48], depicted in Figure 1c,
+                                                                      Output
+                                                                                           provide finer granularity by operating on individual channels
+(c) Channel-wise Mixed Precision        (b) Tensor-wise Mixed Precision
+                                                                                           within tensors. For example, MixQ [7] identifies outlier chan-
+                                                                                           nels through per-channel maximum value measurements,
+Figure 1. The two dimensions of activation tensor and ex-
+                                                                                           quantizing normal channel values to INT8 while preserving
+isting mixed precision quantization methods.
+                                                                                           outlier channels in FP16 to better maintain model accuracy.
+                                                                                           Although channel-wise methods effectively address signifi-
+                                                                                           cant outliers concentrated in specific channels, outliers dis-
+activation 𝑋𝑄 is computed as:
+                                                                                           tributed along the token dimension persist. These remaining
+                        max(|𝑋 |)                                                          token-wise outliers continue to degrade quantization effec-
+                                                                
+                                                   𝑋
+                    𝑆𝑋 = 𝑏 −1     ,     𝑋𝑄 = 𝑟𝑜𝑢𝑛𝑑                             (1)         tiveness, particularly under aggressive 4-bit quantization
+                         2    −1                   𝑆𝑋
+                                                                                           schemes.
+where 𝑆𝑋 is a half-precision scaling factor and 𝑟𝑜𝑢𝑛𝑑 [·] de-
+notes rounding to nearest integer.
+   The quantized activation then undergoes matrix multi-                                   3     Algorithm: Rotated Token-wise Mixed
+plication with offline-quantized weight. The result 𝑋𝑄𝑊𝑄                                         Precision Quantization
+is subsequently cast back to half-precision and dequantized
+                                                                                           To better maintain model performance under 4-bit precision,
+with scaling factors:
+                                                                                           we propose Rotated Token-wise Mixed Precision Quantiza-
+                             𝑌 = 𝑆𝑋 × (𝑋𝑄𝑊𝑄 ) × 𝑆𝑊                             (2)         tion (RTMPQ), a novel method addressing dual-dimensional
+                                                                                           outliers in LLMs. In this section, we first introduce an em-
+  In practice, quantizations are typically conducted at finer                              pirical analysis of activation distribution that identifies why
+granularity (e.g., per-row for activations and per-column for                              existing channel-wise quantization methods underperform.
+weights) to better preserve quantized model accuracy. This                                 Then we detail RTMPQ algorithm, which effectively handles
+approach transforms scaling factors into vectors rather than                               the dual-dimensional outliers through rotation and token-
+scalars, requiring broadcasted element-wise multiplication                                 wise mixed precision computation.
+during the dequantization process.
+
+2.2     Mixed Precision Quantization                                                       3.1   Analysis of Outliers in LLMs
+Prior works have established that activations in LLMs typi-                                We visualize the activation distribution recorded from the
+cally exhibit long-tailed distributions, wherein a small num-                              down projection linear module in Qwen3-8B [44] model’s
+ber of outlier values substantially exceed the magnitude of                                final layer in Figure 2. As shown in Figure 2a, the activation
+the majority [2, 33]. Mixed precision quantization leverages                               distribution exhibits a sparse pattern wherein a small number
+this inherent property to strategically assign higher precision                            of extreme values dominate the magnitude scale. These out-
+formats to critical computational portions while employing                                 liers introduce substantial quantization error by distorting
+lower precision elsewhere. Consequently, these methods                                     the quantization range and inefficiently utilizing the limited
+achieve superior model accuracy preservation compared to                                   bit representation. Consistent with prior works [7, 10, 25],
+uniform precision quantization.                                                            we observe these outliers concentrate in specific channels,
+   Before introducing existing mixed precision quantization                                termed channel-wise outliers (CO).
+algorithms, we first clarify the two dimensions of the ac-                                    Existing channel-wise mixed precision methods leverage
+tivation tensor. Input prompts in LLMs are embedded into                                   this property by separating outlier channels from normal
+activation tensors and propagated through the model. As                                    channels for higher precision computations. After we iden-
+illustrated in Figure 1a, each input token corresponds to a                                tify and prune the top 256 outlier channels by maximum
+row within the activation tensor, representing its embedding                               activation values, the maximum value drops from 1272 to
+vector. The channel dimension refers to different positions                                110 (Figure 2b), enabling effective 8-bit quantization.
+along the hidden dimension of these embeddings.                                               However, when scaled to 4-bit quantization, the remaining
+   Existing mixed precision quantization methods can be                                    values still exhibit outliers that unable to be effectively rep-
+categorized based on the dimension along which precision is                                resented within the constrained 4-bit precision, resulting in
+
+
+
+                                                                                     275
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                              Qihao Zhang, MingLiang Tang, Mingshu Zhai, Kinman Lei, and Jidong Zhai
+
+
+                                                                                                                                   Algorithm 1: Token-wise Mixed Precision Module
+                                                        1200                                                       100
+                                                                                                                                    Input: 𝐴: FP16 activation tensor of shape (𝑀, 𝐾).
+                                                        1000
+                                                        800
+                                                                                                                       80                  𝑊 : FP16 weight tensor of shape (𝐾, 𝑁 ).
+                                                        600
+                                                                                                                   40
+                                                                                                                       60
+                                                                                                                                    Output: 𝐶: FP16 output tensor of shape (𝑀, 𝑁 ).
+                                                        400
+
+    0                                                   200       0
+                                                                                                                   20             1 Function Quant(𝑋 , 𝑛𝑏𝑖𝑡𝑠)
+                                                                                                                                       𝑟𝑎𝑛𝑔𝑒_𝑚𝑎𝑥 ← 2𝑛𝑏𝑖𝑡𝑠 − 1 ;
+     2048                                                   0      2048                                                0
+   To 4096                                                       To 4096
+     ke
+        n 6144
+                                                    12288          ke
+                                                                      n 6144
+                                                                                                               12288              2
+         In                              8192                          In                           8192
+
+                                                                                                                                       𝑠𝑐𝑎𝑙𝑒 ← max(|𝑋 |) / 𝑟𝑎𝑛𝑔𝑒_𝑚𝑎𝑥 ;
+            de 8192                                                      de 8192
+              x               4096            dex                          x              4096           dex                      3
+                 10240   0         nn   el In                                 10240   0         nn el In
+                                Cha                                                         Cha
+
+                                                                                                                                  4    𝑋𝑄 ← INT(𝑋 /𝑠𝑐𝑎𝑙𝑒) ;
+                    (a) Original                                              (b) CO Pruned
+                                                                                                                                  5    return 𝑋𝑄 , 𝑠𝑐𝑎𝑙𝑒 ;
+                                                                                                                                  6  Function Forward(𝐴, 𝑊 )
+                                                            50
+                                                                                                                       17
+                                                                                                                       15
+                                                                                                                                  7     𝐶 ← Empty(𝑀, 𝑁 , FP16) ;
+                                                            40
+
+                                                            30
+                                                                                                                       12
+                                                                                                                       10
+                                                                                                                                   8    for 𝑖 ← 0 to 𝑀 do
+                                                        20
+                                                                                                                       7
+                                                                                                                       5
+                                                                                                                                   9        for 𝑗 ← 0 to 𝑁 do
+    0
+     2048
+   To 4096
+                                                        10
+                                                            0
+                                                                  0
+                                                                   2048
+                                                                 To 4096
+                                                                                                                       2
+                                                                                                                       0
+                                                                                                                                  10           𝑉𝐴 , 𝑠𝐴 ← Quant (𝐴[𝑖, :], 𝑖 ∈ O𝐴 ? 8 : 4) ;
+                                                                                                                                               𝑉𝑊 , 𝑠𝑊 ← Quant (𝑊 [:, 𝑗], 𝑗 ∈ O𝑊 ? 8 : 4) ;
+     ke                                             12288          ke                                          12288
+        n 6144                                                        n 6144
+         In
+            de 8192
+                                      8192                             In
+                                                                         de 8192
+                                                                                                   8192                           11
+              x               4096           ex                            x              4096            ex
+                                       l Ind                                                        l Ind
+                                   nne                                                          nne
+                                                                                                                                               𝐶 [𝑖, 𝑗] ← (𝑉𝐴 · 𝑉𝑊 ) × (𝑠𝐴 × 𝑠𝑊 ) ;
+                 10240   0                                                    10240   0
+                                Cha                                                         Cha
+                                                                                                                                  12
+                    (c) Rotated                                     (d) Rotated + TO Pruned
+                                                                                                                                  13    return 𝐶 ;
+Figure 2. Visualized activation distribution of down projec-
+tion module from layer 35 in Qwen3-8B model. CO and TO
+refers to channel-wise outliers and token-wise outliers, re-
+spectively. For better visualization, the absolute activations                                                                       Our empirical study demonstrates the effectiveness of
+are downsampled using 64×64 max pooling.                                                                                          Hadamard rotation. As shown in Figure 2c, the peak acti-
+                                                                                                                                  vation value after rotation is sharply reduced from 1272 to
+      𝟏                   𝟏        𝟏                 𝟏                     𝑸 𝑨 × 𝐐[𝐖]                                             58.5, significantly reducing quantization error. Furthermore,
+      𝟏                  −𝟏        𝟏                 −𝟏                                                                           the rotated activation exhibits token-wise concentration as
+ 𝑯𝟒 =                                                                                                                             the irregularity migrates from the channel dimension to to-
+      𝟏                   𝟏        −𝟏                −𝟏                𝑸 𝑨𝑯 × 𝐐[𝐇 𝐓 𝐖] Offline
+      𝟏                  −𝟏        −𝟏                𝟏             Online FWT             Rotated & Quantized                     ken dimension. This transformation eliminates the need for
+                                                                                                                                  complex dual-dimensional mixed precision computation.
+Figure 3. Example of a Hadamard matrix of size 4 and il-                                                                             The additional runtime overhead introduced by rotation
+lustration of rotation technique in a quantized LLM linear                                                                        remains minimal due to the recursive structure of Hadamard
+module. It is notable that Hadamard matrices are orthogonal                                                                       matrices. Multiplication with Hadamard matrices can be ef-
+matrices, and 𝐻𝐻 𝑇 equals the identity matrix 𝐼 .                                                                                 ficiently implemented through Fast Walsh-Hadamard Trans-
+                                                                                                                                  form within the computational complexity of 𝑂 (𝑚𝑛 log 𝑛)
+significant accuracy degradation. These residual outliers can-                                                                    for 𝑚 × 𝑛 matrices [1]. This represents negligible overhead
+not be eliminated through channel-wise detection since they                                                                       compared to the dominant cost of the linear module.
+originate from specific tokens within the input sequence,
+                                                                                                                                     Token-wise Mixed Precision. Following Hadamard ro-
+which we identify as token-wise outliers.
+                                                                                                                                  tation, outliers now exhibit pure token-wise concentration.
+3.2      RTMPQ Algorithm Design                                                                                                   RTMPQ then addresses these remaining outliers through
+                                                                                                                                  token-wise mixed precision quantization.
+Rather than applying mixed precision quantization directly
+                                                                                                                                     First, the outlier set O𝐴 is determined by measuring per-
+to channel-wise outliers, RTMPQ employs a two-step ap-
+                                                                                                                                  token maximum activation values. Given a fixed outlier
+proach to address the dual-dimensional outlier problem.
+                                                                                                                                  count budget 𝑘𝑜 , RTMPQ performs top-k selection to identify
+   Hadamard Rotation. Inspired by QuaRot [3] and other                                                                            the 𝑘𝑜 tokens with highest activation magnitudes, storing
+works [6, 26, 38], RTMPQ first employs Hadamard rotation                                                                          them in set O𝐴 .
+for channel-wise outlier suppression. As shown in Figure 3,                                                                          Second, RTMPQ applies INT8 quantization to outlier to-
+the Hadamard matrix is an orthogonal matrix with elements                                                                         kens while using INT4 quantization for remaining tokens, as
+of either +1 or −1. When multiplied to the activation ma-                                                                         detailed in Algorithm 1 (lines 10). In addition to the quantized
+trix, it redistributes the values across channels, effectively                                                                    integer representations, corresponding per-token scaling fac-
+smoothing extreme values. To maintain mathematical equiv-                                                                         tors are also derived during quantization. These two proce-
+alence, a transposed Hadamard rotation to weight matrices                                                                         dures of outlier identification and mixed precision quantiza-
+is performed during offline preparation.                                                                                          tion extend symmetrically to the weight matrix (line 11) and
+
+
+
+                                                                                                                            276
+RoMeo: Mitigating Dual-dimensional Outliers with Rotated Mixed Precision ...           PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+are completed during the offline preparation phase before
+model serving.                                                                        INT4              INT8             W4A4     W4A8     W8A4     W8A8
+   Notably, while weight matrices are typically smoother
+than activations, the required pre-multiplication by 𝐻 𝑇 for
+weights illustrated in Figure 3 amplifies their non-uniformity,                                    ×
+creating an outlier distribution similar to Figure 2c. This                                                                Mapping to
+necessitates applying the same mixed-precision quantization                                                               Thread Blocks
+
+to the weight matrix as well.                                                   Mixed Precision        Mixed Precision                    Thread Block
+   Finally, RTMPQ performs matrix multiplication that nat-                        Layout A               Layout W                          Workloads
+urally accommodates this heterogeneous precision scheme.                              (a) Non-reduction Dimension Mixed Precision GEMM
+The algorithm computes dot products between quantized
+vectors and dequantizes the results using corresponding scal-
+ing factors, as detailed in Algorithm 1 (line 12).                                                 ×
+                                                                                                               TB0   TB1        TB2
+   Depending on the outlier status, these dot products may be                                                              Mapping to
+computed in four distinct precision combinations. RTMPQ                                                        TB3   TB4Thread
+                                                                                                                            TB5Blocks
+
+employs INT32 accumulators for cross-precision multiplica-                           Permuted            Permuted                         Thread Block
+tion to prevent overflow during accumulation. The reduced                            Layout A            Layout W
+                                                                                                            TB6 TB7             TB8
+                                                                                                                                           Workloads
+sum is subsequently cast back to floating-point precision and                                   (b) Permuted Mixed Precision GEMM
+dequantized using per-token scaling factors obtained during
+the quantization process.                                                      Figure 4. Workload partitioning and thread block mapping
+   By separating token-wise outliers in higher precision, the                  for non-reduction dimension mixed precision multiplication.
+remaining values are able to be processed more accurately
+in low bit-width precision. As shown in Figure 2d, the maxi-
+mum activation value is further reduced from 58.5 to 18.6                      4.1    Sparse and Cross-Precision Computation
+after ruling out token-wise outliers.                                          The fundamental difference between token-wise and channel-
+                                                                               wise mixed precision lies in their computational dimension
+3.3   Computational Complexity Analysis                                        within matrix multiplication (GEMM). Token-wise mixed
+Given that INT4 Tensor Cores typically achieve 2× higher                       precision operates along the non-reduction dimension, while
+throughput than INT8 Tensor Cores, the proportion of INT4                      channel-wise method operates along the reduction dimen-
+computations becomes crucial for determining RTMPQ’s                           sion, which naturally supports computation decomposition.
+theoretical speedup.                                                              Therefore, token-wise mixed precision has to face sparse
+  Assume we select 𝑘𝑎 token-wise outliers in the activation                    and cross-precision computation, which is hard to be effi-
+matrix and 𝑘 𝑤 outliers in the weight matrix. The ratio of                     ciently implemented. To illustrate, we present the workload
+pure INT4 computations is given by:                                            partitioning of non-reduction dimension mixed precision
+                                                                               GEMM in Figure 4a. While the output matrix is divided into
+                 P𝐼 𝑁𝑇 4 =
+                             (𝑚 − 𝑘𝑎 ) × (𝑛 − 𝑘 𝑤 )                            9 tiles for parallel execution on GPU thread blocks, mixed
+                                   𝑚 ×𝑛                                        precision causes workload heterogeneity: 8 of the 9 thread
+where 𝑚 denotes the number of tokens and 𝑛 the number of                       blocks must handle mixed data type combinations, requiring
+channels. Assume INT8 Tensor Cores deliver 2× throughput                       conditional branches and limiting Tensor Core efficiency.
+of FP16 Tensor Cores, the overall theoretical speedup of                          One potential solution is to coalesce data of same preci-
+RTMPQ against original FP16 baseline can be calculated as:                     sion with permutation, as shown in Figure 4b. This approach
+                                                                               homogenizes the workload within thread blocks: 4 blocks
+                                     1                                         now compute pure INT4 multiplication, 4 blocks handle ei-
+                 S=
+                       P𝐼 𝑁𝑇 4 /4 + (1 − P𝐼 𝑁𝑇 4 )/2                           ther INT4-INT8 or INT8-INT4 multiplications, and 1 block
+                                                                               computes pure INT8 multiplication. However, the permuta-
+   For example, if we set 𝑚 = 𝑛 = 4096, 𝑘𝑎 = 𝑘 𝑤 = 256, the                    tion introduces non-trivial overhead of computing indices
+ratio of INT4 multiplications is 88%, leading to a theoretical                 and performing in-place swaps, which often outweighs the
+speedup of 3.57×.                                                              computational benefits.
+
+4     System Challenges                                                        4.2    Dynamic Outlier Distribution
+The proposed RTMPQ algorithm demonstrates potential for                        Another challenge stems from the distinct origin of token-
+superior model performance preservation. However, two                          wise outliers in LLMs. Channel-wise outliers emerge from
+system challenges prevent the implementation of this theo-                     the internal model structure and are found to be concentrate
+retical advantage for practical serving speedup.                               at specific positions along the channel dimension. Existing
+
+
+
+                                                                        277
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                Qihao Zhang, MingLiang Tang, Mingshu Zhai, Kinman Lei, and Jidong Zhai
+
+
+                                                    ④ Post-mul.                     from outlier tokens. This approach completely avoids per-
+      ① Offline Outliers                            Overwrite
+                                                                   W4A4             mutation overhead while maintaining contiguous memory
+       Ident. & Quant.
+                                                                   Result           access patterns, simultaneously resolving the challenge of
+    ② Online Outliers                                                               storing multiple precision data within a single data buffer.
+    Ident. & Quant.
+                                                                  Overwrite
+                              ×                                                     5.2 Intra-Kernel Cross-Precision Multiplication with
+                                          ×                                             Software Pipelining
+                                                                                    The performance of the core GEMM kernel is crucial for over-
+                                  ×
+                                              ×
+                                                                                    all serving efficiency. RoMeo introduces an efficient separate-
+       Pre-allocated
+       Outlier Buffer      ③ Cross-precision Mul.                                   kernels implementation with software pipelining to support
+                                                                                    intra-kernel cross-precision multiplication.
+Figure 5. The permutation-free mixed precision computa-
+tion implementation proposed in RoMeo.                                                 Single vs. Multiple Kernels. Mixed precision computa-
+                                                                                    tion introduces diverse precision operand combinations, pre-
+                                                                                    senting a key design decision: whether to employ a single
+methods leverage offline calibration datasets to identify these                     fused kernel or multiple separate kernels for handling differ-
+channels, simplifying system design.                                                ent precision combinations in multiplication.
+   In contrast, token-wise outliers originate from linguistic                          Typically, a fused single-kernel implementation assigns
+characteristics within input sequences, exhibiting dynamic                          different thread blocks to handle different multiplication
+and unpredictable patterns. This nature introduces both chal-                       types, minimizing kernel launch overhead. Conversely, a
+lenges for quantized data layout and online outlier detection.                      separate-kernels implementation launches distinct kernels
+Performing real-time detection could incur significant run-                         (e.g., four kernels for four precision combinations), intro-
+time overhead, thereby diminishing overall speedup gains.                           ducing additional launch overhead and potentially suffering
+                                                                                    from insufficient parallelism due to the tall-and-skinny ma-
+                                                                                    trices caused by outlier tokens.
+5      System Optimizations
+                                                                                       Nevertheless, we opt for a separate-kernels implementa-
+RoMeo introduces three specialized optimizations to address                         tion in this work. The primary reason is the distinct compu-
+these challenges and achieve tangible serving speedup.                              tational characteristics and on-chip resource requirements
+                                                                                    of different multiplication types. For instance, an INT8-INT8
+5.1      Permutation-free Mixed Precision Computation                               multiplication kernel requires twice shared memory capac-
+RoMeo employs a permutation-free approach to densify                                ity for matrix tile caching compared to an INT4-INT4 ker-
+sparse computation while avoiding heavy permutation op-                             nel under identical tiling parameters. In this configuration,
+erations. As illustrated in Figure 5, RoMeo pre-allocates a                         GPU occupancy becomes constrained by shared memory
+dedicated outlier buffer whose size is fixed based on the pre-                      consumption, which subsequently enables the compiler to
+determined number of outlier tokens. During quantization,                           utilize more registers for instruction-level parallelism with-
+the entire matrix is quantized to INT4, while the embeddings                        out negative side effects.
+corresponding to outlier tokens are copied and quantized                               In contrast, an INT4-INT4 kernel consumes less shared
+into this outlier buffer in INT8 precision. Since outlier to-                       memory, establishing a tradeoff between register usage and
+kens typically constitute only a small fraction of the total,                       GPU occupancy. The compiler may reduce loop unrolling to
+the additional memory overhead remains marginal.                                    decrease register usage, trading this for higher occupancy
+   Next, RoMeo performs all four types of cross-precision                           to achieve optimal overall performance. A fused kernel im-
+multiplications between INT4 activations, INT8 outlier ac-                          plementation prevent this fine-grained allocation of on-chip
+tivations, and the corresponding weight matrices. Since all                         resources according to the specific requirements of each
+individual matrices involved in the computation are now                             computation precision, leading to suboptimal performance.
+dense and uniform-precision, each GPU thread block is as-                              RoMeo addresses the limitations of launch overhead and
+signed to handle a specific cross-precision computation type.                       underutilization through asynchronous execution, as de-
+We detail the implementation of this kernel in §5.2.                                tailed in §5.3. Our evaluation demonstrates that the separate-
+   Notably, in our scheme, outlier tokens are quantized to                          kernels implementation outperforms the fused alternative
+both INT8 and INT4 precisions and participate in multiple                           when combined with this asynchronous optimization.
+multiplication operations. We tolerate this redundant com-
+putation to preserve the contiguous memory layout require-                            Software Pipelining and Type Casting. Achieving high
+ment of Tensor Core instructions.                                                   performance for compute-intensive kernels on GPUs re-
+   Finally, we directly overwrite the corresponding positions                       quires efficient overlap of memory accesses and computation.
+in the output tensor with higher-precision results computed                         RoMeo employs a software pipeline to this end, as outlined
+
+
+
+                                                                              278
+RoMeo: Mitigating Dual-dimensional Outliers with Rotated Mixed Precision ...            PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+ Algorithm 2: RoMeo Software Pipeline                                                    Outlier Identification       Quantization         GEMM        Dependency
+                                                                                        Outlier Identification        Quantization         GEMM        Dependency
+  Input: 𝐼𝑡𝑒𝑟 𝐾 : Number of tiles along K dimension.                               Row-max                Q-                                               G-
+                                                                                               Q-4bit                G-W4A4              G-W8A4    G-W4A8
+          𝑁𝑠𝑡𝑎𝑔𝑒 : Number of pipeline stages.                                      + Top-k
+                                                                                   Row-max
+                                                                                               Q-4bit
+                                                                                                         8bit
+                                                                                                          Q-
+                                                                                                                     G-W4A4              G-W8A4    G-W4A8
+                                                                                                                                                          W8A8
+                                                                                                                                                           G-
+                                                                                   + Top-k               8bit                                             W8A8
+1 Function MainLoop                                                                                    (a) Synchronous Serial Execution
+                                                                                                                                G-W8A4
+     // Pipeline fill                                                                                                                                Wall-time
+                                                                                   Row-max                                      G-W8A4     G-
+2    for 𝑖 ← 0 to 𝑁𝑠𝑡𝑎𝑔𝑒 − 1 do                                                    + Top-k
+                                                                                   Row-max
+                                                                                                Q-4bit            G-W4A4
+                                                                                                                                          W8A8
+                                                                                                                                           G-
+                                                                                                                                                     Reduction
+                                                                                                                                                     Wall-time
+3         cp_async_block(𝑖) ;                                                      + Top-k
+                                                                                                Q-4bit            G-W4A4              Q- W8A8
+                                                                                                                                          G-W4A8
+                                                                                                                                                     Reduction
+                                                                                                                                     8bit
+                                                                                                                                      Q-
+                                                                                                                                          G-W4A8
+       // Steady state                                                                                                               8bit
+
+4      for 𝑖 ← 0 to 𝐼𝑡𝑒𝑟 𝐾 − 𝑁𝑠𝑡𝑎𝑔𝑒 − 1 do
+ 5          cp_async_wait(𝑁𝑠𝑡𝑎𝑔𝑒 − 1) ;                                                          (b) Asynchronous Concurrent Execution
+ 6          mma_compute(𝑖%𝑁𝑠𝑡𝑎𝑔𝑒 ) ;
+ 7          cp_async_block(𝑖 + 𝑁𝑠𝑡𝑎𝑔𝑒 ) ;                                      Figure 6. Illustration of asynchronous execution in RoMeo.
+       // Pipeline tail
+8      for 𝑖 ← 𝑁𝑠𝑡𝑎𝑔𝑒 − 1 to 0 do
+ 9          cp_async_wait(𝑖) ;                                                 hiding quantization overhead. The approach leverages the
+10          mma_compute((𝐼𝑡𝑒𝑟 𝐾 − 1 − 𝑖)%𝑁𝑠𝑡𝑎𝑔𝑒 ) ;                            observation that several kernels lack serial dependencies.
+11     scale_and_write_out();                                                  For instance, the four separate multiplication kernels for dif-
+                                                                               ferent precision combinations can execute concurrently. By
+                                                                               decomposing activation quantization into two independent
+in Algorithm 2. The kernel’s main loop computes the prod-                      tasks, quantizing outlier tokens and quantizing non-outlier
+uct of submatrices 𝐴[𝑏𝑖𝑑𝑚 × 𝑇 𝑀 : (𝑏𝑖𝑑𝑚 + 1) × 𝑇 𝑀, :] and                     tokens, each multiplication kernel depends on exactly one
+𝐵 [:, 𝑏𝑖𝑑𝑛 × 𝑇 𝑁 : (𝑏𝑖𝑑𝑛 + 1) × 𝑇 𝑁 ], where 𝑏𝑖𝑑𝑚 and 𝑏𝑖𝑑𝑛 are                 quantization task. This decomposition enables constructing
+thread block indices, and 𝑇 𝑀 and 𝑇 𝑁 are the tiling sizes                     a fine-grained task dependency graph where tasks execute
+along the M and N dimensions, respectively. Computation                        asynchronously across multiple CUDA streams, as shown
+proceeds along the K dimension in 𝐼𝑡𝑒𝑟 𝐾 tiles.                                in Figure 6. RoMeo uses CUDA events to enforce correct
+   The pipeline first issues 𝑁𝑠𝑡𝑎𝑔𝑒 asynchronous memory                        execution ordering only where true dependencies exist.
+copy operations via cp.async PTX instruction to load data
+from global to shared memory, thereby filling the pipeline.                    6      Implementation
+The steady state then starts: each iteration waits for the old-
+                                                                               We implement RoMeo as a PyTorch extension for seamless
+est memory copy to complete, performs matrix multiplica-
+                                                                               integration into existing LLM frameworks. The quantized
+tion using Tensor Cores mma instructions, and subsequently
+                                                                               modules are wrapped as PyTorch nn.Module instances, al-
+issues a new asynchronous copy. Finally, the pipeline drains
+                                                                               lowing direct replacement of original linear layers. We lever-
+by waiting for all remaining memory operations to complete
+                                                                               age HadaCore [1] for efficient Hadamard transformations.
+and performing the corresponding computations.
+                                                                                  At kernel level, we develop fused Triton [37] kernels
+   For computations involving different data types, RoMeo
+                                                                               for outlier identification, quantization and INT4 data pack-
+inserts an in-shared-memory type casting phase before per-
+                                                                               ing. we develop mixed precision CUDA kernels with CUT-
+forming mma computations. INT4 data is cast to INT8 using
+                                                                               LASS [35] and expose them to Python through compiled
+two binary arithmetic instructions instead of expensive type
+                                                                               dynamic libraries. For ease of use, RoMeo employs a just-
+conversion instructions. Upon completing all computations,
+                                                                               in-time (JIT) compilation mechanism that compiles kernels
+the results are scaled by the per-token scaling factors in
+                                                                               for specific model dimensions during initial execution and
+registers and written back to global memory.
+                                                                               caches the compiled binaries for subsequent runs. The sys-
+5.3   Asynchronous Concurrent Execution                                        tem also incorporates auto-tuning for critical hyperparame-
+                                                                               ters based on runtime profiling results, including tiling sizes
+Modern GPUs feature over a hundred streaming multipro-
+                                                                               and the number of pipeline stages.
+cessors (SMs) and large Tensor Core instruction shapes to en-
+able massive parallelism. Hardware underutilization occurs
+when the problem size is insufficient to saturate available                    7      Evaluation
+resources. Consider the outlier multiplication of a 256×4096                   We conduct comprehensive evaluations of RoMeo to assess
+matrix. Using a 256×256 thread block tiling configuration,                     its effectiveness in both model accuracy preservation and
+only 16 thread blocks are launched, leaving most SMs idle.                     end-to-end performance speedup. Additionally, we perform
+   RoMeo employs an asynchronous concurrent execution                          ablation studies to analyze the contribution of individual
+strategy to address underutilization while simultaneously                      technical components.
+
+
+
+                                                                        279
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia       Qihao Zhang, MingLiang Tang, Mingshu Zhai, Kinman Lei, and Jidong Zhai
+
+
+Table 1. Comparison of baseline quantization methods                       Table 2. Comparison of measured perplexity on WikiText2
+across key features: Outlier Dimension addressed , Mixed                   dataset. The lower is better.
+Precision (M.P.), Hadamard Rotation (H.R.), and Quantiza-
+tion Granularity (Quant. Gran.). Tok. and Chan. represent                                         Qwen3                  Llama-3.1
+Token and Channel, respectively.                                               Method
+                                                                                           8B      14B         32B       8B    70B
+                                                                                BF16       9.72      8.65     7.61      6.24      2.81
+ Method       Outlier Dim.        M.P.     H.R.     Quant. Gran.
+                                                                                INT4     2.55e4    2.25e5    2.19e6    769.53    1.02e4
+ QuaRot          Chan.              ×               per-Tok.Chan.
+                                                                                MixQ     14.76     12.57     12.38     10.55     17.15
+                                            ✓
+  MixQ           Chan.                      ×       per-Tok./Chan.
+                                                                                Atom     19.04     10.68      9.78
+                                    ✓
+                                                                                                                        7.62      4.25
+  Atom           Chan.                      ×         per-Group
+                                                                               QuaRot    11.53      9.81      8.85      8.44      5.10
+                                    ✓
+ RoMeo        Tok. & Chan.                          per-Tok./Chan.
+                                                                                                                        7.99      4.87
+                                    ✓       ✓
+                                                                               RoMeo     10.97      9.59      8.64
+
+
+7.1   Accuracy Evaluation
+  Evaluated Models. We evaluate our RTMPQ algorithm                        outliers from activation tensors online with a percentage of
+on two series of widely used open-source LLMs: Qwen3 [44]                  10% to match RoMeo’s sparsity level.
+and Llama-3.1 [12]. The Qwen3 series include 8B, 14B, and
+32B models, while the Llama-3.1 series include 8B and 70B                  7.1.1 Perplexity Evaluation. Table 2 presents the per-
+models, covering a wide range of model sizes.                              plexity results of different quantization methods on the Wiki-
+  Evaluated Tasks. We conduct both perplexity evaluation                   Text2 dataset. We observe that naive INT4 quantization leads
+on WikiText2 [28] and zero-shot evaluation on six common                   to extremely high perplexity across all models, indicating
+downstream tasks, including ARC (Challenge and Easy) [8],                  a severe degradation in model quality. MixQ exhibits sig-
+HellaSwag (HS) [46], LAMBADA [29], PIQA [4], and Wino-                     nificant performance degradation because it only addresses
+Grande (WG) [31]. Downstream tasks are evaluated using                     channel-wise outliers in activations, leaving numerous token-
+the lm-eval library [14] with a batch size of 32. Perplexity is            wise outliers unhandled. Although QuaRot achieves better
+measured with a batch size of 2 and sequence length of 2048.               results by suppressing channel-wise outliers through input
+                                                                           rotation, it still underperforms compared to RoMeo due to
+   Baselines. We evaluate RTMPQ against other state-of-                    residual token-wise outliers. In contrast, RoMeo achieves
+the-art 4-bit quantization methods, including QuaRot [3],                  superior perplexity across all models by effectively mitigat-
+MixQ [7] and Atom [48]. QuaRot employs a similar Hadamard                  ing both token-wise and channel-wise outliers through our
+transformation for outlier suppression. MixQ applies mixed                 proposed RTMPQ algorithm. Atom achieves competitive per-
+precision quantization across channels, allocating higher pre-             plexity on Llama-3.1 models due to its finer-grained, group-
+cision to channels containing channel-wise outliers. Atom                  wise mixed-precision quantization, but at the cost of higher
+leverages mixed precision quantization at channel levels sim-              computational overhead. However, Atom’s effectiveness is
+ilar to MixQ, but performs quantization at a finer group-wise              severely limited on Qwen3 models, indicating a lack of scal-
+granularity (group size 128). While this can yield potentially             ability across different model architectures.
+higher accuracy, it introduces additional computational over-
+head.                                                                      7.1.2 Downstream Tasks Evaluation. Table 3 presents
+   In Table 1, we compare key features of baselines and                    the zero-shot accuracy results of different quantization meth-
+RoMeo, highlighting that RoMeo handles dual-outliers in                    ods across six downstream tasks, using the same experimen-
+both token and channel dimensions using mixed precision                    tal settings as the perplexity evaluation. RoMeo achieves
+quantization and Hadamard rotation. This enables coarse-                   the highest average accuracy across all Qwen3 models, con-
+grained per-token/channel quantization, leading to better                  sistently outperforming existing quantization methods and
+serving efficiency. The choice of quantization granularity is              narrowing the performance gap with the half-precision base-
+orthogonal to the RTMPQ algorithm, and RoMeo can further                   line. On Llama-3.1 models, Atom attains marginally better
+improve accuracy by combining with per-group quantization                  average accuracy due to its finer-grained quantization ap-
+at the cost of efficiency.                                                 proach, but RoMeo still delivers competitive results with
+   The unquantized baseline uses BF16, the default weight                  substantially lower computational overhead.
+type for the evaluated models. We also include INT4 quanti-                   By computing merely 5% of outliers in higher precision,
+zation results using trivial round-to-nearest quantization for             RoMeo effectively mitigates quantization error while main-
+reference. For RoMeo, we set the token-wise outlier percent-               taining computational efficiency, achieving a superior bal-
+age to 5% for both activation and weight tensors. To ensure                ance between model accuracy and inference performance
+fair comparison, we configure MixQ to select channel-wise                  for practical LLM serving.
+
+
+
+                                                                     280
+RoMeo: Mitigating Dual-dimensional Outliers with Rotated Mixed Precision ...         PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                    Table 3. Comparison of zero-shot accuracy on six downstream tasks. The higher is better.
+
+                    Model           Method       ARC-C        ARC-E        HS       LAMBADA          PIQA       WG       Average
+                                      BF16         56.74       80.85      74.90         64.12         77.80     68.11      70.42
+                                     INT4          26.45       26.60      26.40         0.00         51.14     51.14       36.35
+                  Qwen3-8B           MixQ          40.27       64.18      62.55        37.45         70.67     59.91       55.84
+                                     Atom          47.18       73.65      63.44        41.41         72.25     61.56       59.92
+                                    QuaRot         48.21       72.94      68.29        53.95         74.10     62.43       63.32
+                                    RoMeo          49.66       72.85      70.43        57.91         73.34     62.27       64.41
+                                      BF16         60.32       82.95      78.82         67.82         79.87     72.53      73.72
+                                     INT4          24.83       25.55      26.16         0.02         50.05     50.43       29.51
+                  Qwen3-14B          MixQ          46.93       71.04      68.24        45.53         73.39     68.43       62.26
+                                     Atom          51.79       73.23      74.02        62.47         76.93     68.90       67.89
+                                    QuaRot         57.00       79.55      74.79        63.09         77.48     68.35       70.04
+                                    RoMeo          58.11       79.63      75.66        63.81         77.80     69.93       70.82
+                                      BF16         60.84       83.25      82.59         67.13         81.94     73.40      74.86
+                                     INT4          25.94       25.76      26.12         0.00         50.05     50.75       35.72
+                  Qwen3-32B          MixQ          45.31       66.16      71.48        40.93         73.23     58.09       59.20
+                                     Atom          22.70       25.08      78.81        64.56         49.51     68.90       51.59
+                                    QuaRot         56.23       77.44      79.19        62.74         79.05     67.96       70.44
+                                    RoMeo          57.59       77.95      79.59        63.87         77.42     67.56       70.66
+                                      BF16         53.67       81.23      78.84         75.33         81.23     73.56      73.98
+                                     INT4          22.95       30.98      30.34         4.35         52.50     51.54       32.11
+                 Llama-3.1-8B        MixQ          42.92       69.28      69.75        57.03         75.14     67.17       63.55
+                                     Atom          49.06       74.62      74.62        70.27         78.29     70.72       69.60
+                                    QuaRot         42.32       66.84      71.91        65.13         75.03     62.04       63.88
+                                    RoMeo          48.12       75.59      74.03        68.79         77.37     68.43       68.72
+                                      BF16         64.85       86.62      84.95         78.87         84.22     78.93      79.74
+                                     INT4          26.62       25.88      26.29         0.00         50.92     48.22       35.59
+                Llama-3.1-70B        MixQ          48.12       73.19      73.70        56.18         74.32     60.06       64.26
+                                     Atom          60.92       84.51      83.04        78.07         83.03     77.74       77.89
+                                    QuaRot         56.57       80.60      81.53        74.69         82.48     71.35       74.54
+                                    RoMeo          59.56       82.79      82.52        76.32         83.03     75.85       76.68
+
+
+7.2   Efficiency Evaluation                                                    warmups. This ensures accurate and stable microsecond-
+  Experimental Setup. We evaluate performance speedup                          level latency measurements, particularly essential for small
+on NVIDIA GeForce RTX 4090 GPUs with 24 GB memory,                             kernels or high-overhead scenarios.
+which provides up to 8× peak INT4 performance over half-
+precision. The environment uses Python 3.12, PyTorch 2.8.0,                    7.2.1 End-to-end Performance. We integrate RoMeo to
+and CUDA 12.8 for kernel compilation and execution.                            Transformers [41] framework to evaluate its end-to-end ac-
+                                                                               celeration performance. Our evaluation covers Qwen3 model
+                                                                               sizes from 8B to 32B parameters, representing a broad spec-
+                                                                               trum of LLM scales. The experiments are conducted across
+   Methodology. We employ CUDA Graph to capture the tar-                       varying batch sizes with a fixed input sequence length of
+get workflow, eliminating kernel launch overhead, memory                       128. The outlier percentage in RoMeo is consistently set
+allocation costs, and PyTorch framework overhead. The cap-                     to 5%, maintaining alignment with our previous accuracy
+tured graph is executed repeatedly without synchronization                     evaluation configuration.
+to ensure continuous GPU execution. The average latency                           Figure 7 displays the latencies of a single transformer
+is measured using CUDA events with multiple runs after                         layer for BF16, QuaRot, and RoMeo, normalized to the BF16
+
+
+
+                                                                        281
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                        Qihao Zhang, MingLiang Tang, Mingshu Zhai, Kinman Lei, and Jidong Zhai
+
+
+                                                   BF16            QuaRot              RoMeo                                Table 4. Comparison of prefill throughput (tokens per sec-
+                                     Qwen3-8B                  Qwen3-14B                        Qwen3-32B                   ond) on Qwen3 models of different input batch sizes.
+ Norm. Layer Latency
+
+
+
+
+                                                     )                             )                              )
+                             (6.7)    (29.9)   (120.7     (11.2)    (48.0)   (193.0       (16.6)   (68.8)   (275.8
+                       1.0
+                       0.8
+                       0.6
+                                                                                                                                 Model       Batch       BF16       RoMeo       Speedup
+                       0.4
+                       0.2                                                                                                                     8       10233.07      5213.35     0.5095
+                       0.0
+                                16    64   256               16    64   256                    16    64   256
+                                                                                                                               Qwen3-8B        16      10664.64     10282.52     0.9642
+                                  Batch Size                   Batch Size                        Batch Size                     (TP=1)         32      10745.83     19815.86     1.8441
+                                                                                                                                               64      10545.13     20073.60     1.9036
+Figure 7. Normalized layer-level latency on Qwen3 models                                                                                       8        6449.20     4021.85      0.6236
+of different input batch sizes. The number in parentheses in-                                                                 Qwen3-14B        16       6840.79     8060.05      1.1782
+dicates the absolute latency of BF16 baseline in milliseconds.                                                                 (TP=2)          32       6781.74     9148.49      1.3490
+                                                                                                                                               64       6848.02     9064.14      1.3236
+baseline. Absolute latency figures for the BF16 baseline are                                                                                   8        4425.40     2581.76      0.5834
+included in parentheses for reference. We exclude Atom                                                                        Qwen3-32B        16       4451.47     5210.75      1.1706
+from this comparison due to its significant computational                                                                      (TP=4)          32       4561.73     5598.86      1.2274
+overhead from finer-grained quantization, which results in                                                                                     64       4537.32     5473.99      1.2064
+substantial performance degradation relative to other 4-bit
+methods, as detailed in §7.2.3. The results demonstrate that
+RoMeo achieves up to 2.10× end-to-end speedup over the                                                                      batch size increases, kernel execution dominates the overall
+half-precision baseline. Despite the additional computation                                                                 latency, allowing RoMeo to fully leverage its computational
+and challenges introduced by mixed precision quantization,                                                                  advantages.
+RoMeo delivers performance comparable to the uniform pre-                                                                      For larger models requiring distributed serving, RoMeo
+cision baseline QuaRot, highlighting its effectiveness in max-                                                              still delivers significant speedups, achieving up to 1.35× for
+imizing hardware utilization and mitigating mixed precision                                                                 Qwen3-14B and 1.23× for Qwen3-32B. The reduced speedup
+overhead through specialized system designs.                                                                                in distributed settings is primarily due to communication
+   Notably, QuaRot exhibits significant performance degrada-                                                                overhead from tensor parallelism, which partially offsets the
+tion on the Qwen3-14B model. This occurs because QuaRot                                                                     computational gains from quantization. Overall, these results
+applies Hadamard transformation between heads before the                                                                    confirm that RoMeo effectively accelerates LLM serving in
+o_proj layer in the attention module. While this approach                                                                   production environments.
+works efficiently for Llama-2 series models (evaluated in
+                                                                                                                            7.2.3 Kernel Performance. Figure 8 presents the per-
+QuaRot’s original paper), Qwen3-14B’s 40 attention heads
+                                                                                                                            formance of the non-reduction dimension mixed precision
+lead to inefficient Hadamard transformation implementation.
+                                                                                                                            multiplication kernel in RoMeo across various matrix shapes
+In contrast, RoMeo applies Hadamard transformation at the
+                                                                                                                            derived from Qwen3 and Llama-3.1 models. The M dimen-
+heads’ hidden dimension, avoiding this issue.
+                                                                                                                            sion of matrix multiplication is fixed to 4096.
+7.2.2 Model Serving Performance. To evaluate the real-                                                                         We compare RoMeo’ mixed precision kernel against four
+world model serving performance of RoMeo, we further in-                                                                    baselines: BF16 (PyTorch’s half-precision multiplication im-
+tegrate it into SGLang [49] (version v0.5.5), a widely adopted                                                              plementation), INT8 (INT8 precision multiplication kernel
+LLM serving framework. Our experiments include various                                                                      implemented with CUTLASS), Atom (group-wise INT4 mixed
+sizes of Qwen3 models, ranging from 8B to 32B. For models                                                                   precision kernel), and QuaRot (state-of-the-art INT4 multi-
+exceeding the memory capacity of a single GPU, we employ                                                                    plication implementation with fused dequantization kernel).
+tensor parallelism (TP) to distribute model parameters across                                                                  RoMeo achieves a geometric average speedup of 4.68×
+multiple GPUs (2 GPUs for the 14B model and 4 GPUs for                                                                      over BF16 across all matrix shapes, effectively utilizing the
+the 32B model). All evaluations use a fixed input sequence                                                                  GPU’s peak INT4 performance. It also consistently outper-
+length of 128 and are carried out through SGLang’s official                                                                 forms the INT8 baseline (3.39× average speedup). Atom ker-
+offline benchmarking scripts, measuring prefill throughput                                                                  nels only achieve 3.63× average speedup due to the overhead
+in tokens per second across varying batch sizes.                                                                            of finer-grained group-wise quantization.
+   The results in Table 4 show that RoMeo achieves a prefill                                                                   Compared to QuaRot, which achieves an average speedup
+throughput improvement of up to 1.90× over the unquan-                                                                      of 4.55× over the half-precision baseline, RoMeo delivers
+tized baseline when serving the Qwen3-8B model on a single                                                                  comparable performance across most matrix shapes despite
+GPU. At small batch sizes, CPU overhead becomes the bottle-                                                                 computing additional high-precision outliers. As a mixed
+neck, leading to performance degradation. This can be miti-                                                                 precision kernel, RoMeo effectively leverages the GPU’s low-
+gated by enabling CUDA graphs in the prefill stage. As the                                                                  precision computational capabilities while minimizing the
+
+
+
+                                                                                                                      282
+RoMeo: Mitigating Dual-dimensional Outliers with Rotated Mixed Precision ...                                                        PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                                                      BF16                    INT8                  Atom                 Quarot            RoMeo
+ Norm. Speedup
+
+
+
+                 6
+                 4
+                 2
+                 0
+                          QKV           O    UG            D             QKV         O    UG                  D     QKV         O    UG             D     QKV      O     UG          D
+                                                                                                                                                                                          GeoMean
+                                       Qwen3-8B                                     Qwen3-14B                                  Qwen3-32B                        Llama-3.1-70B
+
+
+
+
+Figure 8. Normalized kernel performance on various matrix shapes. QKV, O, UG, and D represents the concatenated q, k, v
+projection, the output projection, the concatenated up, gate projection, and the down projection linear modules, respectively.
+These matrix shapes correspond to the actual weight tensors encountered in model serving.
+
+                                Attention            Hadamard                        Quantization
+                                                                                                                                                  Qwen3-8B                     Llama-3.1-8B
+                                Gemm                 Post_matmul                     Others
+                                                                                                                                  11.7                      Quarot                            Quarot
+                 BF16                                                                                                                                                8.5
+                                                                                                    6.73 ms                       11.5
+                                                                                                                                                            RoMeo    8.3                      RoMeo
+                 U-ker                                                4.01 ms                                                     11.3
+
+
+
+
+                                                                                                                            PPL
+                                                                                                                                  11.1                               8.1
+           + Pipe.                                               3.68 ms
+                                                                                                                                  10.9                               7.9
+                 S-ker.                                                         4.75 ms
+                                                                                                                                  10.7                               7.7
+           + Pipe.                                                       4.27 ms
+                                                                                              Batch=16                                   0   2.5     5 7.5 10 12.5         0   2.5     5 7.5 10 12.5
+  + Async.                                                     3.39 ms
+                                                                                                                                                   Outliers (%)                      Outliers (%)
+                          0        1        2         3           4             5         6          7
+                 BF16                                                                               29.96 ms
+
+                 U-ker                                           16.19 ms                                                            Figure 10. Scaling the percentage of outliers.
+           + Pipe.                                              15.99 ms
+
+                 S-ker.                                           16.86 ms
+
+           + Pipe.                                              15.62 ms
+
+  + Async.                                                     15.32 ms
+                                                                                              Batch=64                     asynchronous execution enabled, the separate-kernels im-
+                          0         5           10        15             20          25         30             35
+                                                                                                                           plementation achieves superior performance, better utilizing
+                                                          Latency (ms)                                                     streaming multiprocessor resources. The benefits of concur-
+                                                                                                                           rent execution decline at larger batch sizes where individual
+                                                                                                                           kernels can already saturate GPU resources.
+Figure 9. Layer-level latency breakdown for Qwen3-8B
+across different batch sizes with progressive optimizations.                                                               7.4     Scaling Outliers
+                                                                                                                           Figure 10 shows the perplexity of Qwen3-8B and Llama-
+overhead of outlier computation through system-level opti-                                                                 3.1-8B models across different outlier percentage levels. We
+mizations, acheiving performance comparable to the fully-                                                                  observe that perplexity decreases with increased outlier per-
+optimized uniform precision kernel implementations.                                                                        centage, confirming that preserving more outliers improves
+                                                                                                                           model accuracy. The most significant improvements occur
+7.3                  Optimization and Performance Breakdown                                                                at lower percentages: Qwen3-8B and Llama-3.1-8B show
+                                                                                                                           perplexity reductions of 0.40 and 0.29 respectively when in-
+Figure 9 shows RoMeo’s layer-level latency breakdown of
+                                                                                                                           creasing outliers from 0% to 1.6%. This demonstrates that
+Qwen3-8B across different batch sizes, with five configura-
+                                                                                                                           a small fraction of outliers has a disproportionate impact
+tions progressively enabled: unified single kernel (U-ker),
+                                                                                                                           on quantization accuracy, which is the core property that
+unified single kernel with pipelining (U-ker + Pipe.), sepa-
+                                                                                                                           RoMeo leverages to achieve high accuracy with minimal
+rate kernels (S-ker), separate kernels with pipelining (S-ker
+                                                                                                                           additional computational overhead.
++ Pipe.), and separate kernels with pipelining and asynchro-
+nous execution (S-ker + Pipe. + Async.).
+                                                                                                                           8      Related Work
+   Compared to BF16 baseline, RoMeo introduces three main
+runtime overheads: Hadamard transformation, outlier identi-                                                                8.1     Quantization Algorithms of LLMs
+fication and quantization, and post-multiplication overwrite.                                                                 Weight-only Quantizations. Weight-only LLM quanti-
+These overheads collectively account for approximately 12%                                                                 zation methods including GPTQ [13], AWQ [23], QuIP [6],
+of the baseline latency, while the mixed precision GEMM                                                                    SqueezeLLM [20], and OmniQuant [32] apply low-bit quan-
+kernel delivers substantial performance gains that yield net                                                               tization to weights while maintaining activations in higher
+speedup. The simple unified kernel implementation outper-                                                                  precision. Although effective for memory reduction in low-
+forms separate kernels due to reduced kernel launch over-                                                                  batch scenarios, these approaches cannot achieve computa-
+head. Software pipelining improves both configurations by                                                                  tional speedup in high-throughput serving settings where
+overlapping computation and memory access. However, with                                                                   computation becomes the bottleneck.
+
+
+
+                                                                                                                    283
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia     Qihao Zhang, MingLiang Tang, Mingshu Zhai, Kinman Lei, and Jidong Zhai
+
+
+   Uniform Precision Weight-activation Quantizations.                    token-wise mixed precision quantization on GPUs. Extensive
+SmoothQuant [43] enables practical 8-bit weight-activation               evaluations across diverse LLMs and benchmarks demon-
+quantization through channel-wise smoothing. QServe [24]                 strate that RoMeo not only improves quantization accuracy
+and Quant-LLM [42] explore sub-8-bit format quantization                 over existing methods but also delivers practical end-to-end
+but still cannot leverage high-throughput 4-bit Tensor Cores             speedups, establishing it as an effective solution for accurate
+of modern GPUs. QuaRot [3] proposes rotation-based 4-bit                 and efficient LLM serving.
+quantization but still exhibits significant accuracy degrada-
+tion compared to higher-bit methods. Other works includ-
+ing DuQuant [22], AffineQuant [27], OstQuant [19], Spin-                 Acknowledgments
+Quant [26], and FlatQuant [34] improve accuracy through                  We would like to thank the anonymous reviewers and our
+optimized rotation matrices. These methods are orthogo-                  shepherd Dimitrios S. Nikolopoulos for their insightful com-
+nal to our RTMPQ algorithm and could be combined for                     ments. This work is supported by the National Key R&D
+enhanced performance.                                                    Program of China under Grant 2023YFB3001501, NSFC for
+                                                                         Distinguished Young Scholar under Grant 62225206, National
+   Mixed Precision Weight-activation Quantizations.                      Natural Science Foundation of China under Grants 62532006,
+HAQ [39] and MxMoE [11] explore tensor-wise mixed preci-                 U23A6007, and Beijing Natural Science Foundation under
+sion for LLMs. Atom [48], LLM.int8() [10], and COMET [25]                Grant L242017. Jidong Zhai is the corresponding author of
+propose channel-wise mixed precision methods for finer-                  this paper.
+grained quantization. MixQ [7] improves the performance
+of channel-wise mixed precision quantization by predicting
+outlier channels. However, these methods overlook token-                 Artifact Appendix
+wise outliers, limiting their quantization performance.                  RoMeo is an open-source project, publicly accessible at https:
+                                                                         //github.com/thu-pacman/RoMeo. Detailed reproduction in-
+    Hardware-specialized Quantizations. ANT [18] pro-                    structions are provided in the repository.
+poses a new data type designed for lower quantization error.
+Olive [17] designs novel encoding schemes that sacrifice pre-
+cision for common values to better represent outliers. While             References
+promising for accuracy, these methods require specialized                 [1] Krish Agarwal, Rishi Astra, Adnan Hoque, Mudhakar Srivatsa,
+hardware support to realize practical speedups and cannot                     Raghu K. Ganti, Less Wright, and Sijia Chen. 2024. HadaCore: Tensor
+                                                                              Core Accelerated Hadamard Transform Kernel. CoRR abs/2412.08832
+be directly deployed on existing GPU-based LLM serving                        (2024). arXiv:2412.08832 doi:10.48550/ARXIV.2412.08832
+infrastructure.                                                           [2] Yongqi An, Xu Zhao, Tao Yu, Ming Tang, and Jinqiao Wang. 2025.
+                                                                              Systematic Outliers in Large Language Models. In The Thirteenth Inter-
+8.2   Accelerating Quantized LLM Serving                                      national Conference on Learning Representations, ICLR 2025, Singapore,
+                                                                              April 24-28, 2025. OpenReview.net. https://openreview.net/forum?id=
+Prominent LLM serving frameworks, such as vLLM [21],                          rLX7Vyyzus
+SGLang [49], and Chitu [36], support quantized model by                   [3] Saleh Ashkboos, Amirkeivan Mohtashami, Maximilian L. Croci, Bo
+continuously integrating the latest algorithms and optimiza-                  Li, Pashmina Cameron, Martin Jaggi, Dan Alistarh, Torsten Hoe-
+tions. SqueezeLLM [20] and DecDEC [30] employ algorithm-                      fler, and James Hensman. 2024. QuaRot: Outlier-Free 4-Bit In-
+system co-design for weight-only quantization, but cannot                     ference in Rotated LLMs. In Advances in Neural Information Pro-
+                                                                              cessing Systems 38: Annual Conference on Neural Information Pro-
+accelerate high-throughput serving scenarios. FP6-LLM [42],                   cessing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, Decem-
+COMET [25], MixQ [7] and Qserve [24] develop special-                         ber 10 - 15, 2024, Amir Globersons, Lester Mackey, Danielle Bel-
+ized systems and kernels for their specific quantization al-                  grave, Angela Fan, Ulrich Paquet, Jakub M. Tomczak, and Cheng
+gorithms, which are not directly applicable to our RTMPQ                      Zhang (Eds.). http://papers.nips.cc/paper_files/paper/2024/hash/
+algorithm. Ladder [40] and QFactory [47] provide compi-                       b5b939436789f76f08b9d0da5e81af7c-Abstract-Conference.html
+                                                                          [4] Yonatan Bisk, Rowan Zellers, Ronan Le Bras, Jianfeng Gao, and Yejin
+lation frameworks for quantized kernels, but they cannot                      Choi. 2020. PIQA: Reasoning about Physical Commonsense in Nat-
+handle RTMPQ’s fine-grained mixed precision pattern.                          ural Language. In The Thirty-Fourth AAAI Conference on Artificial
+                                                                              Intelligence, AAAI 2020, The Thirty-Second Innovative Applications of
+9     Conclusion                                                              Artificial Intelligence Conference, IAAI 2020, The Tenth AAAI Sympo-
+                                                                              sium on Educational Advances in Artificial Intelligence, EAAI 2020,
+We present RoMeo, a LLM serving system that achieves su-                      New York, NY, USA, February 7-12, 2020. AAAI Press, 7432–7439.
+perior model accuracy preservation through a novel Rotated                    doi:10.1609/AAAI.V34I05.6239
+Token-wise Mixed Precision Quantization algorithm. RoMeo                  [5] Sébastien Bubeck, Varun Chandrasekaran, Ronen Eldan, Johannes
+introduces a permutation-free mixed precision computation                     Gehrke, Eric Horvitz, Ece Kamar, Peter Lee, Yin Tat Lee, Yuanzhi Li,
+                                                                              Scott M. Lundberg, Harsha Nori, Hamid Palangi, Marco Túlio Ribeiro,
+paradigm that integrates software-pipelined cross-precision                   and Yi Zhang. 2023. Sparks of Artificial General Intelligence: Early ex-
+kernels and fine-grained asynchronous concurrent execu-                       periments with GPT-4. CoRR abs/2303.12712 (2023). arXiv:2303.12712
+tion to effectively overcome the challenges of deploying                      doi:10.48550/ARXIV.2303.12712
+
+
+
+
+                                                                   284
+RoMeo: Mitigating Dual-dimensional Outliers with Rotated Mixed Precision ...                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+ [6] Jerry Chee, Yaohui Cai, Volodymyr Kuleshov, and Christopher De Sa.                    Imanol Arrieta Ibarra, Isabel M. Kloumann, Ishan Misra, Ivan Evti-
+     2023. QuIP: 2-Bit Quantization of Large Language Models With Guar-                    mov, Jade Copet, Jaewon Lee, Jan Geffert, Jana Vranes, Jason Park, Jay
+     antees. In Advances in Neural Information Processing Systems 36: An-                  Mahadeokar, Jeet Shah, Jelmer van der Linde, Jennifer Billock, Jenny
+     nual Conference on Neural Information Processing Systems 2023, NeurIPS                Hong, Jenya Lee, Jeremy Fu, Jianfeng Chi, Jianyu Huang, Jiawen Liu, Jie
+     2023, New Orleans, LA, USA, December 10 - 16, 2023, Alice Oh, Tristan                 Wang, Jiecao Yu, Joanna Bitton, Joe Spisak, Jongsoo Park, Joseph Rocca,
+     Naumann, Amir Globerson, Kate Saenko, Moritz Hardt, and Sergey                        Joshua Johnstun, Joshua Saxe, Junteng Jia, Kalyan Vasuden Alwala,
+     Levine (Eds.). http://papers.nips.cc/paper_files/paper/2023/hash/                     Kartikeya Upasani, Kate Plawiak, Ke Li, Kenneth Heafield, Kevin Stone,
+     0df38cd13520747e1e64e5b123a78ef8-Abstract-Conference.html                             and et al. 2024. The Llama 3 Herd of Models. CoRR abs/2407.21783
+ [7] Yidong Chen, Chen Zhang, Rongchao Dong, Haoyuan Zhang, Yonghua                        (2024). arXiv:2407.21783 doi:10.48550/ARXIV.2407.21783
+     Zhang, Zhonghua Lu, and Jidong Zhai. 2024. MixQ: Taming Dynamic                  [13] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh.
+     Outliers in Mixed-Precision Quantization by Online Prediction. In                     2022. GPTQ: Accurate Post-Training Quantization for Generative Pre-
+     Proceedings of the International Conference for High Performance Com-                 trained Transformers. CoRR abs/2210.17323 (2022). arXiv:2210.17323
+     puting, Networking, Storage, and Analysis, SC 2024, Atlanta, GA, USA,                 doi:10.48550/ARXIV.2210.17323
+     November 17-22, 2024. IEEE, 74. doi:10.1109/SC41406.2024.00080                   [14] Leo Gao, Jonathan Tow, Baber Abbasi, Stella Biderman, Sid Black,
+ [8] Peter Clark, Isaac Cowhey, Oren Etzioni, Tushar Khot, Ashish Sabhar-                  Anthony DiPofi, Charles Foster, Laurence Golding, Jeffrey Hsu, Alain
+     wal, Carissa Schoenick, and Oyvind Tafjord. 2018. Think you have                      Le Noac’h, Haonan Li, Kyle McDonell, Niklas Muennighoff, Chris
+     Solved Question Answering? Try ARC, the AI2 Reasoning Challenge.                      Ociepa, Jason Phang, Laria Reynolds, Hailey Schoelkopf, Aviya
+     CoRR abs/1803.05457 (2018). arXiv:1803.05457 http://arxiv.org/abs/                    Skowron, Lintang Sutawika, Eric Tang, Anish Thite, Ben Wang, Kevin
+     1803.05457                                                                            Wang, and Andy Zou. 2024. The Language Model Evaluation Harness.
+ [9] DeepSeek-AI, Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao                     doi:10.5281/zenodo.12608602
+     Wu, Chengda Lu, Chenggang Zhao, Chengqi Deng, Chenyu Zhang,                      [15] Amir Gholami, Sehoon Kim, Zhen Dong, Zhewei Yao, Michael W.
+     Chong Ruan, Damai Dai, Daya Guo, Dejian Yang, Deli Chen, Dongjie Ji,                  Mahoney, and Kurt Keutzer. 2021. A Survey of Quantization Methods
+     Erhang Li, Fangyun Lin, Fucong Dai, Fuli Luo, Guangbo Hao, Guanting                   for Efficient Neural Network Inference. CoRR abs/2103.13630 (2021).
+     Chen, Guowei Li, H. Zhang, Han Bao, Hanwei Xu, Haocheng Wang,                         arXiv:2103.13630 https://arxiv.org/abs/2103.13630
+     Haowei Zhang, Honghui Ding, Huajian Xin, Huazuo Gao, Hui Li, Hui                 [16] Ruihao Gong, Yifu Ding, Zining Wang, Chengtao Lv, Xingyu Zheng,
+     Qu, J. L. Cai, Jian Liang, Jianzhong Guo, Jiaqi Ni, Jiashi Li, Jiawei                 Jinyang Du, Haotong Qin, Jinyang Guo, Michele Magno, and Xianglong
+     Wang, Jin Chen, Jingchang Chen, Jingyang Yuan, Junjie Qiu, Junlong                    Liu. 2024. A Survey of Low-bit Large Language Models: Basics, Sys-
+     Li, Junxiao Song, Kai Dong, Kai Hu, Kaige Gao, Kang Guan, Kexin                       tems, and Algorithms. CoRR abs/2409.16694 (2024). arXiv:2409.16694
+     Huang, Kuai Yu, Lean Wang, Lecong Zhang, Lei Xu, Leyi Xia, Liang                      doi:10.48550/ARXIV.2409.16694
+     Zhao, Litong Wang, Liyue Zhang, Meng Li, Miaojun Wang, Mingchuan                 [17] Cong Guo, Jiaming Tang, Weiming Hu, Jingwen Leng, Chen Zhang,
+     Zhang, Minghua Zhang, Minghui Tang, Mingming Li, Ning Tian, Pan-                      Fan Yang, Yunxin Liu, Minyi Guo, and Yuhao Zhu. 2023. OliVe: Accel-
+     pan Huang, Peiyi Wang, Peng Zhang, Qiancheng Wang, Qihao Zhu,                         erating Large Language Models via Hardware-friendly Outlier-Victim
+     Qinyu Chen, Qiushi Du, R. J. Chen, R. L. Jin, Ruiqi Ge, Ruisong Zhang,                Pair Quantization. In Proceedings of the 50th Annual International Sym-
+     Ruizhe Pan, Runji Wang, Runxin Xu, Ruoyu Zhang, Ruyi Chen, S. S.                      posium on Computer Architecture, ISCA 2023, Orlando, FL, USA, June
+     Li, Shanghao Lu, Shangyan Zhou, Shanhuang Chen, Shaoqing Wu,                          17-21, 2023, Yan Solihin and Mark A. Heinrich (Eds.). ACM, 3:1–3:15.
+     Shengfeng Ye, Shengfeng Ye, Shirong Ma, Shiyu Wang, Shuang Zhou,                      doi:10.1145/3579371.3589038
+     Shuiping Yu, Shunfeng Zhou, Shuting Pan, T. Wang, Tao Yun, Tian                  [18] Cong Guo, Chen Zhang, Jingwen Leng, Zihan Liu, Fan Yang, Yunxin
+     Pei, Tianyu Sun, W. L. Xiao, and Wangding Zeng. 2024. DeepSeek-                       Liu, Minyi Guo, and Yuhao Zhu. 2022. ANT: Exploiting Adaptive
+     V3 Technical Report. CoRR abs/2412.19437 (2024). arXiv:2412.19437                     Numerical Data Type for Low-bit Deep Neural Network Quantiza-
+     doi:10.48550/ARXIV.2412.19437                                                         tion. In 55th IEEE/ACM International Symposium on Microarchitecture,
+[10] Tim Dettmers, Mike Lewis, Younes Belkada, and Luke Zettlemoyer.                       MICRO 2022, Chicago, IL, USA, October 1-5, 2022. IEEE, 1414–1433.
+     2022. LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale.              doi:10.1109/MICRO56248.2022.00095
+     CoRR abs/2208.07339 (2022). arXiv:2208.07339 doi:10.48550/ARXIV.                 [19] Xing Hu, Yuan Cheng, Dawei Yang, Zhixuan Chen, Zukang Xu, Jiangy-
+     2208.07339                                                                            ong Yu, Chen Xu, Zhihang Yuan, Zhe Jiang, and Sifan Zhou. 2025.
+[11] Haojie Duanmu, Xiuhong Li, Zhihang Yuan, Size Zheng, Jiangfei Duan,                   OSTQuant: Refining Large Language Model Quantization with Or-
+     Xingcheng Zhang, and Dahua Lin. 2025. MxMoE: Mixed-precision                          thogonal and Scaling Transformations for Better Distribution Fit-
+     Quantization for MoE with Accuracy and Performance Co-Design.                         ting. In The Thirteenth International Conference on Learning Repre-
+     CoRR abs/2505.05799 (2025). arXiv:2505.05799 doi:10.48550/ARXIV.                      sentations, ICLR 2025, Singapore, April 24-28, 2025. OpenReview.net.
+     2505.05799                                                                            https://openreview.net/forum?id=rAcgDBdKnP
+[12] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Ka-                    [20] Sehoon Kim, Coleman Hooper, Amir Gholami, Zhen Dong, Xi-
+     dian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schel-                        uyu Li, Sheng Shen, Michael W. Mahoney, and Kurt Keutzer. 2024.
+     ten, Amy Yang, Angela Fan, Anirudh Goyal, Anthony Hartshorn,                          SqueezeLLM: Dense-and-Sparse Quantization. In Forty-first Interna-
+     Aobo Yang, Archi Mitra, Archie Sravankumar, Artem Korenev, Arthur                     tional Conference on Machine Learning, ICML 2024, Vienna, Austria,
+     Hinsvark, Arun Rao, Aston Zhang, Aurélien Rodriguez, Austen                           July 21-27, 2024. OpenReview.net. https://openreview.net/forum?id=
+     Gregerson, Ava Spataru, Baptiste Rozière, Bethany Biron, Binh Tang,                   0jpbpFia8m
+     Bobbie Chern, Charlotte Caucheteux, Chaya Nayak, Chloe Bi, Chris                 [21] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+     Marra, Chris McConnell, Christian Keller, Christophe Touret, Chun-                    Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+     yang Wu, Corinne Wong, Cristian Canton Ferrer, Cyrus Nikolaidis,                      2023. Efficient Memory Management for Large Language Model Serv-
+     Damien Allonsius, Daniel Song, Danielle Pintz, Danny Livshits, David                  ing with PagedAttention. In Proceedings of the 29th Symposium on Op-
+     Esiobu, Dhruv Choudhary, Dhruv Mahajan, Diego Garcia-Olano, Diego                     erating Systems Principles, SOSP 2023, Koblenz, Germany, October 23-26,
+     Perino, Dieuwke Hupkes, Egor Lakomkin, Ehab AlBadawy, Elina                           2023, Jason Flinn, Margo I. Seltzer, Peter Druschel, Antoine Kaufmann,
+     Lobanova, Emily Dinan, Eric Michael Smith, Filip Radenovic, Frank                     and Jonathan Mace (Eds.). ACM, 611–626. doi:10.1145/3600006.3613165
+     Zhang, Gabriel Synnaeve, Gabrielle Lee, Georgia Lewis Anderson,                  [22] Haokun Lin, Haobo Xu, Yichen Wu, Jingzhi Cui, Yingtao Zhang,
+     Graeme Nail, Grégoire Mialon, Guan Pang, Guillem Cucurell, Hai-                       Linzhan Mou, Linqi Song, Zhenan Sun, and Ying Wei. 2024.
+     ley Nguyen, Hannah Korevaar, Hu Xu, Hugo Touvron, Iliyan Zarov,
+
+
+
+
+                                                                                285
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                    Qihao Zhang, MingLiang Tang, Mingshu Zhai, Kinman Lei, and Jidong Zhai
+
+
+     DuQuant: Distributing Outliers via Dual Transformation Makes                            Artificial Intelligence Conference, IAAI 2020, The Tenth AAAI Sympo-
+     Stronger Quantized LLMs. In Advances in Neural Information Pro-                         sium on Educational Advances in Artificial Intelligence, EAAI 2020,
+     cessing Systems 38: Annual Conference on Neural Information Pro-                        New York, NY, USA, February 7-12, 2020. AAAI Press, 8732–8740.
+     cessing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, Decem-                       doi:10.1609/AAAI.V34I05.6399
+     ber 10 - 15, 2024, Amir Globersons, Lester Mackey, Danielle Bel-                   [32] Wenqi Shao, Mengzhao Chen, Zhaoyang Zhang, Peng Xu, Lirui Zhao,
+     grave, Angela Fan, Ulrich Paquet, Jakub M. Tomczak, and Cheng                           Zhiqian Li, Kaipeng Zhang, Peng Gao, Yu Qiao, and Ping Luo. 2024.
+     Zhang (Eds.). http://papers.nips.cc/paper_files/paper/2024/hash/                        OmniQuant: Omnidirectionally Calibrated Quantization for Large
+     9febda1c8344cc5f2d51713964864e93-Abstract-Conference.html                               Language Models. In The Twelfth International Conference on Learning
+[23] Ji Lin, Jiaming Tang, Haotian Tang, Shang Yang, Wei-Ming Chen,                          Representations, ICLR 2024, Vienna, Austria, May 7-11, 2024. OpenRe-
+     Wei-Chen Wang, Guangxuan Xiao, Xingyu Dang, Chuang Gan, and                             view.net. https://openreview.net/forum?id=8Wuvhh0LYW
+     Song Han. 2024. AWQ: Activation-aware Weight Quantization                          [33] Mingjie Sun, Xinlei Chen, J. Zico Kolter, and Zhuang Liu. 2024. Massive
+     for On-Device LLM Compression and Acceleration. In Proceedings                          Activations in Large Language Models. CoRR abs/2402.17762 (2024).
+     of the Seventh Annual Conference on Machine Learning and Sys-                           arXiv:2402.17762 doi:10.48550/ARXIV.2402.17762
+     tems, MLSys 2024, Santa Clara, CA, USA, May 13-16, 2024, Phillip B.                [34] Yuxuan Sun, Ruikang Liu, Haoli Bai, Han Bao, Kang Zhao, Yuening
+     Gibbons, Gennady Pekhimenko, and Christopher De Sa (Eds.). ml-                          Li, Jiaxin Hu, Xianzhi Yu, Lu Hou, Chun Yuan, Xin Jiang, Wulong Liu,
+     sys.org. https://proceedings.mlsys.org/paper_files/paper/2024/hash/                     and Jun Yao. 2024. FlatQuant: Flatness Matters for LLM Quantization.
+     42a452cbafa9dd64e9ba4aa95cc1ef21-Abstract-Conference.html                               CoRR abs/2410.09426 (2024). arXiv:2410.09426 doi:10.48550/ARXIV.
+[24] Yujun Lin, Haotian Tang, Shang Yang, Zhekai Zhang, Guangxuan Xiao,                      2410.09426
+     Chuang Gan, and Song Han. 2024. QServe: W4A8KV4 Quantization                       [35] Vijay Thakkar, Pradeep Ramani, Cris Cecka, Aniket Shivam, Honghao
+     and System Co-design for Efficient LLM Serving. CoRR abs/2405.04532                     Lu, Ethan Yan, Jack Kosaian, Mark Hoemmen, Haicheng Wu, Andrew
+     (2024). arXiv:2405.04532 doi:10.48550/ARXIV.2405.04532                                  Kerr, Matt Nicely, Duane Merrill, Dustyn Blasig, Fengqi Qiao, Piotr
+[25] Lian Liu, Long Cheng, Haimeng Ren, Zhaohui Xu, Yudong Pan, Mengdi                       Majcher, Paul Springer, Markus Hohnerbach, Jin Wang, and Manish
+     Wang, Xiaowei Li, Yinhe Han, and Ying Wang. 2025. COMET: Towards                        Gupta. 2023. CUTLASS. https://github.com/NVIDIA/cutlass
+     Practical W4A4KV4 LLMs Serving. In Proceedings of the 30th ACM                     [36] THU-PACMAN. 2025. Chitu: High-performance inference framework
+     International Conference on Architectural Support for Programming                       for large language models, focusing on efficiency, flexibility, and avail-
+     Languages and Operating Systems, Volume 2, ASPLOS 2025, Rotterdam,                      ability. https://github.com/thu-pacman/chitu
+     Netherlands, 30 March 2025 - 3 April 2025, Lieven Eeckhout, Geor-                  [37] Philippe Tillet, Hsiang-Tsung Kung, and David D. Cox. 2019. Tri-
+     gios Smaragdakis, Katai Liang, Adrian Sampson, Martha A. Kim, and                       ton: an intermediate language and compiler for tiled neural net-
+     Christopher J. Rossbach (Eds.). ACM, 131–146. doi:10.1145/3676641.                      work computations. In Proceedings of the 3rd ACM SIGPLAN Inter-
+     3716252                                                                                 national Workshop on Machine Learning and Programming Languages,
+[26] Zechun Liu, Changsheng Zhao, Igor Fedorov, Bilge Soran, Dhruv                           MAPL@PLDI 2019, Phoenix, AZ, USA, June 22, 2019, Tim Mattson,
+     Choudhary, Raghuraman Krishnamoorthi, Vikas Chandra, Yuandong                           Abdullah Muzahid, and Armando Solar-Lezama (Eds.). ACM, 10–19.
+     Tian, and Tijmen Blankevoort. 2025. SpinQuant: LLM Quantization                         doi:10.1145/3315508.3329973
+     with Learned Rotations. In The Thirteenth International Conference                 [38] Albert Tseng, Jerry Chee, Qingyao Sun, Volodymyr Kuleshov, and
+     on Learning Representations, ICLR 2025, Singapore, April 24-28, 2025.                   Christopher De Sa. 2024. QuIP#: Even Better LLM Quantization with
+     OpenReview.net. https://openreview.net/forum?id=ogO6DGE6FZ                              Hadamard Incoherence and Lattice Codebooks. In Forty-first Interna-
+[27] Yuexiao Ma, Huixia Li, Xiawu Zheng, Feng Ling, Xuefeng Xiao, Rui                        tional Conference on Machine Learning, ICML 2024, Vienna, Austria,
+     Wang, Shilei Wen, Fei Chao, and Rongrong Ji. 2024. AffineQuant:                         July 21-27, 2024. OpenReview.net. https://openreview.net/forum?id=
+     Affine Transformation Quantization for Large Language Models. In The                    9BrydUVcoe
+     Twelfth International Conference on Learning Representations, ICLR 2024,           [39] Kuan Wang, Zhijian Liu, Yujun Lin, Ji Lin, and Song Han. 2019. HAQ:
+     Vienna, Austria, May 7-11, 2024. OpenReview.net. https://openreview.                    Hardware-Aware Automated Quantization With Mixed Precision. In
+     net/forum?id=of2rhALq8l                                                                 IEEE Conference on Computer Vision and Pattern Recognition, CVPR 2019,
+[28] Stephen Merity, Caiming Xiong, James Bradbury, and Richard Socher.                      Long Beach, CA, USA, June 16-20, 2019. Computer Vision Foundation /
+     2017. Pointer Sentinel Mixture Models. In 5th International Conference                  IEEE, 8612–8620. doi:10.1109/CVPR.2019.00881
+     on Learning Representations, ICLR 2017, Toulon, France, April 24-26, 2017,         [40] Lei Wang, Lingxiao Ma, Shijie Cao, Quanlu Zhang, Jilong Xue, Yining
+     Conference Track Proceedings. OpenReview.net. https://openreview.                       Shi, Ningxin Zheng, Ziming Miao, Fan Yang, Ting Cao, Yuqing Yang,
+     net/forum?id=Byj72udxe                                                                  and Mao Yang. 2024. Ladder: Enabling Efficient Low-Precision Deep
+[29] Denis Paperno, Germán Kruszewski, Angeliki Lazaridou, Quan Ngoc                         Learning Computing through Hardware-aware Tensor Transforma-
+     Pham, Raffaella Bernardi, Sandro Pezzelle, Marco Baroni, Gemma                          tion. In 18th USENIX Symposium on Operating Systems Design and
+     Boleda, and Raquel Fernández. 2016. The LAMBADA dataset: Word                           Implementation, OSDI 2024, Santa Clara, CA, USA, July 10-12, 2024, Ada
+     prediction requiring a broad discourse context. In Proceedings of the                   Gavrilovska and Douglas B. Terry (Eds.). USENIX Association, 307–323.
+     54th Annual Meeting of the Association for Computational Linguistics,                   https://www.usenix.org/conference/osdi24/presentation/wang-lei
+     ACL 2016, August 7-12, 2016, Berlin, Germany, Volume 1: Long Papers.               [41] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond,
+     The Association for Computer Linguistics. doi:10.18653/V1/P16-1144                      Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Rémi Louf,
+[30] Yeonhong Park, Jake Hyun, Hojoon Kim, and Jae W. Lee. 2025. DecDEC:                     Morgan Funtowicz, Joe Davison, Sam Shleifer, Patrick von Platen,
+     A Systems Approach to Advancing Low-Bit LLM Quantization. In 19th                       Clara Ma, Yacine Jernite, Julien Plu, Canwen Xu, Teven Le Scao, Syl-
+     USENIX Symposium on Operating Systems Design and Implementation,                        vain Gugger, Mariama Drame, Quentin Lhoest, and Alexander M. Rush.
+     OSDI 2025, Boston, MA, USA, July 7-9, 2025, Lidong Zhou and Yuanyuan                    2020. Transformers: State-of-the-Art Natural Language Processing.
+     Zhou (Eds.). USENIX Association, 803–819. https://www.usenix.org/                       In Proceedings of the 2020 Conference on Empirical Methods in Natural
+     conference/osdi25/presentation/park-yeonhong                                            Language Processing: System Demonstrations. Association for Computa-
+[31] Keisuke Sakaguchi, Ronan Le Bras, Chandra Bhagavatula, and Yejin                        tional Linguistics, Online, 38–45. https://www.aclweb.org/anthology/
+     Choi. 2020. WinoGrande: An Adversarial Winograd Schema Chal-                            2020.emnlp-demos.6
+     lenge at Scale. In The Thirty-Fourth AAAI Conference on Artificial                 [42] Haojun Xia, Zhen Zheng, Xiaoxia Wu, Shiyang Chen, Zhewei Yao,
+     Intelligence, AAAI 2020, The Thirty-Second Innovative Applications of                   Stephen Youn, Arash Bakhtiari, Michael Wyatt, Donglin Zhuang,
+                                                                                             Zhongzhu Zhou, Olatunji Ruwase, Yuxiong He, and Shuaiwen Leon
+
+
+
+                                                                                  286
+RoMeo: Mitigating Dual-dimensional Outliers with Rotated Mixed Precision ...              PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+     Song. 2024. Quant-LLM: Accelerating the Serving of Large Lan-                      Proceedings of the 57th Conference of the Association for Computational
+     guage Models via FP6-Centric Algorithm-System Co-Design on Mod-                    Linguistics, ACL 2019, Florence, Italy, July 28- August 2, 2019, Volume
+     ern GPUs. In Proceedings of the 2024 USENIX Annual Technical Con-                  1: Long Papers, Anna Korhonen, David R. Traum, and Lluís Màrquez
+     ference, USENIX ATC 2024, Santa Clara, CA, USA, July 10-12, 2024,                  (Eds.). Association for Computational Linguistics, 4791–4800. doi:10.
+     Saurabh Bagchi and Yiying Zhang (Eds.). USENIX Association, 699–                   18653/V1/P19-1472
+     713. https://www.usenix.org/conference/atc24/presentation/xia                 [47] Qihao Zhang, Mingshu Zhai, Rui Sun, and Jidong Zhai. 2025. QFactory:
+[43] Guangxuan Xiao, Ji Lin, Mickaël Seznec, Hao Wu, Julien Demouth, and                Accelerating Quantized Large Language Model Serving with Qtile
+     Song Han. 2023. SmoothQuant: Accurate and Efficient Post-Training                  Graphs. In Proceedings of the 2025 USENIX Annual Technical Conference,
+     Quantization for Large Language Models. In International Conference                USENIX ATC 2025, Boston, MA, USA, July 7-9, 2025, Deniz Altinbüken
+     on Machine Learning, ICML 2023, 23-29 July 2023, Honolulu, Hawaii,                 and Ryan Stutsman (Eds.). USENIX Association, 631–646. https://
+     USA (Proceedings of Machine Learning Research, Vol. 202), Andreas                  www.usenix.org/conference/atc25/presentation/zhang-qihao
+     Krause, Emma Brunskill, Kyunghyun Cho, Barbara Engelhardt, Sivan              [48] Yilong Zhao, Chien-Yu Lin, Kan Zhu, Zihao Ye, Lequn Chen,
+     Sabato, and Jonathan Scarlett (Eds.). PMLR, 38087–38099. https://                  Size Zheng, Luis Ceze, Arvind Krishnamurthy, Tianqi Chen,
+     proceedings.mlr.press/v202/xiao23c.html                                            and Baris Kasikci. 2024. Atom: Low-Bit Quantization for Ef-
+[44] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo                   ficient and Accurate LLM Serving. In Proceedings of the Sev-
+     Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, Chujie                       enth Annual Conference on Machine Learning and Systems, ML-
+     Zheng, Dayiheng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge, Haoran                  Sys 2024, Santa Clara, CA, USA, May 13-16, 2024, Phillip B. Gib-
+     Wei, Huan Lin, Jialong Tang, Jian Yang, Jianhong Tu, Jianwei Zhang,                bons, Gennady Pekhimenko, and Christopher De Sa (Eds.). ml-
+     Jian Yang, Jiaxi Yang, Jingren Zhou, Jingren Zhou, Junyang Lin, Kai                sys.org. https://proceedings.mlsys.org/paper_files/paper/2024/hash/
+     Dang, Keqin Bao, Kexin Yang, Le Yu, Lianghao Deng, Mei Li, Mingfeng                5edb57c05c81d04beb716ef1d542fe9e-Abstract-Conference.html
+     Xue, Mingze Li, Pei Zhang, Peng Wang, Qin Zhu, Rui Men, Ruize                 [49] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Sun,
+     Gao, Shixuan Liu, Shuang Luo, Tianhao Li, Tianyi Tang, Wenbiao Yin,                Jeff Huang, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion
+     Xingzhang Ren, Xinyu Wang, Xinyu Zhang, Xuancheng Ren, Yang                        Stoica, Joseph E. Gonzalez, Clark W. Barrett, and Ying Sheng.
+     Fan, Yang Su, Yichang Zhang, Yinger Zhang, Yu Wan, Yuqiong Liu,                    2024.      SGLang: Efficient Execution of Structured Language
+     Zekun Wang, Zeyu Cui, Zhenru Zhang, Zhipeng Zhou, and Zihan                        Model Programs. In Advances in Neural Information Processing
+     Qiu. 2025. Qwen3 Technical Report. CoRR abs/2505.09388 (2025).                     Systems 38: Annual Conference on Neural Information Process-
+     arXiv:2505.09388 doi:10.48550/ARXIV.2505.09388                                     ing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, Decem-
+[45] Zhihang Yuan, Yuzhang Shang, Yang Zhou, Zhen Dong, Zhe Zhou,                       ber 10 - 15, 2024, Amir Globersons, Lester Mackey, Danielle Bel-
+     Chenhao Xue, Bingzhe Wu, Zhikai Li, Qingyi Gu, Yong Jae Lee, Yan                   grave, Angela Fan, Ulrich Paquet, Jakub M. Tomczak, and Cheng
+     Yan, Beidi Chen, Guangyu Sun, and Kurt Keutzer. 2024. LLM Inference                Zhang (Eds.). http://papers.nips.cc/paper_files/paper/2024/hash/
+     Unveiled: Survey and Roofline Model Insights. CoRR abs/2402.16363                  724be4472168f31ba1c9ac630f15dec8-Abstract-Conference.html
+     (2024). arXiv:2402.16363 doi:10.48550/ARXIV.2402.16363                        [50] Xunyu Zhu, Jian Li, Yong Liu, Can Ma, and Weiping Wang. 2023. A
+[46] Rowan Zellers, Ari Holtzman, Yonatan Bisk, Ali Farhadi, and Yejin                  Survey on Model Compression for Large Language Models. CoRR
+     Choi. 2019. HellaSwag: Can a Machine Really Finish Your Sentence?. In              abs/2308.07633 (2023). arXiv:2308.07633 doi:10.48550/ARXIV.2308.
+                                                                                        07633
+
+
+
+
+                                                                             287
+

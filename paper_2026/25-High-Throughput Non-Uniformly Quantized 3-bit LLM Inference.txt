@@ -1,0 +1,1272 @@
+High-Throughput Non-uniformly Quantized 3-bit LLM
+                   Inference
+                YuAng Chen                                       Wenqi Zeng                                   Jeffrey Xu Yu
+     Chinese University of Hong Kong               Hong Kong University of Science and             Hong Kong University of Science and
+                 China                                       Technology                                  Technology (Guangzhou)
+         ychen@se.cuhk.edu.hk                                   China                                            China
+                                                       wzengad@connect.ust.hk                         jeffreyxuyu@hkust-gz.edu.cn
+
+Abstract                                                                        deployment is often constrained by their massive size that
+While Large Language Models (LLMs) are widely adopted,                          requires hundreds of gigabytes of memory just to store the
+their massive parameter size constrains practical deploy-                       model weights [36, 43]. It creates a significant bottleneck in
+ment. A common solution is clustering-based non-uniform                         memory bandwidth, which limits inference throughput dur-
+quantization, which effectively compresses models to as low                     ing auto-regressive generation where weights are repeatedly
+as 3 bits per weight while preserving high accuracy. How-                       fetched from memory [2, 11].
+ever, instead of accelerating memory-bound LLM inference,                          Weight-only quantization is a widely used strategy to
+the memory reduction paradoxically often causes a signif-                       address the memory challenge by reducing the numerical
+icant slowdown due to dequantization overhead and GPU                           precision of model weights from 16-bit floating-point to
+underutilization. To address the issue, we propose Quantix,                     lower bit-widths [7, 10, 11, 24, 39, 42]. Pioneering methods
+a framework designed to convert memory savings into infer-                      typically adopt uniform quantization [3, 6, 10, 11], which
+ence speedups. Quantix applies two key optimizations: (1) a                     maps floating-point (FP) values to low-bit integers (INT)
+hardware-aligned bit shuffling scheme for efficient data ac-                    with uniformly spaced intervals. Uniform quantization in-
+cess, and (2) a fused dequantization-multiplication pipeline                    curs lightweight computations as the conversion between
+that effectively maps workloads on both CUDA and Tensor                         FP and INT can be efficiently implemented with bitwise in-
+Cores. Quantix enables high-throughput batched inference,                       trinsics. Nonetheless, it struggles with accuracy at ultra-low
+delivering average kernel-level speedups of 4.82× over FP16                     bit-widths.
+cuBLAS and end-to-end speedups of up to 11.46× over state-                         Recently, non-uniform quantization [6, 19, 33] is devel-
+of-the-art quantization methods on NVIDIA L40 GPUs.                             oped to deliver high compression while preserving near-
+                                                                                lossless model accuracy. Instead of a linear mapping, these
+CCS Concepts: • Computing methodologies → Parallel                              approaches use K-means clustering to the weight distribu-
+computing methodologies; Natural language process-                              tion. Each weight is replaced by a low-bit index W𝑞 point-
+ing.                                                                            ing to a shared, full-precision cluster centroid C, such that
+Keywords: Large language model (LLM) inference, GPU pro-                        the reconstructed weight is W† = C[W𝑞 ]. Clustering pro-
+gramming                                                                        vides a finer approximation of irregular weight distributions,
+                                                                                leading to higher model quality. For example, non-uniform
+ACM Reference Format:                                                           SqueezeLLM reduces the perplexity (a metric where lower
+YuAng Chen, Wenqi Zeng, and Jeffrey Xu Yu. 2026. High-Throughput
+                                                                                scores indicate higher model accuracy) for a 3-bit LLaMA-7B
+Non-uniformly Quantized 3-bit LLM Inference. In Proceedings of
+                                                                                model to 6.32, significantly outperforming the 7.55 offered
+the 31st ACM SIGPLAN Annual Symposium on Principles and Prac-
+tice of Parallel Programming (PPoPP ’26), January 31 – February 4,              by the uniform GPTQ [19].
+2026, Sydney, NSW, Australia. ACM, New York, NY, USA, 13 pages.                    However, the non-uniform quantization often introduces
+https://doi.org/10.1145/3774934.3786423                                         a counter-intuitive trade-off: Although compressing weights
+                                                                                reduces memory traffic and should benefit memory-bound
+1    Introduction                                                               LLM inference, it instead brings substantial slowdowns (see
+                                                                                § 3). These slowdowns arise from the three stages of LLM
+Large Language Models (LLMs) have attracted increasing re-
+                                                                                inference: (1) during offline quantization, sub-byte formats
+search and industrial attention [34, 37, 43], but their practical
+                                                                                such as 3 bits misalign with GPU data types (32-bit INT),
+                                                                                leading to wasted or scattered bits, (2) during online dequan-
+                                                                                tization, reconstructing W† = C[W𝑞 ] requires pointer-based
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         memory accesses that break cache locality and remarkably in-
+tional License.
+                                                                                creases instruction overhead, and (3) during matrix multipli-
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                cation, execution proceeds token by token as sequential ma-
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2310-0/2026/01                                              trix–vector multiplications on CUDA cores, underutilizing
+https://doi.org/10.1145/3774934.3786423                                         the massive parallelism (e.g., Tensor Cores) of modern GPUs.
+
+
+
+                                                                          288
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                YuAng Chen, Wenqi Zeng, and Jeffrey Xu Yu.
+
+
+   To address these challenges, we propose Quantix, a high-              2     Background and Related Work
+performance framework for non-uniformly quantized 3-bit                  2.1   GPU Architecture
+LLM inference. We focus on 3-bit quantization as it presents
+                                                                         NVIDIA GPUs are widely adopted for parallel computing,
+the most significant and unique challenges for efficient hard-
+                                                                         featuring multiple Streaming Multiprocessors (SMs) that in-
+ware execution, requiring novel solutions for bit packing,
+                                                                         clude general-purpose CUDA Cores and specialized Tensor
+memory alignment, and cache optimization. Moreover, our
+                                                                         Cores. CUDA Cores handle scalar arithmetic and thread-
+analysis of performance challenges and the proposed opti-
+                                                                         level logic operations, enabling diverse computations. Ten-
+mization techniques are broadly applicable and can be effec-
+                                                                         sor Cores [25], on the other hand, are optimized for low-
+tively extended to other bit-widths (e.g., 2 and 4), which pose
+                                                                         precision dense matrix operations and support matrix mul-
+fewer but related hardware challenges. Also, we prioritize
+                                                                         tiplication and accumulation (MMA). They deliver signifi-
+batched inference, where multiple tokens are generated in
+                                                                         cantly higher throughput than CUDA Cores, accelerating
+parallel, as real-world deployments demand massive through-
+                                                                         deep learning workloads with supported MMA shapes such
+put (e.g., OpenAI serves millions of tokens per second [15]).
+                                                                         as ⟨16, 16, 16⟩ in FP16 [20, 25].
+Batched inference is particularly challenging, as its higher
+                                                                            Despite improvements in compute performance, especially
+arithmetic intensity limits the ability to fully overlap com-
+                                                                         from Tensor Cores, memory bandwidth has lagged behind.
+putation with reduced memory movement.
+                                                                         Over two decades, peak server FLOPS have increased by
+   Quantix integrates several key optimizations to boost non-
+                                                                         ∼60,000×, while DRAM bandwidth has improved by only
+uniformly quantized LLM inference. First, it employs offline
+                                                                         ∼100× [14]. This imbalance has caused many low arithmetic
+bit shuffling (§ 4.2) to reorganize the quantized weights (W𝑞 )
+                                                                         intensity workloads to become memory bound, shifting the
+for aligned and coalesced GPU access. This transformation is
+                                                                         performance bottleneck from computation to data move-
+lossless w.r.t. the non-uniformly quantized model, because it
+                                                                         ment, a phenomenon known as the "memory wall."
+leaves the cluster centroids (C) unchanged, thereby fully pre-
+serving model accuracy. Second, Quantix implements a fused
+                                                                         2.2   LLM Inference Workload Characteristics
+kernel for data prefetching, loading, dequantization and ma-
+trix multiplication (§ 4.3), incorporating a hierarchical soft-          Large Language Models (LLMs) are based on the transformer
+ware pipeline to overlap these steps. Further, dequantization            architecture [37], which consists of stacked layers of multi-
+is performed on CUDA cores with in-register optimizations,               head self-attention and feed-forward networks (FFNs). Self-
+and parallel matrix–matrix multiplication is accelerated on              attention generates context-aware token embeddings by
+Tensor Cores, facilitating efficient batched inference.                  computing query-key similarities, while FFNs apply non-
+   The performance of Quantix is evaluated on both ker-                  linear transformations independently to each token. LLM
+nel and model levels, in comparison with state-of-the-art                inference workloads are characterized by two phases with
+methods, including SqueezeLLM [19], Any-Precision [33],                  distinct compute and memory behaviors [32]:
+Marlin [11], and Bitsandbytes [6]. At the kernel level, Quan-               In the prefill phase, the full input prompt is processed in
+tix’s 3-bit matrix multiplication achieves an average speedup            parallel, making it compute-bound due to large matrix mul-
+of 4.82× (up to 8.40×) over the FP16 cuBLAS baseline on                  tiplications. Given input activations A ∈ R𝑁 ×𝐾 and weights
+an inference-optimized L40 GPU. At the model level, Quan-                W ∈ R𝐾 ×𝑀 , the output Y = A × W involves 𝑁 = 𝐿 × 𝐵 total
+tix enables the LLaMA-65B model to be served on a single                 tokens, where 𝐿 is sequence length and 𝐵 is batch size.
+GPU, which is infeasible with FP16, achieving more than                     In the decode phase, tokens are generated autoregres-
+10× higher throughput than SqueezeLLM.                                   sively, with only one token per sequence processed at each
+   In summary, our contributions are listed as follows:                  step (𝑁 = 1 × 𝐵). The smaller workload reduces arithmetic
+                                                                         intensity but frequently accesses weights and KV cache, mak-
+                                                                         ing this phase memory-bound.
+• We identify the performance bottlenecks of 3-bit non-
+  uniform quantized LLM inference on GPUs, including in-                 2.3   LLM Quantization
+  efficient bit-packing, high dequantization overhead, and               Quantization techniques for neural networks fall into two
+  GPU underutilization.                                                  main categories: Quantization-Aware Training (QAT) and
+• We propose Quantix, a high-performance framework that                  Post-Training Quantization (PTQ). QAT simulates quantiza-
+  overcomes these issues by integrating hardware-aligned                 tion during training to maintain accuracy [18, 27]. By con-
+  bit shuffling, in-register dequantization and Tensor Core-             trast, PTQ quantizes a pretrained model without retrain-
+  accelerated computation within a hierarchical pipeline.                ing [10, 19, 28, 33], making it more practical. Quantization
+• We demonstrate significant speedups with Quantix at both               can be applied to weights and activations. Weight quantiza-
+  the kernel and end-to-end model levels, validating its per-            tion is widely used to reduce model size, while activation
+  formance and scalability across various bit-widths, LLM                quantization is less common due to its dynamic variabil-
+  models, and GPUs.                                                      ity [7, 41].
+
+
+
+                                                                   289
+High-Throughput Non-uniformly Quantized 3-bit LLM Inference                                                                                           PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+                                                                                FP16 Base          SqueezeLLM         Quantix            1   2    3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3
+                 FP16 Base    SqueezeLLM      Quantix (Ours)
+            80                                    250                                                                                     (a) Padding: 10 x 3-bit elements packed into a 32-bit word with 2 unused bits
+                                                  200                             Weight            Weight            Weight
+            60                                                                                                                           1   2    3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2
+
+
+
+
+                                                        Milliseconds
+                                                                       Weights 95%                   81%               81%
+Gigabytes
+
+
+
+
+                                                  150                  KV Cache
+            40                                                         Activations         (b) Memory footprint breakdown                3   1    2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1
+                                                  100
+                                                                                FP16 Base          SqueezeLLM         Quantix            2   3    1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3   1   2   3
+            20                                                         Matmul
+                                                  50
+                                                                       MHA
+                                                                       Others                                                                    (b) Spanning: 32 x 3-bit elements tightly packed across 3 x 32-bit words
+             0                                    0                                                                       Matmul
+                                                                                                                           44%
+                     Memory         Latency                                       Matmul            Matmul
+                                                                                   72%               92%
+
+                      (a) Overall performance                                                (c) GPU time breakdown                      Figure 2. Naive bit packing for 3-bit quantization. Numbers
+                                                                                                                                         1-3 in boxes represent bit positions within elements.
+Figure 1. Performance comparison between FP16 baseline,
+3-bit SqueezeLLM and Quantix for OPT-30B on A100
+                                                                                                                                         reduces weight memory, its inefficient kernels inflate mat-
+                                                                                                                                         mul time to 92% of the total. In contrast, Quantix reduces the
+   The value mapping scheme in quantization can be uniform                                                                               matmul time cost to just 44%. This comparison highlights
+or non-uniform. Uniform quantization uses fixed scale and                                                                                that memory savings from quantization do not automatically
+zero-point to map values to evenly spaced levels [18], as in                                                                             translate into faster inference. A co-designed compute strat-
+FP6-LLM [39], GPTQ [10], AWQ [24] and SmoothQuant [40].                                                                                  egy is required to unlock the potential performance gain.
+With efficient bitwise intrinsics, Marlin [11] accelerates LLM
+inference with uniform 4-bit quantization. Conversely, non-                                                                              3.2          Challenges in Bit Packing
+uniform quantization, as adopted by SqueezeLLM [19] and                                                                                  The use of 3-bit weights presents an architectural challenge
+Any-Precision LLM [33], adapts to data distribution, con-                                                                                because their bit-width does not naturally align with stan-
+sistently delivering better accuracy at low bit-widths. Any-                                                                             dard 32-bit or 64-bit data types. Fig. 2 depicts two naive pack-
+Precision LLM improves upon SqueezeLLM by supporting                                                                                     ing schemes that create non-trivial performance penalties.
+wider bit-widths and enhancing CUDA core utilization. Bit-
+sandbytes [6] supports both uniform and non-uniform schemes.                                                                                Padding and Internal Fragmentation: A straightfor-
+Our work focuses on accelerating inference for LLMs that                                                                                 ward strategy is to pack a fixed number of elements into a
+use post-training, weight-only, non-uniform quantization.                                                                                word and pad the remainder with unused bits. For instance,
+   Model pruning is another common approach to reduce pa-                                                                                ten 3-bit elements (30 bits) can be packed into a 32-bit word,
+rameter size by eliminating redundant weights [9, 17, 22, 35].                                                                           leaving 2 bits for padding. While the padding approach sim-
+Pruning can target either structured blocks [4, 23] or un-                                                                               plifies data access, the unused bits within each word, though
+structured individual weights [21, 22, 26]. Similar to quanti-                                                                           small, accumulate over large matrices, increasing the model’s
+zation, the matrix sparsity from pruning often requires care-                                                                            total memory footprint and the required memory bandwidth
+ful optimization to translate into actual inference speedups                                                                             during execution.
+on GPUs [12]. Since pruning is orthogonal to quantization,                                                                                  Spanning and Memory Misalignment: Alternatively,
+the two techniques can be jointly applied to achieve higher                                                                              elements can be packed tightly, spanning across word bound-
+model compression and accuracy [8, 16, 19].                                                                                              aries to maximize memory utilization. For example, 32 3-
+                                                                                                                                         bit elements fit into three 32-bit words (96 bits). Though
+3                 Gaps and Challenges                                                                                                    the spanning approach eliminates wasted space, it creates
+3.1                 The Performance Gaps                                                                                                 memory misalignment, requiring additional logic to access
+Non-uniform quantization effectively reduces memory foot-                                                                                elements spanning multiple words. This disrupts memory
+print and is thus expected to accelerate memory-bound LLM                                                                                coalescing, introduces branching, and leads to inefficient
+inference. However, it often causes a paradoxical slowdown.                                                                              memory utilization and warp divergence, ultimately degrad-
+Fig. 1a presents performance for the OPT-30B model on an                                                                                 ing GPU performance.
+A100 GPU (batch size 16, token length 128). Under 3-bit quan-
+tization, SqueezeLLM exemplifies the trade-off: it achieves                                                                              3.3          Pressure on CUDA Cores
+a measured memory reduction of 4.07× but increases the                                                                                   The complex dequantization process of non-uniform schemes
+latency by 3.01× compared to FP16 baseline. In contrast,                                                                                 places heavy computational pressure on general-purpose
+Quantix achieves the same memory reduction while deliver-                                                                                CUDA cores. Fig. 3 quantifies the costs by measuring the
+ing a 1.36× speedup, effectively translating memory savings                                                                              instruction counts of SqueezeLLM, the FP16 baseline, and
+into faster inference                                                                                                                    Quantix. SqueezeLLM, which performs both dequantization
+   The performance breakdown in Fig. 1b-c reveals the source                                                                             and matmul on CUDA cores, exhibits a rapidly growing in-
+of the performance gap. For FP16 baseline, weight storage                                                                                struction count as the batch size increases. This imposes
+and matrix multiplication (matmul) dominate memory (95%)                                                                                 a substantial and unsustainable computational load on the
+and computing time (72%). Though SqueezeLLM successfully                                                                                 GPU, explaining its high latency in Fig. 1a.
+
+
+
+                                                                                                                                   290
+  PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                       YuAng Chen, Wenqi Zeng, and Jeffrey Xu Yu.
+
+                                                 SqueezeLLM                FP16 Base                Quantix (Ours)
+                    1010                                                                                                         is exacerbated with 3-bit data, as values are packed across
+Instruction Count
+
+
+
+                                                                                                                                 byte boundaries, making it highly complex to efficiently de-
+                    109
+                                                                                                                                 quantize and simultaneously arrange them into the required
+                    108                                                                                                          interleaved pattern.
+                    107
+                                                                                                                                    Dequantization Overhead. The dequantization of 3-bit
+                    106
+                                     1           2           4       8     16      32          64      128     256   512
+                                                                                                                                 weights comprises a long sequence of low-throughput bit-
+                                                                         Batch Size (N)
+                                                                                                                                 wise and type-conversion instructions on CUDA cores due
+                                                                                                                                 to the complex logic to extract non-power-of-two bit-width
+  Figure 3. Instruction count of different methods for a single                                                                  values [19, 33]. As shown in Fig. 4b, the dequantization forms
+  linear LLM layer sized 21504×7168 from OPT-30B on A100                                                                         a critical dependency in the execution pipeline. The high-
+                                                                                                                                 throughput Tensor Cores are left stalled and idle while wait-
+                    W" 0 1 2 3 4 5 6 7                                                                                           ing for the low-throughput dequantization to produce their
+                                                                                               W"
+                                Dequantization                                                                                   input. This pipeline bubble effectively serializes the work-
+                    W   !
+                            0    1       2   3       4   5   6   7              warp                                             load, nullifying any potential performance gains.
+                                                                                                loop            Global
+                                ldmatrix                                                                        Memory
+
+                            0     1                  4   5
+                                                                                                                                 4     Quantix Design
+                                                                                                       CUDA
+                            2     3                  6   7
+                                                                                Dequantization         Cores
+                                                                                                                                 4.1   Design Overview
+                                                                                           W!                                    To overcome the aforementioned challenges, we introduce
+                                         Tensor Cores                                                            Tensor
+                                                                                       Stall           MMA       Cores           Quantix, a high-performance framework that accelerate ex-
+                            (a) Layout mismatch                                 (b) Dequantization overhead                      isting advanced low-bit quantization schemes. As visualized
+                                                                                                                                 in Fig. 5, Quantix effectively converts memory savings into
+                            Figure 4. Challenges in utilizing Tensor Cores                                                       inference speedups through two key co-designed compo-
+                                                                                                                                 nents: (1) hardware-aligned bit shuffling, and (2) a highly
+                                                                                                                                 optimized fused kernel.
+    In contrast, FP16 baseline maintains low instruction counts,                                                                    First, we leverage the static nature of model weights by
+ as its operations are natively supported by the hardware                                                                        applying a one-time, offline weight transformation. Quantix
+ without dequantization. Quantix effectively avoids the in-                                                                      employs a novel hardware-aligned bit shuffling (detailed in
+ struction explosion seen in SqueezeLLM by optimizing the                                                                        §4.2). This critical pre-processing step reorganizes the packed
+ computational pipeline for dequantization and matmul. It                                                                        3-bit data into a hardware-friendly layout. The goal is to
+ keeps the instruction count orders of magnitude lower than                                                                      ensure that all memory accesses during the online inference
+ SqueezeLLM when 𝑁 ≥ 8, and only slightly higher than                                                                            stage are perfectly aligned and coalesced, which is essential
+ FP16 baseline.                                                                                                                  for maximizing GPU memory bandwidth.
+                                                                                                                                    Second, to exploit the GPU hardware effectively, we de-
+  3.4                       Challenges in Utilizing Tensor Cores.
+                                                                                                                                 sign a single fused kernel that combines the dequantization
+ The over-utilization of CUDA cores for dequantization di-                                                                       and matrix multiplication stages (detailed in §4.3). The fused
+ rectly leads to the underutilization of the GPU’s powerful                                                                      kernel is built to orchestrate the use of both CUDA and
+ Tensor Cores. The key to enabling fast LLM inference on                                                                         Tensor Cores efficiently. It uses in-register dequantization
+ modern NVIDIA GPUs lies in effectively utilizing their Ten-                                                                     (§4.3.2) to prepare weights on CUDA Cores while immedi-
+ sor Cores [20, 29, 32], which provide significant acceleration                                                                  ately feeding the results to the specialized Tensor Cores for
+ for the core matmul operation. However, conventional non-                                                                       high-throughput matmul. The entire process is managed by
+ uniform quantization [19, 33] completely bypasses Tensor                                                                        a hierarchical software pipeline (§4.3.3) that overlaps mem-
+ Cores and leaves the GPU’s highest-throughput units idle                                                                        ory transfers, dequantization and computations, effectively
+ for the very operation they are designed to accelerate. The                                                                     hiding latency and maximizing hardware utilization.
+ obstacles to leveraging Tensor Cores are rooted in two fun-
+ damental, hardware-level challenges:                                                                                            4.2   Hardware-Aligned Bit Shuffling
+   Layout Mismatch. Tensor Cores do not operate on sim-                                                                          To prepare the quantized weight matrix W𝑞 for efficient GPU
+ ple row- or column-major data. They require operands to                                                                         computation, Quantix performs bit shuffling that transforms
+ be loaded from memory into registers in a specific, com-                                                                        the layout of the quantized weights (W𝑞 ) without modify-
+ plex interleaved pattern to function correctly. As shown in                                                                     ing the cluster centroids (C), thereby fully preserving model
+ Fig. 4a, directly loading contiguously stored dequantized                                                                       accuracy. Bit shuffling achieves both coalesced memory ac-
+ weights causes them to be scattered incorrectly across the                                                                      cess and high storage density, overcoming the respective
+ Tensor Core’s internal matrix representation. This problem                                                                      inefficiencies of naive spanning and padding strategies.
+
+
+
+                                                                                                                           291
+High-Throughput Non-uniformly Quantized 3-bit LLM Inference                                            PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                                H                                                                                                        H*
+                                                             Quantization           Hardware-Aligned                                                                         Fused Dequant
+                         Input Embed.
+                                                                                      Bit Shuffling                                              3H                          & Matmat Kernel
+                                           3H
+                 Attention                                                                                                                                                                                                                 A
+                        QKV Projection                        1.1 0.6 2.1
+
+                                                              0.7 11.2 5.3
+                       Output Projection        H                                                                                                        H*                                  W
+                                           H
+                                                              -8.1 6.5 -0.5                                                                       H
+
+                                                                                                                                                                                  Wtile                                                  Atile
+                         Add & Norm
+                                                H              1   3    6                                                                                H*
+                 FFN                                                                                                                                                                   In-Word Parallel
+                                                               2   0    4
+                                                                                                                                                                                        Dequantization
+                         Up Projection     4H                                             1        0        1       0                            4H
+                                                               5   7    6
+                                                                                          0        1        1       0
+                                                                                                                                                                                                  Wfrag                                 Afrag
+                       Down Projection                                                    1        1        0       1
+                                                             SqueezeLLM,                  1        0        1       1
+                                                             AnyPrecision,
+                         Add & Norm                 4H       Bitsandbytes                                                                            4H*                                                Tensor Cores
+                                                                  …                                                                              H
+                                            H
+
+
+
+                                                         Figure 5. Overview of Quantix
+
+                                                                                               𝑏* 𝑏+ 𝑏,                      ⋯           𝑏* 𝑏+ 𝑏,                                      𝑏*           ⋯             𝑏*                          𝑏+ 𝑏,           ⋯            𝑏+ 𝑏,
+   The weight bits are shuffled to align with the hardware                                                                                                     %&'()
+                                                                                                   ⋮                         ⋱               ⋮                                          ⋮           ⋱              ⋮              ∪             ⋮             ⋱              ⋮
+features via two steps: bit dividing and bit mapping. Since                                    𝑏* 𝑏+ 𝑏,                      ⋯           𝑏* 𝑏+ 𝑏,                                      𝑏*           ⋯             𝑏*                          𝑏+ 𝑏,           ⋯            𝑏+ 𝑏,
+it is a one-time, offline operation on static model weights,                                                                 𝑾𝒒                                                                        𝑾𝒒,𝟏                                                    𝑾𝒒,𝟐
+
+the cost of bit shuffling is negligible as it’s amortized over                                                  (a) 3-bit 𝑾𝒒 is divided into 1-bit 𝑾𝒒,𝟏 and 2-bit 𝑾𝒒,𝟐
+                                                                                                                                                                                             32
+all inference runs.
+   Step 1: Bit Dividing for Memory Alignment. This step                             𝑸𝟏 1       1        1       1       1    1     1     1   1       1    1    1        1   1      1     1      1       1    1      1        1     1      1      1   1    1     1      1   1   1   1    1
+
+transforms the difficult problem of packing odd-bit data (3-
+                                                                                          2    3        2       3       2    3     2     3   2       3    2    3        2   3      2     3      2       3    2      3        2     3      2      3   2    3     2      3   2   3   2    3
+bit) into simpler problems of packing 1-bit and 2-bit data,                         𝑸𝟐
+                                                                                          2    3        2       3       2    3     2     3   2       3    2    3        2   3      2     3      2       3    2      3        2     3      2      3   2    3     2      3   2   3   2    3
+
+which align perfectly with native GPU integer types. As
+                                                                                                                             (b) Divided memory space for 𝑾𝒒,𝟏 and 𝑾𝒒,𝟐
+shown in Figure 6a, the 3-bit element in the quantized weight
+matrix W𝑞 is divided into two components: a single bit and                          Figure 6. Bit dividing for memory alignment. Numbers 1-3
+the remaining two bits. The specific single bit chosen for sep-                     in boxes represent bit positions within elements.
+aration (e.g., the most or least significant bit) is arbitrary, as a
+consistent inverse mapping is applied during dequantization
+                                                                                                                                                               0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+(see § 4.3.2). These components are then used to populate two                                                                                              0
+                                                                                                                                                           1
+                                                                                                                                                                   T0
+                                                                                                                                                                   T4
+                                                                                                                                                                            T1
+                                                                                                                                                                            T5
+                                                                                                                                                                                       T2
+                                                                                                                                                                                       T6
+                                                                                                                                                                                                  T3
+                                                                                                                                                                                                  T7
+                                                                                                                                                                                                            T0
+                                                                                                                                                                                                            T4
+                                                                                                                                                                                                                        T1
+                                                                                                                                                                                                                        T5
+                                                                                                                                                                                                                                   T2
+                                                                                                                                                                                                                                   T6
+                                                                                                                                                                                                                                              T3
+                                                                                                                                                                                                                                              T7
+                                                                                                                                                                                                                                                     Pair 0: n-bit element (0,0/1)
+                                                                                                                                                                                                                                                     Pair 1: n-bit element (8,0/1)
+new matrices of identical dimensions: W𝑞,1 , which contains                              TC Tile 0                      TC Tile 2                          2
+                                                                                                                                                           3
+                                                                                                                                                                   T8
+                                                                                                                                                                   T12
+                                                                                                                                                                            T9
+                                                                                                                                                                            T11
+                                                                                                                                                                                       T10
+                                                                                                                                                                                       T12
+                                                                                                                                                                                                  T11
+                                                                                                                                                                                                  T13
+                                                                                                                                                                                                            T8
+                                                                                                                                                                                                            T12
+                                                                                                                                                                                                                        T9
+                                                                                                                                                                                                                      T11
+                                                                                                                                                                                                                                   T10
+                                                                                                                                                                                                                                   T12
+                                                                                                                                                                                                                                              T11
+                                                                                                                                                                                                                                              T13
+                                                                                                                                                                                                                                                     Pair 2: n-bit element (0,8/9)
+                                                                                                                                                                                                                                                     Pair 3: n-bit element (8,8/9)
+
+only 1-bit elements, and W𝑞,2 , which contains 2-bit elements.                                                                                             4
+                                                                                                                                                           5
+                                                                                                                                                                   T16
+                                                                                                                                                                   T20
+                                                                                                                                                                            T17
+                                                                                                                                                                            T21
+                                                                                                                                                                                       T18
+                                                                                                                                                                                       T22
+                                                                                                                                                                                                  T19
+                                                                                                                                                                                                  T23
+                                                                                                                                                                                                            T16
+                                                                                                                                                                                                            T20
+                                                                                                                                                                                                                      T17
+                                                                                                                                                                                                                      T21
+                                                                                                                                                                                                                                   T18
+                                                                                                                                                                                                                                   T22
+                                                                                                                                                                                                                                              T19
+                                                                                                                                                                                                                                              T23             Pair 3: 2 x n bits
+                                                                                                                                                           6       T24      T25        T26        T27       T24       T25          T26        T27
+   The efficacy of bit dividing lies in the subsequent packing                                                                                             7       T28      T29        T30        T31       T28       T29          T30        T31
+                                                                                         TC Tile 1                      TC Tile 3                          8       T0       T1         T2         T3        T0          T1         T2         T3         row, col = 8,8 row, col = 8,9
+process. Since both 1 and 2 are factors of 32 and 64, the ele-                                                                                             9       T4       T5         T6         T7        T4          T5         T6         T7              n bits           n bits
+                                                                                                                                                          10       T8       T9         T10        T11       T8          T9         T10        T11
+ments from the new matrices can be packed perfectly native                                                                                                11       T12      T11        T12        T13       T12       T11          T12        T13
+
+                                                                                                   Warp Tile                                              12       T16      T17        T18        T19       T16       T17          T18        T19
+
+32-bit and 64-bit INT. Specifically, 32 elements from W𝑞,1                                                                                                13
+                                                                                                                                                          14
+                                                                                                                                                                   T20
+                                                                                                                                                                   T24
+                                                                                                                                                                            T21
+                                                                                                                                                                            T25
+                                                                                                                                                                                       T22
+                                                                                                                                                                                       T26
+                                                                                                                                                                                                  T23
+                                                                                                                                                                                                  T27
+                                                                                                                                                                                                            T20
+                                                                                                                                                                                                            T24
+                                                                                                                                                                                                                      T21
+                                                                                                                                                                                                                      T25
+                                                                                                                                                                                                                                   T22
+                                                                                                                                                                                                                                   T26
+                                                                                                                                                                                                                                              T23
+                                                                                                                                                                                                                                              T27
+
+precisely occupy a 32-bit word, and 32 elements from W𝑞,2 ex-                                                                                             15       T28      T29        T30        T31       T28       T29          T30        T31
+
+
+
+actly fill a 64-bit word. Consequently, bit dividing overcomes                            Pair 0
+                                                                                           T0
+                                                                                                       Pair 1
+                                                                                                        T0
+                                                                                                                    Pair 2
+                                                                                                                     T0
+                                                                                                                                 Pair3
+                                                                                                                                  T0
+                                                                                                                                         Pair 0
+                                                                                                                                          T0
+                                                                                                                                                     Pair 1
+                                                                                                                                                      T0
+                                                                                                                                                               Pair 2
+                                                                                                                                                                T0
+                                                                                                                                                                            Pair3
+                                                                                                                                                                             T0
+                                                                                                                                                                                       Pair 0
+                                                                                                                                                                                        T0
+                                                                                                                                                                                                    Pair 1
+                                                                                                                                                                                                     T0
+                                                                                                                                                                                                                  Pair 2
+                                                                                                                                                                                                                   T0
+                                                                                                                                                                                                                                 Pair3
+                                                                                                                                                                                                                                  T0
+                                                                                                                                                                                                                                          Pair 0 Pair 1 Pair 2 Pair3
+                                                                                                                                                                                                                                           T0     T0     T0     T0
+the limitations of both naive bit-packing strategies aforemen-                                          TC Tile 0                                    TC Tile 1                                      TC Tile 2                                        TC Tile 3
+
+tioned in § 3.2. It eliminates the memory fragmentation of
+padding by perfectly packing elements into standard INTs                            Figure 7. Bit mapping for Tensor Core (TC) alignment. Warp
+and avoids the inefficient data access pattern of spanning by                       tile consists of 16 TC tiles, showing 4 for clarity.
+ensuring no element crosses a word boundary.
+   Step 2: Bit mapping for Tensor-Core Alignment. This
+                                                                                    TC tiles. Within each TC tile, every thread is responsible
+step addresses the layout mismatch between the logical struc-
+                                                                                    for 4 pairs of elements. Next, Quantix aligns the data lay-
+ture of tiles and the physical memory layout required for
+                                                                                    out to TCs by gathering all elements assigned to a single
+Tensor Cores (TCs), a challenge detailed in §3.4. To cope with
+                                                                                    thread across these 16 tiles into a single contiguous seg-
+this challenge, Quantix further maps the packed elements of
+                                                                                    ment. This mapping procedure produces a linear memory
+W𝑞,𝑛 to align with the data access patterns of Tensor Cores
+                                                                                    space for the warp tile, consisting of 32 contiguous weight
+and improve spatial locality.
+                                                                                    segments (denoted as W𝑛′ , where 𝑛 = 1, 2 indicates the bit
+   As depicted in Figure 7b, each warp is first assigned a
+                                                                                    width), one for each thread. Each segment has a logical size of
+64 × 64 tile, which is further divided into sixteen 16 × 16
+                                                                                    16(𝑡𝑖𝑙𝑒𝑠) × 4(𝑝𝑎𝑖𝑟𝑠) × 2(𝑒𝑙𝑒𝑚𝑒𝑛𝑡𝑠/𝑝𝑎𝑖𝑟 ) ×𝑛(𝑏𝑖𝑡𝑠/𝑒𝑙𝑒𝑚𝑒𝑛𝑡) =
+
+
+
+                                                                              292
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                YuAng Chen, Wenqi Zeng, and Jeffrey Xu Yu.
+
+
+128𝑛 bits. Additionally, the bit mapping step is performed                                    Wq           A                        Shared Memory
+
+
+
+
+                                                                                                               Double Buffers
+                                                                                         Bit Shuffling                               lds(W’, C)
+independently on the two matrices W𝑞,1 and W𝑞,2 generated                                                                                                            Registers
+                                                                                                   W’, C                            Registers        ldm(A)
+in Step 1, organizing their respective INT-packed data into
+
+
+
+
+                                                                             cp.async
+                                                                                          Global Memory
+                                                                                                                                                                    Tensor Cores
+the final contiguous weight segments.                                                                                             Dequantization
+                                                                                                                                    W!
+                                                                                                                                                                      Y=A×W !
+   The two-step bit shuffling aligns the data access pattern                              Shared Memory                                  Registers
+to GPU’s memory system and Tensor Cores. Step 1 ensures                     (a) Prefetch: Global to Shared          (b) Load: Shared to Register              (c) Compute: Tensor Core
+word-aligned, coalesced memory accesses. Step 2 allows each
+thread to retrieve its entire data assignment for the Tensor                            Figure 8. Data movement across memory hierarchy
+Cores with a short burst of sequential loads. Furthermore,
+the large segment sizes facilitate efficient long-vector instruc-
+tions. For example, the 128-bit W1′ weight segment is fetched               operates on the hardware-aligned weight layout (W′ )1 or-
+with a single cp.async instruction with 128-bit width, while                ganized via bit shuffling. The online execution begins with
+the 256-bit W2′ weight segment utilizes two such instructions.              the Prefetch stage (a), where the kernel issues asynchronous
+More details in vectorization are discussed in §4.3.                        copy instructions (cp.async with 128-bit width) to prefetch
+                                                                            the weight segments (W′ ) and activations (A) for a future
+4.3   High-Performance Fused Kernel                                         iteration from global memory into on-chip shared memory.
+4.3.1 Execution Model. Quantix’s kernel fuses memory                        The memory transfer runs in the background, overlapping
+access, dequantization, and computation into a hierarchical                 with the computation of the subsequent tiles.
+software pipeline. It hides the latency of data movement and                   In the Load stage (b), the kernel loads data from shared
+preparation to maximize the utilization of Tensor Cores. The                memory into private registers. FP16 activations A are loaded
+execution model of the fused kernel is outlined in Algo. 1.                 and formatted for the Tensor Cores via the ldmatrix in-
+The kernel first performs a one-time initialization. The initial            struction, while low-bit weight segments W′ and their cor-
+warp tiles are fetched to shared memory (line 2). A subset of               responding centroids C are loaded using ld.shared. Next,
+the initial tiles is further loaded to registers and dequantized            register-held W′ and C are used together to reconstruct the
+(line 3) to prepare for the upcoming pipelined execution.                   FP16 weight W† . The dequantization produces the recon-
+                                                                            structed weight directly in registers without writing inter-
+                                                                            mediate results to memory. Finally, in the Compute stage
+ Algorithm 1: Fused Kernel in Quantix
+                                                                            (c), the prepared FP16 activations and the dequantized FP16
+  Input: Quantized weights W1′ (1-bit), W2′ (2-bit); Activations A;
+           Centroids C                                                      weights are consumed by the Tensor Cores to perform mat-
+  Output: Result matrix Y = A × Dequant(W1′ , W2′ , C)                      mul. This pipelined data flow ensures that the performant
+1 for each processing unit do in parallel                                   Tensor Cores are constantly supplied with data, minimizing
+       // Initialization
+                                                                            stalls and maximizing hardware utilization.
+2      Fetch initial warp tiles to shared memory (smem)
+3      Load subtile from smem to registers and dequantize weights           4.3.2 In-Register Dequantization. To minimize instruc-
+       // Main Loop with Hierarchical Pipeline
+4      for 𝑘 ← 0 to Number of K-tiles - 1 do
+                                                                            tion overhead and cache misses, Quantix integrates efficient
+             // Inter-tile level: Overlap Compute and Memory                on-the-fly in-register dequantization into the fused kernel.
+                           ′       ′
+5            Prefetch W1,𝑘+1    , W2,𝑘+1 , A𝑘+1 to shared memory            The dequantization occurs entirely within the GPU’s reg-
+             // Intra-tile level: Overlap Dequant and Matmul                isters after the hardware-aligned weight segments and the
+6            for 𝑠 ← 1 to Number of subtiles do                             centroids have been loaded from shared memory into reg-
+7                  Load subtile 𝑠 from shared memory to registers
+                     †                     ′      ′                         isters. This process, plotted in Fig. 9, consists of two steps:
+8                  W𝑘,𝑠   ← Dequant(W1,𝑘,𝑠    , W2,𝑘,𝑠 , C𝑘,𝑠 )
+                                                      †                        First, bit concatenation reconstructs the original 3-bit in-
+ 9              Y𝑘,𝑠 −1 ← Matmul(Y𝑘,𝑠 −1 , A𝑘,𝑠 −1 , W𝑘,𝑠    )
+                                                          −1
+                                                                            dices. As shown in the figure, a 1-bit value from a W1′ seg-
+10          Synchronize and wait for prefetch completion
+11     Store Y back to global memory                                        ment is concatenated with a corresponding 2-bit value from
+                                                                            a W2′ segment to form a 3-bit index (e.g., [1]+[10]→[110]).
+                                                                            The concatenation is performed in parallel for 4 pairs of
+   The core of the kernel is organized as a nested loop that                indices within a TC tile. The 8 resulting 3-bit indices are
+drives the hierarchical pipeline (lines 4–10). At inter-tile                packed into a single 32-bit register. The register layout is
+level, memory transfers are overlapped with computation                     specifically designed to interleave data from different matrix
+(line 5-6). At intra-tile level, dequantization on CUDA Cores               rows (e.g., row0, row8) to match the required data access
+is overlapped with multiplication on Tensor Cores (line 8-                  pattern of the Tensor Core, as previously depicted in Fig. 7.
+9). The first subtile consumed by Tensor Cores is already                      Second, centroid indexing uses these reconstructed indices
+prepared during initialization (line 3). The details of the                 to retrieve the final FP16 values. In 𝑥-bit quantization, each
+pipeline design are further elaborated in § 4.3.3.                          row has 2𝑥 cluster centroids (e.g., 8 centroids for 3-bit case).
+   Fig. 8 illustrates the data movement through the GPU
+memory hierarchy within the fused kernel. 1. The kernel                     1 The subscript 𝑛 is omitted for brevity
+
+
+
+
+                                                                      293
+High-Throughput Non-uniformly Quantized 3-bit LLM Inference                                                                                   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+                                                                 TC Tile 2
+  𝑾′𝟏                                                             0 0 1 0 0 1 0 1
+                                                                                                                                       by the computing units, the other is simultaneously filled
+                                                                                                                                       with the next tile.
+  𝑾′𝟐 0 1 0 0 0 0 1 1 1 0 0 1 0 1 1 0                                                                                                    At the intra-tile level, dequantization and multiplication
+        TC Tile 2                                                                 [ 1 ] + [ 1 0 ] -> [ 1 1 0 ]
+                                                                                                                                       are overlapped at a finer granularity. Each warp tile is di-
+                                    Bit Concatenation
+                                                                                                                                       vided into subtiles loaded into register buffers (Reg 0 and
+Register File
+Data Layout row0             row0    row8            row8          row0               row0                row8            row8         Reg 1 in Fig. 10) sequentially. When one register buffer is
+         0 0 1           0 0 0      1 0 0        0 1 1            0 1 0            1 0 1             0 0 1             1 1 0
+                                                                                                                                       dequantized on CUDA cores, the other is used by Tensor
+                    Pair 0                  Pair 1                           Pair 2                              Pair 3
+                                                                                                                                       Cores for multiplication.
+                                    Centroid Indexing                                                 6
+                                                                                                                                         This carefully orchestrated pipeline effectively addresses
+      Row 0’s centroids:             33.14 -48.24 1.32      0.90 -7.82 53.13 73.96 -27.63
+                                                                                                                                       the challenges identified in §3.4 by hiding the latency of data
+      Row 8’s centroids:             1.09 -84.21 9.90 -3.89 12.42 6.10 -10.12 5.94
+                                      0      1         2     3      4        5        6      7                                         movement and dequantization, and thus maximizing Tensor
+                                                                                                                                       Cores utilization.
+Figure 9. In-Register dequantization via bit concatenation
+and centroid indexing. Numbers in the boxes represent the                                                                              4.3.4 Parallelization and Vectorization. The fused ker-
+actual values. 3-bit quantization has 8 centroids per row.                                                                             nel further incorporates two core optimizations to fully ex-
+                                                                                                                                       ploit GPU’s parallelism and memory bandwidth.
+                         Initialization                                          Main Loop
+
+                       Smem 0                              Smem 1                                  Smem 0                                 Split-K for Computing Parallelism. To enhance par-
+                       cp.async                            cp.async                               cp.async
+                                                                                                                                       allelism and saturate GPU’s computational resources, we
+Prefetch
+                                                                                                                                       employ Split-𝐾 work decomposition, inspired by NVIDIA’s
+                                Reg 0 Reg 1 Reg 0 Reg1
+Dequant                        (W’,C) (W’,C) (W’,C) (W’,C)                                                                             CUTLASS [31]. This technique is widely adopted by conven-
+                    CUDA Cores ⟹ W† ⟹ W† ⟹ W† ⟹ W†                                                …
+                                                                                                                                       tional GEMM problems where the 𝑀 and 𝑁 dimensions are
+Matmul              Tensor Cores                      MMA         MMA            MMA              …                                    not large. It partitions the matrix multiplication along the
+                                                     subtile 0 subtile 1 subtile 2 subtile 0 subtile 1 subtile 2                       𝐾-dimension, dividing the work into several independent
+                                                                  K=0                                            k=1
+                                                                                                                                       slices. Each slice is assigned to a distinct group of thread
+                                                                                                                                       blocks, which computes a partial sum of the final output ma-
+Figure 10. Hierarchical pipeline with double buffers. Buffer
+                                                                                                                                       trix. We integrate Split-𝐾 into our fused kernel by modifying
+sets are distinguished by colors. 3 subtiles are used for clarity.
+                                                                                                                                       the main loop in Algo. 1. Each thread block is assigned a
+                                                                                                                                       specific slice and only iterates over the 𝐾-tiles within that
+Each 3-bit index is used to select a value from its correspond-                                                                        slice’s boundaries. After all slices are processed in parallel,
+ing row-specific centroid set, which is also held in registers.                                                                        a final, lightweight reduction kernel is launched to sum the
+For example, at row 8, the index 110 (binary for 6) is used to                                                                         partial results, producing the final output matrix.
+retrieve the 7th element (0-indexed) from the centroids.
+   The extraction of each 3-bit index from the packed register                                                                            Vectorized Memory Access. To maximize memory band-
+is performed using efficient bitwise operations that avoid                                                                             width, we leverage wide, vectorized memory instructions.
+conditional branching. For a given register 𝑅, the 𝑖-th index                                                                          The hardware-aligned data layout is deliberately designed
+is isolated by first applying a bitwise right shift (≫) of 3 ∗ 𝑖                                                                       so that the weight segments and centroids from the quan-
+bits to move the target index to the least significant posi-                                                                           tized weight matrices as well as the dense matrices align
+tion. Subsequently, a bitwise AND (&) operation with the                                                                               perfectly with the GPU’s 128-bit memory transaction size.
+hexadecimal mask 0𝑥7 (i.e., binary 111) zeroes out all other                                                                           Specifically, the data blocks are reinterpreted as the UINT4
+bits, yielding the final 3-bit value. The entire operation is                                                                          vector type (4×32-bit) within the kernel. This allows a full
+expressed as: 𝑞𝑖 = (𝑅 ≫ (3 · 𝑖))&0𝑥7.                                                                                                  128-bit chunk of data to be transferred with a single instruc-
+   In-register dequantization is a key advantage of our kernel,                                                                        tion, both for asynchronous global-to-shared memory copies
+eliminating the instruction overhead of prior methods (see                                                                             (cp.async) and for shared-to-register loads (ld.shared).
+§4.3.2) and enabling high cache efficiency (see §5.3).                                                                                 The data is cast back to its native type only when it is needed
+                                                                                                                                       for computation (i.e., the bitwise operations during dequan-
+4.3.3 Hierarchical Software Pipeline. Quantix’s kernel                                                                                 tization). The vectorization significantly maximizes memory
+employs a hierarchical software pipeline to overlap data                                                                               bandwidth and minimizes instruction overhead.
+movement, dequantization, and computation. As illustrated
+in Fig. 10, the pipeline relies on a two-level double buffering                                                                        5    Evaluation
+mechanism to process different data tiles concurrently.
+                                                                                                                                       Through extensive experiments, we demonstrate that Quan-
+   At the inter-tile level, memory transfers are overlapped
+                                                                                                                                       tix2 effectively accelerates quantized LLM inference across
+with computation (dequantization and multiplication) at a
+coarse granularity. Two shared memory buffers (Smem 0 and
+Smem 1 in Fig. 10) are used: while one buffer is consumed                                                                              2 https://github.com/yuang-chen/Quantix-PPoPP26
+
+
+
+
+                                                                                                                                 294
+ PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                                                                                                                                                                                                YuAng Chen, Wenqi Zeng, and Jeffrey Xu Yu.
+
+               L40 GPU                                                                                                                                 Quantix                                  Any-Precision                                               SqueezeLLM                                       GPTQ                                                 16-bit cuBLAS                                                                                                            A100 GPU
+           9                                                                                                                                                                                                                                                         3
+Speedup
+
+
+
+           6                                                                                                                                                                                                                                                         2
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              N=8
+           3
+                                                                                                                                                                                                                                                                     1
+
+  0.06                                                                                                                                                                                                                                                             0.06
+  0.03                                                                                                                                                                                                                                                             0.03
+  0.00                                                                                                                                                                                                                                                             0.00
+     9                                                                                                                                                                                                                                                                3
+Speedup
+
+
+
+
+           6                                                                                                                                                                                                                                                         2
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              N=16
+           3                                                                                                                                                                                                                                                         1
+
+  0.06                                                                                                                                                                                                                                                             0.06
+  0.03                                                                                                                                                                                                                                                             0.03
+  0.00                                                                                                                                                                                                                                                             0.00
+     9                                                                                                                                                                                                                                                                3
+                 LLaMA-13B                                 LLaMA-33B                                                OPT-30B                      LLaMA-65B                                     OPT-66B                         OPT-175B                                       LLaMA-13B                                  LLaMA-33B                                              OPT-30B                       LLaMA-65B                                    OPT-66B                          OPT-175B
+ Speedup
+
+
+
+
+           6                                                                                                                                                                                                                                                         2
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              N=32
+           3                                                                                                                                                                                                                                                         1
+
+  0.06                                                                                                                                                                                                                                                             0.06
+  0.03                                                                                                                                                                                                                                                             0.03
+  0.00                                                                                                                                                                                                                                                             0.00
+
+
+
+
+                                                                                                                                                                                                                                                                            5k/5k
+                                                                                                                                                                                                                                                                                    5k/13.25k
+                                                                                                                                                                                                                                                                                                15k/5k
+                                                                                                                                                                                                                                                                                                         26.5k/5k
+                                                                                                                                                                                                                                                                                                                    6.5k/6.5k
+                                                                                                                                                                                                                                                                                                                                6.5k/17.25k
+                                                                                                                                                                                                                                                                                                                                              19.5k/6.5k
+                                                                                                                                                                                                                                                                                                                                                           34.5k/6.5k
+                                                                                                                                                                                                                                                                                                                                                                        7k/7k
+                                                                                                                                                                                                                                                                                                                                                                                7k/28k
+                                                                                                                                                                                                                                                                                                                                                                                         21k/7k
+                                                                                                                                                                                                                                                                                                                                                                                                  28k/7k
+                                                                                                                                                                                                                                                                                                                                                                                                           8k/8k
+                                                                                                                                                                                                                                                                                                                                                                                                                   8k/21.25k
+                                                                                                                                                                                                                                                                                                                                                                                                                               24k/8k
+                                                                                                                                                                                                                                                                                                                                                                                                                                        42.5k/8k
+                                                                                                                                                                                                                                                                                                                                                                                                                                                   9k/9k
+                                                                                                                                                                                                                                                                                                                                                                                                                                                           9k/36k
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                    27k/9k
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                             36k/9k
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      12k/12k
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                12k/48k
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          36k/12k
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    48k/12k
+                5k/5k
+                        5k/13.25k
+                                    15k/5k
+                                             26.5k/5k
+                                                        6.5k/6.5k
+                                                                    6.5k/17.25k
+                                                                                  19.5k/6.5k
+                                                                                               34.5k/6.5k
+                                                                                                            7k/7k
+                                                                                                                    7k/28k
+                                                                                                                             21k/7k
+                                                                                                                                      28k/7k
+                                                                                                                                               8k/8k
+                                                                                                                                                       8k/21.25k
+                                                                                                                                                                   24k/8k
+                                                                                                                                                                            42.5k/8k
+                                                                                                                                                                                       9k/9k
+                                                                                                                                                                                               9k/36k
+                                                                                                                                                                                                        27k/9k
+                                                                                                                                                                                                                 36k/9k
+                                                                                                                                                                                                                          12k/12k
+                                                                                                                                                                                                                                    12k/48k
+                                                                                                                                                                                                                                              36k/12k
+                                                                                                                                                                                                                                                        48k/12k
+                                             Figure 11. Linear layer speedups of 3-bit quantization approaches over unquantized 16-bit cuBLAS.
+
+diverse model sizes, multiple bit-widths, and various hard-                                                                                                                                                                                                                No In-Register
+ware platforms, by two sets of experiments: kernel-level                                                                                                                                                                                                                            No Pipeline
+(§5.1–5.4) and model-level (§5.5).                                                                                                                                                                                                                                        No Vectorization
+                                                                                                                                                                                                                                                                                         No Split-K
+ 5.1              Kernel Benchmark
+                                                                                                                                                                                                                                                                                                                                 0                                          20                              40                                     60                             80                                 100
+    Settings. To profile kernel performance, we extract weight
+ matrices from the linear layers of the LLaMA [36] and OPT [43]                                                                                                                                                                                                           Figure 12. Relative kernel performance without different
+ model families and evaluate them across a range of batch                                                                                                                                                                                                                 optimizations on L40.
+ sizes 𝑁 . For a fair comparison, we benchmark 3-bit Quantix
+ against several 3-bit baselines. Specifically, SqueezeLLM [19]
+ and Any-Precision LLM [33] employ non-uniform quanti-                                                                                                                                                                                                                    then gradually declines as the workload shifts from memory-
+ zation executed on CUDA cores, whereas GPTQ [10] uses                                                                                                                                                                                                                    bound to compute-bound at larger batch sizes (see details
+ uniform quantization. We also include the unquantized 16-                                                                                                                                                                                                                in §5.3). Quantix achieves a modest 1.43× speedup for the
+ bit cuBLAS implementation as a reference. The majority of                                                                                                                                                                                                                5120×5120 matrix, as the matrix is too small to fully uti-
+ results are profiled on the NVIDIA L40 GPU that is specifi-                                                                                                                                                                                                              lize GPU resources. We observe lower speedups (e.g., 1.79×,
+ cally built for LLM inference [29], which allows all kernels                                                                                                                                                                                                             4.64×, 30.25× and 8.33× over cuBLAS, Any-Precision LLM,
+ to reach their peak performance (e.g., Quantix achieves 1.7×                                                                                                                                                                                                             SqueezeLLM and GPTQ, respectively) on the A100 GPU,
+ speedups on L40 over A100).                                                                                                                                                                                                                                              which is commonly used for training. This is because A100’s
+                                                                                                                                                                                                                                                                          higher memory bandwidth reduces the relative performance
+    Results. Fig. 11 presents the performance of Quantix and                                                                                                                                                                                                              advantage of memory-efficient kernels such as Quantix.
+ other approaches, normalized to the 16-bit cuBLAS base-
+ line. On L40 GPU, Quantix achieves an average speedup                                                                                                                                                                                                                    5.2                   Ablation Study
+ of 4.82×, 3.93×, 46.07× and 10.25× over the 16-bit cuBLAS                                                                                                                                                                                                                Fig. 12 presents an ablation study evaluating the performance
+ baseline, Any-Precision LLM, SqueezeLLM and GPTQ, re-                                                                                                                                                                                                                    impact of four optimization components: in-register dequan-
+ spectively. Any-Precision LLM achieves high throughput at                                                                                                                                                                                                                tization, software pipelining, Split-𝐾 parallelization, and vec-
+ batch size 8, but their performance drops significantly as the                                                                                                                                                                                                           torization. Their performances are normalized to that of the
+ input batch is increased. SqueezeLLM exhibits unsatisfac-                                                                                                                                                                                                                fully optimized version and expressed as percentages.
+ tory performance in all test cases due to inefficient kernel                                                                                                                                                                                                                The results demonstrate that the most critical optimization
+ design. GPTQ occasionally outperforms cuBLAS on the L40                                                                                                                                                                                                                  is in-register dequantization, as its removal causes the most
+ at a batch size of 8. However, despite employing simplified                                                                                                                                                                                                              significant slowdown by around 60% of its peak performance.
+ uniform (de-)quantization, it remains limited by suboptimal                                                                                                                                                                                                              Disabling pipelining reduces performance to approximately
+ kernel design and fails to exploit GPU resources.                                                                                                                                                                                                                        41% of the baseline. Vectorization, which enables efficient
+    Quantix consistently outperforms across all batch sizes.                                                                                                                                                                                                              128-bit memory transactions, provides an important 14%
+ Its performance peaks at batch sizes of approximately 8–16,                                                                                                                                                                                                              performance contribution. Split-𝐾 improves performance on
+
+
+
+                                                                                                                                                                                                                                                                  295
+  High-Throughput Non-uniformly Quantized 3-bit LLM Inference                                                                                                    PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+                               Quantix-Compute            FP16-Compute              Quantix-Memory            FP16-Memory                                                                      2-bit Quantix           2-bit Any            16-bit cuBLAS
+                                                                                                                                                                               4-bit Quantix      4-bit Any            4-bit Bitsandbytes          4-bit Marlin (Uniform)
+                     100
+                                                                                                                                                         50                                                      100
+                                                                                                                                                                  2 bits       4 bits               16 bits                     2 bits                      4 bits          16 bits
+Utilization (%)
+
+
+
+
+                      80                                                                                                                                 40                                                           80
+
+                      60                                                                                                                                 30                                                           60
+
+
+
+
+                                                                                                                                                TFLOPs
+
+
+
+
+                                                                                                                                                                                                               N=8
+
+
+
+
+                                                                                                                                                                                                                                                                                      N=16
+                      40                                                                                                                                 20                                                           40
+
+                      20                                                                                                                                 10                                                           20
+
+                       0                                                                                                                                  0                                                            0
+                                1             2       4        8         16        32        64         128     256        512                           120
+                                                                                                                                                               1234 1234 1234 1234 1234 1234 1234                          1234 1234 1234 1234 1234 1234 1234
+                                                                                                                                                                                                                  150
+                                                                                                                                                                  2 bits        4 bits              16 bits                        2 bits                   4 bits          16 bits
+                                    (a) Utilization of compute and memory units                                                                           90
+                                                                                                                                                                                                                  120
+
+
+                                   Quantix-Tensor              FP16-Tensor               Quantix-ALU               FP16-ALU                                                                                           90
+
+
+
+
+                                                                                                                                                TFLOPs
+
+
+
+
+                                                                                                                                                                                                                                                                                      N=64
+                                                                                                                                                                                                               N=32
+                                                                                                                                                          60
+                     60                                                                                                                                                                                               60
+
+                     50
+Utilization (%)
+
+
+
+
+                                                                                                                                                          30
+                                                                                                                                                                                                                      30
+                     40
+                                                                                                                                                           0                                                           0
+                     30                                                                                                                                        1234 1234 1234 1234 1234 1234 1234                          1234 1234 1234 1234 1234 1234 1234
+
+                     20
+                     10                                                                                                                         Figure 14. Performance of 2/4-bit quantization for the 4
+                      0
+                              1           2         4         8          16        32        64         128     256        512
+                                                                                                                                                linear layers of LLaMA-65B on L40.
+                                       (b) Utilization of SIMT and Tensor cores
+                          Quantix-Cache           FP16-Cache              Quantix-Throughput             FP16-Throughput
+                     100                                                                                                   150                  Tensor Cores, and other functionalities such as branching
+Cache Hit Rate (%)
+
+
+
+
+                      80                                                                                                                        and load/store operations. To assess actual computing usage,
+                                                                                                                           100
+                                                                                                                                 TFLOPs
+                      60                                                                                                                        we profile ALU and Tensor Core utilization, as plotted in Fig.
+                      40
+                                                                                                                           50                   13b. Both Quantix and the 16-bit baseline increasingly rely
+                      20
+                       0                                                                                                   0
+                                                                                                                                                on Tensor Cores as batch size grows. The baseline incurs
+                               1          2       4       8         16        32        64        128     256     512                           minimal ALU usage. By contrast, Quantix shows high ALU
+                                                                   Batch Size (N)
+                                                                                                                                                utilization for small batches (<32) due to dequantization, but
+                     (c) Cache efficiency (left y-axis) and throughput (right y-axis)                                                           then declines for larger batches. This drop is caused by regis-
+                                                                                                                                                ter pressure from in-register dequantization: larger batches
+  Figure 13. GPU Utilization for a 12,288×12,288 linear layer                                                                                   require more registers than an SM can provide, causing reg-
+  at different batch sizes on L40.                                                                                                              ister spilling and stalling the ALUs.
+                                                                                                                                                   Cache and Throughput. Fig. 13c shows the cache ef-
+  small matrices by partitioning them into smaller units to                                                                                     ficiency and overall throughput of Quantix and the 16-bit
+  increase parallelism and better utilize GPU resources. For                                                                                    baseline. Quantix maintains a cache hit rate above 90% across
+  large matrices, however, the inherent parallelism is sufficient,                                                                              all batch sizes, a key factor contributing to its high through-
+  making Split-𝐾 redundant.                                                                                                                     put. In contrast, the baseline’s cache hit rate drops sharply
+                                                                                                                                                with increasing batch size, falling to nearly 0%. Leveraging
+  5.3                       Hardware Utilization
+                                                                                                                                                its advantages in compute utilization and memory-cache
+ To better understand Quantix’s performance gains, we an-                                                                                       efficiency, Quantix consistently achieves higher throughput
+ alyze GPU hardware utilization for a single 12,288×12,288                                                                                      than the FP-16 baseline at all batch sizes.
+ linear layer on the L40 GPU using NVIDIA Nsight [30].
+     Compute and Memory. Fig. 13a compares the compute                                                                                          5.4             Other Bit Widths
+  and memory utilization of Quantix and the 16-bit cuBLAS                                                                                          Settings. We evaluate 2-bit and 4-bit variants of Quantix
+  baseline. The 16-bit baseline operates in a memory-bound                                                                                      to assess its applicability across different bit widths. These
+  regime for batch sizes up to 32, where its memory utiliza-                                                                                    variants are compared against other non-uniform quantiza-
+  tion exceeds 80%. By contrast, Quantix maintains a much                                                                                       tion methods, including Any-Precision LLM (Any) [33] and
+  more balanced resource utilization, exhibiting significantly                                                                                  Bitsandbytes [6]. We extend Any to support 2-bit quantiza-
+  higher compute utilization while keeping memory utilization                                                                                   tion. For 4-bit evaluation, we also include Marlin, a high-
+  substantially lower. This demonstrates that Quantix effec-                                                                                    performance kernel specifically designed for uniform 4-bit
+  tively avoids the "memory wall" that limits the baseline and                                                                                  quantization that incurs negligible dequantization overhead.
+  leverages the GPU’s compute capabilities more efficiently,                                                                                    The 16-bit cuBLAS serves as the baseline. All methods are
+  especially at smaller batch sizes. However, Quantix’s com-                                                                                    tested on four linear layers of LLaMA-65B : L1: 8192 × 8192,
+  pute utilization does not increase at larger batch sizes due to                                                                               L2: 8192 × 22016, L3: 22016 × 8192 and L4: 43520 × 8192.
+  the overhead of dequantization, as further discussed below.
+                                                                                                                                                   Results. Fig. 14 compares the throughput of various quan-
+    ALU and Tensor. The compute utilization reported by                                                                                         tization methods. 2-bit Quantix delivers the highest perfor-
+  Nsight aggregates the activity of arithmetic logic units (ALUs),                                                                              mance at all batch sizes, achieving an average speedup of
+
+
+
+                                                                                                                                          296
+  PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                                                                           YuAng Chen, Wenqi Zeng, and Jeffrey Xu Yu.
+
+                                       3-bit Quantix        4-bit Quantix           3-bit SqLLM              Fp16        3-bit GPTQ          4-bit Marlin                                                         3-bit Quantix            4-bit Quantix             3-bit SqLLM          Fp16         3-bit GPTQ            4-bit Marlin
+                                  Token Length 128                Token Length 256                 Token Length 512               Token Length 1024                                                              Token Length 128                  Token Length 256                  Token Length 512           Token Length 1024
+                        512                                                                                                                                                                            512
+                        256                                                                                                                                                                            256
+      Tokens / Second
+
+
+
+
+                                                                                                                                                                                     Tokens / Second
+                                                                                                                                                            LLaMA-65B
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                             LLaMA-65B
+                        128                                                                                                                                                                            128
+                                                   10.21x                                                                                                                                                                         11,46x
+                         64                                                                                                                                                                             64
+                         32                                                                                                                                                                             32
+                         16                                                                                                                                                                             16
+                          8                                                                                                                                                                              8
+                              1    2       4   8 16 32 64     1    2       4   8 16 32 64      1    2    4    8 16 32 64       1    2   4    8 16 32 64                                                      1    2       4   8 16 32 64       1    2        4   8 16 32 64     1     2   4    8 16 32 64     1     2    4    8   6 32 64
+                  1024                                                                                                                                                                           1024
+                        512                                                                                                                                                                            512
+
+
+
+
+                                                                                                                                                            OPT-30B
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                             OPT-30B
+Tokens / Second
+
+
+
+
+                                                                                                                                                                               Tokens / Second
+                        256                                                                                                                                                                            256
+                        128                                                                                                                                                                            128
+                         64                                                                                                                                                                             64
+                         32                                                                                                                                                                             32
+                         16                                                                                                                                                                             16
+                              1    2       4   8 16 32 64     1    2       4   8 16 32 64      1     2    4   8 16 32 64       1    2   4    8 16 32 64                                                      1    2       4   8 16 32 64       1     2       4   8 16 32 64      1    2    4   8 16 32 64     1     2   4     8 16 32 64
+                  2048                                                                                                                                                                           2048
+                  1024                                                                                                                                                                           1024
+                        512                                                                                                                                                                            512
+
+
+
+
+                                                                                                                                                            Vicuna-13B
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                             Vicuna-13B
+Tokens / Second
+
+
+
+
+                                                                                                                                                                               Tokens / Second
+                        256                                                                                                                                                                            256
+                        128                                                                                                                                                                            128
+                         64                                                                                                                                                                             64
+                         32                                                                                                                                                                             32
+                         16                                                                                                                                                                             16
+                              1    2       4   8 16 32 64     1    2       4   8 16 32 64      1    2     4   8 16 32 64       1    2    4   8 16 32 64                                                      1    2       4   8 16 32 64       1    2        4   8 16 32 64     1     2    4   8 16 32 64     1     2    4    8 16 32 64
+                                       Batch Size                      Batch Size                        Batch Size                     Batch Size                                                                    Batch Size                         Batch Size                       Batch Size                    Batch Size
+
+
+
+           Figure 15. Throughput of LLM Inference on a A100 GPU                                                                                                                                        Figure 17. Throughput of LLM Inference on two L40s
+
+                                                                                                                                                                                                                          Quantix                                    FP16 Base                              SqueezeLLM
+                                       Quantix                                     FP16 Base                                  SqueezeLLM                                                               30                                            25                                          120
+                        20                                                                                      120                                                                                                MatMut            MHA
+                                                                   20
+                                    MatMul            MHA                                                                                                                                                          Comm              Others          20                                           90
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                            OPT-30B
+                                    Others                                                                                                                                                             20
+                        15                                         15                                               90
+                                                                                                                                                                               Time (s)
+                                                                                                                                                            OPT-30B
+
+
+
+
+                                                                                                                                                                                                                                                     15
+                                                                                                                                                                                                                                                                                                  60
+Time (s)
+
+
+
+
+                        10                                         10                                               60                                                                                                                               10
+                                                                                                                                                                                                       10
+                                                                                                                                                                                                                                                                                                  30
+                                                                                                                                                                                                                                                         5
+                         5                                             5                                            30
+                                                                                                                                                                                                        0                                                0                                         0
+                         0                                             0                                             0                                                                                       1        2       4   8 16 32                        1   2     4   8 16 32                  1   2       4     8 16 32
+                              1        2       4   8 16 32                     1   2     4   8 16 32                      1   2     4       8 16 32                                                                   Batch Size                                         Batch Size                             Batch Size
+                                       Batch Size                                      Batch Size                                 Batch Size
+
+                                                                                                                                                                                 Figure 18. Breakdown of LLM inference time on two L40s.
+  Figure 16. Breakdown of LLM inference time on a A100.
+                                                                                                                                                                                 MHA: Multi-Head Attention, Comm: Communication.
+  MHA: Multi-Head Attention.
+
+                                                                                                                                                                               Quantix for both 3-bit and 4-bit configurations. We com-
+  5.45× (up to 8.59×) over the 16-bit baseline. Quantix’s per-                                                                                                                 pared performance against four baselines: unquantized FP16
+  formance scales effectively with precision, as shown by its                                                                                                                  (cuBLAS), the original SqLLM kernel, 3-bit GPTQ [10], and
+  2.15× higher throughput than 4-bit Quantix, indicating that                                                                                                                  4-bit Marlin [11]. For the uniform quantization baselines
+  memory savings convert directly into speedups. Compared                                                                                                                      (GPTQ and Marlin), we use the AutoGPTQ library [1] for
+  to other methods, 2-bit Quantix also demonstrates a substan-                                                                                                                 its broad compatibility. We evaluated Vicuna-13B [5], OPT-
+  tial lead, outperforming 2-bit and 4-bit Any by 43.78× and                                                                                                                   30B [43], and LLaMA-65B [36] on a single NVIDIA A100
+  80.98×, respectively, and 4-bit Marlin by 1.49×.                                                                                                                             and dual L40 GPUs. We fix the input (prompt) sequence
+     As the workload becomes compute-bound at larger batch                                                                                                                     length at 128 tokens and measure token generation through-
+  sizes, the relative speedup from quantization narrows for all                                                                                                                put (tokens per second), excluding prompt processing time.
+  methods. The performance of Any collapses at batch sizes                                                                                                                     We vary batch sizes from 1 to 64 and output (generated)
+  of 32 and 64. Only Quantix and Marlin consistently sustain                                                                                                                   sequence lengths ranging from 128 to 1024 tokens. Any-
+  high throughput through the entire range of batch sizes. At                                                                                                                  Precision LLM [33] is excluded due to out-of-memory errors
+  larger batch sizes, 4-bit Quantix is outperformed by 4-bit                                                                                                                   during quantization.
+  Marlin due to the centroid overhead, which is a trade-off                                                                                                                        Results. Fig. 15 and Fig. 17 present the throughput of LLM
+  inherent to non-uniform quantization that enables higher                                                                                                                      inference on an A100 GPU and on two L40 GPUs, respec-
+  accuracy and smaller model size.                                                                                                                                              tively. The results demonstrate Quantix effectively translates
+                                                                                                                                                                                the memory savings from quantization into inference speedups.
+  5.5                         End-to-End Inference                                                                                                                              This advantage is most evident in LLaMA-65B (top rows in
+    Settings. To evaluate Quantix, we integrated our kernel                                                                                                                     both figures), which cannot run with standard FP16, where
+ into the HuggingFace Transformers library [38]. We utilized                                                                                                                    3-bit Quantix achieves up to 11.46× speedup over SqLLM.
+ the non-uniform quantization scheme from SqueezeLLM                                                                                                                               On the A100, 3-bit Quantix delivers average speedups of
+ (SqLLM) [19], replacing its default inference backend with                                                                                                                     1.20× over 4-bit Quantix, 1.35× over the FP16 baseline, 2.98×
+
+
+
+                                                                                                                                                                         297
+High-Throughput Non-uniformly Quantized 3-bit LLM Inference                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+over SqLLM, 2.45× over GPTQ and 1.16× over Marlin. On               Table 1. Perplexity on WikiText-2 and five-shot MMLU ac-
+the dual L40s, these gains increase to 1.39×, 1.64× and 3.27×,      curacy.
+3.30× and 1.29×, respectively. The substantial end-to-end
+inference speedup is driven by Quantix’s acceleration on            Model             Precision         Method           PPL ↓     MMLU ↑
+matmul that dominates the model’s runtime.
+                                                                                      FP16            Baseline            5.68      45.30%
+   Quantix consistently outperforms both SqLLM and the                                4-bit        Quantix (SqLLM)        5.79      45.20%
+FP16 baseline across all configurations. Its performance gains      LLaMA2-7B         4-bit         Marlin (GPTQ)         6.01      44.90%
+increase with both batch size and model size. SqLLM is com-                           3-bit        Quantix (SqLLM)        6.15      42.20%
+petitive at a batch size of 1, but scales poorly as batch grows                       3-bit            GPTQ               7.55      40.40%
+due to its underlying inefficient matrix-vector kernel. Fur-
+                                                                                      FP16            Baseline            5.09      54.80%
+thermore, Quantix yields greater speedups on larger models                            4-bit        Quantix (SqLLM)        5.19      54.70%
+because of the higher proportion of the matmul operation,           LLaMA2-13B        4-bit         Marlin (GPTQ)         5.36      54.50%
+which is the focus of our optimization.                                               3-bit        Quantix (SqLLM)        5.46      53.50%
+   4-bit Quantix offers higher precision, but it is consistently                      3-bit            GPTQ               6.62      51.70%
+slower than the 3-bit configuration. The performance drop
+results from two factors: (1) the increased bit-width con-
+sumes more memory bandwidth, and (2) the larger number
+of centroids (24 vs. 23 ) imposes higher dequantization over-          Table 1 demonstrates that Quantix consistently outper-
+head. This reflects the inherent trade-off between accuracy         forms uniform quantization baselines. The advantage is most
+and inference throughput in quantization.                           significant at 3-bit precision: on LLaMA-7B, Quantix achieves
+   Compared to uniform quantization methods like GPTQ               a perplexity of 6.15, whereas GPTQ degrades to 7.55. Simi-
+and Marlin, 3-bit Quantix maintains a substantial perfor-           larly, 3-bit Quantix retains 42.20% accuracy on MMLU, sub-
+mance advantage in many scenarios. Marlin sometimes achieves        stantially surpassing the 40.40% accuracy of 3-bit GPTQ.
+higher throughput due to simpler dequantization. However,
+its advantage diminishes as workload increases with larger          6    Conclusion
+batches or more tokens. Furthermore, Marlin and GPTQ ex-            This work introduces a high-performance framework, Quan-
+hibit limited scalability. Marlin consumes more memory due          tix, for non-uniform 3-bit LLM inference. It co-designs data
+to its 4-bit compression, while 3-bit GPTQ uses an inefficient      layouts and fused kernels, facilitating efficient dequantiza-
+kernel with poor memory management and high runtime                 tion and high GPU utilization. Experimental results show
+memory usage. They encounter out-of-memory errors sig-              Quantix delivers state-of-the-art speed and scalability across
+nificantly earlier than Quantix, which efficiently leverages        various LLMs. Quantix serves as a blueprint for translating
+3-bit quantization to fit larger workloads within limited GPU       the memory savings of future low-bit models into practical
+memory. Additionally, their inefficiency might also stem            inference speedups.
+from the internal implementation overhead of AutoGPTQ.
+   Fig. 16 and Fig. 18 show the breakdown of inference time         Acknowledgment
+for the OPT-30B model profiled with NVIDIA Nsight [30].
+                                                                    This work is supported by The Research Grants Council of
+The results validate that Quantix effectively addresses the
+                                                                    Hong Kong, China, No.14205520.
+primary performance bottleneck – matmul. SqLLM is domi-
+nated by extremely high matmul due to its inefficient kernel
+design. By contrast, Quantix significantly reduces matmul           References
+time compared with the FP16 baseline. Across all batch sizes,        [1] AutoGPTQ Contributors. 2023. AutoGPTQ: An easy-to-use LLM quan-
+                                                                         tization package with user-friendly APIs, based on GPTQ algorithm.
+the matmul portion is markedly smaller for Quantix, re-                  https://github.com/AutoGPTQ/AutoGPTQ. Accessed: 2025-01-15.
+flecting the efficiency of the proposed fused kernel. This           [2] Arnav Chavan, Raghav Magazine, Shubham Kushwaha, Mérouane
+optimization is impactful enough to reshape the overall per-             Debbah, and Deepak Gupta. 2024. Faster and lighter llms: A survey on
+formance profile: with the matmul bottleneck resolved, other             current challenges and way forward. arXiv preprint arXiv:2402.01799
+components such as MHA often account for the majority of                 (2024).
+                                                                     [3] Jerry Chee, Yaohui Cai, Volodymyr Kuleshov, and Christopher M
+the runtime in Quantix.                                                  De Sa. 2023. Quip: 2-bit quantization of large language models with
+   Accuracy. As a compute library accelerating non-uniform               guarantees. Advances in Neural Information Processing Systems 36
+quantization schemes (e.g., SqLLM), Quantix inherits the                 (2023), 4396–4429.
+accuracy advantages of the underlying model representation           [4] Zhaodong Chen, Zheng Qu, Yuying Quan, Liu Liu, Yufei Ding, and
+over uniform methods like GPTQ. We evaluate LLaMA2-7B                    Yuan Xie. 2023. Dynamic n: M fine-grained structured sparse attention
+                                                                         mechanism. In Proceedings of the 28th ACM SIGPLAN Annual Sympo-
+and LLaMA2-13B using WikiText-2 perplexity and 5-shot                    sium on Principles and Practice of Parallel Programming. 369–379.
+MMLU accuracy with lm-eval [13].                                     [5] Wei-Lin Chiang, Zhuohan Li, Ziqing Lin, Ying Sheng, Zhanghao
+                                                                         Wu, Hao Zhang, Lianmin Zheng, Siyuan Zhuang, Yonghao Zhuang,
+
+
+
+
+                                                              298
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                    YuAng Chen, Wenqi Zeng, and Jeffrey Xu Yu.
+
+
+     Joseph E Gonzalez, et al. 2023. Vicuna: An open-source chatbot im-                [20] Ronny Krashinsky, Olivier Giroux, Stephen Jones, Nick Stam, and
+     pressing gpt-4 with 90%* chatgpt quality. https://vicuna.lmsys.org.                    Sridhar Ramaswamy. 2020. NVIDIA Ampere Architecture In-
+     Accessed: 14 April 2023.                                                               Depth. https://developer.nvidia.com/blog/nvidia-ampere-architecture-
+ [6] Tim Dettmers. 2023. BitsandBytes. https://github.com/bitsandbytes-                     in-depth. Accessed: 2024-01-15.
+     foundation/bitsandbytes. Accessed: 2025-05-26.                                    [21] Eldar Kurtic, Denis Kuznedelev, Elias Frantar, Michael Goinv, Shubhra
+ [7] Tim Dettmers, Mike Lewis, Younes Belkada, and Luke Zettlemoyer.                        Pandit, Abhinav Agarwalla, Tuan Nguyen, Alexandre Marques, Mark
+     2022. LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale.               Kurtz, and Dan Alistarh. 2025. Sparse fine-tuning for inference acceler-
+     In Advances in Neural Information Processing Systems 35 (NeurIPS 2022),                ation of large language models. Enhancing LLM Performance: Efficacy,
+     S. Koyejo, S. Mohamed, A. Agarwal, D. Belgrave, K. Cho, and A. Oh                      Fine-Tuning, and Inference Techniques 7 (2025), 83.
+     (Eds.). https://proceedings.neurips.cc/paper_files/paper/2022/hash/               [22] Yann LeCun, John S Denker, and Sara A Solla. 1990. Optimal brain
+     8c4a7160935517e91cfe296b0bb1be8a-Abstract-Conference.html                              damage. In Advances in Neural Information Processing Systems 2.
+ [8] Tim Dettmers, Ruslan A Svirschevski, Vage Egiazarian, Denis                       [23] Hao Li, Asim Kadav, Igor Durdanovic, Hanan Samet, and Hans Peter
+     Kuznedelev, Elias Frantar, Saleh Ashkboos, Alexander Borzunov,                         Graf. 2017. Pruning filters for efficient convnets. In International
+     Torsten Hoefler, and Dan-Adrian Alistarh. 2024. SpQR: A sparse-                        Conference on Learning Representations (ICLR).
+     quantized representation for near-lossless LLM weight compression.                [24] Ji Lin, Ruicheng Tang, Haotian Tang, Shang Yang, Jiaming Zhang,
+     In 12th International Conference on Learning Representations.                          and Guangxuan Cui. 2023. AWQ: Activation-aware Weight Quan-
+ [9] Elias Frantar and Dan Alistarh. 2023. SparseGPT: Massive Language                      tization for LLM Compression and Acceleration. arXiv preprint
+     Models Can Be Accurately Pruned in One-Shot. In Proceedings of                         arXiv:2306.00978 (2023).
+     the 40th International Conference on Machine Learning (Proceedings of             [25] Mark Harris Luke Durant, Olivier Giroux and Nick Stam. 2017. Inside
+     Machine Learning Research, Vol. 202). PMLR, 10325–10344.                               Volta: The World’s Most Advanced Data Center GPU. https://www.
+[10] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh.                      nvidia.com/en-us/data-center/volta-gpu-architecture/. Accessed:
+     2023. GPTQ: Accurate Post-Training Quantization for Generative                         2024-05-15.
+     Pre-trained Transformers. In International Conference on Learning Rep-            [26] Pavlo Molchanov, Arun Mallya, Stephen Tyree, Iuri Frosio, and Jan
+     resentations (ICLR). https://openreview.net/forum?id=tcbBPnfwxS                        Kautz. 2019. Importance estimation for neural network pruning. In
+[11] Elias Frantar, Roberto L. Castro, Jiale Chen, Torsten Hoefler, and Dan                 Proceedings of the IEEE/CVF conference on computer vision and pattern
+     Alistarh. 2025. MARLIN: Mixed-Precision Auto-Regressive Parallel                       recognition. 11264–11272.
+     Inference on Large Language Models. In Proceedings of the 30th ACM                [27] Markus Nagel, Marios Fournarakis, Rana Ali Amjad, Yelysei Wu,
+     SIGPLAN Annual Symposium on Principles and Practice of Parallel Pro-                   STOYAN GKERESTEDJIAN, and Tijmen Blankevoort. 2021. A white
+     gramming (PPoPP ’25). ACM, 239–251.                                                    paper on neural network quantization. arXiv preprint arXiv:2106.08295
+[12] Trevor Gale, Matei Zaharia, Cliff Young, and Erich Elsen. 2020. Sparse                 (2021).
+     gpu kernels for deep learning. In SC20: International Conference for              [28] Markus Nagel, Mart Van Baalen, Tijmen Blankevoort, and Max Welling.
+     High Performance Computing, Networking, Storage and Analysis. IEEE,                    2020. Up or down? adaptive rounding for post-training quantization.
+     1–14.                                                                                  In International conference on machine learning. PMLR, 7197–7206.
+[13] Leo Gao, Jonathan Tow, Baber Abbasi, Stella Biderman, Sid Black,                  [29] NVIDIA. 2023. L40S GPU for AI and Graphics Performance. https:
+     Anthony DiPofi, Charles Foster, Laurence Golding, Jeffrey Hsu, Alain                   //www.nvidia.com/en-us/data-center/l40s//. Accessed: 2025-05-15.
+     Le Noac’h, Haonan Li, Kyle McDonell, Niklas Muennighoff, Chris                    [30] NVIDIA. 2023. Nsight Systems. https://developer.nvidia.com/nsight-
+     Ociepa, Jason Phang, Laria Reynolds, Hailey Schoelkopf, Aviya                          systems. Accessed: 2025-05-15.
+     Skowron, Lintang Sutawika, Eric Tang, Anish Thite, Ben Wang, Kevin                [31] NVIDIA Corporation. 2025. Efficient GEMM in CUDA. https://docs.
+     Wang, and Andy Zou. 2024. The Language Model Evaluation Harness.                       nvidia.com/cutlass/media/docs/cpp/efficient_gemm.html Accessed:
+     doi:10.5281/zenodo.12608602                                                            2025-08-29.
+[14] Amir Gholami, Zhewei Yao, Sehoon Kim, Coleman Hooper, Michael W                   [32] NVIDIA Developer Blog. 2023. Mastering LLM Techniques: Infer-
+     Mahoney, and Kurt Keutzer. 2024. AI and memory wall. IEEE Micro                        ence Optimization. https://developer.nvidia.com/blog/mastering-llm-
+     (2024).                                                                                techniques-inference-optimization/. Accessed: 2025-05-13.
+[15] A. Griffin. 2024. ChatGPT creators OpenAI are generating 100 bil-                 [33] Yeonhong Park, Jake Hyun, Sanglyul Cho, Bonggeun Sim, and Jae W
+     lion words per day, CEO says. https://www.independent.co.uk/tech/                      Lee. 2024. Any-Precision LLM: Low-Cost Deployment of Multiple,
+     chatgpt-openai-words-sam-altman-b2494900.html. Accessed: 2025-                         Different-Sized LLMs. In International Conference on Machine Learning.
+     08-30.                                                                                 PMLR, 39682–39701.
+[16] Jinyang Guo, Jianyu Wu, Zining Wang, Jiaheng Liu, Ge Yang, Yifu Ding,             [34] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei,
+     Ruihao Gong, Haotong Qin, and Xianglong Liu. 2024. Compressing                         Ilya Sutskever, et al. 2019. Language models are unsupervised multitask
+     large language models by joint sparsification and quantization. In                     learners. OpenAI blog 1, 8 (2019), 9.
+     Forty-first International Conference on Machine Learning.                         [35] Mingjie Sun, Zhuang Liu, Anna Bair, and J. Zico Kolter. 2023. Wanda:
+[17] Song Han, Huizi Mao, and William J Dally. 2016. Deep compression:                      A Simple and Scalable Pruning Method for Large Language Models. In
+     Compressing deep neural networks with pruning, trained quantization                    Proceedings of the 40th International Conference on Machine Learning
+     and huffman coding. In International Conference on Learning Represen-                  (Proceedings of Machine Learning Research, Vol. 202). PMLR, 32873–
+     tations (ICLR).                                                                        32892.
+[18] Benoit Jacob, Skirmantas Kligys, Bo Chen, Menglong Zhu, Matthew                   [36] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-
+     Tang, Andrew Howard, Hartwig Adam, and Dmitry Kalenichenko.                            Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric
+     2018. Quantization and training of neural networks for efficient integer-              Hambro, Faisal Azhar, et al. 2023. Llama: Open and efficient foundation
+     arithmetic-only inference. In Proceedings of the IEEE conference on                    language models. arXiv preprint arXiv:2302.13971 (2023).
+     computer vision and pattern recognition. 2704–2713.                               [37] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion
+[19] Sehoon Kim, Coleman Hooper, Amir Gholami, Zhen Dong, Xiuyu Li,                         Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. At-
+     Sheng Shen, Michael W Mahoney, and Kurt Keutzer. 2023. Squeezellm:                     tention is all you need. Advances in neural information processing
+     Dense-and-sparse quantization. arXiv preprint arXiv:2306.07629 (2023).                 systems 30 (2017).
+
+
+
+
+                                                                                 299
+High-Throughput Non-uniformly Quantized 3-bit LLM Inference                                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+[38] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond,                      [41] Zhewei Yao, Zhen Dong, Zhan Zheng, Amir Gholami, Jiachen Yu,
+     Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Rémi Louf,                 Eric Tan, Kurt Keutzer, and Michael W Mahoney. 2022. ZeroQuant:
+     Morgan Funtowicz, et al. 2020. Transformers: State-of-the-art natural                Efficient and Affordable Post-Training Quantization for Large-Scale
+     language processing. In Proceedings of the 2020 conference on empirical              Transformers. In Advances in Neural Information Processing Systems,
+     methods in natural language processing: system demonstrations. 38–45.                Vol. 35. 27168–27183.
+[39] Haojun Xia, Zhen Zheng, Xiaoxia Wu, Shiyang Chen, Zhewei Yao,                   [42] Zhewei Yao, Xiaoxia Wu, Cheng Li, Stephen Youn, and Yuxiong He.
+     Stephen Youn, Arash Bakhtiari, Michael Wyatt, Donglin Zhuang,                        2023. Zeroquant-v2: Exploring post-training quantization in llms
+     Zhongzhu Zhou, et al. 2024. Fp6-llm: Efficiently serving large lan-                  from comprehensive study to low rank compensation. arXiv preprint
+     guage models through fp6-centric algorithm-system co-design. arXiv                   arXiv:2303.08302 (2023).
+     preprint arXiv:2401.14112 (2024).                                               [43] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen,
+[40] Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and                  Shuohui Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Victoria
+     Song Han. 2023. SmoothQuant: Accurate and Efficient Post-Training                    Lin, et al. 2022. Opt: Open pre-trained transformer language models.
+     Quantization for Large Language Models. In Proceedings of the 40th                   arXiv preprint arXiv:2205.01068 (2022).
+     International Conference on Machine Learning.
+                                                                                     Received 2025-08-28; accepted 2025-11-10
+
+
+
+
+                                                                               300
+

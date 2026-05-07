@@ -1,0 +1,1027 @@
+Laser: Unlocking Layer-Level Scheduling for Efficient
+              Multi-SLO LLM Serving
+               Jianxiong Liao                                 Quanxing Dong                                          Yunkai Liang
+             Sun Yat-sen University                        Sun Yat-sen University                               Sun Yat-sen University
+               Guangzhou, China                              Guangzhou, China                                     Guangzhou, China
+          liaojx9@mail2.sysu.edu.cn                      dongqx3@mail2.sysu.edu.cn                           liangyk7@mail2.sysu.edu.cn
+
+                                          Zhi Zhou∗                                             Xu Chen∗
+                                   Sun Yat-sen University                             Sun Yat-sen University
+                                     Guangzhou, China                                   Guangzhou, China
+                                 zhouzhi9@mail.sysu.edu.cn                          chenxu35@mail.sysu.edu.cn
+
+Abstract                                                                        ACM Reference Format:
+Engaging applications with diverse SLO requirements has                         Jianxiong Liao, Quanxing Dong, Yunkai Liang, Zhi Zhou, and Xu
+                                                                                Chen. 2026. Laser: Unlocking Layer-Level Scheduling for Efficient
+become indispensable for production-scale LLM serving sys-
+                                                                                Multi-SLO LLM Serving. In Proceedings of the 31st ACM SIGPLAN
+tems. However, existing systems rely on iteration-level sched-                  Annual Symposium on Principles and Practice of Parallel Program-
+uling, which enforces inflexible, unified execution across                      ming (PPoPP ’26), January 31 – February 4, 2026, Sydney, NSW, Aus-
+multi-SLO workloads, significantly constraining the serving                     tralia. ACM, New York, NY, USA, 13 pages. https://doi.org/10.1145/
+efficiency.                                                                     3774934.3786413
+   In this paper, we introduce layer-level scheduling, a novel
+mechanism that advances beyond conventional iteration-
+level granularity. This mechanism decomposes per-iteration
+                                                                                1    Introduction
+computation into fine-grained layer operations, enabling the                    Large Language Models (LLMs) [7, 17, 31, 36, 38, 42] have
+tailored execution of requests with differing requirements.                     achieved state-of-the-art performance across a wide spec-
+However, this increased granularity introduces new chal-                        trum of domains, ranging from natural language processing,
+lenges in both intra-instance request execution and cross-                      code generation, and multimodal reasoning. Built upon trans-
+instance coordination, posing significant barriers to practical                 former architectures [37], these models exhibit remarkable
+deployment. To address these challenges, we introduce Laser,                    scalability — their capabilities consistently improve as the
+a system designed for efficient multi-SLO LLM serving. The                      number and width of transformer layers increase. These
+key aspect lies in the seamless integration of inter-instance                   advancements have sparked the integration of LLMs into
+request dispatching with layer-level scheduling within in-                      production systems, where they enhance functionality and
+stances, delivering high serving throughput with SLO guar-                      deliver improved user experiences.
+antees. Evaluations with real-world applications reveal that                       The core computational process of LLMs lies in autoregres-
+Laser effectively improves throughput by over 1.67× while                       sive generation, which produces output tokens sequentially.
+maintaining the same SLO attainment rate compared to state-                     This process naturally splits LLM serving into two distinct
+of-the-art systems.                                                             phases: (1) Prefill: The initial phase that processes the en-
+                                                                                tire input prompt in parallel to generate the first token. (2)
+CCS Concepts: • Computer systems organization →                                 Decode: The subsequent, sequential phase that generates to-
+Real-time systems; • Computing methodologies → Ma-                              kens one-by-one. To accommodate the iterative process, con-
+chine learning approaches.                                                      tinuous batching [41] is proposed to flexibly batch requests
+Keywords: Layer-level Scheduling, Multi-SLO Serving, Large                      at the granularity of individual iterations1 , greatly improv-
+Language Model                                                                  ing GPU utilization and serving throughput. Built on this
+                                                                                iteration-level mechanism, recent advances [20, 28, 30, 43]
+∗ Corresponding authors: Zhi Zhou, Xu Chen.                                     further develop a disaggregated architecture that isolates
+                                                                                prefill and decode phases onto dedicated hardware, allow-
+                                                                                ing phase-specific optimization to meet the distinct resource
+                                                                                demands and performance metrics. These advances have
+This work is licensed under a Creative Commons Attribution 4.0 Interna-
+tional License.                                                                 become mainstream enablers for efficient LLM serving at
+PPoPP ’26, Sydney, NSW, Australia                                               production scale [3, 23, 30].
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2310-0/2026/01                                              1 In this work, we define an iteration as one full forward pass through all
+
+https://doi.org/10.1145/3774934.3786413                                         model layers.
+
+
+
+
+                                                                          509
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                        Jianxiong Liao et al.
+
+
+    Recently, the remarkable generalizability of LLMs has                 on top of layer-level scheduling. Laser incorporates a dual-
+driven a shift toward hosting diverse applications on shared              level design with the prefill-decode disaggregation archi-
+foundation models in the cloud. For instance, Alibaba deploys             tecture. At the intra-instance level, Laser adopts efficient,
+a centrally maintained Qwen 3 model [4, 22, 40] to support                phase-specific scheduling algorithms built on precise layer-
+a unified suite of agents, including a Reading Assistant for              level latency modeling to optimize serving latency with SLO
+comprehension, a Code Completion tool for developers, and                 guarantees. At the inter-instance level, Laser seamlessly co-
+an Image Generator for creators, offering a cohesive user ex-             ordinates request dispatching with intra-instance scheduling
+perience. To maintain responsiveness for online users, these              by incorporating real-time scheduling outcomes from each
+applications typically operate under strict service-level ob-             instance, enabling holistic optimization across multi-SLO
+jectives (SLOs). However, the SLO requirements vary widely                workloads.
+across scenarios and user expectations. Conversational chat-                 We have implemented a prototype of Laser atop vLLM
+bots [17, 38], for example, demand fast prefill to preserve               [23] and evaluated its design through extensive experiments
+interactivity but favor steadier, human-like decoding speeds              across different models and workloads. Experimental results
+for natural dialogue. In contrast, productivity tools [10] em-            demonstrate that Laser improves goodput by over 1.67×
+phasize fast generation in both prefill and decode phases to              compared to state-of-the-art systems. In summary, we make
+maximize efficiency.                                                      the following contributions:
+    Existing systems predominantly [6, 19, 23] incorporate the
+iteration-level scheduling mechanism, executing requests                        • We comprehensively analyze the limitations of iteration-
+at the granularity of entire iterations. However, this limited                    level scheduling and propose layer-level scheduling
+granularity presents fundamental limitations in sustaining                        that enables granular control of request execution
+high throughput while maintaining SLO compliance under                            within iterations to handle the heterogeneous require-
+multi-SLO workloads. In the prefill phase, it lacks the agility                   ments of multi-SLO workloads.
+to dynamically chunk and switch request execution, causing                      • We design and implement Laser, a serving system that
+head-of-line blocking that violates SLOs of latency-critical                      realizes layer-level scheduling through the integration
+requests and limited chunk-size execution that extends pre-                       of intra- and inter-instance optimizations.
+fill latency of relaxed requests. In the decode phase, it batches               • We conduct evaluations across a wide range of sce-
+requests with heterogeneous SLOs uniformly, leading to a                          narios, demonstrating the substantial improvement of
+mismatch between the identical decode time and the multi-                         Laser compared to state-of-the-art systems.
+SLO requirements. This constrains the capacity of instances
+to accommodate requests with relaxed requirements, ulti-                  2     Background
+mately leading to more SLO violations.                                    2.1    LLM Architecture
+    These limitations motivate the exploration of layer-level
+                                                                          Large language models (LLMs) are predominantly built on
+scheduling, a novel mechanism built on two key innova-
+                                                                          the Transformer architecture [37], which consists of a stack
+tions: (1) Layer-level chunked prefill, which promptly
+                                                                          of transformer layers. Each layer processes the intermediate
+prioritizes latency-critical requests with efficient request
+                                                                          states from its predecessor and forwards the result, while
+switching while dynamically consolidating relaxed requests
+                                                                          the output of the final layer is projected into a probability
+into larger chunks within iterations. (2) Layer-level decode
+                                                                          distribution over the vocabulary to generate output tokens.
+batching, which precisely controls the number of layers ex-
+                                                                          To optimize computational efficiency, LLM serving systems
+ecuted per iteration for each request, tailoring execution to
+                                                                          cache intermediate token states, known as the KV cache [23],
+its specific SLO target. Together, these techniques enable the
+                                                                          in GPU High Bandwidth Memory (HBM). This mechanism
+system to independently satisfy the heterogeneous demands
+                                                                          avoids redundant computations by reusing cached states
+of multi-SLO workloads, simultaneously guaranteeing strict
+                                                                          during subsequent token generation.
+SLO attainment and high overall throughput.
+    However, the practical implementation of layer-level sched-
+uling introduces substantial design challenges. First, the vari-          2.2    Iteration-level Request Scheduling
+ability in per-layer execution complicates latency evalua-                Unlike traditional DNN inference that completes compu-
+tion of individual iterations and significantly expands the               tation in a single forward pass [18, 35], modern LLMs [36,
+search space, hindering efficient request scheduling within               40, 42] operate autoregressively, generating one output to-
+instances. Second, dispatching requests to instances necessi-             ken for each iteration until reaching the maximum sequence
+tates careful consideration of layer-level runtime states to ac-          length or emitting an end-of-sequence (EOS) token. This iter-
+curately assess the impact of request assignment and prevent              ative process significantly extends the end-to-end latency of
+SLO violations. In response to these challenges, we present               individual requests. Consequently, traditional request-level
+Laser, an efficient serving system for multi-SLO workloads                scheduling, where new requests wait until prior ones finish,
+                                                                          cannot expand batch sizes during long-running executions,
+
+
+
+                                                                    510
+Laser: Unlocking Layer-Level Scheduling for Efficient Multi-SLO LLM Serving                                                PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+                                Layer Computation              Layer Computation
+                                     of Req 1                       of Req 2                                         specialized applications built atop shared foundation mod-
+ Iteration-
+              Req 2
+                                                                                                                     els. Each application typically exhibits distinct SLO require-
+    level
+ Chunked      Req 1                                          Time                                       Time         ments, shaped by its unique interaction patterns and user
+                                            SLO2      SLO1                                    SLO1, 2
+   prefill                                                                                                           expectations. For example, conversational agents like Chat-
+                 Req 1    Req 2                                     Req 1 Req 2
+                 Arrive   Arrive Priori-     Resto-                 Arrive Arrive Switch Merge
+
+   Layer-
+                                 tize 2       re 1                                 to 2   1,2                        Bots [38] emphasize low TTFT for immediate perceived re-
+              Req 2
+    level
+              Req 1                                          Time                                       Time
+                                                                                                                     sponsiveness while tolerating more relaxed TBT require-
+  Chunked
+   prefill                                  SLO2      SLO1                                   SLO1, 2                 ments aligned with human reading speeds (e.g., 10 tokens
+                                      (a)                                          (b)
+                                                                                                                     per second [9]). Conversely, productivity tools such as cod-
+Figure 1. Comparison between different scheduling ap-                                                                ing assistants require stringent TBT thresholds below 50 ms
+proaches in the prefill phase.                                                                                       to maintain seamless developer workflows [12]. The land-
+                                                                                                                     scape grows increasingly complex with advanced techniques
+resulting in inefficient parallelism and poor resource utiliza-                                                      [17, 39], which can introduce varied SLO requirements even
+tion. Orca [41] mitigates this inefficiency through continuous                                                       within a single application. This heterogeneity in perfor-
+batching, which shifts the batching granularity from requests                                                        mance requirements highlights the critical need for efficient,
+to iterations. This approach allows new requests to be flexi-                                                        SLO-aware LLM serving systems to deliver optimal perfor-
+bly integrated at each iteration, irrespective of the variabil-                                                      mance across diverse application workloads.
+ity in request lengths, yielding significant improvements
+in throughput and resource utilization. Sarathi-Serve [6]
+introduces chunked prefill on top of this technique, partition-                                                      3   Limitations and Proposed Solutions
+ing long prefill computations into smaller chunks executed                                                           In this section, we examine the limitations of iteration-level
+across iterations to prevent prefill from blocking decode exe-                                                       scheduling in handling multi-SLO workloads and introduce
+cution. These iteration-level scheduling mechanisms have                                                             two phase-specific techniques: layer-level chunked prefill
+become the de facto standard for efficient LLM serving.                                                              and layer-level decode batching.
+                                                                                                                     L1: Inflexible prefill chunking. In the prefill phase, the
+2.3    Prefill-Decode Disaggregation                                                                                 chunk size used in chunked prefill critically determines both
+The autoregressive generation process creates two distinct                                                           iteration latency and average latency per token. As Fig. 2a
+computational phases in LLM serving. The prefill phase pro-                                                          shows, increasing the chunk size from 100 to 3200 raises
+cesses the entire input sequence to produce the first output                                                         per-iteration latency by 16× but reduces per-token latency
+token, with the latency captured by Time-to-First-Token                                                              by 45.4%, indicating that larger chunk sizes can significantly
+(TTFT). This phase is compute-bound, leveraging the com-                                                             improve serving throughput at the expense of higher pre-
+putational power of accelerators (e.g., GPUs) to parallelize                                                         fill iteration overhead. Existing systems that incorporate
+batched matrix operations. In contrast, the decode phase                                                             iteration-level chunked prefill are hampered by their inabil-
+generates subsequent tokens iteratively and processes only                                                           ity to flexibly chunk prefill requests, resulting in two critical
+the most recent token for each iteration, with the latency                                                           limitations: (1) Head-of-line blocking. To process lengthy
+measured by Time-Between-Tokens (TBT). This phase is                                                                 requests efficiently, systems must adopt large chunk sizes
+memory-bound, constrained by frequent KV cache accesses                                                              that monopolize compute resources, potentially delaying
+and sequential execution.                                                                                            latency-sensitive requests and causing SLO violations. (2)
+   To meet the distinct resource and latency requirements                                                            Limited Chunk-size Execution. These systems fail to dy-
+of prefill and decode phases, recent LLM serving systems                                                             namically consolidate requests into larger chunks within
+[20, 28, 30, 43] introduce the innovative prefill–decode dis-                                                        iterations. This leads to small, inefficient chunks under un-
+aggregation architecture, deploying specialized serving in-                                                          predictable arrivals, causing substantial queuing delays for
+stances for each phase. Incoming requests are initially pro-                                                         subsequent requests. Fig.1 illustrates an example of these lim-
+cessed by prefill instances, which generate the first token                                                          itations. In (a), although Req 2 arrives later and has a stricter
+while building the complete KV cache. The populated KV                                                               SLO, the system fails to preempt the current iteration of Req
+cache is then migrated to decode instances, which take over                                                          1, resulting in Req 2 missing its deadline. In (b), despite Req
+the iterative generation of subsequent tokens. By physically                                                         1’s small chunk size, the system fails to dynamically batch
+separating these phases, this architecture eliminates inter-                                                         Req 2 once Req 1’s iteration has started. This inefficiency
+phase contention and enables targeted optimizations that                                                             leads to GPU underutilization, ultimately extending Req 2’s
+precisely satisfy the specific resource and SLO requirements                                                         queuing delay and causing it to miss the SLO target.
+of each stage.                                                                                                       S1: Layer-level chunked prefill. For efficient prefill execu-
+                                                                                                                     tion with multi-SLO compliance, we introduce the layer-level
+2.4    Multi-SLO LLM Serving                                                                                         chunked prefill that includes two key operations: (1) pre-
+The rapid growth in both the scale and architectural so-                                                             empting ongoing prefill computations at layer boundaries
+phistication of LLMs has enabled the emergence of diverse,                                                           to prioritize critical requests; and (2) dynamically merging
+
+
+
+                                                                                                               511
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                  Jianxiong Liao et al.
+
+
+
+
+                                                         Token Latency (ms)
+                    0.8                           0.40                                                             (a) Iteration-level              (b) Layer-level            (c) LB + SLO-aware
+Iter. Latency (s)
+
+
+                                                                                         Relaxed requests
+
+                    0.6                           0.35                                                                 Batching (IB)                 Batching (LB)                Dispatching
+                                                  0.30                                                                                                                                   SLO3
+                    0.4                                                                                                                                                           SLO2
+                                                  0.25                                                                  SLO2                          SLO2
+                                                                                                                      SLO1                          SLO1
+                    0.2                           0.20
+                                                  0.15                        Critial requests
+                                                                                                                                         Time                           Time                        Time
+                    0.0
+                          0.5 1 2 4 8 16 32 64                                                                            Instance 1                    Instance 1                     Instance 1
+                               Chunk Size (102)                                                                         SLO2                          SLO2
+                                                                                                                      SLO1                          SLO1                        SLO1
+                                   (a)                                                      (b)
+                                                                                                                                         Time                           Time                        Time
+Figure 2. Serving performance when executing Qwen-14b                                                                     Instance 2                    Instance 2                     Instance 2
+model on an A100 GPU. (a) Latency of each iteration and                                                                   SLO 1 Req's Layer Comp.    SLO 2 Req's Layer Comp.   SLO 3 Req's Layer Comp.
+average token processing latency under varying prefill chunk
+sizes. (b) Per-iteration latency under varying decode batch                                                       Figure 3. Comparison between different scheduling ap-
+sizes. The sequence length per request is configured to 128.                                                      proaches in the decode phase.
+
+                                                                                                                  request simultaneously. This bottleneck inevitably forces
+requests into larger chunks within iterations to enhance
+                                                                                                                  other SLO2 and SLO3 requests to miss their SLO targets.
+resource utilization. This fine-grained mechanism allows
+                                                                                                                  S2: Layer-level decode batching. To achieve non-unified
+prefill instances to maintain responsiveness to urgent in-
+                                                                                                                  scheduling, we propose exploiting the tolerance of relaxed
+coming requests while simultaneously boosting throughput
+                                                                                                                  requests for higher latency to execute more requests concur-
+via larger chunks. As demonstrated in Fig. 1, in (a), with
+                                                                                                                  rently. To realize this idea, we introduce layer-level batching,
+layer-level chunked prefill, the system can checkpoint Req
+                                                                                                                  which batches requests at the granularity of individual layers.
+1’s intermediate state after completing the current layer and
+                                                                                                                  In each iteration, the instance scheduler determines the num-
+promptly prioritize Req 2 when it detects that Req 1’s re-
+                                                                                                                  ber of layers to execute for each request, while efficiently
+maining iteration time risks causing Req 2 to miss its SLO
+                                                                                                                  caching and restoring intermediate states for subsequent
+target. This swift transition ensures Req 2 meets its latency
+                                                                                                                  execution. This finer-grained control significantly boosts the
+target through timely execution. In (b), the system deter-
+                                                                                                                  available batch size of decode instances. As illustrated in
+mines that Req 2 should be merged with Req 1 to avoid SLO
+                                                                                                                  Fig. 3(b), each SLO2 request is configured to process two
+violations by fully exploiting the GPU capacity. To achieve
+                                                                                                                  layers per iteration. This scheduling decision allows the sys-
+this, it first processes the initial three layers of Req 2, then
+                                                                                                                  tem to accommodate two additional SLO2 requests with SLO
+merges the remaining computations of both Req 1 and Req
+                                                                                                                  guarantees by interleaving the execution of SLO2 requests
+2. This ensures both requests meet their SLOs.
+                                                                                                                  within iterations.
+L2: Unified decode batching. In the decode phase, the
+                                                                                                                     However, the underlying discrepancies in TBT require-
+available batch size varies significantly for requests with dif-
+                                                                                                                  ments across requests still constrain the scalability of batch
+ferent TBT requirements. As shown in Fig. 2b, latency-critical
+                                                                                                                  sizes. To address this issue, layer-level batching should be
+requests require low TBT to ensure quick responsiveness,
+                                                                                                                  complemented with an SLO-aware dispatching strategy that
+necessitating small batch sizes of fewer than 128. In con-
+                                                                                                                  prioritizes colocating requests with compatible SLOs. As il-
+trast, relaxed requests can tolerate up to 7× more concurrent
+                                                                                                                  lustrated in Fig. 3(c), assigning the stringent SLO1 requests
+requests than latency-critical ones. However, the iteration-
+                                                                                                                  to Instance 2 while batching the remaining requests in an-
+level scheduler serves all requests with a unified TBT target.
+                                                                                                                  other one allows eight requests to execute simultaneously
+To meet the strictest SLO, it configures decode instances to
+                                                                                                                  and meet their respective SLO targets. This underscores the
+adopt small batch sizes, disregarding the heterogeneous TBT
+                                                                                                                  need to jointly optimize request dispatching and layer-level
+requirements of others. This severely constrains the execu-
+                                                                                                                  batching to achieve system-wide efficiency.
+tion of remaining relaxed requests, ultimately compromising
+the overall SLO attainment.
+   Fig. 3 illustrates an example of serving requests with three                                                   4      System Overview
+distinct SLO targets. Each rectangle represents the per-layer                                                     In this section, we detail the overall system architecture
+execution timeline of an individual request, assuming a four-                                                     of Laser, as illustrated in Fig. 4. It mainly encompasses the
+layer model. For each instance, the duration of the requests                                                      following key components:
+with the strictest SLO to execute four layers corresponds to                                                          The Global Controller serves as the centralized orchestra-
+the execution timeline of one iteration. To guarantee compli-                                                     tor of Laser. To build latency models, it initiates an offline pro-
+ance with the strictest SLO1 requirement, each instance is                                                        filing process during system initialization to gather latency
+configured to process two concurrent requests. For the more                                                       measurements from all serving instances, correlating perfor-
+relaxed SLO2 target, set at twice the SLO1, the permitted                                                         mance with the number of input tokens and context length.
+batch size increases to six. However, as illustrated in Fig. 3(a),                                                At runtime, the Global Controller selects the prefill instance
+to meet the SLO1 target, the unified decode batching only                                                         for new requests and employs a group-based algorithm to
+allows each instance to process just one SLO1 and one SLO2                                                        assign them to decode instances. These instance groups are
+
+
+
+                                                                                                            512
+Laser: Unlocking Layer-Level Scheduling for Efficient Multi-SLO LLM Serving                            PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                            Global Controller                                                      For stateless modules, the latency remains stable within
+    Prefill Selector                Decode Assigner                       Profiler
+                                                                                                certain token ranges but spikes abruptly when the num-
+     Prefill Selection   Group Management    Decode Assignment        # of      Latency
+                                                                                                ber of tokens exceeds specific thresholds due to the tile-
+                          SLO1        SLO2                          tokens       Model
+                                                                    Context
+                                                                                                quantization effect in GPU computation [6]. To capture this,
+                                                                    lengths
+                                                                                                Laser models the latency of stateless modules with a piece-
+                                                                                                wise linear function:
+          Prefill Instance                          Decode Instance                                                  
+                                                                                                                     
+                                                                                                                       𝑎 · 𝑛 + 𝑏0
+                                                                                                                      0
+                                                                                                                     
+                                                                                                                                      𝑡 ∈ [1, 𝑛 0 )
+      Scheduler           Executor                              Planner                                     𝜔 (𝑛) = · · ·                                    (1)
+                                                Latency Analyze           Exec. Plan
+          Slack            Inter-
+                                                                                                                     
+        Evaluation
+                          mediate                                     Req      (L, O)                                𝑎𝑚 · 𝑛 + 𝑏𝑚 𝑡 ∈ [𝑛𝑚−1, 𝑛𝑚 )
+                                                                                                                     
+                           Cache                    Layer   Iter.
+                                                                                                                     
+     Latency SLO                                                                                where 𝑛 denotes the number of input tokens. Each linear
+                                                              Executor
+        Request
+                                               R1                               Inter-
+                                                                                                segment 𝑖 is determined by the slope 𝑎𝑖 and intercept 𝑏𝑖 ,
+      Orchestration                                                            mediate
+                                               R2                               Cache           employing a fixed segment width of 32 tokens—a common
+                                 Request
+                                               R3
+       SLO     EDF
+                                  Queue                                                         divisor of standard GPU tile sizes. Additionally, the commu-
+                                                                                                nication overhead from model parallelism techniques (e.g.,
+          Figure 4. The architecture overview of Laser.                                         tensor parallelism) increases linearly with the token count
+                                                                                                and is integrated into Equation (1) for precise modeling.
+dynamically managed through a group management proce-                                              For the stateful self-attention module, latency is mainly de-
+dure, with each dedicated to accommodating requests with                                        termined by two factors: (1) Total request context length,
+homogeneous TBT targets.                                                                        which dominates computation and memory access overhead;
+   Each prefill instance executes the prefill phase of requests                                 and (2) Token count, which increases GPU thread block
+through the coordination of the Scheduler and the Execu-                                        switching overhead during decode attention but improves
+tor. The Scheduler evaluates the latency slack of incoming                                      parallelism during prefill attention. Our experiments show
+requests, deciding whether to preempt the ongoing prefill                                       strong linear correlations between module latency and these
+requests to prioritize critical requests or increase chunk sizes.                               parameters, with the absolute Pearson coefficients exceeding
+It also orchestrates queued requests based on the SLO targets                                   0.78. Thus, the latency can be formulated as a linearÍfunction
+and the earliest-deadline-first (EDF) principle. The Execu-                                     of the token count 𝑛 and the total context length 𝑛𝑟=1 𝑐𝑟 :
+tor handles prefill computations and supports layer-level                                                            𝑛
+                                                                                                                    ∑︁                      𝑛
+                                                                                                                                           ∑︁
+preemption and restoration. To ensure efficiency, states of                                                   𝜏 (𝑛,     𝑐𝑟 ) = 𝛼 · 𝑛 + 𝛽 ·     𝑐𝑟 + 𝛾        (2)
+preempted requests are checkpointed in an intermediate                                                              𝑟 =1                    𝑟 =1
+
+cache for seamless resumption.                                                                  Here, 𝛼, 𝛽, 𝛾 are related coefficients.
+   Each decode instance executes the decode phase of re-                                          The aforementioned latency models jointly constitute the
+quests, integrating the Planner and the Executor. The Planner                                   serving latency of a transformer layer. expressed as:
+dynamically analyzes per-iteration latency and constructs                                                            𝑛
+                                                                                                                    ∑︁                       𝑛
+                                                                                                                                            ∑︁
+execution plans to guide decode execution by specifying                                                       𝑇 (𝑛,    𝑐𝑟 ) = 𝜔 (𝑛) + 𝜏 (𝑛,    𝑐𝑟 )     (3)
+two key parameters for each request: (1) the number of lay-                                                          𝑟 =1                      𝑟 =1
+ers to execute (L) for each iteration, and (2) the scheduling                                   To obtain the coefficients, Laser performs offline profiling
+offset (O) to balance workloads of different layers. The Ex-                                    by measuring module latencies across varying token counts
+ecutor then performs decoding computations accordingly,                                         and context lengths for each serving instance, and then fits
+switching requests efficiently at layer boundaries. This is                                     these measurements to the corresponding latency models.
+achieved through caching and restoration of request states
+via a dedicated intermediate cache.                                                             6     Intra-instance Request Scheduling
+                                                                                                6.1   Layer-level Chunked Prefill
+5     Modular Latency Modeling                                                                  The Scheduler of each prefill instance performs layer-level
+LLM architectures comprise two types of modules. Stateless                                      chunked prefill by managing request chunking, preemption,
+modules, including the QKV projection, attention output                                         and restoration at layer boundaries. Upon the arrival of a
+projection, and feed-forward modules, process each input                                        new request, the Scheduler computes the slack time as the
+token independently without relying on previously gener-                                        gap between the TTFT target and the estimated prefill la-
+ated tokens. In contrast, the self-attention module computes                                    tency. If the remaining iteration time of the executing chunk
+a weighted sum over all preceding key-value vectors in the                                      exceeds the slack time, the Scheduler restores the the layer
+context window, referred to as the stateful module. Laser                                       intermediate states of executing chunks and then: (1) for-
+separately models these modules to achieve precise latency                                      wards the new request to the same layer as the preempted
+estimation for each transformer layer.                                                          chunk and merges them if doing so will not violate the new
+
+
+
+                                                                                          513
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                   Jianxiong Liao et al.
+
+    R1: (L=4, O=0); R2: (L=2, O=0);      R1: (L=4, O=0); R2: (L=2, O=1);
+            R3: (L=2, O=1)                       R3: (L=1, O=0)                   Algorithm 1: Execution Plan Construction
+ R1                                    R1                                        1 Function ExecPlan(𝑁 , 𝑅, 𝐿, 𝑂, 𝑅 ∗ ):
+ R2                                    R2                                        2    if 𝑅 ∗ ≠ ∅ then
+ R3                                    R3                                        3        𝐿𝑟 = 𝑁 , 𝑂𝑟 = 0 for 𝑟 ∈ 𝑅 ∗ ;
+                                                                                          𝑅 = 𝑅 𝑅∗;
+                                                                                                 Ð
+                                                                                 4
+Figure 5. An example of request execution under different                        5     𝐼𝑡𝑒𝑟 = 𝐿𝑎𝑡𝑒𝑛𝑐𝑦𝐸𝑠𝑡𝑖𝑚𝑎𝑡𝑒 (𝐿, 𝑂);
+execution plans. The total number of model layers is 6.                          6     𝑇𝑔 = min𝑟 ∈𝑅 𝑆𝐿𝑂𝑇𝑟 𝐵𝑇 ;
+request’s SLO; or (2) directly prioritizes executing the new                     7     𝑃 = 𝐺𝑟𝑜𝑢𝑝𝑅𝑒𝑞𝑢𝑒𝑠𝑡𝑠 (𝑅, 𝐿, 𝑂);
+request if merging would risk an SLO violation. If preemp-                       8     while True do
+tion is not required, the Scheduler attempts to merge the                         9        if 𝐼𝑡𝑒𝑟 > 𝑇𝑔 then
+new request into executing chunks when the request queue                         10            𝑟 𝑜𝑝𝑡 = 𝑎𝑟𝑔 max𝐿𝑟 >⌈ 𝑁 ·𝑇 𝑔 ⌉ 𝑆𝐿𝑂𝑇𝑟 𝐵𝑇 ;
+                                                                                                                       𝑆𝐿𝑂𝑇
+                                                                                                                          𝑟
+                                                                                                                            𝐵𝑇
+is empty, which indicates that no pending requests can be                                                  𝑁 ·𝑇𝑔
+                                                                                 11            𝐿𝑟 𝑜𝑝𝑡 = ⌈ 𝑆𝐿𝑂𝑇 𝐵𝑇 ⌉;
+chunked with the executing one. Specifically, it computes                                                     𝑟 𝑜𝑝𝑡
+the executing chunk’s slack time, partitions the new request,                    12            𝑂𝑟 𝑜𝑝𝑡 = 𝑎𝑟𝑔 min𝑜 ∈ [0,𝑀 ] 𝑇 (𝑃 [𝐿𝑟 𝑜𝑝𝑡 , 𝑜]);
+and selects a chunk size that satisfies its SLO deadline. It then                13            𝐼𝑡𝑒𝑟 = 𝐿𝑎𝑡𝑒𝑛𝑐𝑦𝐸𝑠𝑡𝑖𝑚𝑎𝑡𝑒 (𝐿, 𝑂);
+forwards the chunk to the layer of the executing one and                         14            if 𝐼𝑡𝑒𝑟 < 𝑇𝑔 then
+merges them for subsequent prefill. If merging is infeasible,                    15                 break;
+the new request is enqueued for later execution.
+   The Scheduler also strategically orchestrates the execu-                      16        else
+tion order of queued requests using the earliest-deadline-first                  17            𝑟 𝑜𝑝𝑡 = 𝑎𝑟𝑔 min𝐿𝑟 <𝑁 𝑆𝐿𝑂𝑇𝑟 𝐵𝑇 ;
+(EDF) principle, minimizing SLO violations by prioritizing                       18            𝐿𝑟 𝑜𝑝𝑡 = 𝑁 ; 𝑂𝑟 𝑜𝑝𝑡 = 0;
+those with the most urgent deadlines. Specifically, it sorts                     19            𝐼𝑡𝑒𝑟 = 𝐿𝑎𝑡𝑒𝑛𝑐𝑦𝐸𝑠𝑡𝑖𝑚𝑎𝑡𝑒 (𝐿, 𝑂);
+queued requests by their arrival time plus their TTFT targets.                   20            if 𝐼𝑡𝑒𝑟 > 𝑇𝑔 then
+After completing each prefill computation, the Scheduler dy-                     21                 Restore the configuration of 𝑟 𝑜𝑝𝑡 ;
+namically chunks pending requests based on the tightest                          22                 break;
+deadlines to maximize prefill throughput with SLO guaran-
+tees.                                                                            23    return 𝐿, 𝑂, 𝑅, 𝐼𝑡𝑒𝑟 , 𝑇𝑔;
+
+6.2 Layer-level Decode Batching
+Within each decode instance, the Planner schedules decode                                       Í
+requests at layer granularity to optimize decode through-                        layer 𝑗, while 𝑟 ∈𝑅𝑑 𝑥 (𝑟, 𝑖, 𝑗) · 𝑐𝑟 captures the total context
+put with SLO compliance. It constructs execution plans that                      length. The latency for the entire iteration 𝑖 is obtained by
+determine two key parameters for each request: (1) 𝐿: the                        aggregating the contributions of all 𝑁 layers. As per-iteration
+number of layers executed per iteration, and (2) 𝑂: the sched-                   latency varies significantly due to dynamic batch sizes and
+uling offset, which indicates the delay (in iterations) before                   context lengths across layers, the Planner simulates several
+the next execution. Figure 5 shows how 𝐿 and 𝑂 govern                            future iterations and takes the maximum predicted latency
+request execution across iterations under different plans.                       as the estimated per-iteration latency for the execution plan.
+
+6.2.1 Latency Analysis. The Planner implements a layer-                          6.2.2 Execution Plan Construction. Building on the la-
+wise analytical approach to evaluate per-iteration latency of                    tency analysis, the Planner dynamically updates execution
+a given execution plan. Specifically, for each request 𝑟 , 𝐿𝑟                    plans using real-time request metrics. This process poses
+and 𝑂𝑟 denote its layer count and scheduling offset, respec-                     two fundamental challenges. First, the intricate relationship
+tively. Given the total number of layers 𝑁 , the first execution                 between execution plans and per-iteration latency makes
+of layer 𝑗 for this request occurs at iteration ⌈𝑗/𝐿𝑟 ⌉ + 𝑂𝑟 ,                   direct optimization intractable, while the vast configuration
+and subsequent executions follow periodically every ⌈𝑁 /𝐿𝑟 ⌉                     space, spanning layer counts and scheduling offsets for each
+iterations. Thus, layer 𝑗 is executed at iteration 𝑖 only if                     request, creates a combinatorial explosion that rules out
+(𝑖 − ⌈𝑗/𝐿𝑟 ⌉ −𝑂𝑟 ) is divisible by ⌈𝑁 /𝐿𝑟 ⌉. We denote this execu-               brute-force search. Second, growing request context lengths
+tion condition as a binary value 𝑥 (𝑟, 𝑖, 𝑗), where 𝑥 (𝑟, 𝑖, 𝑗) = 1              continually shift the optimal execution plan. However, re-
+indicates the request 𝑟 would execute layer 𝑗 at iteration 𝑖.                    constructing plans at each iteration introduces non-trivial
+   Given 𝑥, the Planner
+                     Í       estimatesÍthe latency of layer 𝑗 in                scheduling overhead and induces latency fluctuations, in-
+iteration 𝑖 as 𝑇𝑑 𝑟 ∈𝑅𝑑 𝑥 (𝑟, 𝑖, 𝑗), 𝑟 ∈𝑅𝑑 𝑥 (𝑟, 𝑖, 𝑗) · 𝑐𝑟 . Here,              creasing the risk of SLO violations.
+𝑅𝑑 is the set of requests assigned to decode instance 𝑑. The                        To address these challenges, the Planner follows two key
+       Í
+term 𝑟 ∈𝑅𝑑 𝑥 (𝑟, 𝑖, 𝑗) represents the batch size processed by                    principles: (1) Maximizing the magnitude of changes on each
+
+
+
+                                                                           514
+Laser: Unlocking Layer-Level Scheduling for Efficient Multi-SLO LLM Serving          PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+affected request to minimize the total number of updates and                   Algorithm 2: Group-based Decode Assignment
+reduce disruptive reordering caused by scheduling offsets.
+                                                                               1 Function LatencyIncrement(𝑟 ∗, 𝑑):
+(2) Triggering updates only during critical events, such as
+                                                                               2    // Execute in decode instance 𝑑
+request arrivals or departures, or when per-iteration latency
+                                                                               3    Instance 𝑑 attains current 𝑁 , 𝑅, 𝐿, 𝑂;
+approaches the strictest request SLO. Guided by these prin-
+ciples, the Planner designs an efficient algorithm for plan                    4    𝐼𝑡𝑒𝑟 = 𝐿𝑎𝑡𝑒𝑛𝑐𝑦𝐸𝑠𝑡𝑖𝑚𝑎𝑡𝑒 (𝐿, 𝑂);
+construction, as outlined in Algorithm 1.                                      5    𝐿 ∗, 𝑂 ∗, 𝑅 ∗, 𝐼𝑡𝑒𝑟 ∗,𝑇𝑔∗ = 𝐸𝑥𝑒𝑐𝑃𝑙𝑎𝑛(𝑁 , 𝑅, 𝐿, 𝑂, 𝑟 ∗ );
+   Initially, the Planner configures each newly arrived re-                    6    if 𝐼𝑡𝑒𝑟 ∗ > 𝑇𝑔∗ or 𝑀𝑒𝑚𝑜𝑟𝑦 𝑆ℎ𝑜𝑟𝑡𝑎𝑔𝑒 then
+quest 𝑟 ∈ 𝑅 ∗ to execute all 𝑁 layers every iteration without                  7         return ∞;
+delay. It then estimates the current per-iteration latency and                 8     else
+sets the TBT target 𝑇𝑔 as the minimum requirement across                                 return 𝑟 ∈𝑅 ∗ 𝐼𝑡𝑒𝑟 ∗ · ⌈ 𝐿𝑁𝑟∗ ⌉ − 𝑟 ∈𝑅 𝐼𝑡𝑒𝑟 · ⌈ 𝐿𝑁𝑟 ⌉;
+                                                                                               Í                          Í
+                                                                               9
+requests. Requests are grouped based on their execution
+configurations. For example, 𝑃 [ 𝑁2 , 1] denotes the group of                 10 Function DecodeAssignment(𝐺, 𝑟 ∗ ):
+requests that execute half of the layers per iteration with                   11    for 𝑑 ∈ 𝑎𝑙𝑙 𝑑𝑒𝑐𝑜𝑑𝑒 𝑖𝑛𝑠𝑡𝑎𝑛𝑐𝑒𝑠 do
+one-iteration delay.                                                          12        𝐼𝑑 = 𝐿𝑎𝑡𝑒𝑛𝑐𝑦𝐼𝑛𝑐𝑟𝑒𝑚𝑒𝑛𝑡 (𝑟 ∗, 𝑑);
+   Following this, the Planner iteratively adjusts execution                  13     Sort 𝐺 based on |𝑆𝐿𝑂𝑔∈𝐺 − 𝑆𝐿𝑂𝑇𝑟 ∗𝐵𝑇 |;
+plans to maintain per-iteration latency near 𝑇𝑔. If the es-                   14     for 𝑔 ∈ 𝐺 do
+timated latency exceeds the target, the Planner selects the                   15         𝐼 𝑜𝑝𝑡 , 𝑑 𝑜𝑝𝑡 = min𝑑 ∈𝑔 𝐼𝑑 , 𝑎𝑟𝑔 min𝑑 ∈𝑔 𝐼𝑑 ;
+request 𝑟 𝑜𝑝𝑡 with the most relaxed SLO and reduces the layer                 16         if 𝐼 𝑜𝑝𝑡 ≠ ∞ then
+count to the minimum required for meeting 𝑟 𝑜𝑝𝑡 ’s SLO. This                  17               return 𝑑 𝑜𝑝𝑡 ;
+greedy adjustment maximizes the change magnitude and
+approaches optimality, as the largest throughput gains come                   18     Assign 𝑟 ∗ to the least-loaded instance;
+from fully utilizing the least constrained resources (relaxed
+SLOs) first. The updated scheduling offset is set to balance the
+latency of request groups with the same layer count (line 12).
+Here, 𝑇 (𝑃 [·]) denotes the per-layer latency of request groups
+𝑃 [·]. This process continues until the per-iteration latency
+                                                                              If no instance can safely admit the request, the controller
+falls within the target. Conversely, if the estimated latency
+                                                                              chooses the instance with the fewest prefill tokens and exe-
+is below the strictest SLO, the Planner prioritizes the request
+                                                                              cutes the request on a best-effort basis during idle periods.
+with the most stringent requirements, attempting to execute
+all layers per iteration. If this adjustment risks an SLO viola-
+tion, the Planner reverts the configuration and terminates the                7.2    Decode Request Assignment
+update. The final updated plan and associated statistics are                  In contrast, decode instances benefit from grouping requests
+then output to direct the subsequent execution of requests.                   with similar TBT SLOs, which reduces TBT discrepancies
+                                                                              and improves batching efficiency. However, dispatching de-
+7     Inter-instance Request Dispatching                                      code requests poses two major challenges. First, colocat-
+                                                                              ing similar-SLO requests causes severe resource imbalance
+The Global Controller dynamically routes new requests to                      across instances due to skewed application popularity and
+phase-specific instances at runtime, applying tailored dis-                   varying request lengths, while unpredictable arrivals further
+patching policies for prefill and decode phases to meet their                 complicate the trade-off between utilization and batching ef-
+respective colocation requirements.                                           ficiency. Second, assigning a new request requires evaluating
+                                                                              its performance impact across all decode instances. Yet, with
+7.1   Prefill Instance Selection                                              layer-level execution, complicated per-layer batch tracking
+For prefill instances, colocating requests with diverse SLOs                  and analysis make centralized performance evaluation in the
+allows the system to exploit the latency slack of relaxed                     Global Controller computationally prohibitive.
+requests, thereby improving overall SLO compliance. To                           To address these challenges, the Global Scheduler employs
+achieve this, the Global Controller continuously monitors the                 two key designs: (1) Instance group management: It main-
+scheduling decisions and request statistics of each instance.                 tains dedicated instance groups for SLO-homogeneous re-
+Using this information, the Global Controller identifies which                quests, prioritizing intra-group assignments while permit-
+instances can admit the new request without violating TTFT                    ting cross-group dispatching for load balancing. (2) Decen-
+SLOs under EDF scheduling and layer-level chunked prefill.                    tralized performance evaluation: New requests are pre-
+Among the feasible instances, it selects the one with the                     allocated to decode instances, enabling each instance to as-
+largest latency slack, defined as the minimum gap between                     sess the impact of assignments locally. This decentralized
+each request’s estimated prefill time and its SLO deadline.                   approach minimizes central scheduling overhead.
+
+
+
+                                                                       515
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                      Jianxiong Liao et al.
+
+
+7.2.1 Group-based assignment. Building on these de-                            Table 1. Average request lengths and SLO targets.
+signs, the Global Scheduler employs a group-based assign-
+ment algorithm, as shown in Algorithm 2. Given the instance                        Dataset    Input Output TTFT TBT
+groups 𝐺 and an incoming request 𝑟 ∗ , the Global Scheduler                     ShareGPT (SG) 350.9  187.9 0.25 s 100 ms
+evaluates the impact of assigning 𝑟 ∗ to each decode instance.
+                                                                               HumanEval (HE) 201.5  105.2 0.125 s 50 ms
+Specifically, each instance first estimates its per-iteration
+latency before accepting the new request. It then applies                      LongBench (LB) 2084.5 95.7    2s    200 ms
+the 𝐸𝑥𝑒𝑐𝑃𝑙𝑎𝑛 algorithm described in Algorithm 1 to gener-
+                                                                         Intermediate state management. To enable efficient re-
+ate an updated plan that incorporates 𝑟 ∗ and recomputes
+                                                                         quest switching, each instance maintains an intermediate
+the latency. If admitting 𝑟 ∗ would cause SLO violations or
+                                                                         cache in GPU memory (analogous to the KV cache) and a
+memory exhaustion, the instance rejects it by returning ∞;
+                                                                         state manager for indexing active requests. The interme-
+otherwise, it returns the increment in aggregated TBT of
+                                                                         diate cache is allocated 16,384 tokens for prefill and 2,048
+all requests after accommodating 𝑟 ∗ . With the increment
+                                                                         tokens for decode instances, consuming less than 256 MB
+statistics, the Global Scheduler sorts instance groups by the
+                                                                         of GPU memory for the Llama-70B model. Such a small
+absolute difference between their designated SLO and 𝑟 ∗ ’s
+                                                                         cache size is sufficient for Laser because intermediate states
+target. It then iterates through instance groups to select the
+                                                                         are maintained at layer granularity, incurring minimal over-
+instance that minimizes the TBT increment with SLO compli-
+                                                                         heads. When the cache reaches capacity, Laser evicts the
+ance. If no suitable instance is found, the request is assigned
+                                                                         request with the least stringent SLO and asynchronously
+to the least-loaded instance for best-effort execution.
+                                                                         restores it once there is enough available cache space. Fur-
+                                                                         thermore, Laser enhances the efficiency of switching inter-
+7.2.2 Instance Group Management. The Global Sched-
+                                                                         mediate states with a fused CUDA kernel that combines state
+uler dynamically reassigns instances to different TBT groups
+                                                                         caching and retrieval into a single operation.
+to adapt to workload distributions. It derives the number of
+                                                                         Cache migration. Laser asynchronously migrates the KV
+required instances for each group by dividing the arrival rate
+                                                                         cache between prefill and decode instances at layer gran-
+of requests by the given target by the per-instance through-
+                                                                         ularity, overlapping this transfer with prefill computation.
+put at the maximum SLO-compliant batch size. Instances are
+                                                                         Since Laser operates without prior knowledge of requests,
+then allocated proportionally to the demand of each group.
+                                                                         it handles memory exhaustion or SLO violations caused by
+Notably, since instance groups are virtual constructs that
+                                                                         dynamic context lengths by reassigning decode requests
+affect only request assignment, the Global Scheduler can
+                                                                         with live cache migration [34], ensuring continuous token
+flexibly resize them in response to workload changes.
+                                                                         generation during transfer.
+
+7.3   Implementing Laser at larger scales                                9     Evaluation
+Scaling Laser to large clusters faces two main challenges.               9.1    Experiment Setup
+First, although Laser employs decentralized performance
+evaluation across instances for efficient scheduling, scal-              Cluster Setup. We deploy Laser on a local cluster consisting
+ing the number of serving instances inevitably increases                 of four physical hosts, each equipped with four NVIDIA A100
+scheduling overhead. This includes network overhead for                  80GB GPUs. The hosts are interconnected via a 100 Gbps
+coordinating statistics between the controller and instances,            LAN, while GPUs within each host are linked via NVLink.
+as well as computational overhead for request dispatching.               Models. We evaluate Laser with Qwen2.5-14B, Qwen2.5-32B
+These overheads can be alleviated by replicating the con-                [22], and LLaMA-3-70B [15] models. Serving instances are
+troller, with each replica independently managing a subset               configured with one-, two-, and four-way tensor parallelism,
+of instances. Second, resource exhaustion or sudden failures             respectively, depending on the model size.
+in serving instances can introduce stragglers, which degrade             Metrics. Following prior work [43], we focus on two key
+overall system efficiency. To address this, Laser sets timeout           metrics: SLO attainment and goodput, which is defined as the
+thresholds in the controller when monitoring prefill instance            throughput achieved while maintaining 90% SLO attainment.
+statistics and preallocating requests to decode instances, en-           A decode request violates its SLO if its P99 TBT exceeds the
+abling the timely detection of potential failures in serving             SLO target [6].
+instances.                                                               Workloads. We choose three different LLM applications for
+                                                                         evaluation and configure the SLO target according to prior
+                                                                         works [6, 26, 43]. Specifically, we use the ShareGPT dataset
+8     Implementation                                                     [1] for the chatbot application [38], the HumanEval dataset
+Laser is an efficient LLM serving system designed to support             [10] for the code completion task [11], and the LongBench
+multi-SLO workloads, incorporating vLLM [23] and Ray [5]                 dataset [8] for the document summarization [2]. Table 1
+as the default inference and communication backend.                      summarizes the workload characteristics, including average
+
+
+
+                                                                   516
+Laser: Unlocking Layer-Level Scheduling for Efficient Multi-SLO LLM Serving                                                                                      PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+        SLO Attainment (%)
+
+
+
+
+                                                                                        SLO Attainment (%)
+
+
+
+
+                                                                                                                                                                                      SLO Attainment (%)
+                                           Laser       Sarathi      DistServe                                         Laser       Sarathi                         DistServe                                                           Laser         Sarathi        DistServe
+                             100                                                                             100                                                                                           100
+                              95                                                                              95                                                                                            95
+                              90                                                                              90                                                                                            90
+                              85                                                                              85                                                                                            85
+                              80                                                                              80                                                                                            80
+                              75                                                                              75                                                                                            75
+                                     10 15 20 25 30 35 40 45 50                                                       10       15       20                          25                                            2                   3     4    5    6    7         8      9
+                                           Workloads (Req/s)                                                                 Workloads (Req/s)                                                                                              Workloads (Req/s)
+                                             (a) Qwen-14b                                                                  (b) Qwen-32b                                                                                                   (c) Llama-70b
+                                                                             Figure 6. SLO attainment under varying workloads.
+
+                     70                                Laser         Sarathi            Distserve                                                    80
+
+
+
+
+                                                                                                                                   Goodput (Req/s)
+                                                                                                                                                                                                                                                 Laser   Sarathi     DistServe
+
+
+
+
+                                                                                                                                                                                                                      Norm. Goodput
+                                                                                                                                                                Laser     Sarathi    DistServe
+                                                                                                                                                                                                                                      1.0
+  Goodput (Req/s)
+
+
+
+
+                     60                                                                                                                              60
+                     50                                                                                                                                                                                                               0.8
+                     40                                                                                                                              40
+                                                                                                                                                                                                                                      0.6
+                     30
+                                                                                                                                                     20                                                                               0.4
+                     20
+                     10                                                                                                                               0                                                                               0.2
+                      0                                                                                                                                   1.3    1.2     1.1 1.0     0.9                    0.8                             16      12       8       4          2
+                                   1:1:1       1:2:4       1:4:2     2:1:4      2:4:1                         4:1:2    4:2:1                                             SLO Scale                                                               Cluster Size (# of GPUs)
+                                             (a) Request Distribution (SG: HE: LB)                                                                              (b) SLO Scale                                                                    (c) Cluster Size
+                                                                 Figure 7. Serving goodput under varied experimental configurations.
+request lengths and baseline SLO targets. To emulate real-                                                                                           ones for higher efficiency. Furthermore, it incorporates inter-
+world user behavior, we generate request arrivals using a                                                                                            instance request dispatching with phase-tailored policies for
+Poisson distribution with varying rates.                                                                                                             system-wide optimization. Consequently, Laser boosts good-
+Baselines. To demonstrate the effectiveness of Laser’s de-                                                                                           put by 43.4% on Qwen-14B, 68.9% on Qwen-32B, and 56.6%
+sign, we compare it against state-of-the-art LLM serving                                                                                             on Llama-70B, compared to all baseline schemes.
+systems, Sarathi-serve [6] and Distserve [43]. Sarathi-serve                                                                                            To further assess the robustness of Laser, we evaluate it
+adopts a prefill–decode aggregation architecture and incor-                                                                                          with the Qwen-14b model under varied configurations:
+porates the chunked prefill mechanism to prevent head-of-                                                                                            Request distribution. To understand the impact of het-
+line blocking caused by long prefill computations. In con-                                                                                           erogeneous requests, we assess the goodput under different
+trast, Distserve disaggregates the prefill and decode phases                                                                                         request distributions. As illustrated in Fig. 7a, the improve-
+and applies iteration-level scheduling in each serving in-                                                                                           ment of Laser grows as the proportion of relaxed requests
+stance. Both baseline systems adopt the earliest-deadline-                                                                                           increases. Specifically, when the distribution shifts from 2:4:1
+first (EDF) scheduling policy instead of the first-come-first-                                                                                       to 2:1:4, where relaxed requests dominate the distribution,
+served (FCFS) policy for fair comparison.                                                                                                            Laser’s improvement grows from 19.4% to over 86%. This
+                                                                                                                                                     significant gain is attributable to two advantages: First, Laser
+                                                                                                                                                     effectively exploits the latency slack of relaxed requests to op-
+                                                                                                                                                     timize both prefill chunking and decode batching, leading to
+9.2                          End-to-end Evaluation
+                                                                                                                                                     higher utilization of GPU capabilities. Second, it can preempt
+We first evaluate the end-to-end performance of Laser under                                                                                          lengthy prefill computations (e.g., from LongBench) to pri-
+different workload intensities. As shown in Fig. 6, compared                                                                                         oritize the latency-critical requests (e.g., from HumanEval),
+to Sarathi-Serve and DistServe, Laser significantly reduces                                                                                          thereby drastically reducing SLO violations.
+the SLO violation rate and improves goodput by up to 68.9%                                                                                           SLO scale. To assess Laser’s sensitivity to SLO targets, we
+and 1.67×, respectively. When the attainment target of good-                                                                                         conduct experiments by varying the SLO scale of requests rel-
+put rises to 99%, throughput improvement further increases                                                                                           ative to the baseline target depicted in Table 1. As shown in
+to 1.85× over all baselines. Sarathi-serve applies decode-                                                                                           Fig. 7b, Laser’s advantage becomes more pronounced as the
+oriented scheduling that prioritizes the execution of decode                                                                                         SLO tightens, thanks to its ability to efficiently execute criti-
+requests. To meet the strict 50 ms TBT target, it enforces a                                                                                         cal requests without compromising others. For a tight 0.8×
+limited prefill chunk size for each instance, leading to signifi-                                                                                    SLO, Laser achieves goodput gains of up to 1.08× and 6.25×
+cant prefill SLO violations. Distserve addresses this limitation                                                                                     against Distserve and Sarathi-serve, respectively. Moreover,
+by disaggregating the prefill and decode phases onto dedi-                                                                                           even under a relaxed 1.3× SLO, Laser maintains a goodput im-
+cated instances. This allows each phase to meet its specific                                                                                         provement of over 34%, demonstrating its robustness across
+requirements, enhancing the goodput by 80.5%. However, its                                                                                           a broad spectrum of SLO targets.
+reliance on iteration-level scheduling struggles to accommo-                                                                                         Cluster size. The available GPU resources in a cluster deter-
+date the heterogeneous demands of multi-SLO workloads,                                                                                               mine the total number of instances, which in turn influences
+resulting in performance degradation. Laser employs layer-                                                                                           request dispatching decisions. To investigate this impact, we
+level scheduling for each phase, allowing latency-critical                                                                                           deploy instances with varying GPU allocations and report
+requests to execute promptly while batching more relaxed
+
+
+
+                                                                                                                                517
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                                                             Jianxiong Liao et al.
+
+
+
+
+                                                           Preempted Rate (%)
+SLO Attainment (%)
+
+
+
+
+                                                                                                                                            SLO Attainment (%)
+                     100                                                        14                                0.98                                           100                                                        30        Iter     Layer      Laser
+
+
+
+
+                                                                                                                                                                                                       Violation Rate (%)
+                                                                                                                         Norm. TTFT
+                      95                                                        12                                0.96                                            95                                                        25
+                      90                                                                                                                                          90
+                                                                                10                                0.94                                            85        Iter                                            20
+                      85                                                         8                                                                                80
+                                Iter                                                                              0.92                                                      Layer                                           15
+                      80                                                         6                                                                                75
+                                Layer                                                                                                                                       Laser                                           10
+                      75                                                                                          0.90                                            70
+                                                                                 4                                                                                                                                          5
+                      70
+                           20   24   28    32    36   40                             20   24 28 32 36        40                                                        40   48   56    64    72   80                        0
+                                  Workload (Req/s)                                        Workload (Req/s)                                                                    Workload (Req/s)                                   HumanEval ShareGPT LongBench
+                                    (a)                                                          (b)                                                                            (a)                                                          (b)
+Figure 8. (a) Comparison between layer-level chunked prefill                                                                                Figure 9. (a) Comparison between layer-level batching
+(Layer) and iteration-level (Iter) chunked prefill. (b) Preemp-                                                                             (Layer), iteration-level (Iter) batching, and Laser. (b) The
+tion rate and TTFT (normalized to the iteration-level) of                                                                                   violation rate of each request type at 56 req/s.
+layer-level chunked prefill.
+
+the goodput, which is normalized by the result of Laser with                                                                                (Layer). As illustrated in Fig. 9a, layer-level batching effec-
+all 16 GPUs. As depicted in Fig.7c, the normalized goodput                                                                                  tively exploits the SLO slack of relaxed requests to increase
+of all schemes declines with smaller cluster sizes, as the re-                                                                              the capacity of decode instances in serving them. Thus, it
+duced scale limits the performance gains achievable through                                                                                 lowers the TBT SLO violation rate by more than 6.7% com-
+optimized request dispatching. Laser’s advantage over the                                                                                   pared to the iteration-level baseline. Laser builds on this
+strongest baseline, Distserve, exhibits a two-stage trend. The                                                                              foundation and integrates a group-based decode assignment
+improvement first declines from 43.4% to 31.3% as smaller                                                                                   policy that prioritizes collocating requests with similar SLO
+clusters constrain the group-based assignment of Laser to                                                                                   targets to mitigate the discrepancies. This synergistic ap-
+mitigate heterogeneous TBT demands. However, once the                                                                                       proach further reduces the SLO violation rate by an addi-
+cluster size drops below 8 GPUs, Distserve fails to mitigate                                                                                tional 10.5%. To better understand these benefits, we analyze
+head-of-line blocking from lengthy requests, whereas Laser                                                                                  the SLO violation rate for each request type under a work-
+prioritizes critical requests at layer boundaries, boosting                                                                                 load of 56 req/s. As shown in Fig. 9b, the violation rate of
+SLO attainment and achieving a 1.23× goodput gain. On the                                                                                   relaxed requests (from ShareGPT and LongBench) consis-
+other hand, Laser maintains a consistent improvement over                                                                                   tently decreases with the integration of layer-level batching
+Sarathi-serve, proving its robustness across all cluster sizes.                                                                             and group-based assignment, demonstrating their effective-
+                                                                                                                                            ness in handling heterogeneous SLO requirements. We also
+9.3                        Ablation Study                                                                                                   evaluate the benefits of Laser using another key decode met-
+In this section, we provide an in-depth analysis of the individ-                                                                            ric, Time-Per-Output-Token (TPOT), which measures the
+ual contributions of Laser’s components using the Qwen-14b                                                                                  average time required to generate each output token. The
+model. Each phase is configured with 8 instances.                                                                                           SLO target for TPOT is set to the same value as TBT, as de-
+Prefill Phase. We quantify the performance gain of layer-                                                                                   fined in Table 1. Compared to iteration-level batching, Laser
+level chunked prefill by comparing it against an iteration-                                                                                 reduces the TPOT SLO violation rate by up to 11.8%, demon-
+level baseline. As depicted in Fig.8a, the implementation of                                                                                strating its superior performance across both decode metrics.
+layer-level chunked prefill significantly reduces SLO viola-                                                                                This improvement is driven by Laser’s ability to concurrently
+tions for prefill requests, with the benefit amplifying under                                                                               execute more decode requests, which minimizes unnecessary
+higher loads—the violation rate drops from 4.4% at 25 Re-                                                                                   request queuing delays.
+q/s to 21.6% at 50 Req/s. The underlying reason can be ex-
+plained in two aspects. First, enabling request switching at                                                                                9.4                        Prediction Accuracy
+layer boundaries allows the system to prioritize and execute                                                                                We evaluate the prediction accuracy of Laser’s modeling
+latency-critical requests in time. As Fig. 8b demonstrates,                                                                                 methodology, encompassing individual modules and the ag-
+the preemption rate in layer-level chunked prefill increases                                                                                gregated latency of each layer and iteration under layer-level
+with workload intensity, enabling more critical requests to                                                                                 scheduling. As shown in Fig. 10a, Laser delivers high pre-
+meet their deadlines. Second, this approach supports the                                                                                    diction accuracy ranging from 94.8% to 98.6% for both state-
+flexible consolidation of new requests into larger chunks                                                                                   ful and stateless modules across various models. This high
+per iteration, reducing the average TTFT by over 10%. To-                                                                                   module-level accuracy directly enables precise prediction
+gether, these advances lead to substantial improvements in                                                                                  of aggregated per-layer and per-iteration latency. Specifi-
+SLO attainment.                                                                                                                             cally, as depicted in Fig.10b, Laser maintains accuracy of over
+Decode Phase. We evaluate the improvement of Laser in the                                                                                   94.6% for these aggregated predictions across all batch sizes,
+decode phase by decomposing its innovations: layer-level                                                                                    demonstrating robust performance under complex layer-
+decode batching and group-based decode assignment. We                                                                                       level scheduling. Notably, the entire profiling process for
+compare it against two baselines: one using iteration-level                                                                                 constructing latency models completes in under two sec-
+batching (Iter) and another using only layer-level batching                                                                                 onds, adding negligible overhead to instance initialization.
+
+
+
+                                                                                                                                      518
+Laser: Unlocking Layer-Level Scheduling for Efficient Multi-SLO LLM Serving                                                              PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                100
+                                       Stateless       Stateful
+                                                                                 100          Per-Layer           Per-Iter         instances. This is achieved by delegating performance eval-
+
+
+
+
+                                                                  Accuracy (%)
+ Accuracy (%)
+
+
+
+
+                        95                                                       95                                                uation to the instances themselves rather than the Global
+                        90
+                                                                                 90                                                Controller. To validate this design choice, we also measure
+                                                                                 85                                                the overhead when the Global Controller centrally evaluates
+                        85
+                                                                                 80
+                        80
+                                                                                       32     64   128 256 512 1024                decode execution performance during request dispatching
+                                  Qwen-14b Qwen-32b Llama-70b                                      Batch Size
+                                                                                                                                   (Central). In this case, the overhead is substantially higher
+  (a) Different types of modules.                                                  (b) Aggregated latency                          and grows with the number of instances, underscoring the
+                                                                                                                                   importance of parallelizing performance evaluation.
+                                      Figure 10. Prediction accuracy of Laser.
+                              4
+                                                                                                                                   10    Related Work
+          Norm. Latency (%)
+
+
+
+
+                                      Prefill Switch                             100        Prefill Dispatch
+                                                                                                                                   Prefill-Decode Disaggregation. The prefill-decode disag-
+                                                                  Latency (ms)
+
+
+
+                                      Decode Switch                                         Decode Dispatch
+                              3                                                  80         Decode Dispatch (Central)
+                                      Schedule
+                              2
+                                                                                 60         Interaction                            gregated architecture has been widely explored for serving
+                                                                                 40
+                              1                                                  20
+                                                                                                                                   LLMs [13, 16, 20, 25, 28, 30, 32, 43]. Splitwise [28] leverages
+                              0
+                                   64    128 256 512 1024
+                                                                                  0
+                                                                                        2         4        8            16
+                                                                                                                                   heterogeneous devices to meet the differing resource de-
+                                     Input Length (Batch Size)                                  # of instances                     mands of each phase and dynamically switches instance
+                                           (a)                                                     (b)                             roles to adapt to workload fluctuations. Distserve [43] in-
+                                                                                                                                   dependently optimizes parallelism strategies and resource
+Figure 11. (a) Normalized latency of request switching and                                                                         allocation for each instance type based on workload distri-
+intra-instance scheduling under varying input lengths (batch                                                                       bution and network bandwidth. Mooncake [30] employs a
+sizes) in the prefill (decode) phase. (b) Latency of inter-                                                                        centralized scheduler to manage KV caches across instances,
+instance request dispatching.                                                                                                      reusing them to reduce redundant prefill computations. De-
+                                                                                                                                   spite the effectiveness in meeting individual SLO targets for
+9.5                               Overhead Analysis                                                                                each phase, existing disaggregated systems are unaware of
+                                                                                                                                   the challenges introduced by multi-SLO workloads, leading
+Layer-level scheduling. Implementing the layer-level sched-
+                                                                                                                                   to significant degradation in serving goodput and frequent
+uling requires fine-grained intra-instance scheduling and
+                                                                                                                                   SLO violations.
+switching the intermediate states of requests at layer bound-
+                                                                                                                                   LLM Serving with SLO guarantees. To satisfy the strin-
+aries. To measure the overhead, we profile the corresponding
+                                                                                                                                   gent SLO requirements of LLM serving, recent works have
+latency under varying input lengths in the prefill phase and
+                                                                                                                                   proposed various strategies to improve SLO attainment and
+batch sizes in the decode phase. Fig.11a depicts the latency
+                                                                                                                                   system throughput [6, 14, 19, 21, 24, 27, 29, 33]. Sarathi-Serve
+of request switching and scheduling, normalized by the re-
+                                                                                                                                   [6] introduces chunked prefill, which partitions prefill com-
+quest execution time under corresponding settings. Request
+                                                                                                                                   putation across multiple iterations to mitigate head-of-line
+switching introduces negligible overhead (<1.5%) for both
+                                                                                                                                   blocking from long requests, thereby preserving the SLO at-
+prefill and decoding, even under large batch sizes and long
+                                                                                                                                   tainment of decode requests. SOLA [19] adopts a state-aware
+sequences. Scheduling exhibits a slightly higher overhead
+                                                                                                                                   scheduling strategy to dynamically switch the scheduling
+of up to 3.8% due to the complex latency estimation and
+                                                                                                                                   preference between prefill-prioritized and decode-prioritized
+fine-grained execution plan updates required to meet SLO
+                                                                                                                                   at the iteration level. DynamoLLM [33] tunes the GPU fre-
+guarantees. However, this cost is mitigated in two ways:
+                                                                                                                                   quency, resource allocation, and model parallelism of each
+first, plan construction is triggered only by critical events,
+                                                                                                                                   application to enhance energy efficiency with SLO com-
+allowing its cost to be amortized over tens of iterations. Sec-
+                                                                                                                                   pliance. Nevertheless, existing approaches fail to provide
+ond, and more importantly, Laser completely masks this
+                                                                                                                                   fine-grained control over per-iteration computation with
+overhead by overlapping plan construction with model exe-
+                                                                                                                                   layer-level scheduling to mitigate requirement discrepancies
+cution, thereby isolating the decode computation from any
+                                                                                                                                   between requests.
+performance impact.
+Inter-instance dispatching. To demonstrate the scalability
+of the Global Controller, we evaluate the request dispatch-                                                                        11    Conclusion
+ing overhead under different numbers of serving instances,                                                                         We propose layer-level scheduling, a novel mechanism that
+with the batch size of each instance fixed to 512. As illus-                                                                       schedules requests at the granularity of individual layers
+trated in 11b, the Global Controller efficiently selects prefill                                                                   to handle heterogeneous SLO requirements. To implement
+instances within 2 ms upon request arrival. For decode re-                                                                         this mechanism, we introduce Laser, a serving system that
+quests, the dispatching overhead is approximately 10 ms,                                                                           efficiently coordinates intra-instance scheduling with inter-
+primarily originating from the inherent controller-instance                                                                        instance dispatching to optimize serving efficiency while
+interaction (Interaction). Notably, Laser’s dispatching over-                                                                      ensuring multi-SLO guarantees. Comprehensive evaluations
+head remains nearly constant, regardless of the number of                                                                          demonstrate that Laser improves both SLO attainment and
+
+
+
+                                                                                                                             519
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                          Jianxiong Liao et al.
+
+
+serving goodput over state-of-the-art systems, highlight-                               with Stream-based Dynamic Scheduling. In Proceedings of the 52nd
+ing that effective request scheduling should extend beyond                              Annual International Symposium on Computer Architecture. 1283–1295.
+iteration-level granularity to handle complex workloads.                           [17] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang,
+                                                                                        Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. 2025.
+Acknowledgements                                                                        Deepseek-r1: Incentivizing reasoning capability in llms via reinforce-
+                                                                                        ment learning. arXiv preprint arXiv:2501.12948 (2025).
+We sincerely thank the anonymous reviewers of PPoPP’26                             [18] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep
+and our shepherd, Myeongjae Jeon, for their insightful sug-                             residual learning for image recognition. In Proceedings of the IEEE
+gestions. This work was supported in part by the Guangdong                              conference on computer vision and pattern recognition. 770–778.
+Key Area R&D Program under Grant No. 2025B0101080001,                              [19] Ke Hong, Xiuhong Li, Lufang Chen, Qiuli Mao, Guohao Dai, Xuefei
+                                                                                        Ning, Shengen Yan, Yun Liang, and Yu Wang. [n. d.]. SOLA: Optimizing
+and the National Natural Science Foundation of China under
+                                                                                        SLO Attainment for Large Language Model Serving with State-Aware
+Grants No. 62432004 and 62172454.                                                       Scheduling. In Eighth Conference on Machine Learning and Systems.
+                                                                                   [20] Cunchen Hu, Heyang Huang, Liangliang Xu, Xusheng Chen, Jiang Xu,
+References                                                                              Shuang Chen, Hao Feng, Chenxi Wang, Sa Wang, Yungang Bao, et al.
+ [1] 2023. ShareGPT. https://sharegpt.com/.                                             2024. Inference without Interference: Disaggregate LLM Inference
+ [2] 2025. LangChain Summarize Text. https://python.langchain.com/                      for Mixed Downstream Workloads. arXiv preprint arXiv:2401.11181
+     docs/tutorials/summarization/.                                                     (2024).
+ [3] 2025. NVIDIA Dynamo Platform. https://www.nvidia.com/en-us/ai/                [21] Jinqi Huang, Yi Xiong, Xuebing Yu, Wenjie Huang, Entong Li, Li Zeng,
+     dynamo/.                                                                           and Xin Chen. 2025. SLO-Aware Scheduling for Large Language Model
+ [4] 2025. Qwen FinAgent. https://www.tongyi.com/discover?type=                         Inferences. arXiv preprint arXiv:2504.14966 (2025).
+     FindAgent.                                                                    [22] Binyuan Hui, Jian Yang, Zeyu Cui, Jiaxi Yang, Dayiheng Liu, Lei Zhang,
+ [5] 2025. Ray. https://docs.ray.io/en/latest/index.html.                               Tianyu Liu, Jiajun Zhang, Bowen Yu, Keming Lu, et al. 2024. Qwen2.
+ [6] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun                   5-coder technical report. arXiv preprint arXiv:2409.12186 (2024).
+     Kwatra, Bhargav S Gulavani, Alexey Tumanov, and Ramachandran                  [23] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+     Ramjee. 2024. Taming throughput-latency tradeoff in llm inference                  Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+     with sarathi-serve. arXiv preprint arXiv:2403.02310 (2024).                        2023. Efficient memory management for large language model serving
+ [7] Ebtesam Almazrouei, Hamza Alobeidli, Abdulaziz Alshamsi, Alessan-                  with pagedattention. In Proceedings of the 29th Symposium on Operating
+     dro Cappelli, Ruxandra Cojocaru, Merouane Debbah, Etienne Goffinet,                Systems Principles. 611–626.
+     Daniel Heslow, Julien Launay, Quentin Malartic, Badreddine Noune,             [24] Zikun Li, Zhuofu Chen, Remi Delacourt, Gabriele Oliaro, Zeyu Wang,
+     Baptiste Pannier, and Guilherme Penedo. 2023. Falcon-40B: an open                  Qinghan Chen, Shuhuai Lin, April Yang, Zhihao Zhang, Zhuoming
+     large language model with state-of-the-art performance. (2023).                    Chen, et al. 2025. AdaServe: SLO-Customized LLM Serving with Fine-
+ [8] Yushi Bai, Xin Lv, Jiajie Zhang, Hongchang Lyu, Jiankai Tang, Zhidian              Grained Speculative Decoding. arXiv preprint arXiv:2501.12162 (2025).
+     Huang, Zhengxiao Du, Xiao Liu, Aohan Zeng, Lei Hou, et al. 2023.              [25] Yunkai Liang, Zhangyu Chen, Pengfei Zuo, Zhi Zhou, Xu Chen, and
+     Longbench: A bilingual, multitask benchmark for long context under-                Zhou Yu. 2025. Injecting Adrenaline into LLM Serving: Boosting
+     standing. arXiv preprint arXiv:2308.14508 (2023).                                  Resource Utilization and Throughput via Attention Disaggregation.
+ [9] Marc Brysbaert. 2019. How many words do we read per minute? A                      arXiv preprint arXiv:2503.20552 (2025).
+     review and meta-analysis of reading rate. Journal of memory and               [26] Zizhao Mo, Jianxiong Liao, Huanle Xu, Zhi Zhou, and Chengzhong
+     language 109 (2019), 104047.                                                       Xu. 2025. Hetis: Serving LLMs in Heterogeneous GPU Clusters with
+[10] Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde                   Fine-grained and Dynamic Parallelism. arXiv preprint arXiv:2509.08309
+     De Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas               (2025).
+     Joseph, Greg Brockman, et al. 2021. Evaluating large language models          [27] Bowen Pang, Kai Li, and Feifan Wang. 2025. Optimizing LLM Infer-
+     trained on code. arXiv preprint arXiv:2107.03374 (2021).                           ence Throughput via Memory-aware and SLA-constrained Dynamic
+[11] Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde                   Batching. arXiv preprint arXiv:2503.05248 (2025).
+     De Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas          [28] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo
+     Joseph, Greg Brockman, et al. 2021. Evaluating large language models               Goiri, Saeed Maleki, and Ricardo Bianchini. 2024. Splitwise: Efficient
+     trained on code. arXiv preprint arXiv:2107.03374 (2021).                           generative llm inference using phase splitting. In 2024 ACM/IEEE 51st
+[12] Siyuan Chen, Zhipeng Jia, Samira Khan, Arvind Krishnamurthy, and                   Annual International Symposium on Computer Architecture (ISCA). IEEE,
+     Phillip B Gibbons. 2025. SLOs-Serve: Optimized Serving of Multi-SLO                118–132.
+     LLMs. arXiv preprint arXiv:2504.08784 (2025).                                 [29] Archit Patke, Dhemath Reddy, Saurabh Jha, Chandra Narayanaswami,
+[13] Shiyang Chen, Rain Jiang, Dezhi Yu, Jinlai Xu, Mengyuan Chao, Fan-                 Zbigniew Kalbarczyk, and Ravishankar Iyer. 2025. Hierarchical Au-
+     long Meng, Chenyu Jiang, Wei Xu, and Hang Liu. 2024. KVDirect: Dis-                toscaling for Large Language Model Serving with Chiron. arXiv
+     tributed Disaggregated LLM Inference. arXiv preprint arXiv:2501.14743              preprint arXiv:2501.08090 (2025).
+     (2024).                                                                       [30] Ruoyu Qin, Zheming Li, Weiran He, Mingxing Zhang, Yongwei Wu,
+[14] Ke Cheng, Zhi Wang, Wen Hu, Tiannuo Yang, Jianguo Li, and Sheng                    Weimin Zheng, and Xinran Xu. 2024. Mooncake: A kvcache-centric dis-
+     Zhang. 2025. SCOOT: SLO-Oriented Performance Tuning for LLM                        aggregated architecture for llm serving. arXiv preprint arXiv:2407.00079
+     Inference Engines. In Proceedings of the ACM on Web Conference 2025.               (2024).
+     829–839.                                                                      [31] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan
+[15] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Ka-                      Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. 2020.
+     dian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten,                  Exploring the limits of transfer learning with a unified text-to-text
+     Amy Yang, Angela Fan, et al. 2024. The llama 3 herd of models. arXiv               transformer. The Journal of Machine Learning Research 21, 1 (2020),
+     e-prints (2024), arXiv–2407.                                                       5485–5551.
+[16] Jingqi Feng, Yukai Huang, Rui Zhang, Sicheng Liang, Ming Yan, and             [32] Gursimran Singh, Xinglu Wang, Ivan Hu, Timothy Yu, Linzi Xing,
+     Jie Wu. 2025. WindServe: Efficient Phase-Disaggregated LLM Serving                 Wei Jiang, Zhefeng Wang, Xiaolong Bai, Yi Li, Ying Xiong, et al. 2024.
+
+
+
+
+                                                                             520
+Laser: Unlocking Layer-Level Scheduling for Efficient Multi-SLO LLM Serving                 PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+     Efficiently serving large multimedia models using EPD Disaggregation.           [38] Guan Wang, Sijie Cheng, Xianyuan Zhan, Xiangang Li, Sen Song, and
+     arXiv preprint arXiv:2501.05460 (2024).                                              Yang Liu. 2023. Openchat: Advancing open-source language models
+[33] Jovan Stojkovic, Chaojie Zhang, Íñigo Goiri, Josep Torrellas, and Esha               with mixed-quality data. arXiv preprint arXiv:2309.11235 (2023).
+     Choukse. 2025. Dynamollm: Designing llm inference clusters for per-             [39] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia,
+     formance and energy efficiency. In 2025 IEEE International Symposium                 Ed Chi, Quoc V Le, Denny Zhou, et al. 2022. Chain-of-thought prompt-
+     on High Performance Computer Architecture (HPCA). IEEE, 1348–1362.                   ing elicits reasoning in large language models. Advances in neural
+[34] Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang,                       information processing systems 35 (2022), 24824–24837.
+     Yong Li, and Wei Lin. 2024. Llumnix: Dynamic scheduling for large               [40] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo
+     language model serving. In 18th USENIX Symposium on Operating                        Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et al. 2025.
+     Systems Design and Implementation (OSDI 24). 173–191.                                Qwen3 technical report. arXiv preprint arXiv:2505.09388 (2025).
+[35] Christian Szegedy, Vincent Vanhoucke, Sergey Ioffe, Jon Shlens, and             [41] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and
+     Zbigniew Wojna. 2016. Rethinking the inception architecture for                      Byung-Gon Chun. 2022. Orca: A distributed serving system for
+     computer vision. In Proceedings of the IEEE conference on computer                   {Transformer-Based} generative models. In 16th USENIX Symposium
+     vision and pattern recognition. 2818–2826.                                           on Operating Systems Design and Implementation (OSDI 22). 521–538.
+[36] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-          [42] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen,
+     Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric                  Shuohui Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Victoria
+     Hambro, Faisal Azhar, et al. 2023. Llama: Open and efficient foundation              Lin, et al. 2022. Opt: Open pre-trained transformer language models.
+     language models. arXiv preprint arXiv:2302.13971 (2023).                             arXiv preprint arXiv:2205.01068 (2022).
+[37] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion               [43] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xu-
+     Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. At-                 anzhe Liu, Xin Jin, and Hao Zhang. 2024. DistServe: Disaggregating
+     tention is all you need. Advances in neural information processing                   Prefill and Decoding for Goodput-optimized Large Language Model
+     systems 30 (2017).                                                                   Serving. arXiv preprint arXiv:2401.09670 (2024).
+
+                                                                                     Received 2025-08-31; accepted 2025-11-10
+
+
+
+
+                                                                               521
+

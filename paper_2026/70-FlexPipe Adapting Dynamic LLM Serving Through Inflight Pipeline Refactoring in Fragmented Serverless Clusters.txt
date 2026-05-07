@@ -1,0 +1,1170 @@
+    FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented
+                 Serverless Clusters
+                 Yanying Lin                                      Shijie Peng                                      Chengzhi Lu
+      Shenzhen Institutes of Advanced                 Shenzhen Institutes of Advanced                  Nanyang Technological University
+         Technology, CAS; UCAS                              Technology, CAS
+              UC San Diego                                        UCAS
+
+                                      Chengzhong Xu                                         Kejiang Ye*
+                                     University of Macau                        Shenzhen Institutes of Advanced
+                                                                                      Technology, CAS
+
+Abstract                                                                       ACM Reference Format:
+                                                                               Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Ke-
+Serving Large Language Models (LLMs) in production faces                       jiang Ye* . 2026. FlexPipe: Adapting Dynamic LLM Serving Through
+significant challenges from highly variable request patterns                   Inflight Pipeline Refactoring in Fragmented Serverless Clusters. In
+and severe resource fragmentation in serverless clusters.                      European Conference on Computer Systems (EUROSYS ’26), April
+Current systems rely on static pipeline configurations that                    27–30, 2026, Edinburgh, Scotland Uk. ACM, New York, NY, USA,
+struggle to adapt to dynamic workload conditions, leading                      17 pages. https://doi.org/10.1145/3767295.3769316
+to substantial inefficiencies.
+   We present FlexPipe, a novel system that dynamically re-
+                                                                               1    Introduction
+configures pipeline architectures during runtime to address
+these fundamental limitations. FlexPipe decomposes models                      The exponential growth in Large Language Model (LLM)
+into fine-grained stages and intelligently adjusts pipeline                    parameters [6, 10, 12, 46, 47] has created significant chal-
+granularity based on real-time request pattern analysis, im-                   lenges for serving these models in production environments.
+plementing three key innovations: fine-grained model par-                      With models scaling to hundreds of billions of parameters,
+titioning with preserved computational graph constraints,                      deploying efficient inference systems requires distributed
+inflight pipeline refactoring with consistent cache transi-                    computing approaches as single-device execution becomes
+tions, and topology-aware resource allocation that navigates                   infeasible due to memory constraints [5, 30, 60]. Current serv-
+GPU fragmentation. Comprehensive evaluation on an 82-                          ing systems primarily rely on two distributed paradigms: ten-
+GPU cluster demonstrates that FlexPipe achieves up to 8.5×                     sor parallelism, which distributes matrix operations across
+better resource efficiency while maintaining 38.3% lower la-                   devices with high-bandwidth interconnects, and pipeline
+tency compared to state-of-the-art systems, reducing GPU                       parallelism, which segments models into sequential stages
+reservation requirements from 75% to 30% of peak capacity.                     with lower communication requirements [21, 26]. However,
+                                                                               these approaches face substantial challenges when deployed
+CCS Concepts: • Computer systems organization → Dis-
+                                                                               in real-world serverless environments [27, 53], particularly
+tributed architectures; Cloud computing; • Computing
+                                                                               in balancing computational efficiency with resource adapt-
+methodologies → Distributed artificial intelligence.
+                                                                               ability under dynamic request patterns [57] and fragmented
+Keywords: Large Language Models, Serverless Computing,                         cluster resources [51].
+Resource Efficiency, Pipeline Parallelism, Dynamic Scaling                        Production analysis of Alibaba clusters 1 reveals two funda-
+                                                                               mental challenges that current LLM serving systems cannot
+∗ Corresponding Author                                                         address. i) workload volatility: request patterns exhibit
+                                                                               extreme variability with coefficient of variation (CV) fluc-
+                                                                               tuating up to 7× across timeframes (Fig. 1), causing static
+                                                                               pipelines to misalign with shifting workload characteristics
+                                                                               [13, 57] and resulting in 17% average GPU utilization. ii)
+This work is licensed under a Creative Commons Attribution 4.0 Interna-        resource fragmentation: serverless environments scatter
+tional License.                                                                GPUs across heterogeneous workloads [25, 51], preventing
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2212-7/26/04                                               1 Request distribution traces and GPU data are openly available at https:
+
+https://doi.org/10.1145/3767295.3769316                                        //github.com/alibaba/clusterdata/tree/master/cluster-trace-v2026-GenAI.
+
+
+
+
+                                                                          72
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                   Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Kejiang Ye
+
+
+the high-bandwidth interconnects essential for tensor par-
+allelism [5, 60]. Our measurements show only 0.02% proba-
+bility of co-locating 4 GPUs on the same server (§3), forcing
+suboptimal execution patterns. This architectural mismatch
+between model requirements and fragmented resource avail-
+ability fundamentally undermines serving efficiency in elas-
+tic environments [27, 53].
+   Existing systems [1, 14, 20, 22, 24, 26, 57] employ sophis-
+ticated pipeline optimization techniques but fundamentally
+rely on static configurations that cannot adapt to dynamic                (a) Alibaba Trace           (b) Top-1 App              (c) Top-2 App
+environments. While these systems achieve impressive per-              Figure 1. Request distribution CV (coefficient of variation) variations across
+formance under stable conditions, they struggle with the dual          different periods. Significant mismatches exist in CV calculated with differ-
+challenges of workload volatility and resource fragmentation.          ent window sizes (180s, 3h, 12h), 7× variation exists. (a) Request distribution
+                                                                       CV of Alibaba Trace, (b) Request distribution CV of Top-1 App, and (c) Top-2
+For instance, AlpaServe [26] optimizes pipeline architectures
+                                                                       App from Azure [58].
+based on historical request patterns, focusing on long-term
+performance rather than adapting to short-term variability.
+                                                                       and CV metrics to seamlessly reconfigure pipeline topologies
+Such static approaches inevitably create bottlenecks when
+                                                                       while maintaining cache consistency; and (3) Topology-aware
+faced with rapid workload fluctuations or when fragmented
+                                                                       resource allocation that employs hierarchical resource coordi-
+GPU resources prevent optimal tensor-parallel execution
+                                                                       nation and memory-aware scheduling strategies to navigate
+(§3). This mismatch between fixed pipeline designs and the
+                                                                       GPU fragmentation, minimizing contention during parallel
+dynamic reality of serverless environments results in signifi-
+                                                                       scaling operations while transforming cold starts into effi-
+cant inefficiencies during deployment.
+                                                                       cient warm starts through parameter locality preservation.
+   To address these fundamental limitations, we introduce
+                                                                          We evaluated our approach on a production-grade Kuber-
+FlexPipe, a dynamically adaptive LLM serving system that
+                                                                       netes cluster with 42 servers and 82 GPUs using realistic
+performs inflight pipeline refactoring without service in-
+                                                                       workloads. Results demonstrate significant performance ad-
+terruption. FlexPipe challenges the conventional wisdom
+                                                                       vantages: 38.3% lower latency under stable workloads and
+that fixed pipeline configurations are necessary for con-
+                                                                       66.1% improvement under variable conditions. For large mod-
+sistent performance. Instead, it exploits a critical insight:
+                                                                       els like OPT-66B, FlexPipe achieves 24.38% lower prefill
+pipeline granularity requirements fundamentally shift with
+                                                                       latency compared to alternatives. Most importantly, our sys-
+workload characteristics. Fine-grained pipelines excel under
+                                                                       tem maintains consistent performance as workload variabil-
+bursty workloads by distributing buffering capacity across
+                                                                       ity increases—recovering from pipeline stalls in just 9ms un-
+stages, while coarse-grained pipelines minimize communica-
+                                                                       der high-CV conditions (82% faster than competitors) while
+tion overhead during stable periods. FlexPipe continuously
+                                                                       achieving up to 8.5× better resource efficiency. In a produc-
+transitions between these configurations based on real-time
+                                                                       tion deployment, our dynamic resource allocation strategy
+coefficient of variation metrics, achieving superior resource
+                                                                       reduced always-on GPU reservation from 75% to just 30% of
+efficiency across the full spectrum of serverless request pat-
+                                                                       peak capacity without compromising service quality, while
+terns.
+                                                                       decreasing resource allocation wait time by 85%. These re-
+   However, implementing this approach presents three sig-
+                                                                       sults confirm that FlexPipe effectively addresses the funda-
+nificant technical challenges: (1) determining optimal par-
+                                                                       mental challenges of resource fragmentation and request
+tition boundaries that balance computation and communi-
+                                                                       variability in serverless environments.
+cation overhead while preserving computational graph con-
+                                                                       Contributions. Our key contributions include:
+straints for future reconfiguration, (2) maintaining cache con-
+sistency during dynamic pipeline topology transitions with-            • A novel approach for dynamically reconfiguring pipeline
+out service interruption, and (3) navigating GPU resource                architectures in response to changing request distributions
+fragmentation in highly dynamic serverless environments                  without service interruption.
+while minimizing cold-start initialization latency.                    • A method for fine-grained model partitioning that enables
+   To address these challenges, FlexPipe introduces three                efficient pipeline refactoring while preserving computa-
+core innovations: (1) Fine-grained model partitioning that               tional efficiency.
+decomposes LLMs through a constrained optimization algo-               • A system for enhancing LLM inference elasticity through
+rithm, balancing computation and communication overhead                  dynamic resource allocation and pipeline topology adap-
+while preserving computational graph constraints for effi-               tation.
+cient future reconfiguration; (2) Inflight pipeline refactoring        • Empirical evidence demonstrating FlexPipe’s effective-
+that dynamically transitions between pipeline granularities              ness through extensive evaluation on production-grade
+without service interruption, using real-time monitoring                 infrastructure with real-world workloads.
+
+
+
+                                                                  73
+FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters                      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+2     Background                                                               2.2   Serverless Challenges for LLM Serving
+
+2.1   Distributed LLM Inference Paradigms                                      Serverless computing architectures promise enhanced hard-
+                                                                               ware utilization through dynamic resource provisioning [35,
+The exponential growth in LLM parameters has created fun-                      36, 56, 59]. However, the fundamental design philosophy
+damental conflicts between memory capacity and computa-                        of serverless platforms creates a fundamental tension with
+tional demands. With models scaling to hundreds of billions                    distributed LLM inference requirements.
+of parameters, single-device approaches face severe memory                        Modern serverless schedulers [17, 59] implement anti-
+constraints, while inference scenarios encounter compute                       affinity policies that deliberately scatter service replicas across
+limitations under concurrent requests [32, 37, 50, 58]. Dis-                   diverse physical nodes to prvent cascading failures. This
+tributed parallel computing has emerged as the essential                       spatial distribution conflicts directly with distributed LLM
+solution for large-scale model deployment [18, 47].                            inference, which requires tightly coupled GPU clusters with
+Tensor Parallelism: Tensor parallelism distributes tensor                      high-bandwidth interconnects (e.g., NVLink, InfiniBand) for
+operations across multiple devices by partitioning matrix                      efficient tensor parallelism. The result is a paradoxical sce-
+operations row-wise or column-wise [5, 60]. This approach                      nario: individual GPUs are abundant, but cohesive GPU clus-
+effectively parallelizes multi-head attention mechanisms in                    ters are scarce, fundamentally undermining communication-
+Transformers and achieves optimal computational efficiency                     intensive parallelism strategies.
+when GPUs are tightly coupled with high-bandwidth in-                             The serverless resource allocation model operates through
+terconnects. However, tensor parallelism fundamentally de-                     dual-tier provisioning: always-on resources (60-75% of peak
+pends on low-latency, high-bandwidth network communi-                          capacity) guarantee baseline service levels, while elastic re-
+cation (NVLink, InfiniBand) for frequent synchronization                       sources handle demand spikes. This conservative approach,
+operations [30]. This network dependency becomes a crit-                       designed to prevent service outages, creates chronic under-
+ical bottleneck in fragmented environments where GPUs                          utilization during normal operations while still introducing
+are distributed across different physical nodes with limited                   multi-second scaling delays that violate sub-second response
+inter-node bandwidth. In such scenarios, the frequent all-                     requirements for interactive LLM applications.
+reduce operations required for tensor synchronization can                         Beyond serverless, similar fragmentation challenges emerge
+dominate execution time, making tensor parallelism imprac-                     in multi-tenant clusters enforcing strict isolation, edge com-
+tical for distributed deployments with commodity network                       puting deployments with heterogeneous hardware, and ded-
+infrastructure.                                                                icated clusters supporting diverse workloads. The common
+Pipeline Parallelism: Pipeline parallelism implements an                       thread across these environments is the fundamental tension
+inter-layer decoupling strategy, dividing models into sequen-                  between resource isolation policies designed for predictable
+tial stages based on layer dependencies [5, 8, 15, 21, 34].                    performance and the collaborative access patterns required
+This approach employs asynchronous scheduling to achieve                       for efficient distributed inference.
+spatiotemporal overlap between computation and commu-                             This analysis reveals that resource fragmentation repre-
+nication [26, 30]. The fundamental advantage of pipeline                       sents a fundamental systems challenge requiring adaptive
+parallelism lies in its communication pattern: while ten-                      pipeline architectures that maintain efficiency across diverse
+sor parallelism requires 𝑂 (𝑛 2 ) all-reduce communications                    and changing resource landscapes, rather than static opti-
+per layer with 𝑛 devices, pipeline parallelism reduces inter-                  mization approaches that assume stable resource topologies.
+stage communication to point-to-point transfers with 𝑂 (1)
+complexity per stage. This dramatic reduction in communi-                      3     Motivation
+cation overhead—from dense synchronization matrices to
+sparse sequential dependencies—enables pipeline parallelism                    Optimizing parallel computing strategies is essential for effi-
+to maintain performance even when network bandwidth is                         cient LLM inference, particularly in serverless environments
+constrained or latency is high. The asynchronous nature of                     with fragmented resources and fluctuating request patterns.
+pipeline execution also enables natural load balancing across                  Our systematic analysis reveals critical correlations between
+heterogeneous hardware configurations, as slower devices                       inference performance, pipeline architecture, and request
+can process smaller pipeline stages without blocking faster                    distributions that fundamentally impact serving efficiency.
+ones. However, this communication efficiency comes with
+the inherent challenge of pipeline bubble overhead, where                      3.1   Resource Fragmentation in Cloud
+stages remain idle during pipeline fill and drain phases. So-                  To understand resource characteristics in cloud environ-
+phisticated micro-batching strategies and overlapping tech-                    ments, we conducted a two-week analysis of GPU resources
+niques are essential to amortize these bubbles and maintain                    from a major cloud provider. Our findings revealed a striking
+high computational efficiency [21, 24].                                        216% average GPU subscription rate (Fig. 2a), indicating that
+                                                                               two services typically share each GPU. Memory utilization
+
+
+
+
+                                                                          74
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                  Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Kejiang Ye
+
+
+  Table 1. GPU cluster statistics showing resource utilization patterns.
+
+ Metric                            Cluster C1                  Cluster C2
+
+ Number of nodes                            430                         927
+ Number of GPUs                             468                       1,175
+
+ SM Utilization (%)
+ Mean                                     16.91                       23.74
+                                                                                             (a) GPU Subscription Rate           (b) GPU Availability Heatmap
+ Median (P50)                               9.16                      10.85
+ P95                                      80.53                      85.37             Figure 2. Resource fragmentation in Alibaba. (a) GPU subscription rate
+ 10-30% utilization                      31.26%                     20.98%             averaging 216%, indicating significant resource overcommitment, and (b)
+                                                                                       Heatmap revealing spatially scattered GPU availability patterns that impede
+ GPU Memory Utilization (%)                                                            formation of high-bandwidth interconnected GPU groups needed for tensor
+ Mean                                     43.48                       50.92            parallelism.
+ Median (P50)                             28.78                       53.69                  Table 2. Performance metrics for different pipeline granularities.
+ P95                                      99.09                      99.34
+ 10-30% utilization                      38.44%                     17.78%               Stages      Load(s)    Compute(ms)       Comm.(ms)       Max Batch
+
+ Note: C1 represents the inference-only cluster, while C2 is a hybrid training-              4        47.14          69.94             6.3            128
+inference cluster. Both employ dynamic resource scaling strategies.
+                                                                                             8        13.05          36.63            14.7            256
+                                                                                             16       9.19           18.67            31.5            512
+presented significant variability (Table 1), with P50 servers                                32       5.43           9.67             65.1            1024
+showing modest 20.3% GPU memory utilization while P99                                    Note: OPT-66B (120GB) performance with sequence length 4096 on A100
+servers approached saturation at 99.3%.                                                   GPUs. Compute indicates per-stage inference time, Comm. represents
+   Resource availability analysis demonstrates severe con-                               inter-stage communication overhead, and Max Batch shows maximum
+straints: securing a single GPU with >85% free memory oc-                                               supported batch size per configuration.
+curs with only 8.7% probability, while co-locating 4 GPUs on
+the same server drops to 0.02%. This fragmentation stems                               scaling. This approach produces a problematic trade-off:
+from heterogeneous model deployments creating unpredictable                            during normal operations, GPU utilization remains unneces-
+memory patterns, performance isolation mechanisms frag-                                sarily low (approximately 17% in our measurement study),
+menting resources, and aggressive oversubscription maxi-                               yet during traffic spikes, the delayed provisioning of ad-
+mizing utilization at the cost of availability.                                        ditional GPUs frequently causes SLO violations as scaling
+   The practical impact of this fragmentation is substantial.                          operations cannot keep pace with request bursts. The funda-
+In production clusters, 78% of tensor parallelism requests                             mental disconnect between idealized theoretical GPU alloca-
+were forced to degrade to pipeline parallelism due to unavail-                         tion models and the reality of fragmented, ephemeral GPU
+ability of adjacent GPUs with high-bandwidth interconnects.                            availability creates a persistent efficiency gap in large-scale
+This degradation fundamentally challenges distributed infer-                           LLM serving.
+ence paradigms, as tensor operations designed for tightly-                             Insight 1: Resource fragmentation in cloud environments sig-
+coupled execution must be reorganized into pipeline stages                             nificantly impedes communication-intensive parallelism strate-
+with higher communication overhead and suboptimal mem-                                 gies that rely on high-bandwidth interconnects, necessitating
+ory access patterns. Communication-intensive approaches                                alternative approaches for distributed LLM inference.
+like tensor parallelism require high-bandwidth interconnec-
+                                                                                       3.2        Pipeline Granularity and Data Parallelism
+tions between GPUs, yet the scattered distribution of available
+GPUs (Fig. 2b) creates persistent misalignment between phys-                           Pipeline parallelism provides an effective solution for uti-
+ical topology and logical requirements. The ephemeral nature                           lizing fragmented GPU resources in LLM inference. The
+of serverless GPU allocation further exacerbates this chal-                            granularity of pipeline stages—defined by operators or pa-
+lenge, as optimal GPU configurations may remain available                              rameters per stage—fundamentally affects memory footprint,
+only briefly before reallocation—creating an inherent incom-                           communication patterns, and computational characteristics.
+patibility between tensor-parallel computational models and                            As shown in Table 2, finer-grained partitioning significantly
+the reality of fragmented cloud GPU environments.                                      reduces per-stage memory requirements, decreasing param-
+   This GPU fragmentation introduces significant operational                           eter loading time and per-stage inference latency, but intro-
+challenges. Due to the immediate reallocation of released                              duces a critical trade-off: more stages cause proportionally
+GPUs to competing workloads, production clusters typically                             increased inter-stage communication overhead.
+adopts conservative scaling strategies—maintaining approxi-                               In elastic serverless environments, fine-grained pipeline
+mately 75% of historical peak GPU capacity as always-on re-                            architectures offer significant advantages. Our experiments
+sources, with the remaining 25% allocated through dynamic                              show 32-stage pipelines reduce parameter loading latency
+
+
+
+                                                                                  75
+FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters                         EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+to just 5.43s—an 8.7× improvement over 4-stage configura-
+tions—enabling rapid establishment of data-parallel repli-
+cas during demand spikes. This reduction incurs a 65.1ms
+communication penalty per inference iteration, creating a
+trade-off between initialization speed and runtime efficiency.
+   Fine-grained partitioning creates a fundamental trade-off
+in memory efficiency: 32-stage pipelines achieve 8× larger
+batch sizes (1024 vs 128) than 4-stage configurations for
+OPT-66B, dramatically improving GPU tensor core utiliza-
+tion. This increased batch capacity amortizes communication                          (a) Goodput            (b) Queue Length           (c) Stall Cycle
+overhead across more requests, creating a counterintuitive                     Figure 3. Impact of request distribution variability on pipeline performance.
+effect where higher communication costs are offset by im-                      (a) Goodput decreases by 37% as CV increases from 0.1 to 8 due to resource
+proved computational efficiency.                                               contention; (b) Average queue length grows nearly 4× with increasing CV,
+                                                                               indicating pipeline congestion; (c) Stall cycle ratio increases exponentially
+   This granularity trade-off reveals a fundamental archi-                     (22×) at high CV values, showing how static pipelines become inefficient
+tectural insight that directly motivates dynamic adaptation                    under variable workloads.
+in serverless environments. The dichotomy between fine-
+grained and coarse-grained pipeline configurations exposes                     providers need to quickly reclaim idle GPU resources, while
+an inherent temporal optimization problem: bursty server-                      multi-model services and multi-agent systems require lo-
+less workloads demand fine-grained pipelines to achieve                        cally optimized performance through concentrated resources.
+rapid horizontal scaling (8.7× faster initialization) and exploit              This fundamental mismatch between long-term optimiza-
+large batch processing capacity (8× larger batches) during                     tion strategies and short-term load characteristics leads to
+traffic spikes, while stable operational periods derive greater                significant performance degradation, manifested as pipeline
+efficiency from coarser partitions that minimize per-request                   bubbles and queuing delays.
+communication overhead through reduced inter-stage co-                            As shown in Fig. 1, request distribution CV exhibits sub-
+ordination. This creates a dynamic optimization landscape                      stantial fluctuation, with variation of up to 7× across different
+where the optimal pipeline configuration is fundamentally                      time windows. To quantify how this volatility impacts per-
+time-dependent and workload-sensitive. The strategic im-                       formance, we evaluated a static 4-stage OPT-66B pipeline
+perative becomes clear: systems must dynamically transition                    under varying request distributions with a baseline QPS of
+between these configurations—temporarily adopting fine-                        20. Fig. 3 reveals the severe performance degradation caused
+grained architectures during demand surges to maximize                         by increasing workload variability across multiple dimen-
+elasticity and batch throughput, then reverting to coarser-                    sions. As CV increases from 0.1 to 8, goodput decreases
+grained configurations during stable periods to minimize                       by 37% (Fig. 3a), while average queue length grows nearly
+communication penalties and optimize per-request latency.                      4× (Fig. 3b)—clear indicators of pipeline congestion and re-
+   Given the inherently bursty nature of serverless work-                      quest backpressure. Most critically, the pipeline stall cycle
+loads, dynamic pipeline granularity adjustment becomes es-                     ratio increases exponentially, reaching 22× at high CV values
+sential. During traffic spikes, fine-grained pipelines provide                 (Fig. 3c), demonstrating how static pipeline configurations
+rapid scaling and increased batch processing capacity. As traf-                become fundamentally inefficient under variable workloads.
+fic stabilizes, transitioning to coarser-grained configurations                   Our experiments demonstrate that with the same 4-stage
+minimizes per-request latency through reduced communica-                       pipeline architecture, a 4× difference in CV leads to a nearly
+tion overhead, creating an optimal balance between elasticity                  10× increase in pipeline stall overhead (comparing CV=1
+and efficiency.                                                                and CV=4). This exponential relationship reveals the crit-
+Insight 2: Fine-grained pipelines offer superior elasticity and                ical importance of adapting pipeline structures to match re-
+batch processing capability during bursty workloads but in-                    quest volatility patterns, as static configurations optimized for
+cur communication overhead penalties. The optimal approach                     one CV value perform poorly when the request distribution
+dynamically transitions between granularities—using fine-                      changes.
+grained configurations temporarily during traffic spikes and                      To explore the relationship between pipeline architecture
+reverting to coarser pipelines when workloads stabilize.                       and load characteristics, we evaluated three pipeline models
+                                                                               (4, 8, and 16 stages) under constant total request volume but
+3.3   Pipeline Overhead in Request Distributions                               varying CV values. As shown in Fig. 4, 4-stage and 8-stage
+Advanced pipeline systems [1, 5, 20, 26] primarily optimize                    architectures maintain excellent response time stability (ap-
+pipeline architectures offline using historical workload data                  proximately 0.5 seconds) under low CV conditions, while the
+for long-term performance. However, LLM inference in server-                   16-stage architecture’s processing time increases to 1.2 sec-
+less environments demands short-term optimization: cloud                       onds (2.7× longer). However, in high-burst scenarios (CV=4),
+                                                                               the 16-stage architecture achieves average latency of only
+
+
+
+                                                                          76
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Kejiang Ye
+
+
+                                                                                                                                                                             ❶
+                                                                                                            Pretrained                           Operator-Level
+                                                                                                             Models                                                              10011
+                                                                                                                                                  Performance
+                                                                                                                                                                                 00111
+
+                                                                                       Model Developer                         Profiling                             Model Partitioning
+
+                                                                                                                Model Param. (latency, memory)                Executable Model Stages
+
+
+                                                                                                                                                  Positions
+
+    (a) Dist. of Latency across CVs         (b) Latency Dist. of CV=4                        Users                              Configs                                    Storage
+
+Figure 4. Latency distribution across different request patterns. (a) Box                 Prompts           Response                                                  §5       OFFLINE
+plot comparing pipeline granularities across varying CV values, showing                                                                                                        ONLINE
+fine-grained pipelines perform better with high-variability workloads; (b)                                                                     GPU, Mem
+                                                                                                            Update API                         Utilization
+Detailed latency distribution for CV=4 with 4-stage pipeline, revealing                                                       Scheduler
+significant variance from pipeline stalls.                                                API Manager                                                         Resource Monitor
+                                                                                           QPS, SLO                                                                 CV, Latency
+                                                                                                                       Instance TP, lantency feedback
+one-third that of the 4-stage architecture, comparable to the
+                                                                                              ❸                                                                            ❷
+latter’s performance at CV=1.                                                                               TP Update                        SLO, TP notify
+                                                                                                                             Performance
+   This behavior can be explained through a stochastic pro-                                                                   Controller
+                                                                                         Adaptive Scaling                                                         Pipeline Refactoring
+cess model that reveals the dynamic coupling between pipeline
+depth (𝑆) and load burstiness (𝐶𝑉 ). While the theoretical de-
+                                                                                     Figure 5. FlexPipe system architecture showing the three core compo-
+lay of an 𝑆-stage pipeline is 𝑇𝑝𝑖𝑝𝑒 = 𝑆 ·𝜏 + (𝑆 −1) ·𝛿 (where 𝜏 is                   nents: ❶ Fine-Grained Pipeline Model Partitioning that decomposes LLMs
+single-stage service time and 𝛿 is communication overhead),                          at operator level for optimal adaptability, ❷ Inflight Pipeline Refactoring
+burst requests cause uneven workloads across stages. We                              that dynamically adjusts pipeline granularity based on request patterns,
+established an extended G/G/S queuing model:                                         and ❸ Adaptive Pipeline Scaling that enables efficient resource allocation
+                                                                                     during traffic fluctuations.
+
+                       𝜌𝑆        𝐶𝑉𝑎2 + 𝐶𝑉𝑠2
+                                                     𝑆 
+                                                    ∑︁        𝜆𝑖
+                                                                                       Fine-Grained Pipeline Model Partitioning. This com-
+         𝑇𝑡𝑜𝑡𝑎𝑙 =              ·             +                            (1)        ponent performs operator-level decomposition of LLMs to
+                    𝑆!(1 − 𝜌 )        2              𝑖=1
+                                                           𝜇𝑖 − 𝜆𝑖
+                    |          {z          }        |      {z      }                 create balanced pipeline stages optimized for both compu-
+                         Queue Latency           Stage Congestion Delay              tation and reconfiguration potential. By analyzing compu-
+where 𝜌 = 𝜆/𝜇 represents system utilization, 𝜆 is arrival rate,                      tation graphs and establishing natural partition boundaries,
+𝜇 is service rate, 𝐶𝑉𝑎 and 𝐶𝑉𝑠 denote coefficients of variation                      it creates pipeline architectures ranging from coarse stages
+for arrival intervals and service times respectively, 𝜆𝑖 is the                      with minimal communication overhead to fine-grained stages
+arrival rate at stage 𝑖, and 𝜇𝑖 is the service rate at stage 𝑖.                      that enable rapid scaling during bursty workloads.
+As 𝐶𝑉𝑎 increases, increasing pipeline stages 𝑆 produces two                             Inflight Pipeline Refactoring. At FlexPipe’s core, this
+opposing effects: 1) fine-grained task segmentation reduces                          component monitors request distributions and dynamically
+per-stage service time, alleviating congestion; 2) it increases                      restructures pipeline topology without interruption. Using
+cumulative pipeline register delays. Our experimental data                           coefficient of variation (CV) metrics and queue monitoring,
+indicates                                                                            it selects optimal configurations that minimize stalls while
+     √ that when 𝐶𝑉𝑎 > 3, effect 1 dominates, and setting                            maximizing resource utilization. The system seamlessly tran-
+𝑆 ∝ 𝐶𝑉𝑎 achieves optimal latency. This explains why the 16-
+stage pipeline achieves a 3× performance improvement over                            sitions between fine-grained pipelines (for high-CV traf-
+the 4-stage pipeline at CV=4—the deeper pipeline effectively                         fic) and coarse-grained architectures (for stable workloads)
+absorbs peak loads through distributed buffering.                                    through consistent parameter migration.
+Insight 3: Request distribution variability causes pipeline                             Adaptive Pipeline Scaling. This component orchestrates
+stage imbalances, resulting in different optimal architectures                       GPU allocation during traffic fluctuations through topology-
+for various workloads. In highly bursty environments, deeper                         aware scheduling. It implements a Hierarchical Resource
+pipeline architectures can effectively absorb peak loads through                     Graph to coordinate parallel scaling while avoiding resource
+distributed buffering, significantly outperforming static con-                       contention, and employs affinity-based scheduling to lever-
+figurations.                                                                         age parameter locality across scaling events, transforming
+                                                                                     cold starts into efficient warm starts through intelligent
+4     System Overview                                                                cache management.
+                                                                                     Key Implementation Challenges. Implementing FlexPipe
+Based on our analysis of resource fragmentation, pipeline                            presents three critical technical challenges: (1) determin-
+granularity trade-offs, and dynamic request patterns in server-                      ing optimal operator-level partition boundaries that balance
+less environments, we present FlexPipe, a dynamically adap-                          computation-communication trade-offs while preserving
+tive LLM serving system designed to overcome these chal-                             refactoring potential, requiring specialized constrained opti-
+lenges. As illustrated in Fig. 5, FlexPipe comprises three                           mization algorithms; (2) maintaining state consistency dur-
+synergistic components:                                                              ing topology changes without service interruption through
+
+
+
+                                                                                77
+FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters                       EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+efficient KV cache synchronization and coordinated param-                       balanced stage execution times while creating natural break-
+eter migration; and (3) navigating resource fragmentation                       points for potential pipeline reconfiguration.
+while minimizing initialization delays using topology-aware                        For micro-batch adaptation, we introduce batch-aware
+allocation strategies that preserve parameter locality across                   transmission scaling:
+scaling operations. These challenges represent the funda-                                                                               
+mental tension between dynamic adaptation and efficient                                                                             𝑏
+                                                                                           𝑠𝑎 (𝑆𝑘 , 𝑏) = 𝑠𝑎𝑏𝑎𝑠𝑒 (𝑆𝑘 ) · 1 + 𝛼 log          (3)
+resource utilization in serverless environments.                                                                                  𝑏 base
+                                                                                where 𝑏 is the micro-batch size, 𝑏 base is the profiling batch
+5    Fine-Grained Model Partitioning                                            size, and 𝛼 is the compression factor learned from histori-
+To enable adaptation to varying request patterns, FlexPipe                      cal data through linear regression. This allows the system
+decomposes models into fine-grained pipeline stages that                        to predict communication patterns for arbitrary batch sizes
+can be reconfigured at runtime. The core challenge lies in                      during online serving. Crucially, the partitioning algorithm
+balancing communication overhead and computational effi-                        preserves the parameter grouping structure to enable future
+ciency while facilitating dynamic refactoring. This requires                    replica alignment - parameters within the same logical group
+solving three critical issues: determining the optimal gran-                    (e.g., attention heads or MLP blocks) are colocated in con-
+ularity that satisfies bandwidth constraints while enabling                     tiguous memory regions, allowing merged stages to reuse
+communication-computation overlap, maintaining perfor-                          existing memory layouts.
+mance stability across varying micro-batch sizes, and sup-
+porting seamless runtime pipeline transitions with minimal                      6     Inflight Pipeline Refactoring
+synchronization overhead.                                                       The dynamic nature of cloud environments and the resource
+   FlexPipe initiates pipeline optimization through computa-                    fragmentation challenges identified earlier necessitate a flexi-
+tion graph analysis and operator-level profiling. For a given                   ble approach to pipeline management. To address this, we de-
+model 𝑀 with 𝐿 layers, we first construct its computation                       sign an inflight pipeline refactoring mechanism (Fig. 6) that
+graph 𝐺 = (𝑉 , 𝐸) where vertices 𝑣𝑖 ∈ 𝑉 represent operators                     can dynamically adjust pipeline granularity during model
+and edges 𝑒𝑖 𝑗 ∈ 𝐸 denote data dependencies. The Profiling                      serving without service interruption. The core challenge lies
+module measures three critical metrics for each operator:                       in dynamically adjusting pipeline granularity under time-
+computation time 𝑡𝑐 (𝑣𝑖 ), parameter size 𝑠𝑝 (𝑣𝑖 ), and activa-                 varying request distributions while maintaining hardware
+tion size 𝑠𝑎 (𝑣𝑖 ). To achieve optimal partitioning, we employ                  efficiency and consistency.
+a dynamic programming algorithm that simultaneously con-                           We formulate this as a multi-objective optimization prob-
+siders communication-computation overlap and future refac-                      lem with temporal constraints. Let G = {𝑔1, ..., 𝑔𝐾 } denote
+toring needs.                                                                   the set of candidate pipeline granularities, where each gran-
+   The partitioning process solves a constrained optimization                   ularity 𝑔𝑘 = (𝜂𝑘 , 𝑏𝑘 ) corresponds to stage count 𝜂𝑘 and batch
+problem:                                                                        size 𝑏𝑘 . The temporal correlation of request patterns is cap-
+                                                                                tured by coefficient of variation (CV) 𝜈𝑡 = 𝜎𝜇𝑡𝑡 , where 𝜎𝑡 and
+                     𝐾
+                    ∑︁                 𝑠𝑝 (𝑆𝑘 )                                 𝜇𝑡 represent the standard deviation and mean of request
+           min            𝑡𝑐 (𝑆𝑘 ) +            − 𝐶 + 𝜆 · 𝑅(𝑆𝑘 )
+            {𝑆𝑘 }                         𝐵                                     arrival intervals at time 𝑡, respectively.
+                    𝑘=1
+                    𝐾
+                    Ø                                                (2)        6.1   Granularity Adaptation
+             s.t.         𝑆𝑘 = 𝑉 ,     𝑆𝑖 ∩ 𝑆 𝑗 = ∅ ∀𝑖 ≠ 𝑗
+                    𝑘=1                                                         The optimal granularity 𝑔∗ is determined through joint opti-
+                    max 𝑠𝑝 (𝑆𝑘 ) ≤ 𝑀GPU                                         mization of throughput and latency, balancing the trade-off
+                     𝑆𝑘
+                                                                                between processing speed and response time:
+                                                                                                                                             
+where 𝐾 denotes the number of stages, 𝑆𝑘 represents the                                               𝑇𝑘              𝐿𝑚𝑖𝑛           |𝜈𝑡 − 𝜈𝑘 |
+                                                                                𝑔∗ = arg max 𝛼 ·          + (1 − 𝛼) ·        · exp −
+𝑘-th stage containing a subset of operators, 𝑉 is the com-                                𝑔𝑘 ∈ G    𝑇𝑚𝑎𝑥               𝐿𝑘                𝜎
+plete set of operators in the computation graph, 𝑡𝑐 (𝑆𝑘 ) is the                                                                             (4)
+computation time of stage 𝑘, 𝑠𝑝 (𝑆𝑘 ) is the parameter size of                  where 𝑔𝑘 = (𝜂𝑘 , 𝑏𝑘 ) represents granularity configuration 𝑘
+stage 𝑘, 𝐵 represents the inter-stage bandwidth, 𝐶 is the tar-                  with stage count 𝜂𝑘 and batch size 𝑏𝑘 , G is the set of candi-
+get computation-communication overlap cycle, 𝑀GPU is the                        date granularities, 𝑇𝑘 and 𝐿𝑘 denote throughput and latency
+GPU memory capacity, and 𝜆 is a regularization weight. The                      for granularity 𝑔𝑘 , 𝑇𝑚𝑎𝑥 and 𝐿𝑚𝑖𝑛 are normalization con-
+regularization term 𝑅(𝑆𝑘 ) encodes the refactoring potential                    stants, 𝜈𝑡 is the current CV value at time 𝑡, 𝜈𝑘 represents the
+of each partition, favoring cuts that preserve hierarchical                     optimal CV threshold for granularity 𝑔𝑘 , 𝛼 ∈ [0, 1] is the
+structure boundaries (e.g., attention blocks in Transform-                      throughput-latency trade-off weight, and 𝜎 controls adap-
+ers) to facilitate future merging. This formulation ensures                     tation sensitivity. Intuitively, this formula finds the sweet
+
+
+
+                                                                           78
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                      Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Kejiang Ye
+
+
+                                                                                        (a) Pipeline Expansion
+spot between maximizing throughput (first term) and min-
+                                                                                                         Splited Stage                   Splited Stage                Splited Stage
+imizing latency (second term), while the exponential term                                                                                                                                            Evict from GPU
+                                                                                                                                                                  Pipeline Reconstruct
+ensures the selected granularity aligns with the current re-
+                                                                                                     Load Stage in
+                                                                                                 ❶ New Instance Splited Stage ❷ Layer-wised                 ❸     and Update Gateway                  to Host Mem
+                                                                                                                                Merge State
+                                                                                                         Fine-Grain                       Fine-Grain                                                 New Instance
+quest pattern. When request patterns are stable (low CV), the                                               Stage                            Stage
+                                                                                                                                                                       Fine-Grain
+                                                                                                                                                                          Stage                      Reserved Stage
+
+system favors coarser granularity to reduce communication                         (b) Reconstruct Process
+
+overhead; when requests become bursty (high CV), it shifts                                 Pipeline expansion to
+                                                                                           handle burst request
+                                                                                                                                   Workload Change
+                                                                                                                                     to be Stable
+                                                                                                                                                         Reduce pipeline depth to
+                                                                                                                                                         lower overhead.
+
+
+
+
+                                                                           Operations
+toward finer granularity to enable rapid scaling.                                           Create New GPU Instance
+                                                                                                                            us Level Inflight
+                                                                                                                                                                      Save GPU Memory to
+                                                                                                                                                                     Improve Resource Effi.
+                                                                                                                                                                                                   Release Old
+                                                                                                                                                                                                    Instances
+                                                                                                                             Reconstruction
+  For multi-granular data parallelism, we introduce a hier-                                  Cache        Layer-wised       Pipeline                     Load Cache Layer-wised Pipeline                     Auto
+                                                                                                                                                                                                         Loadbalancing
+                                                                                           Activations    Merge State      Reconstruct                   From Host Merge State Reconstruct
+archical scheduling framework that determines the optimal                                       Using Host Cache to      Evict Cache to     Update           Load New Stage           Recompute     Update
+                                                                                                                         Host Memory        Gateway         into GPU Memory           Activation    Gateway
+number of parallel instances for each granularity level:                                         Reduce Overhead
+                                                                                                                                                                                                                 Time
+
+                                                                                        (c) Enlarge Pipeline Stage
+                             
+                       𝜇𝑡𝑜𝑡𝑎𝑙               𝑇𝑘
+           M (𝑔𝑘 ) =            , 𝜇𝑘 =                     (5)                                 Cache In Memory
+                         𝜇𝑘            𝛽 1 + 𝛽 2 · 𝜂𝑘
+                                                                                                                           ❷ Layer-Wised                      ❸ Recompute
+                                                                                                                                                                Activation                  Stage Reconstruct
+
+where M (𝑔𝑘 ) indicates the number of parallel instances for                               ❶ Load New Stages
+                                                                                                                                State Merge                                              Update LoadBalancing
+
+
+granularity 𝑔𝑘 , 𝜇𝑡𝑜𝑡𝑎𝑙 is the total system processing capac-             Figure 6. Inflight pipeline refactoring mechanism. (a) Stage refinement
+ity, 𝜇𝑘 is the effective processing capacity per instance of              process where fine-grained partitioning occurs by evicting parameters and
+granularity 𝑔𝑘 , 𝑇𝑘 is the throughput of granularity 𝑔𝑘 , 𝛽 1 and         redistributing them onto additional GPUs; (b) Temporal sequence diagram
+𝛽 2 are coordination overhead coefficients that model perfor-             showing synchronization protocol during refactoring; (c) Stage consolida-
+                                                                          tion process where parameters from multiple stages are merged, utilizing
+mance degradation from pipeline coordination, and 𝜂𝑘 is the
+                                                                          host memory caching to minimize loading overhead from persistent storage.
+number of stages in granularity 𝑔𝑘 . This approach dynam-
+ically distributes computational resources across different               consumption. The memory constraint (Eq. 7) ensures that
+granularity levels based on their efficiency—finer granular-              total memory allocation across all stages assigned to GPU
+ities enable quicker scaling but incur higher coordination                𝑗 does not exceed its capacity 𝑀 𝑗 . The load balancing con-
+overhead, while coarser granularities optimize steady-state               straint (Eq. 8) maintains balanced computation times across
+performance but adapt more slowly to load changes.                        stages within the same granularity group G𝑘 , preventing
+                                                                          pipeline stalls caused by stage imbalances.
+6.2   Hardware Efficiency Optimization                                       FlexPipe also strictly prohibits multiple pipeline stages
+In fragmented cloud environments, efficient GPU allocation                from the same model from being allocated to the same GPU.
+becomes critical when multiple models with varying pipeline               This is critical for preserving performance isolation and pre-
+granularities compete for limited resources. The fundamen-                venting resource contention between stages of the same
+tal challenge lies in balancing resource sharing efficiency               model, as they typically exhibit similar computation pat-
+against performance isolation requirements. Our key insight               terns and would compete for the same GPU resources rather
+is that heterogeneous models can achieve superior resource                than complementing each other. By ensuring that different
+utilization when their computational patterns complement                  pipeline stages of the same model—regardless of their gran-
+each other—reducing GPU idle periods while maintaining                    ularity—are always deployed on separate GPUs, FlexPipe
+service quality.                                                          maximizes parallelism while minimizing interference, creat-
+   To address this challenge, we formulate GPU resource                   ing an optimal balance between resource utilization and
+allocation as a constrained optimization problem that maxi-               computational efficiency.
+mizes system efficiency while respecting hardware and per-                   Multiplexing Penalty Function: The penalty function
+formance constraints:                                                     𝛾 (𝐶𝑉𝑖 ) models the performance degradation from resource
+                   𝑁 ∑︁𝑀
+                          "                                  #            multiplexing based on workload variability:
+                  ∑︁        𝑇𝑖 𝑗                ∑︁
+          max                    − 𝛾 (𝐶𝑉𝑖 ) · I( 𝑥𝑖 ′ 𝑗 > 1)   (6)                                                       𝛾 (𝐶𝑉𝑖 ) = 𝛾 0 · (1 + 𝛼 · 𝐶𝑉𝑖2 )                                                             (9)
+          {𝑥𝑖 𝑗 }           𝑚𝑗
+                  𝑖=1 𝑗=1                        𝑖′
+                 𝑁
+                ∑︁                                                        where 𝛾 0 represents the base multiplexing penalty and 𝛼
+         s.t.         𝑥𝑖 𝑗 · 𝑚 𝑗 ≤ 𝑀 𝑗 ,   ∀𝑗 ∈ [1, 𝐽 ]       (7)         controls sensitivity to workload variability. The quadratic re-
+                𝑖=1                                                       lationship 𝐶𝑉𝑖2 reflects our empirical observation that bursty
+                 𝑇𝑖 𝑗                                                     workloads (high CV) create significantly more performance
+                         − 1 ≤ 𝜖,      ∀𝑖, 𝑖 ′ ∈ G𝑘           (8)         interference when multiplexed due to concurrent resource
+                𝑇𝑖 ′ 𝑗 ′
+                                                                          demand spikes. For stable workloads (low CV), the penalty
+Problem Formulation: The objective function maximizes                     approaches the minimal 𝛾 0 , enabling      efficient resource shar-
+                      𝑇
+throughput efficiency 𝑚𝑖 𝑗𝑗 while penalizing multiplexing over-
+                                                                                                        Í
+                                                                          ing. The indicator function I( 𝑖 ′ 𝑥𝑖 ′ 𝑗 > 1) applies this penalty
+head through 𝛾 (𝐶𝑉𝑖 ). Here, 𝑥𝑖 𝑗 ∈ {0, 1} indicates whether              only when multiple models share the same GPU, ensuring
+pipeline stage 𝑖 is assigned to GPU 𝑗, 𝑇𝑖 𝑗 represents the                that single-model deployments incur no multiplexing over-
+throughput of stage 𝑖 on GPU 𝑗, and 𝑚 𝑗 denotes memory                    head.
+
+
+
+                                                                     79
+FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters                      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+ Algorithm 1: Inflight Pipeline Refactoring                                       The refactoring algorithm operates through continuous
+                                                                               workload monitoring and predictive adaptation. FlexPipe
+      1: Initialize granularity set G = {𝑔1, ..., 𝑔𝐾 }
+                                                                               tracks request intensity gradients to anticipate traffic shifts
+      2: while True do
+                                                                               before they manifest as performance degradation, enabling
+      3: Monitor request intensity 𝜆𝑡 and compute
+                                                                               proactive rather than reactive optimization. When workload
+         characteristic velocity 𝜈𝑡 = 𝜕𝜆
+                                       𝜕𝑡
+                                         𝑡
+                                                                               characteristics deviate from the current pipeline’s optimal
+    4:   Update queue length 𝑞ˆ 𝑗                                              operating range, the system evaluates alternative configu-
+    5:   for each granularity 𝑔𝑘 ∈ G do                                        rations using cached performance profiles. This predictive
+    6:      Compute h optimization score: i                                  approach transforms pipeline adaptation from a costly re-
+    7:
+                          𝑇𝑘
+              𝑆𝑘 = 𝛼 · 𝑇𝑚𝑎𝑥  + (1 − 𝛼) · 𝐿𝑚𝑖𝑛
+                                           𝐿𝑘  · exp − |𝜈𝑡 −𝜈
+                                                           𝜎
+                                                             𝑘|
+                                                                               active process into an efficient proactive mechanism. The
+    8:      Evaluate hardware efficiency using Eq. 9                           refinement process (Fig. 6(a)) partitions computational stages
+    9:   end for                                                               when burst capacity is needed, while consolidation (Fig. 6(c))
+   10:   Select optimal granularity 𝑔∗ = arg max𝑔𝑘 ∈ G 𝑆𝑘                      merges stages during stable periods to minimize communi-
+   11:   if 𝑔∗ ≠ 𝑔𝑐𝑢𝑟𝑟𝑒𝑛𝑡 then                                                 cation overhead. Decision latency remains under 5ms across
+   12:      Determine required data parallelism using Eq. 5                    configurations spanning 2-32 pipeline stages, ensuring that
+   13:      Perform parameter   migration with consistency:                    adaptation benefits consistently exceed transition costs even
+                                                                               under rapidly changing workloads.
+                      Ð
+   14:         C(𝑡) = 𝑖 ∈GPUs KV𝑖 (𝑡) ⊗ 𝑀valid
+   15:      Update routing metadata and activate new
+            pipeline configuration                                             7    Adaptive Pipeline Scaling
+   16:   end if
+   17:   Wait until next optimization interval                                 Serving LLMs in serverless, dynamic request patterns require
+   18: end while
+                                                                               responsive resource allocation strategies to maintain service
+                                                                               quality during both peak and idle periods. To address service
+                                                                               demands during traffic bursts, we propose a dynamic-aware
+                                                                               pipeline scaling mechanism. This mechanism leverages dy-
+  This formulation addresses the fundamental tension be-                       namic batching [13] to monitor request queue status, com-
+tween resource efficiency and performance isolation in frag-                   bined with stage-level elastic scaling to balance performance
+mented environments. By dynamically adjusting the multi-                       and overhead. As shown in Fig. 7, the system performs dis-
+plexing penalty based on workload characteristics, the sys-                    tributed stage scaling during traffic peaks and automatically
+tem makes informed decisions about resource consolidation                      reclaims resources when requests subside.
+versus isolation—prioritizing consolidation for stable work-                   Elastic Scaling Granularity Decision. Selecting the scal-
+loads while maintaining isolation for bursty patterns that                     ing granularity requires balancing three key parameters: ○   1
+would otherwise create performance interference.                               fine-grained scaling (stage-level) reduces cold-start time but
+                                                                               increases communication overhead, while coarse-grained
+6.3        Consistency Maintenance
+                                                                               scaling (pipeline-level) does the opposite; ○ 2 the coefficient
+During pipeline refactoring, maintaining KV cache consis-                      of variation (CV) of traffic reflects request volatility, with
+tency across distributed GPU instances represents a funda-                     high CV scenarios requiring rapid response; ○  3 queue length
+mental challenge that directly impacts inference quality. The                  (Q) characterizes the urgency of system load. We establish a
+key insight is that cache coherence can be preserved through                   scaling granularity decision function:
+selective synchronization rather than global state replica-
+tion. We implement a consistency protocol that tracks cache
+                                                                                                                                  
+                                                                                                            𝐺 max
+validity at the token level:                                                                     𝑚𝑗 =                                         (11)
+                                                                                                      1 + 𝛽 · 𝑒 −𝛾 (𝑐𝑣 𝑗 ·𝑞ˆ 𝑗 )
+                          Ø
+                 C(𝑡) =       KV𝑖 (𝑡) ⊗ 𝑀valid            (10)
+                                                                               where 𝑚 𝑗 is the selected scaling granularity for workload 𝑗,
+                           𝑖 ∈GPUs
+                                                                               𝐺 max is the maximum scaling granularity (corresponding to
+where C(𝑡) represents the consistent KV cache state across                     the finest granularity), 𝑐𝑣 𝑗 is the coefficient of variation for
+all GPUs at time 𝑡, KV𝑖 (𝑡) represents the KV cache state on                   workload 𝑗, 𝑞ˆ 𝑗 = min(𝑞 𝑗 /𝑄 max, 1) is the normalized queue
+GPU instance 𝑖 at time 𝑡, 𝑀valid is a validity mask identifying                length with 𝑞 𝑗 being the current queue length and 𝑄 max
+tokens that need synchronization (with 1 indicating valid                      being the maximum queue capacity, and 𝛽, 𝛾 are calibration
+tokens and 0 indicating invalid ones), and ⊗ denotes element-                  parameters controlling the sigmoid transition. As the product
+wise multiplication. During pipeline refactoring, the system                   𝑐𝑣 𝑗 · 𝑞ˆ 𝑗 increases, the exponential term decays more rapidly,
+performs asynchronous KV cache transfers (Fig. 6(b)) while                     pushing 𝑚 𝑗 closer to 𝐺 max to select a finer granularity. This
+the inference continues on the original pipeline configura-                    function smoothly adjusts the scaling granularity through its
+tion, minimizing service interruption.                                         Sigmoid characteristics, avoiding decision oscillation. While
+
+
+
+                                                                          80
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                               Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Kejiang Ye
+
+                                                           Constructed by 4 Finest Stages, with
+ Initial Model Pipeline: 4 Stages
+                                                           Constrain of Computation Graph                                           that significantly reduce initialization latency during traf-
+                          Network                                                                                                   fic bursts while maintaining performance isolation between
+ Bursty Request:
+                                                                                                                                    competing workloads.
+                                                                Scaling up
+ Using Fine-Grain Stage to Increase Throughput                                                                                      Memory-Aware Elastic Scaling. In serverless environ-
+                                                                                                                                    ments, scaled-down model instances have their resources im-
+  Scaling Pipeline Stages:         Dynamic Load Balance
+                                                          +                        Parallel Loading in Serverless Instance          mediately reallocated to competing workloads. This causes
+                                                                                                                                    cache invalidation, forcing subsequent scale-up operations
+   Data Parallellism using Multi-LLM Stage Replicas       ...                                                                       to incur significant cold-start penalties as parameters reload
+ Stable Request: Reduce Communication Overhead                                     Scaling Granularity                              from slower storage. To address this challenge, FlexPipe
+                                                                             ...                                   ...              implements a two-pronged memory-aware approach pre-
+                                                                Merge g* finest stage                  Merge g* finest stage
+     Retain the ‘Warm’ pipelines with Granularity g*                          ...                                  ...              serving locality across scaling operations. First, the system
+Figure 7. The process of model scaling using fine-grained pipeline stages.                                                          maintains parameter copies in host memory even after GPU
+FlexPipe conference satisfies the minimum granularity pipeline stage for                                                            eviction, creating a middle-tier cache that survives instance
+loading and executing inference. Then, after traffic changes, it modifies to a
+coarser granularity pipeline stage with fewer additional overheads.
+                                                                                                                                    termination and prevents costly reloads from persistent stor-
+                                                                                                                                    age. Second, FlexPipe implements an affinity-based schedul-
+integrating SLO constraints to ensure service quality:                                                                              ing policy prioritizing servers with historical model place-
+                                                                                                                                    ment:
+                               Í𝑚 𝑗
+                 (𝑇 𝑗 − 𝑆 𝑗 ) · 𝑘=1 𝜇 𝑗𝑘                                                                                                                                                         
+                                         ≥ 𝑟𝑗          (12)                                                                             𝑠 ∗ = arg max 𝑤𝑡 · 𝑒 −𝜆 (𝑡𝑛𝑜𝑤 −𝑡𝑠 ) + 𝑤𝑔 · |𝑔𝑠 ∩ 𝐺𝑎𝑣𝑎𝑖𝑙 |   (13)
+                            𝑄𝑗                                                                                                                  𝑠 ∈ H𝑖
+
+where 𝑇 𝑗 is the SLO deadline for workload 𝑗, 𝑆 𝑗 is the ini-
+tialization time for scaling operations, 𝜇 𝑗𝑘 represents the                                                                        where 𝑠 ∗ is the selected server, H𝑖 tracks servers that pre-
+expected throughput of the 𝑘-th expanded stage, 𝑚 𝑗 is the                                                                          viously hosted model 𝑖, 𝑤𝑡 and 𝑤𝑔 are temporal and GPU
+number of scaling stages, 𝑄 𝑗 is the current queue length for                                                                       affinity weights respectively, 𝑡𝑛𝑜𝑤 is the current time, 𝑡𝑠 is
+workload 𝑗, and 𝑟 𝑗 is the number of requests to be processed                                                                       the last time server 𝑠 hosted model 𝑖, 𝜆 is the temporal decay
+within the deadline. This constraint ensures that the selected                                                                      rate, 𝑔𝑠 is the set of GPUs on server 𝑠, 𝐺𝑎𝑣𝑎𝑖𝑙 represents avail-
+granularity 𝑚 𝑗 can process 𝑟 𝑗 requests within the time limit                                                                      able GPUs, and |𝑔𝑠 ∩ 𝐺𝑎𝑣𝑎𝑖𝑙 | denotes the number of available
+𝑇𝑗 .                                                                                                                                GPUs on server 𝑠. The temporal decay factor 𝑒 −𝜆 (𝑡𝑛𝑜𝑤 −𝑡𝑠 )
+    To address resource contention during multi-model scal-                                                                         prioritizes recently used hosts whose caches are likely still
+ing that arises from multiple concurrent requests for GPU                                                                           warm. This approach significantly reduces initialization time
+memory, PCIe bandwidth, and network resources during                                                                                by leveraging cached parameters in host memory, effectively
+rapid parallel deployment, we design a three-level coordina-                                                                        transforming cold starts into warm starts.
+tion control strategy:
+Topology-Aware Resource Coordination. During rapid                                                                                  8    Implementation
+scaling operations, resource contention emerges as multi-                                                                           We have implemented FlexPipe with approximately 7K lines
+ple models simultaneously compete for GPU memory, net-                                                                              of code, including a 3.2K LoC tool for dynamic operator-level
+work bandwidth, and storage I/O. To address this challenge,                                                                         model partitioning and merging. After pipeline refactoring,
+we implement a Hierarchical Resource Graph (HRG) that or-                                                                           KV cache data must migrate between GPU devices. Using
+chestrates resources across three critical levels: server (GPU                                                                      NCCL would introduce significant connection establishment
+memory, PCIe bandwidth), rack (network bandwidth), and                                                                              overhead of several seconds and potential bandwidth con-
+cluster (storage I/O).                                                                                                              tention. To address this challenge, we implemented a hierar-
+    The HRG maintains annotated paths with scaling event                                                                            chical data transfer mechanism that prioritizes RDMA for
+markers to identify contention patterns and track resource                                                                          high-bandwidth, low-latency transfers between GPU devices.
+dependencies. This enables the system to proactively pre-                                                                           For machines without RDMA support, we fall back to the
+dict bottlenecks and intelligently distribute workloads. Rather                                                                     sendfile system call, which enables efficient kernel-space
+than treating scaling operations as independent events, HRG                                                                         data transfers without redundant copying between user and
+directs new instances toward available resources while avoid-                                                                       kernel buffers. This hybrid approach eliminates connection
+ing paths with recent scaling activities, effectively transform-                                                                    initialization overhead while achieving near-line-rate data
+ing a resource contention problem into a resource coordination                                                                      transmission speeds.
+opportunity.
+    This topology-aware approach ensures concurrent scaling                                                                         9    Evaluation
+operations distribute optimally across the physical infras-
+tructure. By respecting the hierarchical nature of datacenter                                                                       We evaluated FlexPipe on a Kubernetes (v1.23.7) cluster
+resources, the system makes informed placement decisions                                                                            with 42 servers and 82 GPUs, each server having at least
+
+
+
+                                                                                                                               81
+FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters                        EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+256GB memory and connected via 100Gbps network. For re-
+alistic workload patterns, we utilized Microsoft Azure Func-
+tions traces [58] supplemented with the Splitwise corpus
+for prompt generation, enabling rigorous assessment under
+production-grade request distributions.
+Baseline. We compare FlexPipe against two categories
+of systems. First, serverless-based systems: ServerlessLLM
+[17], which uses DeepSpeed’s parallelism for distributed in-
+ference, and Tetris [25], which provides memory-efficient
+hosting without specialized pipeline parallelism. Second,
+offline-optimized systems: AlpaServe [26], which configures
+pipelines based on historical request patterns, and MuxServe
+[14], which employs statistical multiplexing for multi-tenant
+                                                                               Figure 8. End-to-End Latency Breakdown across varying request distribu-
+serving. We also include recent advances in throughput-                        tions. FlexPipe maintains lower overall latency despite higher communica-
+latency optimization [1] and interference mitigation [20] to                   tion overhead by significantly reducing queue wait times: (a) CV=1 (stable
+provide comprehensive comparison coverage. These systems                       workload), (b) CV=2 (moderate variability), and (c) CV=4 (highly variable
+lack the dynamic adaptation capabilities of FlexPipe, allow-                   workload).
+ing us to evaluate both serverless efficiency and adaptability
+against established approaches.
+Metric and Model. We evaluate performance using good-
+put (throughput under quality constraints) and end-to-end
+latency across varying workload distributions. Experiments
+use representative models spanning different scales: WHISPER-
+9B [33], LLAMA2-7B [47], BERT-21B [12], and OPT-66B [10].
+We measure initialization latency to validate our pipeline
+scaling approach, quantify pipeline stall cycles to assess in-
+flight refactoring effectiveness, and analyze GPU memory
+efficiency to evaluate resource utilization. These metrics pro-
+vide comprehensive insight into system performance under
+                                                                               Figure 9. Latency under highly variable workload (CV=8, first 300s). (a)
+diverse conditions.                                                            Request distribution CV variability measured in 15s windows, (b) Response
+                                                                               latency comparison across systems.
+9.1   End-to-End Performance
+Latency Breakdown. We analyzed end-to-end latency                              workloads, communication-intensive fine-grained pipelines
+across systems under varying request distributions (Fig. 8)                    significantly outperform static architectures trapped in queue
+while maintaining consistent goodput. Under stable work-                       buildup cycles.
+loads (CV=1), FlexPipe achieves 38.3% lower overall latency                       All experiments used a baseline of 20 QPS across the com-
+than AlpaServe and ServerlessLLM while delivering identical                    plete 2-hour lifecycle, with different CV values creating vary-
+goodput (12,000 requests), primarily by reducing queue time                    ing peak loads. While static approaches typically provision
+by 54.8%. As request variability increases (CV=2), FlexPipe’s                  GPU resources to match peak volumes, FlexPipe maintains
+advantage grows to 46.9% lower latency than MuxServe                           only 30% of peak capacity as always-ready resources, with
+through a strategic trade-off: accepting higher communi-                       remaining capacity allocated through dynamic scaling. This
+cation time (105ms vs. 45ms) to achieve 72.6% reduction in                     resource allocation strategy enables FlexPipe to maintain sta-
+queue wait time, all while maintaining maximum goodput.                        ble performance and consistent goodput across all workload
+The most significant improvements appear under highly vari-                    variability levels while static systems suffer progressively
+able workloads (CV=4), where FlexPipe delivers 66.1% lower                     degrading performance as request patterns become more
+total latency than AlpaServe and 80.6% lower than MuxServe,                    erratic.
+while preserving 98.3% of maximum throughput (compared                         Burst Absorption. Fig. 9 demonstrates system perfor-
+to MuxServe’s 33.3% reduction and ServerlessLLM’s 40.4%                        mance under extreme workload variability (CV=8). Fig. 9(a)
+decline). These gains stem from FlexPipe’s pipeline reconfig-                  reveals substantial fluctuations in 15-second measurement
+uration that increases communication overhead (225ms vs.                       windows, with CV ranging from 0.59 to 3.47—highlighting
+45ms) to dramatically reduce queue times—transforming ex-                      the challenging dynamics of bursty serverless environments.
+ponentially growing wait times into manageable communica-                      As shown in Fig. 9(b), while MuxServe experiences sus-
+tion overhead. This demonstrates a key insight: under bursty                   tained high latencies (frequently exceeding 10 seconds) and
+                                                                               AlpaServe exhibits periodic performance spikes, FlexPipe
+
+
+
+                                                                          82
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                             Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Kejiang Ye
+
+
+
+
+                                                                                  Figure 11. Pipeline stall recovery time across systems and request distribu-
+Figure 10. Performance stability analysis across varying request distribu-        tion variability (CV). FlexPipe achieves substantially faster recovery under
+tions (CV=1, 2, 4), showing FlexPipe maintains consistently lower latency         high-variability workloads (9ms at CV=4), demonstrating the effectiveness
+percentiles even as workload variability increases in serverless.                 of dynamic pipeline refactoring in addressing structural stall causes.
+                                                                                  architectures. The latency percentile analysis shows Flex-
+maintains significantly lower and more consistent response                        Pipe maintains consistently lower latency across all per-
+times throughout the evaluation period, even during intense                       centiles—particularly at P90-P99 where traditional systems
+traffic surges at 75s and 165s intervals.                                         exhibit dramatic increases. This advantage becomes more
+   This comparison specifically includes non-serverless GPU                       pronounced as CV increases from 1 to 4, with FlexPipe main-
+multiplexing systems because they represent the SOTA in                           taining well-controlled P99 latency while competitors experi-
+handling variable workloads through GPU sharing [1, 20],                          ence 2-3× degradation. Such predictability is crucial in server-
+yet fundamentally differ from FlexPipe in their adaptation                        less environments where resource fragmentation introduces
+approach. Unlike serverless-oriented systems that focus on                        natural variability. By dynamically adjusting pipeline granu-
+rapid resource provisioning, these multiplexing systems op-                       larity based on workload characteristics, FlexPipe effectively
+timize for maximum GPU utilization through sophisticated                          transforms queueing delays into manageable communication
+sharing strategies—providing the most challenging perfor-                         overhead, delivering significantly more stable performance
+mance baseline for FlexPipe’s dynamic adaptation mecha-                           under challenging conditions.
+nism. The results demonstrate that even compared to systems
+specifically designed for workload variability, FlexPipe’s                        9.3    Pipeline Stall Recovery
+dynamic pipeline refactoring capability more effectively ab-                      To quantify each system’s resilience to pipeline stalls, we
+sorbs request bursts by transitioning between pipeline gran-                      established an objective measurement methodology. We de-
+ularities based on real-time traffic patterns. By using finer-                    fine a stall as occurring when response latency exceeds 1.5×
+grained pipelines during traffic spikes and coarser configu-                      the baseline latency (P25 latency under normal operation),
+rations during stable periods, FlexPipe avoids the queuing                        and recovery as the point when latency returns to within
+delays that plague static architectures, resulting in more pre-                   1.2× of this baseline. The elapsed time between these events
+dictable performance even under highly variable workloads.                        constitutes the recovery duration.
+                                                                                     Fig. 11 illustrates recovery performance across systems
+9.2   Performance Stability
+                                                                                  under varying request distributions. Under stable workloads
+To evaluate system stability under dynamic serverless work-                       (CV=1), FlexPipe’s median recovery time (88ms) is compa-
+loads, we analyzed latency percentiles across varying request                     rable to AlpaServe (83ms), while significantly outperform-
+distributions (Fig. 10). We focus specifically on Serverless-                     ing MuxServe (131ms), ServerlessLLM (115ms), and Tetris
+LLM and Tetris as representative serverless LLM deployment                        (179ms). As variability increases to moderate levels (CV=2),
+approaches facing unique resource elasticity and fragmenta-                       FlexPipe maintains consistent recovery performance (79ms)
+tion challenges.                                                                  while other systems show mixed behavior.
+   Under stable traffic patterns (CV=1), FlexPipe maintains a                        The most significant advantage emerges under highly vari-
+tight latency distribution with significantly lower P99 latency                   able workloads, where FlexPipe achieves remarkably rapid
+compared to ServerlessLLM and Tetris. This advantage be-                          recovery (9ms)—44% faster than AlpaServe (16ms) and 82%
+comes increasingly pronounced as request variability inten-                       faster than both MuxServe (48ms) and ServerlessLLM (50ms).
+sifies. At moderate variability (CV=2), FlexPipe’s P99 latency                    This exceptional performance stems from FlexPipe’s ability
+remains well-controlled while serverless competitors show                         to dynamically reconfigure pipeline topology in response
+substantial degradation. The stability gap widens further                         to detected imbalances, rather than merely adjusting batch
+under highly variable workloads (CV=4), where FlexPipe                            sizes or waiting for queue drain as static systems must do.
+consistently maintains much lower P99 latency compared                               When a stall is detected, FlexPipe’s pipeline monitor-
+to both ServerlessLLM and Tetris, demonstrating superior                          ing system identifies congested stages through distributed
+performance stability even in challenging conditions.                             queue-length analysis, then initiates targeted refactoring to
+   FlexPipe’s dynamic pipeline refactoring prevents the ex-                       redistribute computational bottlenecks. By maintaining KV
+ponential latency degradation observed in static serverless                       cache consistency during transitions (as described in §6),
+
+
+
+                                                                             83
+FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters                             EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+
+
+                                                                                     Figure 13. Performance comparison with production workloads: (a) Av-
+                                                                                     erage prefill latency across model scales showing FlexPipe’s consistent
+                                                                                     advantage (6.43%-24.38% improvement), (b) Latency distribution showing
+                                                                                     tighter performance bounds with fewer outliers.
+Figure 12. Resource efficiency analysis across varying request distributions:
+(a) CV=1 (stable workload), (b) CV=2 (moderate variability), (c) CV=4 (high
+variability).                                                                        elastic scaling with 5-minute reclamation windows, directly
+                                                                                     addressing the resource fragmentation challenges.
+FlexPipe achieves architectural adaptation during live infer-
+                                                                                     9.5   Performance in Production Workloads
+ence without service interruption—transforming potential
+performance-degrading stalls into brief transitional states                          To evaluate real-world effectiveness, we deployed FlexPipe
+and enhancing system resilience under variable workloads.                            on our cluster using production workload traces across four
+                                                                                     representative models. As shown in Fig. 13(a), FlexPipe
+9.4    Resource Efficiency                                                           consistently achieves lower prefill latency across all model
+We evaluate system efficiency by examining the relationship                          scales—from lightweight WHISPER-9B (6.43% improvement
+between GPU utilization and achieved goodput under vary-                             over AlpaServe) to large-scale OPT-66B (24.38% reduction
+ing request distributions. Fig. 12 demonstrates FlexPipe’s                           compared to AlpaServe).
+optimal balance between resource utilization and throughput                             The performance differential increases with model com-
+across workload variability—critical for serverless environ-                         plexity: 19.52% improvement for LLAMA-7B and 18.97% for
+ments with resource fragmentation.                                                   BERT-21B over ServerlessLLM. This scalability advantage
+   Under stable workloads (Fig. 12(a), CV=1), FlexPipe achieves                      stems from FlexPipe’s dynamic pipeline refactoring capabil-
+maximum goodput at 33% GPU utilization—3× more effi-                                 ity, which becomes increasingly valuable as computational
+cient than AlpaServe with identical throughput through fine-                         profiles grow more complex. The latency distribution in
+grained pipeline partitioning that distributes load across frag-                     Fig. 13(b) further demonstrates that FlexPipe delivers not
+mented resources. As variability increases (Fig. 12(b), CV=2),                       only lower average latency but significantly tighter perfor-
+FlexPipe maintains near-maximum goodput with modest                                  mance distributions with fewer outliers—critical for main-
+utilization increases (36%), while competitors experience                            taining consistent service-level objectives in production. This
+throughput degradation despite higher resource consump-                              aligns with recent work on fairness in serving [39] and end-
+tion. Under highly variable workloads (Fig. 12(c), CV=4), this                       to-end optimization [43] that emphasizes consistent perfor-
+efficiency gap becomes pronounced: Tetris achieves only                              mance delivery across diverse workloads.
+1,543 requests/second despite 85% GPU utilization, while                                Notably, FlexPipe achieves its greatest advantage (24.38%)
+FlexPipe maintains 12,000 requests/second at 43% utiliza-                            on the largest OPT-66B model, where effective pipeline stage
+tion—8.5× better resource efficiency. This disparity reveals                         management becomes most critical. By dynamically redis-
+that high GPU utilization in static systems often indicates                          tributing computational bottlenecks and minimizing pipeline
+resource contention rather than productive computation,                              stalls based on real-time workload characteristics, FlexPipe
+whereas FlexPipe’s dynamic topology optimization prevents                            achieves an average 17.32% latency improvement across all
+such inefficiencies by continuously rebalancing bottlenecks,                         models, confirming the effectiveness of adaptive pipeline
+ensuring GPU cycles translate to inference throughput rather                         granularity optimization in dynamic serving environments.
+than synchronization overhead.
+                                                                                     9.6   Case Study in Production Cluster
+   This analysis reveals FlexPipe’s fundamental advantage:
+while static pipeline architectures show inverse relationships                       To validate our approach in production environments, we
+between GPU utilization and throughput under variable                                conducted a phased rollout of FlexPipe in production server-
+workloads, FlexPipe maintains proportional resource scaling.                         less GPU cluster, gradually migrating LLM serving traffic.
+Dynamic pipeline refactoring enables FlexPipe to require                             Results demonstrate substantial operational improvements:
+only 30% of peak capacity as always-ready resources—a 70%                            resource allocation wait times decreased by 85% compared
+reduction compared to static approaches that provision for                           to the static baseline, while instance initialization latency
+peak demand. The remaining capacity is allocated through                             was reduced by 72% on average across all model sizes.
+
+
+
+                                                                                84
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                 Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Kejiang Ye
+
+
+   Most significantly, FlexPipe’s dynamic resource allocation         optimize for rapid resource provisioning and cold-start mini-
+strategy enabled a dramatic reduction in the always-on GPU            mization, while FaaS-optimized solutions such as SAND [2],
+reservation—from 75% to just 30% of historical peak capac-            FaaSnap [7], FaaSNet [48], BATCH [3], and Groundhog [4]
+ity—without compromising service quality. This efficiency             handle resource elasticity through function-level optimiza-
+gain translates to substantial operational cost savings while         tion. Computation disaggregation approaches exemplified
+maintaining consistent performance under varying work-                by DistServe [61] and InfiniGen [23] separate prefill and de-
+loads. The reduced startup latency and improved resource              coding phases to enable independent scaling, while context
+allocation directly address the fundamental challenges of             optimization systems like CacheGen [29] and CacheBlend
+resource fragmentation and request variability identified in          [54] focus on efficient KV cache management. Additional ap-
+our motivation analysis (§3), confirming the practical bene-          proaches include Tabi [49] for multi-level optimization and
+fits of inflight pipeline refactoring in production serverless        FlashLLM [52] for cost-effective inference. However, these
+environments.                                                         approaches fundamentally optimize individual components
+                                                                      independently, addressing either resource efficiency or la-
+10     Related Work                                                   tency in isolation without considering the dynamic tension
+                                                                      between resource fragmentation and workload volatility. Un-
+The challenges of LLM serving in fragmented serverless en-            like these static optimization strategies, FlexPipe provides
+vironments have driven extensive research across multiple             coordinated pipeline adaptation that continuously reconfig-
+dimensions. We organize related work into three categories            ures execution topology based on real-time patterns, repre-
+based on their approach to addressing resource fragmenta-             senting a paradigm shift from component-level optimization
+tion and workload volatility.                                         toward holistic system adaptation.
+Static Pipeline Optimization Traditional pipeline opti-
+mization approaches use offline graph partitioning for static         11    Conclusion
+workloads. Representative systems like Megatron [31] and
+Alpa [60] employ sophisticated algorithms to optimize com-            We presented FlexPipe, a fundamentally new approach to
+munication patterns and stage placement [15, 28, 30, 44,              LLM serving that challenges the conventional wisdom of
+45]. These approaches fundamentally assume predictable                static pipeline optimization. Through inflight pipeline refac-
+resource availability and stable request patterns, making             toring, FlexPipe transforms how distributed inference sys-
+them inadequate for fragmented serverless environments                tems adapt to resource fragmentation and workload volatil-
+where resource topology changes dynamically. Unlike Flex-             ity—two pervasive challenges in modern serverless envi-
+Pipe’s runtime adaptation capability, they lack the ability           ronments. By enabling continuous topology reconfiguration
+to respond to real-time resource fragmentation or workload            without service interruption, FlexPipe demonstrates that
+volatility.                                                           fine-grained adaptability, rather than static optimization, is
+Resource Multiplexing and Sharing Resource multiplex-                 the key to achieving both resource efficiency and perfor-
+ing approaches address multi-tenant efficiency through three          mance consistency in dynamic serving environments.
+primary strategies. Memory optimization systems like vLLM
+[22] and FlexGen [40] enhance throughput through page-                12    Acknowledgments
+based memory management, while multi-tenant frameworks
+such as Punica [11], SLoRA [38], and BlockLLM [19] enable             We would like to thank our shepherd Anand Iyer and the
+parameter sharing across models. Statistical multiplexing             anonymous reviewers for their valuable feedback and sug-
+systems including MuxServe [14], Llumnix [42], Orca [55],             gestions that helped improve the quality of this paper. We es-
+Varuna [9], FaaST [16], and USHER [41] maximize GPU uti-              pecially thank Professor Rong Chen for providing extremely
+lization through intelligent scheduling, elastic scaling, and         valuable insights on this work. We also thank Alibaba Group
+holistic interference avoidance. However, these approaches            AIOS Team for providing the platform and assistance. This
+optimize for predictable resource patterns and struggle when          work is supported by the National Natural Science Foun-
+resource availability fluctuates rapidly—a fundamental char-          dation of China (No. 92267105), Guangdong Basic and Ap-
+acteristic of serverless environments. Unlike static multi-           plied Basic Research Foundation (No. 2023B1515130002),
+plexing strategies, FlexPipe employs inflight refactoring to          Guangdong Special Support Plan (No. 2021TQ06X990), Shen-
+dynamically reconfigure pipeline topology, maintaining effi-          zhen Basic Research Program (No. JCYJ20220818101610023,
+ciency across variable workload distributions without rely-           KJZD20230923113800001), and Alibaba Innovative Research
+ing on stable resource assumptions.                                   (AIR) Project.
+Serverless and Elastic Serving Serverless adaptations for
+LLM serving have emerged to address cloud-native deploy-              References
+ment challenges through three primary strategies. Resource             [1] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun
+provisioning systems like ServerlessLLM [17] and Tetris [25]               Kwatra, Bhargav S. Gulavani, Alexey Tumanov, and Ramachandran
+
+
+
+
+                                                                 85
+FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters                              EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+     Ramjee. 2024. Taming Throughput-Latency Tradeoff in LLM Inference               [16] Mohammadbagher Fotouhi, Derek Chen, and Wes J. Lloyd. 2019-
+     with Sarathi-Serve. In 18th USENIX Symp. Oper. Syst. Des. Implement.                 12-09. Function-as-a-Service Application Service Composition: Im-
+     OSDI 2024 St. Clara CA USA July 10-12 2024, Ada Gavrilovska and                      plications for a Natural Language Processing Application. In Proc.
+     Douglas B. Terry (Eds.). USENIX Association, 117–134.                                5th Int. Workshop Serverless Comput. (Middleware ’19). ACM, 49–54.
+ [2] Istemi Ekin Akkus, Ruichuan Chen, Ivica Rimac, Manuel Stein, Klaus                   https://doi.org/10.1145/3366623.3368141
+     Satzke, Andre Beck, Paarijaat Aditya, and Volker Hilt. 2018. SAND: To-          [17] Yao Fu, Leyang Xue, Yeqi Huang, Andrei-Octavian Brabete, Dmitrii
+     wards High-Performance Serverless Computing.. In Proc. 2018 USENIX                   Ustiugov, Yuvraj Patel, and Luo Mai. 2024. ServerlessLLM: Low-
+     Annu. Tech. Conf. USENIX ATC 2018 Boston MA USA July 11-13 2018                      Latency Serverless Inference for Large Language Models. In 18th
+     (USENIX ATC 2018). 923–935.                                                          USENIX Symp. Oper. Syst. Des. Implement. OSDI 2024 St. Clara CA
+ [3] Ahsan Ali, Riccardo Pinciroli, Feng Yan, and Evgenia Smirni. 2020-11.                USA July 10-12 2024, Ada Gavrilovska and Douglas B. Terry (Eds.).
+     BATCH: Machine Learning Inference Serving on Serverless Platforms                    USENIX Association, 135–153.
+     with Adaptive Batching. In SC20 Int. Conf. High Perform. Comput. Netw.          [18] Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav
+     Storage Anal. (SC 2020). IEEE, 69. https://doi.org/10.1109/sc41405.2020.             Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil
+     00073                                                                                Mathur, et al. 2024-11-23. The Llama 3 Herd of Models.           https:
+ [4] Mohamed Alzayat, Jonathan Mace, Peter Druschel, and Deepak Garg.                     //doi.org/10.48550/arXiv.2407.21783
+     2023-05-08. Groundhog: Efficient Request Isolation in FaaS. In Proc.            [19] Bodun Hu, Jiamin Li, Le Xu, Myungjin Lee, Akshay Jajoo, Geon-Woo
+     Eighteenth Eur. Conf. Comput. Syst. (EuroSys ’23). ACM, 398–415. https:              Kim, Hong Xu, and Aditya Akella. 2024-09-23. BlockLLM: Multi-
+     //doi.org/10.1145/3552326.3567503                                                    tenant Finer-grained Serving for Large Language Models. https:
+ [5] Reza Yazdani Aminabadi, Samyam Rajbhandari, Ammar Ahmad Awan,                        //doi.org/10.48550/arXiv.2404.18322
+     Cheng Li, Du Li, Elton Zheng, Olatunji Ruwase, Shaden Smith, et al.             [20] Cunchen Hu, Heyang Huang, Liangliang Xu, Xusheng Chen, Jiang
+     2022-11. DeepSpeed- Inference: Enabling Efficient Inference of Trans-                Xu, Shuang Chen, Hao Feng, Chenxi Wang, et al. 2024-01-20. Infer-
+     former Models at Unprecedented Scale. In SC22 Int. Conf. High Per-                   ence without Interference: Disaggregate LLM Inference for Mixed
+     form. Comput. Netw. Storage Anal. (SC 2022). IEEE, 46:1–46:15. https:                Downstream Workloads. https://doi.org/10.48550/arXiv.2401.11181
+     //doi.org/10.1109/sc41404.2022.00051                                            [21] Yanping Huang, Youlong Cheng, Ankur Bapna, Orhan Firat, Mia Xu
+ [6] Rohan Anil, Andrew M. Dai, Orhan Firat, Melvin Johnson, Dmitry                       Chen, Dehao Chen, HyoukJoong Lee, Jiquan Ngiam, et al. 2019-12-08.
+     Lepikhin, Alexandre Passos, Siamak Shakeri, Emanuel Taropa, et al.                   GPipe: Efficient Training of Giant Neural Networks Using Pipeline
+     2023-09-13. PaLM 2 Technical Report. https://doi.org/10.48550/arXiv.                 Parallelism. In Proceedings of the 33rd International Conference on
+     2305.10403                                                                           Neural Information Processing Systems. Number 10. Curran Associates
+ [7] Lixiang Ao, George Porter, and Geoffrey M. Voelker. 2022-03-28. FaaS-                Inc., 103–112.
+     nap: FaaS Made Fast Using Snapshot-Based VMs. In Proc. Seven-                   [22] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+     teenth Eur. Conf. Comput. Syst. (EuroSys ’22). ACM, 730–746. https:                  Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, et al. 2023-10-23.
+     //doi.org/10.1145/3492321.3524270                                                    Efficient Memory Management for Large Language Model Serving
+ [8] Sanjith Athlur, Nitika Saran, Muthian Sivathanu, Ramachandran Ram-                   with PagedAttention. In Proc. 29th Symp. Oper. Syst. Princ. (SOSP ’23).
+     jee, and Nipun Kwatra. 2022-03-28. Varuna: Scalable, Low-Cost Train-                 ACM, 611–626. https://doi.org/10.1145/3600006.3613165
+     ing of Massive Deep Learning Models. In Proc. Seventeenth Eur. Conf.            [23] Wonbeom Lee, Jungi Lee, Junghwan Seo, and Jaewoong Sim. 2024.
+     Comput. Syst. (EuroSys ’22). ACM, 472–487. https://doi.org/10.1145/                  InfiniGen: Efficient Generative Inference of Large Language Models
+     3492321.3519584                                                                      with Dynamic KV Cache Management. In 18th USENIX Symp. Oper.
+ [9] Sanjith Athlur, Nitika Saran, Muthian Sivathanu, Ramachandran Ram-                   Syst. Des. Implement. OSDI 2024 St. Clara CA USA July 10-12 2024,
+     jee, and Nipun Kwatra. 2022-03-28. Varuna: Scalable, Low-Cost Train-                 Ada Gavrilovska and Douglas B. Terry (Eds.). USENIX Association,
+     ing of Massive Deep Learning Models. In Proc. Seventeenth Eur. Conf.                 155–172.
+     Comput. Syst. (EuroSys ’22). ACM, 472–487. https://doi.org/10.1145/             [24] Conglong Li, Zhewei Yao, Xiaoxia Wu, Minjia Zhang, Connor Holmes,
+     3492321.3519584                                                                      Cheng Li, and Yuxiong He. 2023-02-07. DeepSpeed Data Efficiency:
+[10] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D.                      Improving Deep Learning Model Quality and Training Efficiency via
+     Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, et al.                  Efficient Data Sampling and Routing. https://doi.org/10.48550/arXiv.
+     2020. Language Models Are Few-Shot Learners. 33 (2020), 1877–1901.                   2212.03597
+[11] Lequn Chen, Zihao Ye, Yongji Wu, Danyang Zhuo, Luis Ceze, and                   [25] Jie Li, Laiping Zhao, Yanan Yang, Kunlin Zhan, and Keqiu Li. 2022.
+     Arvind Krishnamurthy. 2023-10-28. Punica: Multi-Tenant LoRA Serv-                    Tetris: Memory-efficient Serverless Inference through Tensor Sharing..
+     ing. https://doi.org/10.48550/arXiv.2310.18547                                       In Proc. 2022 USENIX Annu. Tech. Conf. USENIX ATC 2022 Carlsbad CA
+[12] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.                    USA July 11-13 2022 (USENIX ATC 2022). USENIX Association.
+     2019-05-24. BERT: Pre-training of Deep Bidirectional Transformers for           [26] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng,
+     Language Understanding. https://doi.org/10.48550/arXiv.1810.04805                    Xin Jin, Yanping Huang, Zhifeng Chen, et al. 2023. AlpaServe: Statisti-
+[13] Khaled Diab, Parham Yassini, and Mohamed Hefeeda. 2022. Orca:                        cal Multiplexing with Model Parallelism for Deep Learning Serving..
+     Server-assisted Multicast for Datacenter Networks.. In 19th USENIX                   In 17th USENIX Symp. Oper. Syst. Des. Implement. OSDI 2023 Boston
+     Symp. Networked Syst. Des. Implement. NSDI 2022 Renton WA USA April                  MA USA July 10-12 2023 (OSDI 2023). USENIX Association, 663–679.
+     4-6 2022 (NSDI 2022). 1075–1091.                                                [27] Yanying Lin, Yanbo Li, Shijie Peng, Yingfei Tang, Shutian Luo, Haiying
+[14] Jiangfei Duan, Runyu Lu, Haojie Duanmu, Xiuhong Li, Xingcheng                        Shen, Chengzhong Xu, and Kejiang Ye. 2024-07. QUART: Latency-
+     Zhang, Dahua Lin, Ion Stoica, and Hao Zhang. 2024-06-13. MuxServe:                   Aware FaaS System for Pipelining Large Model Inference. In 2024 IEEE
+     Flexible Spatial-Temporal Multiplexing for Multiple LLM Serving.                     44th Int. Conf. Distrib. Comput. Syst. ICDCS. 1–12. https://doi.org/10.
+     https://doi.org/10.48550/arXiv.2404.02015                                            1109/ICDCS60910.2024.00010
+[15] Shiqing Fan, Yi Rong, Chen Meng, Zongyan Cao, Siyu Wang, Zhen                   [28] Zhiqi Lin, Youshan Miao, Guodong Liu, Xiaoxiang Shi, Quanlu Zhang,
+     Zheng, Chuan Wu, Guoping Long, et al. 2021-02-17. DAPPLE: A                          Fan Yang, Saeed Maleki, Yi Zhu, et al. 2023-01-21. SuperScaler:
+     Pipelined Data Parallel Approach for Training Large Models. In Proc.                 Supporting Flexible DNN Parallelization via a Unified Abstraction.
+     26th ACM SIGPLAN Symp. Princ. Pract. Parallel Program. (PPoPP ’21).                  https://doi.org/10.48550/arXiv.2301.08984
+     ACM, 431–445. https://doi.org/10.1145/3437801.3441593
+
+
+
+
+                                                                                86
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                Yanying Lin, Shijie Peng, Chengzhi Lu, Chengzhong Xu, and Kejiang Ye
+
+
+[29] Yuhan Liu, Hanchen Li, Yihua Cheng, Siddhant Ray, Yuyang Huang,                      CA USA July 10-12 2024, Ada Gavrilovska and Douglas B. Terry (Eds.).
+     Qizheng Zhang, Kuntai Du, Jiayi Yao, et al. 2024-08-04. CacheGen:                    USENIX Association, 947–964.
+     Fast Context Loading for Language Model Applications via KV Cache               [42] Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang,
+     Streaming.                                                                           Yong Li, and Wei Lin. 2024. Llumnix: Dynamic Scheduling for Large
+[30] Deepak Narayanan, Aaron Harlap, Amar Phanishayee, Vivek Seshadri,                    Language Model Serving. In 18th USENIX Symp. Oper. Syst. Des. Imple-
+     Nikhil R. Devanur, Gregory R. Ganger, Phillip B. Gibbons, and Matei                  ment. OSDI 2024 St. Clara CA USA July 10-12 2024, Ada Gavrilovska
+     Zaharia. 2019-10-27. PipeDream: Generalized Pipeline Parallelism for                 and Douglas B. Terry (Eds.). USENIX Association, 173–191.
+     DNN Training. In Proc. 27th ACM Symp. Oper. Syst. Princ. (SOSP ’19).            [43] Xin Tan, Yimin Jiang, Yitao Yang, and Hong Xu. 2025. Towards End-to-
+     ACM, 1–15. https://doi.org/10.1145/3341301.3359646                                   End Optimization of LLM-based Applications with Ayo. In Proc. 30th
+[31] Deepak Narayanan, Mohammad Shoeybi, Jared Casper, Patrick LeGres-                    ACM Int. Conf. Archit. Support Program. Lang. Oper. Syst. Vol. 2 ASPLOS
+     ley, Mostofa Patwary, Vijay Korthikanti, Dmitri Vainbrand, Prethvi                   2025 Rotterdam Neth. 30 March 2025 - 3 April 2025, Lieven Eeckhout,
+     Kashinkunti, et al. 2021-11-14. Efficient Large-Scale Language Model                 Georgios Smaragdakis, Katai Liang, Adrian Sampson, Martha A. Kim,
+     Training on GPU Clusters Using Megatron-LM. In Proc. Int. Conf.                      and Christopher J. Rossbach (Eds.). ACM, 1302–1316. https://doi.org/
+     High Perform. Comput. Netw. Storage Anal. (SC ’21). ACM, 58. https:                  10.1145/3676641.3716278
+     //doi.org/10.1145/3458817.3476209                                               [44] Masahiro Tanaka, Kenjiro Taura, Toshihiro Hanawa, and Kentaro
+[32] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, ’I nigo                   Torisawa. 2021-05. Automatic Graph Partitioning for Very Large-scale
+     Goiri, Saeed Maleki, and Ricardo Bianchini. 2024. Splitwise: Efficient               Deep Learning. In 2021 IEEE Int. Parallel Distrib. Process. Symp. IPDPS
+     Generative LLM Inference Using Phase Splitting. In 51st ACMIEEE                      (IPDPS 2021). IEEE, 1004–1013. https://doi.org/10.1109/ipdps49936.
+     Annu. Int. Symp. Comput. Archit. ISCA 2024 B. Aires Argent. June 29 -                2021.00109
+     July 3 2024. IEEE, 118–132. https://doi.org/10.1109/ISCA59077.2024.             [45] Jakub M Tarnawski, Deepak Narayanan, and Amar Phanishayee. 2021.
+     00019                                                                                Piper: Multidimensional Planner for DNN Parallelization.. In Adv.
+[33] Alec Radford, Jong Wook Kim, Tao Xu, Greg Brockman, Christine                        Neural Inf. Process. Syst. 34 Annu. Conf. Neural Inf. Process. Syst. 2021
+     McLeavey, and Ilya Sutskever. 2022-12-06. Robust Speech Recognition                  NeurIPS 2021 Dec. 6-14 2021 Virtual (NeurIPS 2021, Vol. 34). Curran
+     via Large-Scale Weak Supervision. https://doi.org/10.48550/arXiv.                    Associates, Inc., 24829–24840.
+     2212.04356                                                                      [46] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-
+[34] Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He.                    Anne Lachaux, Timoth’ee Lacroix, Baptiste Rozi‘ere, Naman Goyal,
+     2020-11. ZeRO: Memory Optimizations Toward Training Trillion                         et al. 2023-02-27. LLaMA: Open and Efficient Foundation Language
+     Parameter Models. In SC20 Int. Conf. High Perform. Comput. Netw.                     Models. https://doi.org/10.48550/arXiv.2302.13971
+     Storage Anal. (SC 2020). IEEE, 20. https://doi.org/10.1109/sc41405.2020.        [47] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Alma-
+     00024                                                                                hairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, et al. 2023-
+[35] Alireza Sahraei, Soteris Demetriou, Amirali Sobhgol, Haoran Zhang,                   07-19. Llama 2: Open Foundation and Fine-Tuned Chat Models.
+     Abhigna Nagaraja, Neeraj Pathak, Girish Joshi, Carla Souza, et al.                   https://doi.org/10.48550/arXiv.2307.09288
+     2023-10-23. XFaaS: Hyperscale and Low Cost Serverless Functions at              [48] Ao Wang, Shuai Chang, Huangshi Tian, Hongqi Wang, Haoran Yang,
+     Meta. In Proc. 29th Symp. Oper. Syst. Princ. (SOSP ’23). ACM, 231–246.               Huiba Li, Rui Du, and Yue Cheng. 2021. FaaSNet: Scalable and Fast Pro-
+     https://doi.org/10.1145/3600006.3613155                                              visioning of Custom Serverless Container Runtimes at Alibaba Cloud
+[36] Larissa Schmid, Marcin Copik, Alexandru Calotoiu, Laurin Brandner,                   Function Compute.. In Proc. 2021 USENIX Annu. Tech. Conf. USENIX
+     Anne Koziolek, and Torsten Hoefler. 2025. SeBS-Flow: Benchmarking                    ATC 2021 July 14-16 2021 (USENIX ATC 2021). USENIX Association,
+     Serverless Cloud Function Workflows. In Proc. Twent. Eur. Conf. Com-                 443–457.
+     put. Syst. EuroSys 2025 Rotterdam Neth. 30 March 2025 - 3 April 2025.           [49] Yiding Wang, Kai Chen, Haisheng Tan, and Kun Guo. 2023-05-08.
+     ACM, 902–920. https://doi.org/10.1145/3689031.3717465                                Tabi: An Efficient Multi-Level Inference System for Large Language
+[37] Mohammad Shahrad, Rodrigo Fonseca, ’I nigo Goiri, Gohar Chaudhry,                    Models. In Proc. Eighteenth Eur. Conf. Comput. Syst. (EuroSys ’23). ACM,
+     Paul Batum, Jason Cooke, Eduardo Laureano, Colby Tresness, et al.                    233–248. https://doi.org/10.1145/3552326.3587438
+     2020. Serverless in the Wild: Characterizing and Optimizing the Server-         [50] Qizhen Weng, Wencong Xiao, Yinghao Yu, Wei Wang, Cheng Wang,
+     less Workload at a Large Cloud Provider.. In Proc. 2020 USENIX Annu.                 Jian He, Yong Li, Liping Zhang, et al. 2022. MLaaS in the Wild: Work-
+     Tech. Conf. USENIX ATC 2020 July 15-17 2020 (USENIX ATC 2020).                       load Analysis and Scheduling in Large-Scale Heterogeneous GPU
+     205–218.                                                                             Clusters.. In 19th USENIX Symp. Networked Syst. Des. Implement. NSDI
+[38] Ying Sheng, Shiyi Cao, Dacheng Li, Coleman Hooper, Nicholas Lee,                     2022 Renton WA USA April 4-6 2022 (NSDI 2022). USENIX Association,
+     Shuo Yang, Christopher Chou, Banghua Zhu, et al. 2024-06-05. S-                      945–960.
+     LoRA: Serving Thousands of Concurrent LoRA Adapters. https:                     [51] Qizhen Weng, Lingyun Yang, Yinghao Yu, Wei Wang, Xiaochuan Tang,
+     //doi.org/10.48550/arXiv.2311.03285                                                  Guodong Yang, and Liping Zhang. 2023. Beware of Fragmentation:
+[39] Ying Sheng, Shiyi Cao, Dacheng Li, Banghua Zhu, Zhuohan Li,                          Scheduling GPU-Sharing Workloads with Fragmentation Gradient De-
+     Danyang Zhuo, Joseph E. Gonzalez, and Ion Stoica. 2024. Fairness                     scent.. In Proc. 2023 USENIX Annu. Tech. Conf. USENIX ATC 2023 Boston
+     in Serving Large Language Models. In 18th USENIX Symp. Oper. Syst.                   MA USA July 10-12 2023 (USENIX ATC 2023). USENIX Association,
+     Des. Implement. OSDI 2024 St. Clara CA USA July 10-12 2024, Ada                      995–1008.
+     Gavrilovska and Douglas B. Terry (Eds.). USENIX Association, 965–               [52] Haojun Xia, Zhen Zheng, Yuchao Li, Donglin Zhuang, Zhongzhu
+     988.                                                                                 Zhou, Xiafei Qiu, Yong Li, Wei Lin, et al. 2023-10-01. Flash-LLM:
+[40] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan Li, Max Ryabinin,                   Enabling Cost-Effective and Highly-Efficient Large Generative Model
+     Beidi Chen, Percy Liang, Christopher Re, et al. 2023-06-15. FlexGen:                 Inference with Unstructured Sparsity. 17, 2 (2023-10-01), 211–224.
+     High-Throughput Generative Inference of Large Language Models                        https://doi.org/10.14778/3626292.3626303
+     with a Single GPU.. In Int. Conf. Mach. Learn. ICML 2023 23-29 July             [53] Yanan Yang, Laiping Zhao, Yiming Li, Huanyu Zhang, Jie Li, Mingyang
+     2023 Honol. Hawaii USA (ICML 2023). 31094–31116.                                     Zhao, Xingzhen Chen, and Keqiu Li. 2022-02-28. INFless: A Native
+[41] Sudipta Saha Shubha, Haiying Shen, and Anand Iyer. 2024. USHER:                      Serverless System for Low-Latency, High-Throughput Inference. In
+     Holistic Interference Avoidance for Resource Optimized ML Inference.                 Proc. 27th ACM Int. Conf. Archit. Support Program. Lang. Oper. Syst.
+     In 18th USENIX Symp. Oper. Syst. Des. Implement. OSDI 2024 St. Clara                 (ASPLOS ’22). ACM, 768–781. https://doi.org/10.1145/3503222.3507709
+
+
+
+
+                                                                                87
+FlexPipe: Adapting Dynamic LLM Serving
+Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters                             EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+[54] Jiayi Yao, Hanchen Li, Yuhan Liu, Siddhant Ray, Yihua Cheng, Qizheng               (NSDI 2023). USENIX Association, 787–808.
+     Zhang, Kuntai Du, Shan Lu, et al. 2025. CacheBlend: Fast Large Lan-           [58] Yanqi Zhang, ’I nigo Goiri, Gohar Irfan Chaudhry, Rodrigo Fonseca,
+     guage Model Serving for RAG with Cached Knowledge Fusion. In Proc.                 Sameh Elnikety, Christina Delimitrou, and Ricardo Bianchini. 2021-10-
+     Twent. Eur. Conf. Comput. Syst. EuroSys 2025 Rotterdam Neth. 30 March              26. Faster and Cheaper Serverless Computing on Harvested Resources.
+     2025 - 3 April 2025. ACM, 94–109. https://doi.org/10.1145/3689031.                 In Proc. ACM SIGOPS 28th Symp. Oper. Syst. Princ. (SOSP ’21). ACM,
+     3696098                                                                            724–739. https://doi.org/10.1145/3477132.3483580
+[55] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and                [59] Zili Zhang, Chao Jin, and Xin Jin. 2024. Jolteon: Unleashing the Promise
+     Byung-Gon Chun. 2022. Orca: A Distributed Serving System for                       of Serverless for Serverless Workflows.. In 21st USENIX Symp. Net-
+     Transformer-Based Generative Models.. In 16th USENIX Symp. Oper.                   worked Syst. Des. Implement. NSDI 2024 St. Clara CA April 15-17 2024
+     Syst. Des. Implement. OSDI 2022 Carlsbad CA USA July 11-13 2022 (OSDI              (NSDI 2024). USENIX Association, 167–183.
+     2022). USENIX Association, 521–538.                                           [60] Lianmin Zheng, Zhuohan Li, Hao Zhang, Yonghao Zhuang, Zhifeng
+[56] Shaoxun Zeng, Minhui Xie, Shiwei Gao, Youmin Chen, and Youyou                      Chen, Yanping Huang, Yida Wang, Yuanzhong Xu, et al. 2022. Alpa:
+     Lu. 2025. Medusa: Accelerating Serverless LLM Inference with Materi-               Automating Inter- and Intra-Operator Parallelism for Distributed Deep
+     alization. In Proc. 30th ACM Int. Conf. Archit. Support Program. Lang.             Learning.. In 16th USENIX Symp. Oper. Syst. Des. Implement. OSDI 2022
+     Oper. Syst. Vol. 1 ASPLOS 2025 Rotterdam Neth. 30 March 2025 - 3 April             Carlsbad CA USA July 11-13 2022 (OSDI 2022). 559–578.
+     2025, Lieven Eeckhout, Georgios Smaragdakis, Kaitai Liang, Adrian             [61] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xu-
+     Sampson, Martha A. Kim, and Christopher J. Rossbach (Eds.). ACM,                   anzhe Liu, Xin Jin, and Hao Zhang. 2024. DistServe: Disaggregating
+     653–668. https://doi.org/10.1145/3669940.3707285                                   Prefill and Decoding for Goodput-optimized Large Language Model
+[57] Hong Zhang, Yupeng Tang, Anurag Khandelwal, and Ion Stoica. 2023.                  Serving. In 18th USENIX Symp. Oper. Syst. Des. Implement. OSDI 2024
+     SHEPHERD: Serving DNNs in the Wild.. In 20th USENIX Symp. Net-                     St. Clara CA USA July 10-12 2024, Ada Gavrilovska and Douglas B.
+     worked Syst. Des. Implement. NSDI 2023 Boston MA April 17-19 2023                  Terry (Eds.). USENIX Association, 193–210.
+
+
+
+
+                                                                              88
+

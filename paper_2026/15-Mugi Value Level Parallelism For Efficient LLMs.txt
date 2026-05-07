@@ -1,0 +1,1476 @@
+       Mugi: Value Level Parallelism For Efficient LLMs
+           Daniel Price                   Prabhu Vellaisamy                            John P. Shen                            Di Wu
+     daniel.price@ucf.edu        pvellais@andrew.cmu.edu                         jpshen@cmu.edu                       di.wu@ucf.edu
+   University of Central Florida Carnegie Mellon University                  Carnegie Mellon University          University of Central Florida
+      Department of ECE             Department of ECE                           Department of ECE                   Department of ECE
+       Orlando, FL, USA             Pittsburgh, PA, USA                         Pittsburgh, PA, USA                  Orlando, FL, USA
+
+Abstract                                                                               Activation     Weight          Operations beyond GEMM
+
+Value level parallelism (VLP) has been proposed to improve                                                                         4
+                                                                                  DNN
+the efficiency of large-batch, low-precision general matrix
+multiply (GEMM) between symmetric activations and weights.                                     FP8        FP8           ReLU           GEMM Nonlinear
+In transformer based large language models (LLMs), there ex-
+ist more sophisticated operations beyond activation-weight                                 3          2           1
+                                                                                     LLM
+GEMM. In this paper, we explore how VLP benefits LLMs.
+First, we generalize VLP for nonlinear approximations, out-                                    BF16       INT4        SiLU/GELU softmax/exp KV cache
+performing existing nonlinear approximations in end-to-
+end LLM accuracy, performance, and efficiency. Our VLP                                Figure 1. Challenges for LLM inference using VLP.
+approximation follows a value-centric approach, where im-
+portant values are assigned with greater accuracy. Second,
+we optimize VLP for small-batch GEMMs with asymmetric
+inputs efficiently, which leverages timely LLM optimizations,                    ’26), March 22–26, 2026, Pittsburgh, PA, USA. ACM, New York, NY,
+including weight-only quantization, key-value (KV) cache                         USA, 19 pages. https://doi.org/10.1145/3779212.3790189
+quantization, and group query attention. Finally, we design
+a new VLP architecture, Mugi, to encapsulate the innova-
+tions above and support full LLM workloads, while provid-                        1     Introduction
+ing better performance, efficiency and sustainability. Our                       Modern artificial intelligence (AI) has been betting on deep
+experimental results show that Mugi can offer significant                        neural networks (DNNs) for over a decade [35]. A great deal
+improvements on throughput and energy efficiency, up to                          of software and hardware research has been dedicated to
+45× and 668× for nonlinear softmax operations, and 2.07×                         improving the efficiency of GEMM, as it accounts for over
+and 3.11× for LLMs, and also decrease operational carbon                         90% of the total runtime [31]. A key insight from this body
+for LLM operation by 1.45× and embodied carbon by 1.48×.                         of work is that low numerical precision gives good efficiency
+CCS Concepts: • Hardware → Application-specific VLSI                             and accuracy. Previous research has proposed and applied
+designs; Emerging architectures; Arithmetic and datapath                         narrower data formats symmetrically to the activations and
+circuits; • Computer systems organization → Parallel                             weights of GEMM, e.g. BF16 [32], DLFloat16 [2], CBFloat [51],
+architectures.                                                                   FP8 [41]. For offline workloads that process large-batch, low-
+                                                                                 precision data, value level parallelism (VLP) can potentially
+Keywords: value-level parallelism, value reuse, data reuse,                      improve performance and efficiency by avoiding redundant
+computation reuse, unary computing, temporal coding, quan-                       computations, as shown by a Carat design [46], with details
+tization, general matrix multiplication, nonlinear approxima-                    given in Section 2.1.
+tion, large language model, KV cache, group query attention
+                                                                                 Challenges. Recent AI advancements have given rise to gen-
+ACM Reference Format:                                                            erative AI workloads, e.g., transformer-based large language
+Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu. 2026.                  models (LLMs) [64]. LLMs exhibit complicated operations
+Mugi: Value Level Parallelism For Efficient LLMs. In Proceedings of              beyond activation-weight GEMM, for which VLP is designed.
+the 31st ACM International Conference on Architectural Support for
+                                                                                 Naturally, a research question is raised: can VLP address di-
+Programming Languages and Operating Systems, Volume 2 (ASPLOS
+                                                                                 verse LLM operations? Figure 1 highlights the challenges.
+                                                                                     1 First, prior VLP architectures do not support LLM non-
+                                                                                 linear operations, such as such as SiLU [17], Swish [56],
+This work is licensed under a Creative Commons Attribution 4.0 Interna-          GELU [25], and softmax. These operations are far more com-
+tional License.
+ASPLOS ’26, Pittsburgh, PA, USA
+                                                                                 plicated than the ReLU predecessor [20] and account for sig-
+© 2026 Copyright held by the owner/author(s).
+                                                                                 nificant runtime if not optimized [9, 34, 55, 61, 72], despite
+ACM ISBN 979-8-4007-2359-9/2026/03                                               various software [45, 68] and hardware [27, 42, 66, 67, 72]
+https://doi.org/10.1145/3779212.3790189                                          solutions being proposed.
+
+
+
+                                                                          1216
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                   Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+
+    2 Second, prior VLP architectures misalign the trending                 • We formulate value level parallelism for nonlinear ap-
+asymmetric quantization in LLM inference, offering subopti-                   proximation, which adopts input approximation in a
+mal efficiency. Memory-intensive LLMs outgrow the mem-                        value-centric manner.
+ory capacity in mobile devices easily [16, 43, 49]. BF16-INT4               • We optimize value level parallelism asymmetric, small-
+quantization has been exploited on both weight [19] and                       batch GEMM, using timely LLM optimizations, such
+KV cache [26] to combat the large memory footprint while                      as quantization and group query attention.
+preserving accuracy. But prior Carat only supports FP8 [46].                • We synergize the nonlinear approximation and GEMM
+    3 Third, prior VLP architectures are not optimized to for                 optimization above in one Mugi architecture to run
+small-batch inputs, leading to suboptimal efficiency. LLMs                    full LLM workloads.
+usually use a small batch size, such as 8, ensure real-time                 • We conduct experiments on multiple LLMs using Mugi
+inference, since large batch sizes linearly worsen the infer-                 and demonstrate good improvements in performance,
+ence latency [1, 81] and violate the system-level objectives                  efficiency and sustainability.
+(around 200 ms) [10, 59],
+    4 Fourth, existing AI architectures dedicate separate ma-              This paper is organized as follows. Section 2 reviews the
+trix and vector units for nonlinear operations and GEMM,                background. Section 3 articulates VLP approximation. Sec-
+increasing the carbon emission and lowering sustainability.             tion 4 describes our Mugi architecture, with evaluations in
+The nonlinear hardware increases on-chip area and embod-                Section 5 and Section 6. Section 7 and Section 8 discuss and
+ied carbon during manufacture, which could outweigh the                 conclude this paper.
+operational carbon during LLM execution, especially for
+more advanced technologies [22].
+                                                                        2    Background
+Proposal. To overcome the challenges above, we craft Mugi,               2.1 Value Level Parallelism
+a new VLP architecture that support nonlinear approxima-
+tion for the first time and asymmetric, small-batch GEMM,               Value level parallelism (VLP) was first proposed for GEMM
+as well as reusing the array for both nonlinear operations               operations on large-batch, low-precision data [46], with an
+and GEMM for efficient LLMs. First, Mugi orchestrates the                example for vector-scalar multiplication and vector-vector
+first-to-date VLP support for nonlinear approximation. Mugi              outer product given in Figure 2. (a) shows the temporal cod-
+approximates critical nonlinear operations in LLMs, such as              ing of a variable 𝑖, done by a temporal converter (TC) in
+softmax, SiLU, and GELU. Mugi adopts input approximation                 green, which is essentially an equivalence logic. When input
+and generates a precise output for an approximate input,                𝑖, of value 3, equals the number in counting-up sequence (i.e.,
+in contrast to common output approximation with precise                 when the counter 𝑐 reaches 3 in the rectangle), the TC asserts
+input [27, 42, 66, 67, 72]. VLP approximation is value centric           a temporal spike in red at the 3rd cycle; otherwise, no spikes
+and assign greater accuracy to more important inputs.                    is generated, indicated by the bold segments in black. (b) and
+   Moreover, Mugi is optimized for asymmetrically quan-                 (c) depicts transforming a multiplication between 𝑖 = 3 and
+tized, small-batch GEMMs, that are not compatible in prior              𝑤 = 1 into the accumulation of 𝑤 over time. At cycle 𝑖, the
+VLP designs [46]. LLMs leverages weight-only quantization                accumulation outputs the correct product 𝑖𝑤, equivalent to
+(WOQ) [8, 13, 19, 28, 38, 39] for activation-weight GEMM                 1 + 1 + 1 = 3. (d) exemplifies temporal subscription. Saving
+and KV cache quantization (KVQ) [26, 33, 60, 82, 83] for                 the correct product (Val) into the register in yellow is en-
+activation-activation GEMM, introducing BF16-INT4 GEMM.                  abled by the temporal spike (Sub), essentially selecting its
+Mugi supports such asymmetric quantization by customizing                corresponding 𝑖𝑤 product of 3 × 1 = 3 in red. (e) extends to
+the data format and optimized mapping. This optimization                 scalar-vector multiplication between a scalar 𝑤 and a vector
+                                                                        ®𝑖 . The accumulation results of 𝑤 are shared by all vector
+ensures high utilization for both WOQ with small-batch in-
+put and KVQ with grouped query attention (GQA) [3]. We                   elements. Each vector element subscribes to its own product
+additionally minimize the buffer cost in Mugi over Carat via             in parallel, based on it own input (red and blue). We call such
+broadcasting and output buffer leaning.                                  parallel, value-dependent sharing across multiple inputs as
+   Last but not least, Mugi synergizes the nonlinear approxi-            value reuse. Value reuse and temporal subscription together
+mation and GEMM optimizations and maximally reuse the                    formulate VLP. (f) shows that a vector-vector outer product
+chip budget for LLMs. This allows Mugi to execute full LLM               can be obtained by organizing multiple columns of scalar-
+workloads efficiently and decrease area overhead, both of                vector multiplication into a 2D array. Carat maps batched
+which directly correlate to a decrease in operational and                input activations to rows and weights to columns, with the
+embodied carbon.                                                         number of columns matching the temporal spike latency
+   The contributions of this paper are summarized as follows:            to avoid resource overprovision and maximize the resource
+                                                                         utilization. Since the temporal spike latency increases expo-
+                                                                         nentially, 2𝑛 cycles for an 𝑛-bit input, it is more beneficial to
+                                                                         keep VLP at smaller bitwidths [74, 80]. Therefore, Carat opts
+
+
+
+                                                                 1217
+Mugi : Value Level Parallelism For Efficient LLMs                                                                     ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+(a) i=3
+               =
+                                  i=3
+                                          =
+                                                                  i=3
+                                                                        =                         inputs are far from the Taylor expansion point. Allowing
+    c=0                           c=1                             c=3
+                                                                                                  more points introduces addition hardware overheads.
+     i=3                                                             543210
+(b) w=1    x       3 (c) w    ACC       543210 (d)
+                                               w=1           ACC
+                                                                              Val = iw            Summary. Different implementations offer distinct accuracy
+(e)                     543210                                                Sub                 and efficiency tradeoffs, and this work introduces a novel
+                                    Val       i=3    TC                              3
+   w=1         ACC                        iw (f)
+                                                                                                  VLP approximation for nonlinear operations.
+                                                 Weights
+ i[0]=3        TC                           3                       ACC ACC ACC
+                                                                                                  2.3 Large Language Model Inference
+
+
+                                               activations
+ i[1]=1        TC                          1
+
+
+                                                Batched
+                                                             TC
+                                                                                                  Modern LLMs are mainly built on attention-based transform-
+                             …
+                   …
+
+
+
+
+                                           …                 TC
+ i[k]=3        TC                          3                 TC                                   ers [64]. During prefilling, multiple tokens are processed in
+                                                                                                  parallel, resulting in GEMM operations. During decoding,
+    Figure 2. Illustration of VLP, detailed in Section 2.1.                                       one token is processed, resulting in GEMV operations, unless
+                                                                                                  input tokens are batched. However, even with batched input,
+                                                                                                  normal attention still performs GEMV for KV cache [50].
+for mapping the batch dimension to rows to achieve scalable
+performance with large batch sizes.                                                               2.3.1 Grouped Query Attention. GEMV in normal at-
+                                                                                                  tention severely lowers the hardware utilization [83]. To
+2.2 Nonlinear Implementations                                                                     mitigate the problem, grouped query attention (GQA) is pro-
+2.2.1 Software Implementation. We take nonlinear op-                                              posed, where multiple Q tokens share the same KV cache [3],
+erations in LLMs such as softmax, SiLU [17], and GELU [25]                                        creating small-batch GEMM. In this paper, Mugi benefits
+as examples, formulated in Equations 1, 2, and 3 [47], where                                      from GQA to improve the hardware utilization.
+erf means error function. To ensure numerical stability by
+avoiding overflow in exp, softmax inputs are usually sub-                                         2.3.2 Weight-Only Quantization. Low-bit quantization
+tracted by the maximum of all inputs. Without KV cache,                                           is now the de facto technique to reduce the memory foot-
+softmax can take more than 40% of the total runtime in                                            print [36]. Most prior works adopt symmetric quantization,
+transformer models [9, 34, 55, 61]. The GELU function is                                          e.g., INT8 or FP8 for both inputs and weights [12, 16, 36, 44],
+commonly approximated as shown in Equation 4 or Equa-                                             which are still too memory inefficient for LLMs. Developers
+tion 5 [47]. The functions easily take tens even hundreds of                                      resort to sub-byte quantization for weights, while keeping
+cycles to finished [45, 68].                                                                      the inputs in floating point format, e.g, BF16-INT4 weight
+                                                                                                  only quantization (WOQ) [8, 13, 19, 28, 38, 39].
+            𝑒 (𝑥𝑖 −𝑚𝑎𝑥 )
+                                                                        
+                                    𝑥                      𝑥           𝑥
+ softmax = Í (𝑥 −𝑚𝑎𝑥 ) (1) SiLU =                               1+erf √
+                                                         (2) GELU =          (3)
+                                  1+𝑒 −𝑥                   2            2
+                                                                                                  2.3.3 KV Cache Quantization. KV cache introduces addi-
+             𝑒 𝑖
+
+                                                                                                  tional memory footprint on top of weights, leading to poten-
+                                                                !!
+                                        2
+                                     √︂
+                          𝑥                                  3
+                   GELU =   1 + Tanh      · 𝑥 + 0.044715 · 𝑥                  (4)
+                          2             𝜋                                                         tial out-of-memory errors [83]. BF16-INT4 KV cache quan-
+                                                                                                  tization (KVQ) has been leveraged to compress KV cache
+                         1 + Tanh 0.7978845608𝑥 · 1.0 + 0.004715 · 𝑥 2
+                       𝑥
+           GELU =                                                                    (5)
+                                                                       
+                       2                                                                          with minimum accuracy drop [26, 33, 60, 82, 83]. Moreover,
+2.2.2 Piecewise Linear Hardware Approximation. To                                                 WOQ and KVQ can be combined together, reporting just a
+ensure high efficiency, hardware approximations are pro-                                          0.02 increase in perplexity [26].
+posed. Piecewise linear (PWL) approximation [27, 67] sepa-                                        Summary. These LLM optimizations are timely and allow
+rates the function curve into multiple linear segments based                                      optimizing asymmetric, small-batch GEMM efficiently.
+on the input range and computes the result based on which
+segment an input falls into. PWL approximations need to                                           2.4 Sustainable Computing
+buffer the segment coefficients and identify the correspond-
+                                                                                                  Carbon emissions have become a growing concern in the AI
+ing segment of an input via comparison. For an input vector,
+                                                                                                  world [29] and AI inference reportedly contributes up to 90%
+a dedicated set of buffers, comparators, and arithmetic units
+                                                                                                  of datacenter costs [6]. To quantify carbon emissions, carbon
+is needed for each element, increasing hardware overheads.
+                                                                                                  modeling focuses on operational carbon for workload deploy-
+2.2.3 Taylor Series Hardware Approximation. Another                                               ment and embodied carbon for infrastructure manufacture
+popular hardware approximation is a Taylor series [42, 66, 71,                                    over the full lifetime [18, 48, 70]. The equivalent emissions
+72, 77]. The coefficient of each Taylor term is precomputed.                                      (CO2eq ) are formulated in Equation 6, where E, CI, CPA are
+With Horner’s rule, the computation can be transformed in                                         short for energy and carbon intensity, carbon emitted per
+to concatenated multiply-accumulate (MAC) operations [72].                                        unit area. Embodied carbon is taking over operational carbon
+This transformation allows for vectorized implementation,                                         as the majority of contributed emissions [18, 70].
+where coefficients can be shared by all inputs efficiently.
+However, Taylor approximation exhibits poor accuracy when                                              Operational CO2eq = 𝐸 · 𝐶𝐼   (6)   Embodied CO2eq = 𝐴𝑟𝑒𝑎 · 𝐶𝑃𝐴   (7)
+
+
+
+
+                                                                                           1218
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                      Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+
+Summary. Our Mugi shares the hardware for both nonlinear                   can be shared across the array in parallel, individually sub-
+operation and GEMM, and contributes to reduction of both                   scribing to their final result.
+operational and embodied carbon.
+                                                                           3.2 Input Approximation
+                                                                           VLP approximation favors lower-precision inputs to reduce
+3    VLP Nonlinear Approximation
+                                                                           the duration of temporal spikes. However, popular data for-
+3.1 Formulation                                                            mats have a wide mantissa field, e.g., BF16 mantissa has 7
+We formulate VLP approximation as in Figure 3. (a) depicts                 bits. Therefore, in the input field split phase, we round the
+a conventional lookup table (LUT) for exp, indexing with an                input mantissa to fewer bits for softmax, SiLU and GELU.
+address and receiving its corresponding value. (b) indicates               Profiling shows that rounding introduces uniform errors to
+that such a conventional LUT can only sequentially process                 the input mantissa values, as the mantissa are uniformly
+different inputs, limiting the scalability. To alleviate this re-          distributed in softmax, SiLU and GELU, and this pattern is
+striction, (c) splits the lookup processes into two steps. First,          consistent across models and modalities. We exclude these
+a row of exp values with consecutive input values are re-                  results for simplicity.
+trieved from the LUT, then the correct value can be selected
+from that row. Such a split inspires VLP approximation. (d)-               3.3 Value-Centric Approximation
+(e) illustrates this split within VLP. (d) uses an input sign and          The approximation efficiency also suffers from wide expo-
+mantissa (i: S-M) to index the LUT row, and (e) then uses the              nents, since both the temporal signal length and the LUT
+exponent (i: E) to select the final result from the row.                   row size grows exponentially with exponent bitwidth. Our
+   (f) details VLP approximation within a single row. 1 – 4 de-            formulation leverages the insights that input exponents are
+notes four phases, i.e., input field split, value reuse, mantissa          often clustered at a small range. We focus on these impor-
+temporal subscription, and exponent temporal subscription.                 tant values, following a value-centric approach. We profile
+ 1 the input field split phase splits the input S-M-E (0-3-2)              the input distribution of softmax, SiLU and GELU in Fig-
+into S-M (0-3) and E (2), as in (d)-(e). 2 the value reuse phase           ure 4. For softmax, exponent values are concentrated around
+organizes the LUT the same as that in (d), where each LUT                  [−3, 4], despite input values being widely spread. Similar
+row contains all values for the same S-M. At each cycle, an                observations also exist in SiLU and GELU. We define these
+ascending address is sent to the LUT, and generates an out-                model-specific, important exponents as the LUT window,
+put LUT row, marked by bold lines. Overtime, LUT rows                      and we only store the results for these exponents in the LUT.
+are reused by different S-M values. 3 the mantissa temporal                However, a single mapping, with a set of inputs for value
+subscription phase further splits the S-M to reuse LUT rows.               reuse, might not cover the full range of important exponents.
+S-M (0-3) generates a temporal signal via the temporal con-                Therefore, we opt for a sliding window for each mapping
+verter in green, subscribing to the row at the 3rd cycle with              and choose an optimal range, as shown in Figure 5.
+a red fill. The LUT row will be stored into the yellow blocks
+when a temporal spike arrives. 4 the exponent temporal                     3.4 Accuracy Impact
+subscription leverages the temporal spike of the exponent                  We explore the accuracy of different window sizes and bound-
+(E=2) to subscribe the final exp results from the LUT row, se-             aries as in Figure 6. We compare VLP approximation against
+lecting the value at the 2nd cycle with a blue outline. Starting           prior approximations, like Taylor series [42, 66], piecewise
+from the moment when the correct LUT row is subscribed                     linear (PWL) approximation [67], and partial approximation
+in 3 , the exponent also starts generating its own temporal                (PA) [27]. For most models with full VLP approximation
+spikes. Therefore, the full VLP approximation requires the                 (combined softmax/activation), Mugi shows better accuracy,
+total duration of both mantissa and exponent temporal spike                except for Llama 2, whose softmax distribution varies signif-
+timing to finish.                                                          icantly across layers, as shown in Figure 4. To address this,
+   (g) zooms into the single row for mantissa and exponent                 Figure 7 demonstrates per-layer tuning of Llama 2, selecting
+temporal subscription. The LUT row subscription is indicated               the optimal LUT range for each layer. This mitigates accu-
+by S-M. ‘-x’ here denotes all exponents. The corresponding                 racy loss, yielding perplexity values approaching those in
+rows will be sent to the proper inputs, indicated by the bold              line with other approximation techniques.
+lines. The exponent subscription is indicated by the blue                     Figure 8 further shows the accuracy of the nonlinear ap-
+outlined blocks. Following (f), this example selects the row               proximation. While VLP approximation does not exhibit the
+corresponding to an S-M of (0-3), subscribing at the 3rd cycle,            best error, it has the best accuracy where inputs are impor-
+then subscribing where E=2, or at the 2nd cycle of 4 in (f).               tant, in term of magnitude and quantity. For softmax in layer
+This full process takes a total of 6 cycles, which is the sum              0, high exp accuracy for majority of the inputs (Figure 4)
+of two subscription.                                                       propagates less errors to deeper layers. In deeper layers,
+   (h-i) expands approximation to a full array, enabling ap-               more inputs center around −10. Their output magnitudes
+proximation of vector 𝑖®. By leveraging VLP, selected rows                 are smaller, e.g, adding 22k 𝑒 −10 equals 𝑒 0 . Therefore, even
+
+
+
+                                                                    1219
+ Mugi : Value Level Parallelism For Efficient LLMs                                                                 ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+ (a)              LUT                       (b)                    LUT                     (g)
+                                                           Addr          Val                      Cycle        7      6          5         4     3     2                1          0
+                 exp(0)                           i[0]=0          exp(0)     exp(0)
+                   …                                                …                            LUT row                                 0-4-x 0-3-x 0-2-x            0-1-x
+            Addr        Val                       i[1]=2                     exp(2)
+        i=2      exp(2)     exp(2)                                exp(2)                          i: E=2           0-3-2       0-3-1    0-3-0
+                   …                                                …
+
+
+
+
+                                                    …
+
+
+
+
+                                                                                …
+                 exp(4)                           i[k]=4          exp(4)     exp(4)
+                   …                                                …                                                                          Time
+
+ (c)                                                                    (f)                               Val
+                                                                                Addr       LUT                                           4            E=2
+                       LUT
+                                                                                                 3 S-M=0-3 2         LUT row                                         exp S-M-E
+           Addr exp(0)exp(1)exp(2) Val     LUT row                                                                                     i[0]: E=2
+ i={0,1,2}                                                                1 i: S-M=0-3     TC                                                                            0-3-2
+                exp(3)exp(4)exp(5)     exp(0)exp(1)exp(2)
+                        …
+                                                                        (i)                        Cycle       7      6          5         4     3     2     1                     0
+                                                                                                 LUT row                                 0-4-x 0-3-x 0-2-x 0-1-x
+ (d)
+               LUT: exp(S-M-E)                                                                   i[0]: E=2         0-3-2       0-3-1    0-3-0
+   i: S-M Addr 0-0-0 0-0-1 0-0-2 Val     LUT row                                                 i[1]: E=1                              0-1-2 0-1-1 0-1-0
+                                                                                                    …
+    =0-0       0-1-0 0-1-1 0-1-2     0-0-0 0-0-1 0-0-2                                           i[k]: E=0         0-3-2       0-3-1    0-3-0
+                      …
+                                                                                                                                               Time
+                                                                        (h)                                  Val
+                                                                                Addr       LUT                                           4          E=2
+ (e)
+                                                                                                               2     LUT row                                         exp S-M-E
+                                                                                                                                       i[0]: E=2
+                                                    S-M-E               i[0]: S-M=0-3      TC                                                                            0-3-2
+            Addr       LUT row       Val                                                         3
+   i: E=0                                       exp(0-0-0)                                                                             i[1]: E=1
+                   0-0-0 0-0-1 0-0-2                                    i[1]: S-M=0-1      TC                                                                                 0-1-1
+                                                                                                     S-M=0-3               …
+
+
+
+                                                                                                     …
+                                                                         1
+                                                                                             …
+                                                                                                                                       i[k]: E=0
+                                                                        i[k]: S-M=0-3      TC                                                                                 0-3-0
+
+ Figure 3. VLP approximation for nonlinear operations, exp here, with a floating-point input 𝑖, represented as S-M-E, denoting
+ the sign, mantissa and exponent. More details are in Section 3.1.
+
+                         Llama 2                                          Whisper                                         SwinV2                                   ViViT
+                   7B                 13B              4 SM
+                                                                   Tiny                  Large                 Tiny                     Large                        Base
+         2 SM                                                                     4 SM                                                                      1 SM
+         1                                             2                          2
+         0                                             0                          0
+Value
+
+
+
+
+           -16      -8        0 -16        -8       0      -16 -8   0 -12 -6 0       -16 -8                                    0 -16           -8     0        -12      -6         0
+        40 S                                              G                      10 G                                                                         G
+                                                       2                          5                                                                    1
+        20
+         0                                             0                          0                                                                    0
+             -2     0     2 -8         0          8     -10 -5    0     -4   0      -8   0                                 8      -8       0        8   -10 -5                 0
+        50 SM                                         60 SM                      50 SM                                                                40 SM
+        25                                            30                         25                                                                   20
+         0                                             0                          0                                                                    0
+Exp
+
+
+
+
+            -8     0      8     -8     0          8       -8   0   8 -8    0   8    -8   0                                 8      -8       0        8     -8  0                8
+        30 S                                          60 G                       60 G                                                                 40 G
+        15                                            30                         30                                                                   20
+         0                                             0                          0                                                                    0
+            -8     0      8     -8     0          8       -8   0   8 -8    0   8    -8   0                                 8      -8       0        8     -8  0                8
+ Figure 4. Distribution of input values and exponents of nonlinear operations in transformer models. Profiled layers, stages,
+ and sequence lengths are detailed in Table 1. Cooler colors represent early layers, while warmer colors represent later layers.
+ Within each color, lighter lines represent shorter sequence lengths, while darker lines represent longer sequence lengths.
+ Softmax, SiLU, and GELU are abbreviated as SM, S, and G, denoting the nonlinear function within each window.
+
+ though VLP approximation is less accurate, it has negligible                                4   Mugi Architecture
+ impacts compared to inputs closer to 0. Another contributor                                 We introduce Mugi, a novel VLP architecture to support non-
+ to overall accuracy is that uniform input errors from input                                 linear approximation and asymmetric, small-batch GEMM,
+ approximation can cancel out each other’s output errors dur-                                as well as reusing the array for both nonlinear operations
+ ing summation. For SiLU/GELU, inputs consistently cluster                                   and GEMM for efficient LLMs. Mugi supports nonlinear soft-
+ around 0, where VLP approximation is more accurate.                                         max, SiLU and GELU operations. Mugi supports BF16-INT
+                                                                                             GEMM, leveraging timely GQA, WOQ and KVQ optimiza-
+                                                                                             tions. The support for both nonlinear operations and GEMM
+
+
+
+                                                                                      1220
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                     Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+
+                        LUT window (S-M)                                  double buffer the results from two spikes. Sign conversion
+         E-6 E-5 E-4 E-3 E-2 E-1 E0 E1 E2 E3 E4 E5                        (SC) XORs all signs to generate the final result.
+                             Slide window (S-M)                              4 is for the exponent temporal subscription phase. The
+                      E-3 E-2 E-1 E0 E1 E2 E3 E4                          PP block takes the exponent from the E-proc and generates a
+          i[0]: S-M   TC
+                                                                          MUX selection signal. If no special values exist, this selection
+                                                                          signal is the temporal spike from the exponent, subscribing
+          i[1]: S-M   TC                                                  the correct element in the sliding window. If there are special
+                            …                        …
+                       …
+
+
+                                                                          values, the multiplexer outputs the proper special values
+          i[k]: S-M   TC
+                                                                          among Zero, infinity (INF) and Not-a-Number (NaN).
+Figure 5. An example sliding window for input mapping.
+This example chooses the exponent range of [−3, 4] for the                4.1 Nonlinear Approximation
+current set of inputs, from the full LUT window with the                  To better understand how Mugi works, we give a walk-
+exponent range of [−6, 5]. The sliding window size of 8 is                through example in Figure 10. Here, rows apply broadcasting,
+chosen to match the VLP array width in prior VLP works [46].              while columns adopt pipelining. The LUT (iSRAM) stores
+This sliding window can slide left and right for each mapping,            pre-computed nonlinear results, and each LUT row contains
+aiming to minimize the accuracy loss.                                     a vector of results for one mantissa. The LUT size will double
+                                                                          if the nonlinear operation has both positive and negative
+                                                                          inputs. In 0 – 7 , TC or PP is red if a temporal signal (yellow)
+                                                                          arrives. In 8 – 9 , a new mapping is marked with blue.
+above are mixed in one singular architecture with maximized                  In the first input field split phase, the 8-bit BF16 mantissa
+resource reuse. Figure 9 outlines our Mugi architecture. It               is rounded to INT4 with a 3-bit mantissa magnitude to gen-
+double buffers all memory hierarchies to hide access latency.             erate an 8-cycle temporal signal. In the second value reuse
+We follow prior VLP designs and set the number of columns                 phase, LUT row vectors are read out per cycle in a mantissa-
+to 8 (matching 3-bit mantissa) for optimal performance and                ascending order, and reused in the next subscription phase.
+efficiency tradeoffs [46].                                                Note that vectors from different LUT columns are sent to
+    1 is for the input field split phase. M-proc splits the sign
+                                                                          the array in a staggered manner, as the temporal signal is
+(S) and mantissa (M) fields for BF16 input and approximates               pipelined across columns. In the third mantissa temporal
+the mantissa to 3-bit via rounding (R). For a given mapping,              subscription phase, temporal signals are generated from ap-
+E-proc processes the exponent (E) values to determine the                 proximated mantissa. For each mantissa, the TC turns red
+maximum or minimum exponent, which determines the LUT                     upon the coincidence of the input value and equivalent clock
+sliding window in the SW block. The sliding window size is                cycle. The fourth exponent temporal subscription phase sub-
+fixed to 8 to match array width. It also clamps the exponent,             scribes to the correct result from the LUT vector, indicated
+underflowing to 0, and overflowing depending on the non-                  by the red exponent (e). The sign (s) is omitted here as it is
+linear operation. In softmax, overflow values are set to the              always negative. The cycle index to get the final result is the
+maximum value of the LUT, while SiLU/GELU passes values                   sum of mantissa and exponent values. After 8 cycles of red
+through directly. The exponent is sent to post processing                 input, at cycle 8, new blue inputs enter the array.
+(PP) block for the final result.                                             The above VLP approximation works for element-wise
+    2 is for the value reuse phase. The iSRAM acts as the LUT,
+                                                                          nonlinear operations, e.g., exp and SiLU/GELU. Additional
+and the pre-computed, output LUT window is sent to the SW                 summation and division are needed for softmax. We first
+block to generate the sliding window. The sliding window is               compute the exp for all inputs (maximum subtracted). To
+sent to iFIFO to stagger the input by one cycle to adjacent               perform the summation, when we compute exp, the output
+columns. This staggering ensures fully pipelined execution                accumulator (oAcc) simultaneously accumulates the exp re-
+in our VLP approximation.                                                 sults. Once all exp operations finish, we store the sum to the
+    3 is for the mantissa temporal subscription phase. The
+                                                                          oSRAM from the oFifo. Next, we divide all exp results by the
+temporal converter (TC) converts the approximate mantissa                 sum using the vector multiplication array (Vec) in Figure 9.
+(M) to a temporal signal using the counter (CNT) and leaves               This array multiplies the exp by the reciprocal of the sum in
+the sign (S) to PP. The temporal signal is then pipelined                 one cycle. To ensure high utilization, we map both attention
+in a row via the T register in the processing element (PE).               head and batch across rows for softmax.
+Temporal subscription is done using the AND gate in each PE.
+Within a PE column (Figure 9 (d)), both the counter value and
+                                                                          4.2 GEMM Optimization
+sliding window are broadcast. Within a PE row (Figure 9 (e)),
+the subscribed results will be sent out via OR gates, since               Mugi optimizes GEMM over prior VLP designs in two ways.
+only one column will be activated by the pipelined temporal               Format Customization. Asymmetric BF16-INT4 GEMM
+spike. Two sets of OR gates, together with a small FIFO,                  imposes challenges to Carat. As Carat maps FP8 input across
+
+
+
+                                                                   1221
+     Mugi : Value Level Parallelism For Efficient LLMs                                                                                                           ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+                                                    Llama 2 7B             Llama 2 13B              Whisper Tiny Whisper Large                        SwinV2 Tiny             SwinV2 Large                    ViViT
+                                              8      6.71 6.28 6.89 6.93      6.71 5.99 6.53 6.54      20.3 12.0 11.1      4.90 4.42 4.00 3.39      0.90 0.86 0.82 0.94 0.95 0.71 0.69 0.68 0.69 0.76 3.38 2.00 1.76 1.77 1.77
+VLP SM
+
+                                              9      6.72 6.28 6.89 6.91      6.71 5.99 6.53 6.54      20.3 12.0 11.1      4.90 4.42 4.00 3.39      0.90 0.86 0.82 0.94 0.95 0.71 0.69 0.68 0.69 0.76 3.38 2.00 1.76 1.77 1.77
+                                             10      6.72 6.28 6.89 6.90      6.71 5.99 6.53 6.54      20.3 12.0 11.1      4.90 4.42 4.00 3.39      0.90 0.86 0.82 0.94 0.95 0.71 0.69 0.68 0.69 0.76 3.38 2.00 1.76 1.77 1.77
+                                             11      6.72 6.28 6.89 6.90      6.71 5.99 6.53 6.54      20.3 12.0 11.1      4.90 4.42 4.00 3.39      0.90 0.86 0.82 0.94 0.95 0.71 0.69 0.68 0.69 0.76 3.38 2.00 1.76 1.77 1.77
+
+
+
+
+                                                                                                                                                                                                                                 Min/Max Exp
+                                 LUT Size
+
+
+                                             12      6.72 6.28 6.89 6.90      6.71 5.99 6.53 6.54      20.3 12.0 11.1      4.90 4.42 4.00 3.39      0.90 0.86 0.82 0.94 0.95 0.71 0.69 0.68 0.69 0.76 3.38 2.00 1.76 1.77 1.77
+                                                  0 1 2 3 4 0 1 2 3 4 -2 -1 0 1 2 -2 -1 0 1 2 -2 -1 0 1 2 -2 -1 0 1 2 0 1 2 3 4
+                                              8 6.37 5.76 5.76 5.76 5.81 6.02 5.21 5.20 5.20 5.23      22.4 22.4 22.4 22.5           3.52 5.11 5.10 6.78 4.44 0.82 0.92 0.91 0.72 0.72 0.70 1.23 7.34 6.54 1.75 1.73 1.76 1.76
+Full PPL Taylor SM PWL S/G PWL SM VLP S/G
+
+
+
+
+                                              9 6.37 5.76 5.76 5.76 5.76 6.02 5.21 5.20 5.20 5.20      22.4 22.4 22.4 22.4           3.52 5.12 5.11 6.61 4.94 0.87 0.91 0.91 0.71 0.72 0.73 1.57 7.45 6.27 1.87 1.75 1.77 1.77
+                                             10 6.37 5.76 5.76 5.76 5.76 6.02 5.21 5.20 5.20 5.20      22.4 22.4 22.4 22.4           3.53 5.13 5.11 6.71 3.59 0.89 0.91 0.91 0.71 0.72 0.71 1.35 7.21 5.26 1.84 1.75 1.76 1.77
+                                             11 6.37 5.76 5.76 5.76 5.76 6.02 5.21 5.20 5.20 5.20      22.4 22.4 22.4 22.4           3.54 5.09 5.14 6.22 1.91 0.88 0.90 0.90 0.70 0.71 0.68 1.03 6.21 3.86 1.83 1.76 1.76 1.78
+                                             12 6.37 5.76 5.76 5.76 5.76 6.02 5.21 5.20 5.20 5.20      22.4 22.4 22.4 22.3           3.53 5.08 5.10 5.49 1.88 0.91 0.94 0.93 0.74 0.75 0.79 1.57 5.06 3.88 2.05 1.97 2.04 1.93
+                                                  0 1 2 3 4 0 1 2 3 4 0 1 2 3 4 -2 -1 0 1 2 -8 -7 -6 -5 -4 -3 -2 -1 0 1 -7 -6 -5 -4 -3
+                                             20 5.76 5.76 5.76 5.76 5.75 5.19 5.19 5.19 5.19 5.19                          5.15 5.20 5.11 5.15 5.11 0.87 0.87 0.92 0.91 0.90 0.69 0.70 0.72 0.71 0.71 1.77 1.77 1.78 1.78 1.77
+                                             22 5.76 5.76 5.76 5.75 5.75 5.19 5.19 5.19 5.19 5.19           23.8           5.19 5.11 5.14 5.19 5.12 0.93 0.90 0.87 0.90 0.92 0.72 0.70 0.70 0.71 0.73 1.77 1.77 1.77 1.78 1.77
+                                             23 5.76 5.76 5.76 5.75 5.75 5.19 5.19 5.19 5.19 5.19      23.0           24.0 5.09 5.12 5.20 5.09 5.08 0.87 0.90 0.90 0.91 0.89 0.70 0.71 0.71 0.72 0.71 1.78 1.77 1.78 1.77 1.77
+
+
+
+
+                                                                                                                                                                                                                                 Segment Range
+                                             24 5.76 5.76 5.75 5.75 5.75 5.19 5.19 5.19 5.19 5.19           22.6           5.12 5.17 5.00 5.11 5.12 0.90 0.91 0.90 0.92 0.94 0.71 0.72 0.71 0.72 0.73 1.77 1.78 1.77 1.77 1.77
+                                 Segments
+
+
+
+
+                                             25 5.76 5.75 5.75 5.76 5.75 5.19 5.19 5.19 5.19 5.19           24.9           5.14 5.08 5.09 5.14 5.05 0.93 0.90 0.91 0.92 0.91 0.73 0.71 0.72 0.72 0.71 1.78 1.77 1.77 1.78 1.77
+                                                -20 -19 -18 -17 -16 -20 -19 -18 -17 -16 -21 -20 -19 -18 -17 -20 -19 -18 -17 -16 -24 -23 -22 -21 -20 -24 -23 -22 -21 -20 -24 -23 -22 -21 -20
+                                             20 5.79 5.77 5.79 5.84 5.90 5.32 5.21 5.21 5.25 5.29 22.5 22.9 23.0 23.7 24.8 5.36 5.43 5.26 5.18 5.13 0.91 0.91 0.91 0.92 0.92 0.72 0.72 0.72 0.71 0.72 1.77 1.78 1.78 1.79 1.79
+                                             22 5.78 5.78 5.78 5.80 5.82 5.32 5.21 5.21 5.22 5.23 22.4 22.9 23.5 23.5 24.2 5.28 5.32 5.00 4.93 5.26 0.91 0.90 0.91 0.91 0.91 0.72 0.72 0.72 0.72 0.73 1.77 1.77 1.77 1.78 1.80
+                                             23 5.78 5.77 5.78 5.82 5.94 5.32 5.21 5.21 5.23 5.29 22.4 22.9 23.0 23.3 24.2 5.36 5.33 5.25 5.19 4.98 0.91 0.90 0.91 0.91 0.93 0.72 0.72 0.72 0.72 0.71 1.77 1.77 1.78 1.78 1.78
+                                             24 5.78 5.76 5.78 5.79 5.82 5.32 5.20 5.21 5.21 5.23 22.4 22.7 23.2 23.7 23.9 5.25 5.34 5.37 5.25 5.47 0.90 0.91 0.90 0.91 0.91 0.73 0.72 0.72 0.73 0.72 1.77 1.77 1.77 1.78 1.80
+                                             25 5.78 5.76 5.77 5.82 5.84 5.32 5.20 5.21 5.23 5.24 22.4 22.9 23.0 22.9 23.3 5.24 5.35 5.34 5.31 5.19 0.91 0.91 0.90 0.91 0.92 0.72 0.72 0.73 0.73 0.72 1.77 1.77 1.78 1.78 1.78
+                                                  3 4 5 6 7 3 4 5 6 7 3 4 5 6 7 7 8 9 10 11 3 4 5 6 7 7 8 9 10 11 3 4 5 6 7
+
+
+
+
+                                                                                                                                                                                                                                 Degree Center
+                                              6 5.94 5.84 5.81 5.81 5.88 5.35 5.29 5.27 5.28 5.40 22.9 22.4 22.9           5.11 4.45 4.69 4.89 5.04 0.86 0.85 0.84 0.84 0.86 0.70 0.70 0.69 0.69 0.69 1.83 1.78 1.76 1.76 1.76
+                                 Degrees
+
+
+
+
+                                              7 5.84 5.80 5.78 5.80 5.87 5.29 5.26 5.23 5.27 5.37 22.5 22.2 22.4           4.44 4.67 4.91 5.01 5.05 0.85 0.84 0.84 0.86 0.88 0.70 0.69 0.69 0.69 0.70 1.78 1.76 1.76 1.76 1.76
+                                              8 5.80 5.79 5.78 5.80 5.84 5.26 5.24 5.24 5.26 5.32 22.2 22.4 21.7           4.67 4.89 4.99 5.05 5.08 0.84 0.84 0.86 0.88 0.89 0.69 0.69 0.69 0.70 0.70 1.76 1.76 1.76 1.76 1.76
+                                              9 5.79 5.78 5.78 5.78 5.82 5.25 5.24 5.24 5.24 5.30 22.2 22.5 21.8           4.86 4.97 5.06 5.08 5.11 0.84 0.85 0.87 0.89 0.90 0.69 0.69 0.70 0.70 0.71 1.76 1.76 1.76 1.76 1.76
+                                             10 5.78 5.78 5.78 5.78 5.81 5.24 5.24 5.24 5.23 5.27 21.9 22.5 21.8           4.96 5.04 5.06 5.08 5.10 0.85 0.87 0.89 0.90 0.91 0.69 0.70 0.70 0.71 0.71 1.76 1.76 1.76 1.76 1.77
+                                                 -7 -6 -5 -4 -3 -7 -6 -5 -4 -3 -4 -3 -2 -1 0 -9 -8 -7 -6 -5 -9 -8 -7 -6 -5 -9 -8 -7 -6 -5 -9 -8 -7 -6 -5
+                                                  Base VLP PWL T Base VLP PWL T Base VLP PWL T Base VLP PWL T Base VLP PWL T Base VLP PWL T Base VLP PWL T
+                                                  5.75 6.21 5.68 5.78 5.19 6.00 5.21 5.23 22.23 11.1 22.2 21.68 5.06 3.52 5.05 4.44 0.91 0.83 0.91 0.84 0.71 0.67 0.71 0.69 1.77 1.75 1.77 1.76
+
+
+     Figure 6. Perplexity and loss heatmaps of transformer models, showing the best for each nonlinear operation separately
+     highlighted in orange (lower is better). Llama 2 and Whisper show perplexity, while Swin and Vivit show Loss. Combined
+     softmax/activation metrics are short right of the title, with VLP being on top and PWL on bottom. Boxes on the left denote
+     the approximation method, with softmax, SiLU and GELU abbreviated as SM, S, and G. The labels next to the boxes denote y
+     axis value and the labels on the right side denote x axis. LUT size refers to the number of exponents stored in the LUT, and
+     Min/Max exp denotes the maximum or minimum value used to create the LUT. For PWL, segment range (sr) denotes the
+     approximation range, with SM going from [sr, 0] and S/G going from [-sr, sr]. For taylor series, degrees denotes the number of
+     polynomial expansions used, while degree center is the center of the expansion. Empty boxes represent masked large values.
+     Each column’s table lists full end-to-end perplexity values (SM and S/G). The Taylor-series values, denoted T, include only SM.
+
+                                            6.2                                                                                        LLM tokens are large enough to fill in all rows, and 8 Q tokens
+                                            6.0                                                                                        in a group for GQA can fill in all columns. The customization
+                                                                                                                                       timely synergizes with the trends of LLMs, small batch sizes,
+                                            5.8
+        PPL
+
+
+
+
+                                                                                  Llama 2 7B Final PPL: 5.98                           large token sizes, WOQ, KVQ and GQA, none of which are
+                                                                                  Llama 2 13B Final PPL: 5.43                          compatible in Carat. WOQ and KVQ require dequantization
+                                            5.6
+                                                                                                                                       after GEMM, which is done by the vector array.
+                                            5.4                                                                                        Buffer Minimization. Buffers (FIFOs) occupy significant
+                                                   0       5      10       15      20       25      30       35      40                area in Carat, due to pipelining the inputs across rows and
+                                                                                                                                       double buffering in the output OR tree. The relevant cost
+    Figure 7. Per-layer perplexity tuning of Llama 2 (7B, 13B),
+                                                                                                                                       scales quadratically with the array size. Mugi solves this prob-
+    with final achieved perplexity noted in the legend. Tuning is
+                                                                                                                                       lem via broadcasting and output buffer leaning (optimizing
+    done progressively across layers.
+                                                                                                                                       two FIFOs into one without functional changes), successfully
+                                                                                                                                       lowering the total buffer area by 4.5×.
+     rows, changing input to BF16 will prolong the temporal                                                                               With the optimizations above, GEMM can be exectued ef-
+     signal from 8 (3-bit mantissa magnitude) to 128 cycles (7-bit),                                                                   ficiently, following the flow in Figure 2. To ensure scalability,
+     prohibitively lowering the throughput. If INT4 weights were                                                                       we can further use a 2D mesh Network-on-Chip (NoC) to con-
+     mapped to rows, the FP8 datapath is wasted. To overcome                                                                           nect multiple nodes. We consider output stationary dataflow
+     these, Mugi transposes the mapping, i.e., INT4 weight/KV                                                                          and inter-node accumulation, and GEMMs are evenly tiled
+     cache to rows with a slim INT4 datapath, and BF16 input/Q                                                                         across nodes to enhance efficiency and utilization.
+     token to columns. This mapping offers high utilization, since
+
+
+
+                                                                                                                               1222
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                         Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+                 Exp PWL                           Exp Taylor 100% Exp Mugi                                                  Table 2. Comparison of Mugi and baselines: SA refers to
+        0%                                                              -0.5 0
+                   0% 1%                                                                                     1%              systolic array, SD to SIMD array, Tensor to Tensor Core,
+        6%                                                                                                   0%
+  -50%           -50% 0%                                                                                     -2%             with off-chip bandwidth at 256 GB/s. Input (i), weight (w),
+        0%-0.5 0      -3%                                                      0%                                            and output (o) refer to respective components, with ranges
+ -100% 16 8 0 -100% 8 -0.54 00                                                      16        8          0                   (e.g., a-b) covering all powers of 2 between a and b. Input
+                SiLU PWL                             SiLU PA                    SiLU Mugi                                    word config applies to the query word, and weight word to
+                                              -0.5 0.5                     100%                                              key and value words with kvcache quantization. -S denotes
+    0%                  0% 10%                        5%
+         22%                            50%           0%                                                                     scaled-up configurations. All designs use 4x4 and 8x8 NoC
+  -50% 0%                     0%                      -6%                                                                    layouts except Tensor and -S configurations, which use a 2x1
+        -22%-0.5 0.5         -7%-0.5 0.5 0%
+ -100% 5 0        5  -100% 5 0       5      5 0      5                                                                       and 2x2 and no NoC, respectively.
+                              GELU PWL                                     GELU-0.5Mugi
+                                                                                     0.5
+                                                            100%                               5%                             Configuration      Mugi   Carat      SA    SD       SA-S    SD-S     Tensor
+                    0%                       34%                                               0%
+                                                                50%                            -6%                              i/w/o SRAM                64KB                               1MB
+                                             0%                                                                               Array height (H)     32 - 256         4 - 16            32 - 64        16
+              -100% 5                -0.5 0.5-34%                0%                                                           Array width (W)         8                           H                  8
+                                     0         5                           5        0         5                               Array Depth (D)                      N/A                               16
+                                                                                                                                 Input word                                  16
+Figure 8. Relative errors against software implementation.                                                                     Weight word                                   4
+The most accurate configurations from Figure 6 are com-                                                                          NoC shape              4x4, 8x8                       N/A         2x1, 2x2
+pared. x and y axes are input values and relative error. 100%
+error indicates flushing output to 0.
+                                                                                                                             5.2 Hardware
+                        Table 1. Studied LLMs in this paper.                                                                 5.2.1 Mugi. As shown in Table 2, we set the oSRAM width
+                                                                                                                             to enable wFIFO loading of nonlinear operations in 8 cy-
+                                 Llama2 [63]           Whisper [54]                     SwinV2               ViViT
+                                                                                                                             cles, ensuring sufficient bandwidth. The wSRAM width is
+Model
+                         7B         13B        70B     tiny      large          tiny           large         base            similarly configured to allow loading in 8 cycles for GEMM
+Batch size                                              1 - 32                                                               operations. Mugi’s vector array is configured to scale ar-
+# layers                 32          40         80      4             32          12            24            12             ray outputs after exiting the oFIFO, hiding latency. Mugi is
+# stages
+# attn heads             32           40        64       6         20
+                                                                                   4
+                                                                                3 - 24
+                                                                                                 4
+                                                                                              6 - 48          12
+                                                                                                                             optimized for output stationary outer-product computation.
+# KV heads               32           40         8       6         20           3 - 24        6 - 48          12
+Attn h dim              4096         5120      8192     384       1280          96-768       192-1536        768             5.2.2 Baseline. We build baselines with components for
+FFN h dim              11008        13824      28672   1536       5120         384-3072      768-6144        3072
+                                                                                                                             both nonlinear operations and GEMM.
+Seq len                             4096                       1500                      64-4096             3136
+                                                                                                                                Nonlinear approximation hardware uses alternative vec-
+Prof. layers          1/16/32      1/20/40   1/32/64   1/3/6     1/10/20         1/12             1/24       1/6/12
+                                                                                                                             tor arrays with added components to implement the Taylor
+                                    1024                    112/224                       16/32              784
+Prof. seq len                       2048                    375/750                      64/1024             1568            series and PWL approximation methods [42, 67]. The Taylor
+                                    4096                     1500                       2048/4096            3136
+                                                                                                                             series is implemented with Horner’s method up to 9 degrees,
+* ℎ = hidden, Prof. = Profiled
+                                                                                                                             and requires additional registers to store coefficients. PWL
+                                                                                                                             implementation adopts 22 segments, requiring additional
+                                                                                                                             registers and comparators to store and select proper seg-
+5       Experimental Setup
+                                                                                                                             ments. Both methods are configured to achieve their best
+5.1 Large Language Model                                                                                                     perplexity as shown in Figure 6. We also consider a vector ar-
+The evaluated LLMs are summarized in Table 1, with LLaMA2-                                                                   ray of MAC units to precisely compute nonlinear operations,
+70B supporting GQA using a group size of 8. We imple-                                                                        which require 44 cycles [45, 68].
+ment all models using the HuggingFace Transformers Pack-                                                                        For GEMM, we compare Mugi with Carat [46], systolic ar-
+age [69], profiling and computing loss or perplexity for each                                                                rays, SIMD arrays, FIGNA [30], and tensor cores from Nvidia
+model over 100 inferences. During profiling, we extract the                                                                  Hopper GPUs [43], as well as a Mugi-L design. Given Carat
+runtime input nonlinear tensors across all tokens and record                                                                 only supports FP8 GEMM with inputs mapped across rows,
+the value and exponent distributions, which is documented                                                                    we modify its accumulators at the top to BF16 and map in-
+in Figure 4. To obtain the perplexity and loss values shown                                                                  puts across columns, while using its FP8 data path for INT4
+in Figure 6, we sweep various configurations for each non-                                                                   weights. The systolic and SIMD arrays are similar, with the
+linear implementation, and show windows containing the                                                                       systolic array needing additional control hardware and a
+best performing configuration. For both figures, we show                                                                     column of output accumulators, compared to SIMD’s adder
+the smallest and largest model of each model family, with                                                                    trees. Like Mugi, Carat implements output stationary, while
+the only exception of Llama 2 13B replacing Llama 2 70B due                                                                  the systolic and SIMD arrays use weight stationary config-
+to memory and runtime limitations.                                                                                           urations. The FIGNA configurations extend both systolic
+
+
+
+                                                                                                                      1223
+Mugi : Value Level Parallelism For Efficient LLMs                                                                          ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+                                  2                                                          (b)                       (d) CNT iFIFO (f)        M-proc        (g)
+                          iSRAM            iFIFO iFIFO iFIFO        SW                                                                                                    Max/Min
+                                                                                                         T                                       M R                 E-proc
+                  (a)             3 CNT iAcc iAcc iAcc             E-proc                                                      TC    PE             S                 E    Clamp
+                                                                                                     PE
+Off-chip memory
+
+
+
+
+                                                                                                                               TC    PE
+                          wFIFO       TC    PE    PE     PE         PP      oAcc   oFIFO                                                                     (h)
+                                                                                                                               TC    PE                             PP
+                  wSRAM
+
+
+
+
+                                                                                                                                                                          M-sel
+                          wFIFO       TC    PE    PE     PE         PP      oAcc   oFIFO           (c)
+                                                                                                          TC             (e)
+                          wFIFO       TC    PE    PE     PE         PP      oAcc   oFIFO                           =            TC        PE   PE       PE               Zero
+                                                                     4                                       M
+                                                  1                                                                                                                      INF
+                                  M-proc               oSRAM                Vec                                S                                                         NaN
+                                                                                                                                                        SC
+
+
+Figure 9. Overview of Mugi architecture. 1 – 4 (yellow, red, green, and blue) correspond to 1 – 4 phases of VLP approximation
+in Figure 3. Purple is for mapping softmax, and gray marks the additional hardware for GEMM.
+
+   a S=0/1 M7E0 M7E1 … M7E7                            0 S=1 0, 0           …                  1 S=1 1, 0 0, 1 …                               2 S=1 2, 0 1, 1 …
+                                                       M                            E          M                                     E         M                                  E
+                                      …
+
+
+
+
+  LUT M1E0 M1E1 … M1E7                                 0   TC                         PP       0   TC                                  PP      0   TC                               PP
+                                                                                    1                                                1                                            1
+      M0E0 M0E1 … M0E7                                 1   TC                         PP       1   TC                                  PP      1   TC                               PP
+                                                                                    2                                                2                                            2
+M                    S, E                              0   TC                         PP       0   TC                                  PP      0   TC                               PP
+                                                                                    2                                                2                                            2
+m0 TC                     PP                           4   TC                         PP       4   TC                                  PP      4   TC                               PP
+                    s0e0                                                            2                                                2                                            2
+m1 TC                     PP
+                                                               …
+
+
+
+
+                                                                                                             …
+
+
+
+
+                                                                                                                                                        …
+                                                                                                                                                        …
+                    s1e1
+m2 TC                     PP                           3 S=1 3, 0 2, 1 …                       4 S=1 4, 0 3, 1 …                               5 S=1 5, 0 4, 1 …
+                    s2e2
+m3 TC                     PP
+                    s3e3                               M                            E          M                                     E         M                                  E
+                    …
+
+
+
+
+                                                       0   TC                         PP       0   TC                                  PP      0   TC                               PP
+                                                                                    1                                                1                                            1
+                                                       1   TC                         PP       1   TC                                  PP      1   TC                               PP
+                                                                                    2                                                2                                            2
+                                                       0   TC                         PP       0   TC                                  PP      0   TC                               PP
+                                                                                    2                                                2                                            2
+                                                       4   TC                         PP       4   TC                                  PP      4   TC                               PP
+                                                                                    2                                                2                                            2
+                                                               …
+
+
+
+
+                                                                                                             …
+
+
+
+
+                                                                                                                                                        …
+  6 S=1 6, 0 5, 1 … 0, 6                               7 S=1 7, 0 6, 1 … 1, 6 0, 7             8 S=1 0, 0 7, 1 … 2, 6 1, 7                     9 S=1 1, 0 0, 1 … 3, 6 2, 7
+  M                                        E           M                          E            M                          E                    M                          E
+  0   TC                                     PP        0   TC                       PP         1   TC                       PP                 1   TC                       PP
+                                           1                                      1                                       1                                               1
+  1   TC                                     PP        1   TC                       PP         0   TC                       PP                 0   TC                       PP
+                                           2                                      2                                       2                                               2
+  0   TC                                     PP        0   TC                       PP         0   TC                       PP                 0   TC                       PP
+                                           2                                      2                                       2                                               2
+  4   TC                                     PP        4   TC                       PP         2   TC                       PP                 2   TC                       PP
+                                           2                                      2                                       2                                               2
+                                                               …
+                    …
+
+
+
+
+                                                                                                             …
+
+
+
+
+                                                                                                                                                        …
+Figure 10. Mapping element-wise nonlinear operations to Mugi. a abstracts the VLP array for nonlinear operations. M, S and
+E are for mantissa, sign and exponent. 0 – 9 are examples for exp, and the numbers denotes the clock cycles.
+
+and SIMD arrays with the FIGNA PE, which is customized                                             memory. Both the NoC and off-chip memory are configured
+for FP-INT multiplication. Additionally, scale-up versions                                         such that they always supply the minimum bandwidth re-
+of both systolic and SIMD arrays with MAC and FIGNA                                                quired to not bottleneck computation.
+configurations are evaluated. The tensor core has GEMM
+shaped as 8x16x16, and is a fully pipelined design to perform                                      5.3 Carbon Modeling
+8x16x16 MAC operations per cycle. We only compare ten-                                             To model both Mugi and baselines operational and embod-
+sor core in NoC settings. The Mugi-L uses a dedicated LUT                                          ied carbon, we follow a consistent approach by previous
+to approximate nonlinear operations, rather than temporal                                          works [18, 48, 70]. Operational carbon is computed as the
+coding based approximation. We ensure 8 inputs share one                                           product of E and CI, while embodied carbon is the product
+LUT to match the throughput of Mugi. Similar to Mugi, all                                          of Area and CPA, both outlined in Section 2.4. For CI, we use
+design’s wSRAM and oSRAM widths are selected to load the                                           world carbon intensity outlined in ACT [23]. We compute
+array without introducing additional latency.                                                      CPA with 𝐸/𝑚𝑚 2 detailed in Dark Silicon [7], and convert it
+5.2.3 Network on Chip and Off-Chip Memory. The                                                     to CPA with the previously stated CI.
+NoC incorporates three channels for input, weight, and out-
+put. An output-stationary approach is employed across all im-                                      5.4 Simulation
+plementations. Each design operates with a NoC frequency                                           We developed an in-house architecture simulator based on
+of 400 MHz and a HBM bandwidth of 256 GB/s from off-chip                                           a publicly available artifact for Carat [46]. We extend the
+
+
+
+                                                                                           1224
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                 Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+
+            Mugi         Carat          VA-FP       VA-AP                                                 Mugi (128) Carat (128)            SA (16)     SD (16)
+           SM (128)     SM (128)       SM (16)     SM Taylor (16)                                         Mugi (256) Carat (256)            SA-F (16) SD-F (16)
+           SiLU (128)   SiLU (128)     SiLU (16)   SM PWL (16)
+           SM (256)     SM (256)       SM T (16) SiLU PWL (16)                                                   Projection/FFN                     Attention
+
+
+
+
+                                                                            Power Eff Energy Eff Throughput
+           SiLU (256)   SiLU (256)     SiLU T (16)                                                            2x                          10x
+     48x                      Norm Throughput                                                                 1x                           5x
+     32x
+     16x                                                                                                      3x                          20x
+                          Norm Energy Efficiency                                                              2x                          10x
+    750x                                                                                                      1x
+    500x
+    250x                                                                                                      2x                           4x
+     18x                   Norm Power Efficiency                                                              1x                           2x
+     12x
+      6x                                                                                                           7B     13B     70B             7B 13B 70B GQA
+              128       256      512       1024    2048     4096
+                                                                           Figure 12. Iso-area comparison for projection (proj), atten-
+Figure 11. Iso-area comparison between Mugi and baselines                  tion (attn), and feed-forward network (ffn) GEMM operations
+for nonlinear operations, across sequence lengths (128–4096)               in Llama 2 (7B, 13B, 70B, and 70B with GQA). All results are
+with a batch size of 8, geometric meaned across all Llama 2                normalized to that of 16×16 systolic array (SA). -F denotes
+models (7B, 13B, 70B). SM, and VA-FP, and VA-AP abbreviate                 FIGNA. Batch size is set to 8, and sequence length is set to
+softmax, precise vector array, and approximate vector arrays.              4096, with array heights indicated in parenthesis ().
+Titles in the legend indicate the array type of each column.
+All results are normalized to VA (16) with array heights
+indicated in “()”.                                                         6.1.2 Throughput and Efficiency. Figure 11 compares
+                                                                           the throughput and efficiency. Since all designs map the head
+                                                                           dimension across rows, sequence length does not impact
+artifact and build an event-based simulator that can hier-                 the normalized performance gains. Mugi achieves a shared
+archically solve the mapping of nonlinear operations and                   normalized throughput of 45×, and energy and power ef-
+GEMM on our customized Mugi architecture and report area,                  ficiency improvements of 481.07× and 10.69× for softmax,
+leakage power, dynamic energy, cycle count, and runtime.                   and 667.85× and 14.84× for SiLU compared to precise vector
+The basic hardware modules are implemented in RTL and                      arrays. Mugi outperforms PWL approximation in softmax by
+synthesized under 400MHz with 45nm technology to retrieve                  5× (throughput), 8.53× (energy efficiency), and 1.71× (power
+metric values. The memory access power are obtained from                   efficiency), and in SiLU by 5×, 10.36×, and 2.37×, respec-
+CACTI7 [5].                                                                tively. Against Taylor series softmax, Mugi achieves 10.02×,
+   We also place and route the full RTL of a single node 8x8               32.93×, and 3.28× improvements in the same metrics.
+Mugi at 400MHz, and obtain area 0.056𝑚𝑚 2 and frequency                       Mugi contributes these gains in performance to its ability
+of 408.5MHz with critical path on VLP broadcast. We further                to scale to larger array sizes, sharing the compute array
+increase the synthesis frequency of Mugi, and reach 975MHz                 with GEMM. However, other designs require standalone
+without timing violations. We stick to 400MHz to isolate of                vector arrays for nonlinear operations, where the scale is
+the impact of the implementation during the evaluation.                    bounded by the SRAM bandwidth. Additionally, Mugi does
+                                                                           not have to compute costly exp [68], thus multiplier free.
+6     Evaluation                                                           These improvements allow Mugi to increase throughput and
+6.1 Nonlinear Approximation                                                efficiency compared to vector arrays for both precise and
+                                                                           approximation configurations.
+6.1.1 Accuracy. As shown in Figure 6, Mugi softmax, SiLU,
+and GELU implementations achieve highly accurate results,                  Takeaway. Mugi enables accurate nonlinear approximation
+outperforming other methods on most models. Even in cases                  by applying input approximation and value-centric approach
+where Mugi is not the most accurate, Llama 2, it remains com-              to VLP, greatly enhancing both throughput and efficiency.
+parable to prior implementations. Conversely, when value
+distributions are concentrated, Mugi yields substantial im-                6.2 GEMM
+provements in performance, as evident by the perplexity                    We show the GEMM execution results in Figure 12. The
+gains observed in Whisper Tiny and highlighted in Figure 8.                GEMM operations include the projection, attention, and FFN
+In contrast, prior approximation methods [27, 42, 67] do                   layers from the studied LLM models. We observe that in
+not consider the value distribution of workloads prior to                  terms of throughput and efficiency, Mugi consistently out-
+approximation, introducing additional error.                               performs both systolic and SIMD arrays. Mugi is optimized
+
+
+
+                                                                    1225
+Mugi : Value Level Parallelism For Efficient LLMs                                                                     ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+Table 3. Comparison of Mugi and baselines throughput,                                                 0%                                50%                     100%
+area, energy and power efficiency on LLaMa 2 70B (with                                                                Node:      Fifo     Nonlinear   TC
+GQA). Batch size is set to 8, and sequence length is set to
+                                                                                                                      Acc        PE       Vector      VR
+                                                                                                         0.5 mm²
+                                                                                                         117.4 mW                                                   128
+4096. Hardware details are outlined in Table 2.                                                          35.1 mm²
+                                                                                                   Mugi
+                                                                                                         2.6 W
+                                                                                                         0.9 mm²
+                           Throughput    OC Area    Energy Efficiency   Power Efficiency                 195.8 mW                                                   256
+       Design
+                                          (𝑚𝑚 2 )                                                        50.1 mm²
+                            (Tokens/s)                (Tokens/s/𝜇J)      (Tokens/s/W)
+                                                                                                         4.1 W
+         Mugi (128)           0.71         2.16          68.64                3.18                       0.8 mm²
+         Mugi (256)           1.39         3.10          142.82               3.37                       122.1 mW                                                   128
+         Carat (128)          0.70         2.42          53.00                2.47                       39.5 mm²
+         Carat (256)          1.38         3.84          95.78                2.27                Mugi-L
+                                                                                                         2.6 W
+ SN
+           SA (16)            0.67         2.58          45.97                2.24                       1.5 mm²
+          SA-F (16)           0.67         2.81          44.34                2.16                       205.3 mW                                                   256
+           SD (16)            0.67         2.54          47.83                2.34                       58.9 mm²
+          SD-F (16)           0.67         2.77          46.06                2.25
+                                                                                                         4.3 W
+                                                                                                         0.9 mm²
+           SA (64)            2.70        25.84          138.59               1.68                       168.3 mW                                                   128
+          SA-F (64)           2.70        29.56          131.66               1.60                       39.2 mm²
+SN-S       SD (64)            2.70        25.14          143.18               1.74                 Carat
+                                                                                                         3.2 W
+          SD-F (64)           2.70        28.86          135.79               1.65                       2.0 mm²
+           Tensor             10.06       38.75          488.31               1.59                       325.0 mW                                                   256
+                                                                                                         61.9 mm²
+       4 x 4 Mugi (256)       22.19       50.12          2314.23              3.42                       6.0 W
+       4 x 4 Carat (256)      22.08       61.92          1551.09              2.30                       0.3 mm²
+         4 x 4 SA (16)        10.74       41.77          770.31               2.35                       108.0 mW                                                   8
+ NoC    4 x 4 SA-F (16)       10.74       45.48          741.68               2.26                       28.5 mm²
+         4 x 4 SD (16)        10.74       41.18          803.82               2.45                   S-F
+                                                                                                         2.0 W
+        4 x 4 SD-F (16)       10.74       44.89          772.70               2.36                       1.0 mm²
+       2 x 1 Tensor (8)       20.12       77.56          989.02               1.61                       221.6 mW                                                   16
+                                                                                                         45.5 mm²
+                                                                                                         3.4 W
+                                                                                                         0.2 mm²
+                                                                                                         98.9 mW                                                    8
+                                                                                                         28.4 mm²
+for 8 columns, which aligns with and benefits from a batch                                          SD-F
+                                                                                                         1.9 W
+                                                                                                         1.0 mm²
+size and GQA group size of 8, allowing it to leverage GQA for                                            209.7 mW                                                   16
+                                                                                                         44.9 mm²
+better throughput. This capability ensures that Mugi main-                                               3.3 W
+tains excellent utilization even as the array size scales. On                                                       NoC (4x4):      Array     SRAM     NoC
+the contrary, systolic and SIMD arrays face under-utilization
+with array sizes larger than 8x8. Additionally, VLP elimi-                                        Figure 13. Array and NoC level area and power breakdown.
+nates multiplication in Mugi, increasing efficiency compared                                      Total area and power is shown in each bar. Cool colored bars
+to baselines. Compared with Carat [46], Mugi shows better                                         represent array level while warm colored bars represent NoC
+efficiency as Carat needs additional hardware to execute                                          level. Acc refers to output accumulators, and nonlinear refers
+nonlinear operations.                                                                             to nonlinear hardware. For the power breakdown, batch size
+Takeaway Mugi achieves good throughput and efficiency                                             is set to 8 and the sequence length is set to 4096.
+gains through timely LLM optimizations in emerging asym-
+metric data formats, small-batch GEMM, and GQA.
+
+6.3 LLM workload                                                                                  quadratically as the array scales in both row and column
+6.3.1 Single Node. Single-node evaluations show that                                              dimensions. Though also based on VLP, Carat area scales
+Mugi exceeds baseline implementations in both throughput                                          up super-linearly, due to the excessive cost of FIFO. Despite
+and efficiency, while also reducing overhead and area costs.                                      the large area, the temporal coding in VLP still minimizes
+An end-to-end comparison is provided in Table 3. Compared                                         the switching activities and ensures a low power-to-area
+to a baseline systolic array 16, the Mugi 256 architecture                                        ratio. Comparing to Mugi, Mugi-L with LUT for nonlinear
+achieves an increase of 2.07×, 3.11×, and 1.50× in throughput,                                    operations and VLP for GEMM, spends way more hardware
+energy efficiency, and power efficiency respectively. These                                       on on-chip LUT, implemented using FIFOs to ensure pro-
+improvements stem from Mugi ’s effective reuse of the com-                                        grammability.
+pute array for both nonlinear operations and GEMM, and                                               We further show an extended throughput and energy com-
+efficient handling of asymmetric, small-batch GEMM using                                          parison of different designs when sweeping the batch size,
+WOQ, KVQ, and GQA.                                                                                as shown in Figure 14, offering higher throughput and lower
+   Figure 13 highlights these advantages, which are further                                       energy per token. The best throughput of Mugi is attainable
+amplified by the elimination of specialized vector arrays and                                     at a smaller batch size of 8 than other baselines, as Mugi
+costly MAC units, resulting in a more compact compute ar-                                         maps the batch across columns and peaks the utilization at
+ray and lower power consumption. Mugi additionally scales                                         a batch size of 8.
+more efficiently to larger array sizes, growing linearly. On                                         We additionally considered off-chip memory accesses, and
+the contrary, the area of systolic and SIMD arrays scales up                                      we see that Mugi handles DRAM traffic similarly to other
+
+
+
+                                                                                           1226
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                         Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+
+                             Mugi (64)          Carat (64)          SA (8)           SA-F (8)         SD (8)           SD-F (8)
+                             Mugi (256)         Carat (256)         SA (16)          SA-F (16)        SD (16)          SD-F (16)
+                                                               Norm Throughput
+                   128                    256                 512                   1024                  2048                   4096
+  30x
+  20x
+  10x
+                                                              Norm Energy/Token
+  25x
+  15x
+   5x
+           1 2 4 8 16 32 1 2 4 8 16 32 1 2 4 8 16 32 1 2 4 8 16 32 1 2 4 8 16 32 1 2 4 8 16 32
+
+Figure 14. ISO-throughput LLMs study, geometric mean over all Llama models. The x-axis represents batch size at the bottom
+and each plot represents sequence lengths (128-4096) at the top. The y-axis represents the improvements of throughput and
+energy per token. All designs are normalized to an 8×8 systolic array with batch a size of 1. -F denotes FIGNA, and array
+heights are indicated in “()”. SA and SD base and -F array’s throughput closely overlap, as do Mugi and Carat.
+
+dataflow architectures, almost identical operational inten-                          Projection Attention FFN Nonlinear Embodied
+sity, but offers higher compute utilization, therefore more                              7B            13B             70B         70B GQA
+compute bounded.                                                                    256 16         256 16         256 16           256 16
+   Figure 16 shows a latency breakdown of different LLMs.                     1.5
+It is observed that Mugi have slightly better latency for at-                 1.0
+tention GEMMs than other designs, but almost halves the la-                   0.5
+tency for projection and FFN GEMMs. Regarding the nonlin-                     0.0
+                                                                                    MC S D T P MC S D T P MC S D T P MC S D T P
+ear operations, Mugi shows almost invisible latency, exhibit-
+ing tremendous improvements over other designs. Though                      Figure 15. Normalized onchip operational and embodied
+not obvious, Carat triples the nonlinear latency of Mugi, due               carbon across model sizes (Llama 2-7B, 13B, 70B, 70B GQA)
+to relying on non-VLP approximations.                                       of Mugi and baseline configurations. Batch size is set to 8,
+6.3.2 Carbon Emission. When comparing Mugi’s car-                           and sequence length is set to 4096. Top x-axis represents
+bon impact to baselines, we see that Mugi improves in both                  array height, while y axis is normalized latency. M, C, S, D,
+operational and embodied emissions by 1.45× and 1.48×                       T, P represents Mugi, Carat, Systolic, SIMD, Taylor Series,
+respectively. While Figure 15 shows operational carbon as                   and Piecewise linear approximate respectively.
+the major contributor to emissions, this follows previous
+trends consitent with 45nm technologies. Through Mugi’s
+efficient, shared compute array, Mugi is able to simultane-                             Projection      Attention      FFN       Nonlinear
+ously decrease both operational and embodied carbon while                               7B            13B             70B           70B GQA
+delivering an increase to throughput for LLM workloads.                             256 16        256 16          256 16           256 16
+                                                                              2
+6.3.3 Multi Node. Mugi scales efficiently to multi-node
+designs using a NoC architecture. We compare Mugi ’s multi-                   1
+node implementations against baseline designs with the
+                                                                              0
+same NoC configuration and scaled-out versions of single                            MCS T P MCS T P MCS T P MCS T P
+node baseline architectures. As with single node setups,
+Mugi ’s multi node configurations show comparable gains                     Figure 16. Normalized end-to-end latency breakdown across
+in throughput, energy efficiency, and power efficiency when                 model sizes. All notations are identical to those in Figure 15,
+comparing Mugi 4x4 256 and systolic array 4x4 16. Figure 17                 except that S here is for Systolic/SIMD.
+details these improvements, emphasizing the benefits of
+multi-node architectures. Moreover, NoC-based implemen-
+tations clearly outperform scaled-up systolic arrays, due to
+severe under-utilization at a small batch size, as shown in                 and the array is occupying varying ratios of the on-chip
+Table 3. Figure 13 shows the breakdown of NoC level area,                   resource, given an identical on-chip SRAM size.
+
+
+
+                                                                     1227
+Mugi : Value Level Parallelism For Efficient LLMs                                         ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+           Mugi Carat SA SA-F SD SD-F Tensor                             to both MoE and multi-modal variants, though we leave full
+    18x                     Norm Throughput                              validation to future work.
+    12x                                                                  Online Approximation. Currently, Mugi pre-computes
+     6x                                                                  the results offline for accurate nonlinear approximation via
+    30x                 Norm Energy Efficiency                           LUT. However, the value distribution could exhibit a slight
+    20x                                                                  drift at runtime. Such drifts in both KV cache and FFN have
+    10x                                                                  been well tackled via quantization, using as few as 4 bits. As
+                          Norm Power Efficiency                          for softmax, since all softmax inputs are subtracted by the
+     2x                                                                  maximum for numerical stability, the drift minimally impacts
+     1x                                                                  accuracy. Moreover, Mugi ’s sliding window mechanism
+                                                                         helps adapt to the current workload and further reduces the
+                 64/8/S              128/16/2       256/SU/4             impact of drift. That said, we argue optimal accuracy would
+                                                                         benefit from an online mechanism to adjust LUT values at
+Figure 17. Normalized NoC-level throughput, energy effi-
+                                                                         runtime, and we leave this to future work.
+ciency, and power efficiency for Mugi and baseline 4x4 and
+8x8 NoC architectures. Data represents the geometric mean
+across model sizes (Llama 2–7B, 13B, 70B) with a batch size              7.2   Related Works
+of 8 and sequence length set to 4096. The x-axis represents
+array height for each group, in order of VLP, SA/SD, and                 Nonlinear Approximation. Prior works have explored
+tensor core. Tensor core configurations represent -S (single             approximating nonlinear operations. Some approaches use
+node), 2 (2x1 NoC), 4 (2x2 NoC). All models are normalized               piece-wise linear (PWL) approximations, partitioning the
+to an 8×8 systolic array (NoC dim: 4x4).                                 function into segments and selecting coefficients based on in-
+                                                                         put range, while others approximate the entire function with
+                                                                         a single simplified equation [27, 67, 76, 79]. Other works use
+                                                                         Taylor-series expansions, which can provide high accuracy
+Takeaway By enabling VLP for both nonlinear operations                   but degrade as values drift from the expansion point [42, 66].
+and GEMM, Mugi effectively accelerates all aspects of LLM                While all approximation techniques, including Mugi, intro-
+workloads, which also scales to multi nodes.                             duce some levels of approximation error, others underper-
+                                                                         form Mugi in most models while increasing area and effi-
+                                                                         ciency costs, as detailed in Figure 6 and Table 3.
+7     Discussion
+                                                                         GEMM Acceleration. A number of prior works target GEMM
+7.1 Limitations
+                                                                         acceleration. Carat first introduced VLP, enabling low-precision,
+While we showcase the benefits of VLP, there are a few                   large-batch value reuse for CNNs [46]. While large batch
+workloads or techniques not addressed in this paper.                     sizes compliment CNN workloads, LLMs operate with smaller
+Additional Operations. While Mugi unlocks nonlinear ap-                  batch sizes and larger matrices, making Carat unsuited for
+proximation, there are still some nonlinear LLM operations               such workloads. Other accelerators exploit unary comput-
+not supported, such as layer normalization and rotary posi-              ing [73–75, 78] to reduce buffer overhead using ternary RIM
+tional embeddings (RoPE). Layer normalization are vector                 arrays and unary half-adders [21], improving accumulation
+multiplication, and can be supported in Mugi’s vector unit.              efficiency. However, each PE still requires multipliers and
+For RoPE, Mugi can either approximate the required sine                  accumulators, whereas Mugi eliminates costly PE MAC units
+and cosine functions, though the utilization might be low                altogether via VLP. Additional works identify the ability to
+due to its sparse nature, or offload them to external hardware           exploit data reuse to reduce data movement. Multi-chip mod-
+as in existing GEMM accelerators.                                        ule designs share inputs across weight-stationary chiplets to
+MoE and Multi-Modal Models. Mixture-of-Experts (MoE)                     exploit cross-chiplet reuse [58]. Matrix-scaling approaches
+extend standard attention-based LLMs with selective FFN ex-              reduce large matrices into sub-matrices and scaling vectors,
+perts, selected by a softmax-based gating network [11, 15, 37].          reducing memory transfers sharing sub-matrix computation
+Multi-modal models support multiple modalities beyond just               during rescaling [53]. Lastly, another work identifies that
+text (i.e., language, vision, video, etc), by either tokenizing          quantization reduces the number of possible inputs, enabling
+non-language inputs [14], or combining multiple modality-                computation to be shared between layers where outputs do
+specific layers [4, 62]. There additionally exist models that            not change [57]. Like Mugi, these works similarly identify
+leverage MoE architecture on multiple modalities [40]. All               data reuse techniques but largely overlook value reuse, miss-
+these additional operations have been supported in Mugi,                 ing further opportunities for optimization.
+and different modality has been studied in this work to prove            KV Cache Compatibility. Some works employ detailed
+the efficacy of VLP. We conjecture Mugi should generalize                hardware–software co-design to improve LLM performance.
+
+
+
+                                                                  1228
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                        Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+
+These works aim to reduce computation through top-k spec-
+ulative prediction, removing computation predicted to be
+negligible to the attention output and reducing KV cache
+accesses [24, 52, 65, 66]. In contrast, other accelerators focus
+purely on GEMM computation and do not address attention
+or KV-cache related bottlenecks [21, 46, 53, 57, 58]. Mugi
+occupies a middle ground by incorporating lightweight KV-
+cache optimizations natively in its architecture, avoiding
+workload-specific optimizations via co-design. This allows
+Mugi to generalize across models while still capturing key
+reuse opportunities in modern LLM workloads.
+
+8    Conclusion
+In this paper, we orchestrate value-level parallelism (VLP)
+for efficient transformer-based LLMs. We formulate VLP
+for nonlinear approximation in a value-centric approach
+where important values are assigned with greater accuracy.
+We design a Mugi architecture for our VLP approximation.
+Additionally, we optimize Mugi to accelerate asymmetric,
+small-batch GEMM, which leverages the trending LLM opti-
+mizations. To this end, Mugi effectively supports full LLM
+workloads via VLP. Our experimental results demonstrate
+significant performance and efficiency gains in Mugi, high-
+lighting the potential of VLP for AI workloads.
+
+
+
+
+                                                                   1229
+Mugi : Value Level Parallelism For Efficient LLMs                                              ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+A      Artifact Appendix                                                         – Time needed to complete experiments (approx-
+A.1 Abstract                                                                       imate): 0.5 - 1 hours
+                                                                                 – Publicly available: Yes
+The artifact evaluation is separated into two scopes, work-
+                                                                                 – Code licenses (if publicly available): MIT License
+load evaluation and architecture evaluation. The workload
+                                                                                 – Workflow framework used: In-house simulation
+evaluation contains nearly all figures within section 3, namely
+                                                                                   framework
+Figure 4, Figure 6, and Figure 8. The architecture evaluation
+includes all figures within section 6. Both artifacts can be run          A.3 Description
+on an x86_64 machine with python and conda installed. The
+workload evaluation requires access to a GPU cluster. We                  A.3.1 How to access. Both artifacts can be downloaded at
+have tested the architecture evaluation on ubuntu 24.04, and              https://zenodo.org/records/18063514. Follow the instructions
+the workload evaluation on an NSF GPU cluster running Red                 detailed in the zenodo or Section A.4 and A.5 to evaluate
+Hat 9.4. To run each artifact, download the artifacts from                each artifact.
+the zenodo links detailed in Section A.3 and follow steps                 A.3.2 Hardware dependencies. For the workload evalu-
+outlined in Section A.4. To see the results generated from                ation, a GPU capable of loading all models at half precision
+running the artifact, see Section A.6 for detail.                         is required.
+                                                                          A.3.3 Software dependencies. Conda is required to build
+A.2     Artifact check-list (meta-information)
+                                                                          the environment.1
+      • Workload evaluation:
+        – Model: AI profiling                                             A.3.4 Datasets. Both evaluations use the models outlined
+        – Data set: Models outlined in Table 1. Note that                 in Table 1, with the architecture evaluation only including
+          Llama 70B results are excluded in the provided arti-            Llama models, and the workload evaluation ignoring Llama
+          fact, due to the excessive profiling time.                      2 70b. Access to the ML models is provided in the artifact
+        – Run-time environment: Conda                                     during the artifact evaluation, but will be deprecated after
+        – Hardware: NSF GPU cluster                                       evaluation, and access to the models will have to be ob-
+        – Metrics: Perplexity, value distribution, theoretical            tained.2
+          error
+                                                                          A.3.5 Models. The models used in our simulation frame-
+        – Output: Figure 6, Figure 4, Figure 8,
+                                                                          work include a cycle-level performance model and an event-
+        – Experiments: Approximate perplexity comparison,
+                                                                          based cost model, as well as profiling and end-to-end per-
+          model value distribution, approximation theoretical
+                                                                          plexity results.
+          error
+        – Disk space required (approximate): 70GB                         A.4 Installation
+        – Time needed to complete experiments (approx-
+          imate): 12-24 hours                                             One may follow the steps below to run the artifact, also
+        – Publicly available: Yes                                         available at the zenodo link in Section A.3.1. For the artifact
+        – Code licenses (if publicly available): MIT License              evaluation, we will provide access to the NSF GPU cluster.
+        – Workflow framework used: Pytorch                                Both evaluations detail the steps assuming a Linux envi-
+      • Architecture evaluation:                                          ronment, and require the command-line tool unzip to be
+        – Model: Cycle-level performance model, event-based               installed prior to evaluation. If you are evaluating either ar-
+          cost model                                                      tifact on a local machine, follow the commands below to
+        – Data set: Llama configurations outlined in Table 1              install unzip. Otherwise, ensure that unzip or and equivalent
+        – Run-time environment: Conda                                     command-line tool is available.
+        – Hardware: x86_64 machine                                           sudo apt update
+        – Metrics: Throughput, latency, energy efficiency, power             sudo apt install unzip
+          efficiency, area, carbon equivalent emissions.                  Workload evaluation.
+        – Output: Figure 11, Figure 12, Table 3, Figure 13,                   1. Download the zip file from the zenodo link.
+          Figure 14, Figure 15, Figure 16, Figure 17.                            mugi_profiling-asplos_2026_ae.zip
+        – Experiments: Iso-area nonlinear comparison, iso-                       https://zenodo.org/records/18063514
+          area GEMM comparison, comprehensive design com-                     2. Unzip the artifact and cd into the new directory.
+          parison, array and noc-level area and power break-                     unzip mugi_profiling-asplos_2026_ae.zip
+          down, batch size comparison, operational and em-                       cd mugi_profiling-asplos_2026_ae
+          bodied carbon comparison, end-to-end latency com-
+          parison, iso-area noc comparison.                               1 Available at https://www.anaconda.com/download.
+
+        – Disk space required (approximate): 8GB                          2 Available at https://huggingface.co/meta-llama.
+
+
+
+
+                                                                   1230
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                      Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+
+    3. Create a conda environment with the included envi-                   A.6 Evaluation and expected results
+       ronment.yaml and activate the environment.                           After running the steps in Section A.4, the generated figures
+       conda env create -f environment.yaml                                 can be found locally in figures/output directory for work-
+       conda activate mugi_profiling                                        load evaluation and zoo/llm/results/figs and
+    4. Run the included script to launch all slurm scripts.                 zoo/llm/results/tables for the architecture evaluation.
+       bash mugi_profiling.sh                                               Each figure is labeled as figX-Y.pdf that corresponds to
+       If slurm access is not available (NSF access fails), an ad-          what is included in Section 3 and Section 6. The expected
+       ditional script is provided, but tuning may be required.             profiling distribution in the workload evaluation may exhibit
+       bash mugi_profiling_local.sh                                         slight deviations from the values reported in the paper due
+    5. Finally, retrieve the figures in the figures/output direc-           to device-specific computational variation.
+       tory.
+                                                                            A.7 Methodology
+                                                                            Submission, reviewing and badging methodology:
+Architecture evaluation.                                                       • https://www.acm.org/publications/policies/artifact-review-
+                                                                                 badging
+                                                                               • http://cTuning.org/ae/submission-20201122.html
+    1. Download the zip file from the zenodo link.
+                                                                               • http://cTuning.org/ae/reviewing-20201122.html
+       archx-asplos_2026_ae.zip
+       https://zenodo.org/records/18063514
+    2. Unzip the artifact and cd into the new directory.
+       unzip archx-asplos_2026_ae.zip
+       cd archx-asplos_2026_ae
+    3. Create a conda environment with the included envi-
+       ronment.yaml and activate the environment.
+       conda env create -f environment.yaml
+       conda activate archx
+    4. Run the included script to generate and simulate the
+       architecture descriptions.
+       bash run_mugi.sh
+    5. Finally, retrieve the figures in the zoo/llm/results/figs/
+       and zoo/llm/results/tables/ directories.
+
+
+A.5    Experiment workflow
+Workload evaluation. We use slurm scripts to automate
+profiling and end-to-end perplexity results. To produce each
+figure, the scripts load the model onto an allocated node
+and run the target dataset. Profiling is done on the base half-
+precision models, while perplexity is retrieved for base mod-
+els at both half precision and for nonlinear approximation.
+After all models run, the scripts process both the profiling
+and perplexity results and report them within each figure.
+Architecture evaluation. We use scripts to automatically
+run the workflow for the result production. To produce a fig-
+ure, the evaluation scripts first generate all the hardware con-
+figurations based on the provided architecture descriptions.
+Then, the simulation is run on each architecture description
+with a target workload (e.g., llama). More specifically, both
+the performance model and cost model are run. Note that the
+automated workflow launches these simulations in parallel.
+Finally, the scripts parse the generated result and aggregate
+results across runs from all the configurations to generate
+figures.
+
+
+
+                                                                     1231
+Mugi : Value Level Parallelism For Efficient LLMs                                                          ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+References                                                                                  Vuong, Tianhe Yu, Wenlong Huang, Yevgen Chebotar, Pierre Sermanet,
+ [1] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun                       Daniel Duckworth, Sergey Levine, Vincent Vanhoucke, Karol Haus-
+     Kwatra, Bhargav S Gulavani, Alexey Tumanov, and Ramachandran                           man, Marc Toussaint, Klaus Greff, Andy Zeng, Igor Mordatch, and Pete
+     Ramjee. 2024. Taming Throughput-Latency Tradeoff in LLM Inference                      Florence. 2023. PaLM-E: an embodied multimodal language model. In
+     with Sarathi-Serve. USENIX Symposium on Operating Systems Design                       Proceedings of the 40th International Conference on Machine Learning.
+     and Implementation (2024).                                                             JMLR.org.
+ [2] Ankur Agrawal, Silvia M. Mueller, Bruce M. Fleischer, Xiao Sun,                   [15] Nan Du, Yanping Huang, Andrew M Dai, Simon Tong, Dmitry Lep-
+     Naigang Wang, Jungwook Choi, and Kailash Gopalakrishnan. 2019.                         ikhin, Yuanzhong Xu, Maxim Krikun, Yanqi Zhou, Adams Wei Yu,
+     DLFloat: A 16-b Floating Point Format Designed for Deep Learning                       Orhan Firat, Barret Zoph, Liam Fedus, Maarten P Bosma, Zongwei
+     Training and Inference. In 2019 IEEE 26th Symposium on Computer                        Zhou, Tao Wang, Emma Wang, Kellie Webster, Marie Pellat, Kevin
+     Arithmetic (ARITH).                                                                    Robinson, Kathleen Meier-Hellstern, Toju Duke, Lucas Dixon, Kun
+ [3] Joshua Ainslie, James Lee-Thorp, Michiel de Jong, Yury Zemlyanskiy,                    Zhang, Quoc Le, Yonghui Wu, Zhifeng Chen, and Claire Cui. 2022.
+     Federico Lebron, and Sumit Sanghai. 2023. GQA: Training General-                       GLaM: Efficient Scaling of Language Models with Mixture-of-Experts.
+     ized Multi-Query Transformer Models from Multi-Head Checkpoints.                       In Proceedings of the 39th International Conference on Machine Learn-
+     Empirical Methods in Natural Language Processing.                                      ing.
+ [4] Shuai Bai, Yuxuan Cai, Ruizhe Chen, Keqin Chen, Xionghui Chen, Ze-                [16] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Ka-
+     sen Cheng, Lianghao Deng, Wei Ding, Chang Gao, Chunjiang Ge, Wen-                      dian, Ahmad Al-Dahle, et al. 2024. The Llama 3 Herd of Models. arXiv
+     bin Ge, Zhifang Guo, Qidong Huang, Jie Huang, Fei Huang, Binyuan                       (2024).
+     Hui, Shutong Jiang, Zhaohai Li, Mingsheng Li, Mei Li, Kaixin Li,                  [17] Stefan Elfwing, Eiji Uchibe, and Kenji Doya. 2018. Sigmoid-Weighted
+     Zicheng Lin, Junyang Lin, Xuejing Liu, Jiawei Liu, Chenglong Liu,                      Linear Units for Neural Network Function Approximation in Rein-
+     Yang Liu, Dayiheng Liu, Shixuan Liu, Dunjie Lu, Ruilin Luo, Chenxu                     forcement Learning. Neural Networks (2018).
+     Lv, Rui Men, Lingchen Meng, Xuancheng Ren, Xingzhang Ren, Sibo                    [18] Ahmad Faiz, Sotaro Kaneda, Ruhan Wang, Rita Osi, Prateek Sharma,
+     Song, Yuchong Sun, Jun Tang, Jianhong Tu, Jianqiang Wan, Peng Wang,                    Fan Chen, and Lei Jiang. 2024. LLMCarbon: Modeling the end-to-end
+     Pengfei Wang, Qiuyue Wang, Yuxuan Wang, Tianbao Xie, Yiheng Xu,                        Carbon Footprint of Large Language Models. arXiv (2024).
+     Haiyang Xu, Jin Xu, Zhibo Yang, Mingkun Yang, Jianxin Yang, An                    [19] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh.
+     Yang, Bowen Yu, Fei Zhang, Hang Zhang, Xi Zhang, Bo Zheng, Humen                       2023. GPTQ: Accurate Post-Training Quantization for Generative
+     Zhong, Jingren Zhou, Fan Zhou, Jing Zhou, Yuanzhi Zhu, and Ke Zhu.                     Pre-Trained Transformers. arXiv (2023).
+     2025. Qwen3-VL Technical Report. arXiv (2025).                                    [20] Kunihiko Fukushima. 1969. Visual Feature Extraction by A Multilay-
+ [5] Rajeev Balasubramonian, Andrew B. Kahng, Naveen Muralimanohar,                         ered Network of Analog Threshold Elements. IEEE Transactions on
+     Ali Shafiee, and Vaishnav Srinivas. 2017. CACTI 7: New Tools for In-                   Systems Science and Cybernetics (1969).
+     terconnect Exploration in Innovative Off-Chip Memories. Transactions              [21] Hongrui Guo, Yongwei Zhao, Zhangmai Li, Yifan Hao, Chang Liu,
+     on Architecture and Code Optimization (2017).                                          Xinkai Song, Xiaqing Li, Zidong Du, Rui Zhang, Qi Guo, Tianshi Chen,
+ [6] Jeff Barr. 2019. Amazon EC2 Update – Inf1 Instances with AWS                           and Zhiwei Xu. 2023. Cambricon-U: A Systolic Random Increment
+     Inferentia Chips for High Performance Cost-Effective Inferenc-                         Memory Architecture for Unary Computing. In International Sympo-
+     ing. https://aws.amazon.com/blogs/aws/amazon-ec2-update-inf1-                          sium on Microarchitecture.
+     instances-with-aws-inferentia-chips-for-high-performance-cost-                    [22] Udit Gupta, Mariam Elgamal, Gage Hills, Gu-Yeon Wei, Hsien-Hsin S.
+     effective-inferencing/                                                                 Lee, David Brooks, and Carole-Jean Wu. 2022. ACT: designing sustain-
+ [7] Erik Brunvand, Donald Kline, and Alex K. Jones. 2018. Dark Silicon                     able computer systems with an architectural carbon modeling tool. In
+     Considered Harmful: A Case for Truly Green Computing. In nterna-                       International Symposium on Computer Architecture.
+     tional Green and Sustainable Computing Conference (IGSC).                         [23] Udit Gupta, Mariam Elgamal, Gage Hills, Gu-Yeon Wei, Hsien-Hsin S.
+ [8] Yuji Chai, John Gkountouras, Glenn G. Ko, David Brooks, and Gu-Yeon                    Lee, David Brooks, and Carole-Jean Wu. 2022. ACT: designing sus-
+     Wei. 2023. INT2.1: Towards Fine-Tunable Quantized Large Language                       tainable computer systems with an architectural carbon modeling
+     Models with Error Correction through Low-Rank Adaptation. arXiv                        tool.
+     (2023).                                                                           [24] Tae Jun Ham, Yejin Lee, Seong Hoon Seo, Soosung Kim, Hyunji Choi,
+ [9] Jaewan Choi, Hailong Li, Byeongho Kim, Seunghwan Hwang, and                            Sung Jun Jung, and Jae W. Lee. 2021. ELSA: hardware-software co-
+     Jung Ho Ahn. 2022. Accelerating Transformer Networks through                           design for efficient, lightweight self-attention mechanism in neural
+     Recomposing Softmax Layers. In International Symposium on Workload                     networks. In International Symposium on Computer Architecture.
+     Characterization.                                                                 [25] Dan Hendrycks and Kevin Gimpel. 2016. Gaussian Error Linear Units
+[10] Yujeong Choi, Yunseong Kim, and Minsoo Rhu. 2021. Lazy Batch-                          (GELUs). arXiv (2016).
+     ing: An SLA-aware Batching System for Cloud Machine Learning                      [26] Coleman Hooper, Sehoon Kim, Hiva Mohammadzadeh, Michael W.
+     Inference. In International Symposium on High-Performance Computer                     Mahoney, Yakun Sophia Shao, Kurt Keutzer, and Amir Gholami. 2024.
+     Architecture.                                                                          KVQuant: Towards 10 Million Context Length LLM Inference with KV
+[11] Damai Dai, Chengqi Deng, Chenggang Zhao, R. X. Xu, Huazuo Gao,                         Cache Quantization. arXiv (2024).
+     Deli Chen, Jiashi Li, Wangding Zeng, Xingkai Yu, Y. Wu, Zhenda                    [27] Andrew Howard, Mark Sandler, Grace Chu, Liang-Chieh Chen, Bo
+     Xie, Y. K. Li, Panpan Huang, Fuli Luo, Chong Ruan, Zhifang Sui, and                    Chen, Mingxing Tan, Weijun Wang, Yukun Zhu, Ruoming Pang, Vi-
+     Wenfeng Liang. 2024. DeepSeekMoE: Towards Ultimate Expert Spe-                         jay Vasudevan, Quoc V. Le, and Hartwig Adam. 2019. Searching for
+     cialization in Mixture-of-Experts Language Models. arXiv (2024).                       MobileNetV3. International Conference on Computer Vision (2019).
+[12] DeepSeek-AI, Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao                 [28] Wei Huang, Yangdong Liu, Haotong Qin, Ying Li, Shiming Zhang,
+     Wu, et al. 2025. Deepseek-V3 Technical Report. arXiv (2025).                           Xianglong Liu, Michele Magno, and Xiaojuan Qi. 2024. BiLLM: Pushing
+[13] Tim Dettmers, Mike Lewis, Younes Belkada, and Luke Zettlemoyer.                        the Limit of Post-Training Quantization for LLMs. arXiv (2024).
+     2022. LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale.          [29] International Telecommunication Union (ITU) and World Benchmark-
+     In Advances in Neural Information Processing Systems.                                  ing Alliance (WBA). 2025. Tech sector emissions, energy use grow
+[14] Danny Driess, Fei Xia, Mehdi S. M. Sajjadi, Corey Lynch, Aakanksha                     with rise of AI. https://www.itu.int/en/mediacentre/Pages/PR-2025-
+     Chowdhery, Brian Ichter, Ayzaan Wahid, Jonathan Tompson, Quan                          06-05-greening-digital-companies-report.aspx Accessed: 2025-08-12.
+
+
+
+
+                                                                                1232
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                   Daniel Price, Prabhu Vellaisamy, John P. Shen, and Di Wu
+
+
+[30] Jaeyong Jang, Yulhwa Kim, Juheun Lee, and Jae-Joon Kim. 2024. FIGNA:            [47] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Brad-
+     Integer Unit-Based Accelerator Design for FP-INT GEMM Preserving                     bury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein,
+     Numerical Accuracy. In 2024 IEEE International Symposium on High-                    Luca Antiga, Alban Desmaison, Andreass Köpf, Edward Yang, Zach
+     Performance Computer Architecture (HPCA).                                            DeVito, Martin Raison, Alykhan Tejani, Sasank Chilamkurthy, Benoit
+[31] Yangqing Jia. 2014. Learning Semantic Image Representations at a Large               Steiner, Lu Fang, Junjie Bai, and Soumith Chintala. 2019. PyTorch: An
+     Scale. Ph. D. Dissertation. EECS Department, University of California,               Imperative Style, High-Performance Deep Learning Library. arXiv
+     Berkeley. http://www2.eecs.berkeley.edu/Pubs/TechRpts/2014/EECS-                     (2019).
+     2014-93.html                                                                    [48] David Patterson, Joseph Gonzalez, Quoc Le, Chen Liang, Lluis-Miquel
+[32] Dhiraj Kalamkar, Dheevatsa Mudigere, Naveen Mellempudi, Dipankar                     Munguia, Daniel Rothchild, David So, Maud Texier, and Jeff Dean.
+     Das, Kunal Banerjee, Sasikanth Avancha, Dharma Teja Vooturi, Nataraj                 2021. Carbon Emissions and Large Neural Network Training. arXiv
+     Jammalamadaka, Jianyu Huang, Hector Yuen, Jiyan Yang, Jongsoo                        (2021).
+     Park, Alexander Heinecke, Evangelos Georganas, Sudarshan Srini-                 [49] Raspberry Pi. 2024. Raspberry Pi 5. Retrieved 2024-11-14 from https:
+     vasan, Abhisek Kundu, Misha Smelyanskiy, Bharat Kaul, and Pradeep                    //www.raspberrypi.com/products/raspberry-pi-5/
+     Dubey. 2019. A Study of BFLOAT16 For Deep Learning Training. arXiv              [50] Reiner Pope, Sholto Douglas, Aakanksha Chowdhery, Jacob Devlin,
+     (2019).                                                                              James Bradbury, Jonathan Heek, Kefan Xiao, Shivani Agrawal, and Jeff
+[33] Tushar and Qingru Zhang Kang, Hao, Souvik Kundu, Geonhwa Jeong,                      Dean. 2023. Efficiently Scaling Transformer Inference. In Proceedings
+     Zaoxing Liu, Tushar Krishna, and Tuo Zhao. 2024. GEAR: An Efficient                  of Machine Learning and Systems.
+     KV Cache Compression Recipe for Near-Lossless Generative Inference              [51] Valentina Popescu, Abhinav Venigalla, Di Wu, and Robert Schreiber.
+     of LLM. arXiv (2024).                                                                2021. Representation Range Needs for 16-Bit Neural Network Training.
+[34] Rachid Karami, Sheng-Chun Kao, and Hyoukjun Kwon. 2025.                              arXiv (2021).
+     NonGEMM Bench: Understanding the Performance Horizon of the                     [52] Yubin Qin, Yang Wang, Dazheng Deng, Zhiren Zhao, Xiaolong Yang,
+     Latest ML Workloads with NonGEMM Workloads. In International                         Leibo Liu, Shaojun Wei, Yang Hu, and Shouyi Yin. 2023. FACT: FFN-
+     Symposium on Performance Analysis of Systems and Software.                           Attention Co-optimized Transformer Architecture with Eager Correla-
+[35] Alex Krizhevsky, Ilya Sutskever, and Geoffrey E Hinton. 2012. Ima-                   tion Prediction. In International Symposium on Computer Architecture.
+     geNet Classification with Deep Convolutional Neural Networks. In                [53] Yubin Qin, Yang Wang, Zhiren Zhao, Xiaolong Yang, Yang Zhou, Shao-
+     Advances in Neural Information Processing Systems, F. Pereira, C.J.                  jun Wei, Yang Hu, and Shouyi Yin. 2025. MECLA: Memory-Compute-
+     Burges, L. Bottou, and K.Q. Weinberger (Eds.).                                       Efficient LLM Accelerator with Scaling Sub-matrix Partition. In Inter-
+[36] Andrey Kuzmin, Mart Van Baalen, Yuwei Ren, Markus Nagel, Jorn                        national Symposium on Computer Architecture.
+     Peters, and Tijmen Blankevoort. 2022. FP8 Quantization: The Power of            [54] Alec Radford, Jong Wook Kim, Tao Xu, Greg Brockman, Christine
+     the Exponent. In Advances in Neural Information Processing Systems.                  McLeavey, and Ilya Sutskever. 2023. Robust Speech Recognition via
+[37] Dmitry Lepikhin, HyoukJoong Lee, Yuanzhong Xu, Dehao Chen,                           Large-Scale Weak Supervision . In International Conference on Machine
+     Orhan Firat, Yanping Huang, Maxim Krikun, Noam Shazeer, and                          Learning.
+     Zhifeng Chen. 2020. GShard: Scaling Giant Models with Conditional               [55] Mariam Rakka, Jinhao Li, Guohao Dai, Ahmed Eltawil, Mohammed E
+     Computation and Automatic Sharding. arXiv (2020).                                    Fouda, and Fadi Kurdahi. 2025. SoftmAP: Software-Hardware Co-
+[38] Ji Lin, Jiaming Tang, Haotian Tang, Shang Yang, Guangxuan Xiao, and                  design for Integer-Only Softmax on Associative Processors. In Design
+     Song Han. 2025. AWQ: Activation-aware Weight Quantization for                        Automation and Test in Europe.
+     On-Device LLM Compression and Acceleration. GetMobile: Mobile                   [56] Prajit Ramachandran, Barret Zoph, and Quoc V. Le. 2017. Searching
+     Comp. and Comm. (2025).                                                              for Activation Functions. arXiv (2017).
+[39] Shuming Ma, Hongyu Wang, Lingxiao Ma, Lei Wang, Wenhui Wang,                    [57] Marc Riera, Jose-Maria Arnau, and Antonio Gonzalez. 2018. Compu-
+     Shaohan Huang, Li Dong, Ruiping Wang, Jilong Xue, and Furu Wei.                      tation Reuse in DNNs by Exploiting Input Similarity. In International
+     2024. The Era of 1-bit LLMs: All Large Language Models are in 1.58                   Symposium on Computer Architecture.
+     Bits. arXiv (2024).                                                             [58] Yakun Sophia Shao, Jason Clemons, Rangharajan Venkatesan, Brian
+[40] Meta AI. 2025. Llama 4: Multimodal Intelligence. https://ai.meta.com/                Zimmer, Matthew Fojtik, Nan Jiang, Ben Keller, Alicia Klinefelter,
+     blog/llama-4-multimodal-intelligence/. Accessed: 2025-12-05.                         Nathaniel Pinckney, Priyanka Raina, Stephen G. Tell, Yanqing Zhang,
+[41] Paulius Micikevicius, Dusan Stosic, Neil Burgess, Marius Cornea,                     William J. Dally, Joel Emer, C. Thomas Gray, Brucek Khailany, and
+     Pradeep Dubey, Richard Grisenthwaite, Sangwon Ha, Alexander Hei-                     Stephen W. Keckler. 2019. Simba: Scaling Deep-Learning Inference
+     necke, Patrick Judd, John Kamalu, Naveen Mellempudi, Stuart Ober-                    with Multi-Chip-Module-Based Architecture. In International Sympo-
+     man, Mohammad Shoeybi, Michael Siu, and Hao Wu. 2022. FP8 For-                       sium on Microarchitecture. 14–27.
+     mats for Deep Learning. arXiv (2022).                                           [59] Haichen Shen, Lequn Chen, Yuchen Jin, Liangyu Zhao, Bingyu Kong,
+[42] Peter Nilsson, Ateeq Ur Rahman Shaik, Rakesh Gangarajaiah, and title                 Matthai Philipose, Arvind Krishnamurthy, and Ravi Sundaram. 2019.
+     = Hardware Implementation of the Exponential Function Using Taylor                   Nexus: A GPU Cluster Engine for Accelerating DNN-Based Video
+     Series journal = Nordic Circuits and Systems Conference year = 2014                  Analysis. In Symposium on Operating Systems Principles.
+     Hertz, Er. [n. d.]. ([n. d.]).                                                  [60] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan Li, Max Ryabinin,
+[43] NVIDIA. 2024. NVIDIA H100 Tensor Core GPU Architecture. Re-                          Beidi Chen, Percy Liang, Christopher Ré, Ion Stoica, and Ce Zhang.
+     trieved 2024-11-14 from https://resources.nvidia.com/en-us-hopper-                   2023. FlexGen: High-Throughput Generative Inference of Large Lan-
+     architecture/nvidia-h100-tensor-c                                                    guage Models with a Single GPU. In International Conference on Ma-
+[44] NVIDIA. 2024. TensorRT-LLM. Retrieved 2024-11-14 from https:                         chine Learning.
+     //github.com/NVIDIA/TensorRT-LLM                                                [61] Jacob R. Stevens, Rangharajan Venkatesan, Steve Dai, Brucek Khailany,
+[45] Stuart F. Oberman and Michael J. Flynn. 1997. Division Algorithms                    and Anand Raghunathan. 2021. Softermax: Hardware/Software Co-
+     and Implementations. IEEEXplore (1997).                                              Design of an Efficient Softmax for Transformers. In Design Automation
+[46] Zhewen Pan, Joshua San Miguel, and Di Wu. 2024. Carat: Unlocking                     Conference.
+     Value-Level Parallelism for Multiplier-Free GEMMs. In International             [62] Gemini Team, Rohan Anil, Sebastian Borgeaud, Jean-Baptiste Alayrac,
+     Conference on Architectural Support for Programming Languages and                    Jiahui Yu, Radu Soricut, et al. 2025. Gemini: A Family of Highly Capable
+     Operating Systems.                                                                   Multimodal Models.
+
+
+
+
+                                                                              1233
+Mugi : Value Level Parallelism For Efficient LLMs                                                         ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+[63] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Alma-                    Architecture.
+     hairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal                 [75] Di Wu, Jingjie Li, Ruokai Yin, Hsuan Hsiao, Younghyun Kim, and
+     Bhargava, Shruti Bhosale, Dan Bikel, Lukas Blecher, Cristian Can-                     Joshua San Miguel. 2021. uGEMM: Unary Computing for GEMM
+     ton Ferrer, Moya Chen, Guillem Cucurull, David Esiobu, Jude Fer-                      Applications. IEEE Micro (2021).
+     nandes, Jeremy Fu, Wenyin Fu, Brian Fuller, Cynthia Gao, Vedanuj                 [76] Di Wu and Joshua San Miguel. 2019. In-Stream Stochastic Division
+     Goswamim, Naman Goyal, Anthony Hartshorn, Saghar Hosseini, Rui                        and Square Root via Correlation. In Design Automation Conference.
+     Hou, Hakan Inan, Marcin Kardas, Viktor Kerkez, Madian Khabsa, Isabel                  doi:10.1145/3316781.3317844
+     Kloumann, Artem Korenev, Punit Singh Koura, Marie-Anne Lachaux,                  [77] Di Wu and Joshua San Miguel. 2021. When Dataflows Converge:
+     Thibaut Lavril, Jenya Lee, Diana Liskovich, Yinghai Lu, Yuning Mao,                   Reconfigurable and Approximate Computing for Emerging Neural
+     Xavier Martinet, Todor Mihaylov, Pushkar Mishra, Igor Molybog, Yixin                  Networks. In International Conference on Computer Design. doi:10.
+     Nie, Andrew Poulton, Jeremy Reizenstein, Rashi Rungta, Kalyan Saladi,                 1109/ICCD53106.2021.00014
+     Alan Schelten, Ruan Silva, Eric Michael Smith, Ranjan Subramanian,               [78] Di Wu and Joshua San Miguel. 2022. uSystolic: Byte-Crawling Unary
+     Xiaoqing Ellen Tan, Binh Tang, Ross Taylor, Adina Williams, Jian Xi-                  Systolic Array. In International Symposium on High-Performance Com-
+     ang Kuan, Puxin Xu, Zheng Yan, Iliyan Zarov, Yuchen Zhang, Angela                     puter Architecture.
+     Fan, Melanie Kambadur, Sharan Narang, Aurelien Rodriguez, Robert                 [79] Di Wu, Ruokai Yin, and Joshua San Miguel. 2021. In-Stream
+     Stojnic, Sergey Edunov, and Thomas Scialom. 2023. LLAMA 2: Open                       Correlation-Based Division and Bit-Inserting Square Root in Stochastic
+     Foundation and Fine-Tuned Chat Models. arXiv (2023).                                  Computing. IEEE Design & Test (2021). doi:10.1109/MDAT.2021.3050716
+[64] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion                [80] Di Wu, Ruokai Yin, and Joshua San Miguel. 2021. Normalized Stabil-
+     Jones, Aidan N Gomez, Ł ukasz Kaiser, and Illia Polosukhin. 2017.                     ity: A Cross-Level Design Metric for Early Termination in Stochastic
+     Attention is All You Need. In Advances in Neural Information Processing               Computing. In Asia and South Pacific Design Automation Conference.
+     Systems.                                                                         [81] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and
+[65] Huizheng Wang, Zichuan Wang, Zhiheng Yue, Yousheng Long, Tai-                         Byung-Gon Chun. 2022. Orca: A Distributed Serving System for
+     quan Wei, Jianxun Yang, Yang Wang, Chao Li, Shaojun Wei, Yang                         Transformer-Based Generative Models. In USENIX Symposium on Op-
+     Hu, and Shouyi Yin. 2025. MCBP: A Memory-Compute Efficient LLM                        erating Systems Design and Implementation.
+     Inference Accelerator Leveraging Bit-Slice-enabled Sparsity and Repet-           [82] Tianyi Zhang, Jonah Yi, Zhaozhuo Xu, and Anshumali Shrivastava.
+     itiveness. In International Symposium on Microarchitecture.                           2024. KV Cache is 1 Bit Per Channel: Efficient Large Language Model
+[66] Hanrui Wang, Zhekai Zhang, and Song Han. 2021. SpAtten: Efficient                     Inference with Coupled Quantization. arXiv (2024).
+     Sparse Attention Architecture with Cascade Token and Head Pruning.               [83] Youpeng Zhao, Di Wu, and Jun Wang. 2024. ALISA: Accelerating
+     International Symposium on High-Performance Computer Architecture                     Large Language Model Inference via Sparsity-Aware KV Caching. In
+     (2021).                                                                               International Symposium on Computer Architecture.
+[67] Shuo Wang, Zhe Li, Caiwen Ding, Bo Yuan, Qinru Qiu, Yanzhi Wang,
+     and Yun Liang. 2018. C-LSTM: Enabling Efficient LSTM using Struc-
+     tured Compression Techniques on FPGAs. International Symposium
+     on Field-Programmable Gate Arrays (2018).
+[68] Maciej Wielgosz and Ernest Jamro. 2009. Highly Efficient Twin Module
+     Structure of 64-Bit Exponential Function Implemented on SGI RASC
+     Platform. ResearchGate (2009).
+[69] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond,
+     Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Rémi
+     Louf, Morgan Funtowicz, and Jamie Brew. 2020. HuggingFace’s Trans-
+     formers: State-of-the-art Natural Language Processing. arXiv (2020).
+[70] Carole-Jean Wu, Ramya Raghavendra, Udit Gupta, Bilge Acun, New-
+     sha Ardalani, Kiwan Maeng, Gloria Chang, Fiona Aga Behram, James
+     Huang, Charles Bai, Michael Gschwind, Anurag Gupta, Myle Ott, Anas-
+     tasia Melnikov, Salvatore Candido, David Brooks, Geeta Chauhan, Ben-
+     jamin Lee, Hsien-Hsin S. Lee, Bugra Akyildiz, Maximilian Balandat,
+     Joe Spisak, Ravi Jain, Mike Rabbat, and Kim Hazelwood. 2022. Sustain-
+     able AI: Environmental Implications, Challenges and Opportunities.
+     arXiv (2022).
+[71] Di Wu, Tianen Chen, Chienfu Chen, Oghenefego Ahia, Joshua
+     San Miguel, Mikko Lipasti, and Younghyun Kim. 2019. SECO: A Scal-
+     able Accuracy Approximate Exponential Function Via Cross-Layer
+     Optimization. In International Symposium on Low Power Electronics
+     and Design. doi:10.1109/ISLPED.2019.8824959
+[72] Di Wu, Jingjie Li, Setareh Behrooz, Younghyun Kim, and Joshua
+     San Miguel. 2021. UNO: Virtualizing and Unifying Nonlinear Op-
+     erations for Emerging Neural Networks. In International Symposium
+     on Low Power Electronics and Design.
+[73] Di Wu, Jingjie Li, Zhewen Pan, Younghyun Kim, and Joshua San Miguel.
+     2022. uBrain: A Unary Brain Computer Interface. In International
+     Symposium on Computer Architecture.
+[74] Di Wu, Jingjie Li, Ruokai Yin, Hsuan Hsiao, Younghyun Kim, and
+     Joshua San Miguel. 2020. uGEMM: Unary Computing Architecture
+     for GEMM Applications. In International Symposium on Computer
+
+
+
+
+                                                                               1234
+

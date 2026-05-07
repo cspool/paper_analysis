@@ -1,0 +1,1409 @@
+XY-Serve: End-to-End Versatile Production Serving for
+             Dynamic LLM Workloads
+               Mingcong Song∗                                    Xinru Tang∗                                     Fengfan Hou
+        songmingcong@huawei.com                        tangxr23@mails.tsinghua.edu.cn                    houfengfan@huawei.com
+        Huawei Technologies Co., Ltd.                    Tsinghua University, BNRist                    Huawei Technologies Co., Ltd.
+              Beijing, China                                   Beijing, China                                 Beijing, China
+
+                      Jing Li                                       Wei Wei                                       Yipeng Ma
+          joy.lijing@huawei.com                           weiwei17@huawei.com                             mayipeng@huawei.com
+        Huawei Technologies Co., Ltd.                   Huawei Technologies Co., Ltd.                   Huawei Technologies Co., Ltd.
+               Beijing, China                                 Beijing, China                                  Beijing, China
+
+                  Runqiu Xiao                                     Hongjie Si                                  Dingcheng Jiang
+         xiaorunqiu@huawei.com                            sihongjie@huawei.com                           jdc24@mails.tsinghua.edu.cn
+        Huawei Technologies Co., Ltd.                   Huawei Technologies Co., Ltd.                     Tsinghua University, BNRist
+              Beijing, China                                  Beijing, China                                    Beijing, China
+
+                   Shouyi Yin                                      Yang Hu†                                     Guoping Long
+           yinsy@tsinghua.edu.cn                          hu_yang@tsinghua.edu.cn                          robin3@huawei.com
+         Tsinghua University, BNRist                     Tsinghua University, BNRist                    Huawei Technologies Co., Ltd.
+               Beijing, China                                  Beijing, China                                 Beijing, China
+           Shanghai AI Laboratory
+              Shanghai, China
+
+Abstract                                                                        pattern of GEMM-Softmax-GEMM with architectural-aware
+Meeting growing demands for low latency and cost efficiency                     tile sizes. For Linear, we introduce a virtual padding scheme
+in production-grade large language model (LLM) serving                          that adapts to dynamic shape changes while using highly
+systems requires integrating advanced optimization tech-                        efficient GEMM primitives with assorted fixed tile sizes. XY-
+niques. However, dynamic and unpredictable input-output                         Serve sits harmoniously with vLLM. Experimental results
+lengths of LLM, compounded by these optimizations, exac-                        show up to 95% end-to-end throughput improvement com-
+erbate the issues of workload variability, making it difficult                  pared with current publicly available baselines on Ascend
+to maintain high efficiency on AI accelerators, especially                      NPUs. We also set a new performance record for Linear
+DSAs with tile-based programming models. To address this                        (average 14.6% faster) and Attention (average 21.5% faster)
+challenge, we introduce XY-Serve, a versatile, Ascend NPU                       kernels relative to existing libraries. Lastly, we demonstrate
+native, end-to-end production LLM-serving system. The core                      the generality of our technologies on GPU platform.
+idea is an abstraction mechanism that smooths out the work-
+load variability by decomposing computations into unified,                      CCS Concepts: • Hardware → Emerging architectures;
+hardware-friendly, fine-grained meta primitives. Then, ker-                     • Computing methodologies → Parallel algorithms.
+nels can efficiently execute without concerning the irreg-
+ularity of workload. After this abstraction mechanism, for                      Keywords: Inference System; AI Accelerator; Large Lan-
+Attention, we propose a meta-kernel that computes the basic                     guage Model;
+∗ Both authors contributed equally to this research.
+† Corresponding author
+                                                                                ACM Reference Format:
+                                                                                Mingcong Song, Xinru Tang, Fengfan Hou, Jing Li, Wei Wei, Yipeng
+                                                                                Ma, Runqiu Xiao, Hongjie Si, Dingcheng Jiang, Shouyi Yin, Yang
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         Hu, and Guoping Long. 2026. XY-Serve: End-to-End Versatile Pro-
+tional License.                                                                 duction Serving for Dynamic LLM Workloads. In Proceedings of
+ASPLOS ’26, Pittsburgh, PA, USA                                                 the 31st ACM International Conference on Architectural Support for
+© 2026 Copyright held by the owner/author(s).                                   Programming Languages and Operating Systems, Volume 1 (ASPLOS
+ACM ISBN 979-8-4007-2165-6/26/03                                                ’26), March 22–26, 2026, Pittsburgh, PA, USA. ACM, New York, NY,
+ https://doi.org/10.1145/3760250.3762228                                        USA, 16 pages. https://doi.org/10.1145/3760250.3762228
+
+
+
+
+                                                                          314
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                               Mingcong Song et al.
+
+
+1    Introduction                                                        (a)                   Prompt
+                                                                                                                  Prefill                   Decode                   Decode
+Large language models (LLMs) [53, 54] have achieved im-                                             K/V Cache                                                                        ...
+pressive accuracy and are widely applied in fields like natural          (b)                 Raw Inference                       Prefix Reuse                    Speculative Decoding
+language processing [26] and computer vision [28, 32]. As                                  Input          Output          Matched prefixes
+
+
+
+
+                                                                         Input \ Output
+                                                                                                                                                                       Verify
+                                                                                          Prompts         Answers
+shown in Fig. 1(a), LLM inference typically consists of two
+stages: prefill and decode. During the prefill stage, LLMs
+process the user’s input to generate an initial token, while                                 Varying input and                  The input length           Varying speculative
+                                                                                              output lengths                 variability is amplified     length and structure
+concurrently caching the key/value (K/V) data for future use.
+                                                                                                     Square-shaped
+In the decode stage, tokens are generated sequentially in                                                                                 Rectangular
+
+
+
+
+                                                                         Mask
+                                                                                                    Attention with a                   Attention with a                     Irregular mask
+an auto-regressive manner. Despite their impressive perfor-                                         triangular mask                    trapezoidal mask
+
+mance, LLMs come with significant computational costs and                                                               Prefill and Decode are batched togater
+latency. As the model size increases and input sequences be-             SplitFuse
+                                                                                                                 Time                                                Time
+come longer, the computational demands grow substantially,
+making online inference increasingly challenging [40].
+                                                                                                     Figure 1. Dynamics of LLM Inference.
+   To address these challenges, a number of optimization
+techniques have emerged to reduce inference costs and la-
+tency, such as Prefix Reusing [61]. Speculative Decoding [27,
+29, 42, 43, 49, 60], and SplitFuse [24, 25, 34]. Prefix Reusing          efforts aimed at achieving peak computational efficiency. Sec-
+enables new queries with matching prefixes to reuse cached               ond, the adoption of these technologies introduces greater
+K/V data and skip computations for shared segments, thereby              diversity in attention shapes and mask structures, weakening
+improving prefill performance. The adoption of the draft                 the effectiveness of existing attention kernels.
+model in Speculative Decoding provides a chance for the                     Furthermore, in practical systems, the Prefill (P), Decode
+target model to generate multiple tokens per step, enhanc-               (D), and Verify (V) stages may operate independently or in
+ing key/value cache and model weight reuse, which helps                  combination. Even in disaggregated deployments, the D node
+mitigate the memory-bound bottleneck of decode in the                    may run both D and V stages simultaneously. If disaggre-
+draft model. SplitFuse splits long-sequence prefill tokens               gated deployment [35, 38, 50, 62] nodes support dynamic
+into smaller chunks and schedules them alongside decode                  role switching, the hybrid P/D/V combinations issue may
+tokens, reducing interruptions to the decode stage.                      also arise during role transitions. Since these stages present
+   While these optimizations promise to improve inference                varying computational loads during the attention phase, at-
+efficiency, they also introduce new complexities. For LLM                tempting to enumerate and optimize for every possible stage
+serving of a production system, the key challenge is how to              combination becomes a labor-intensive and impractical task.
+integrate all these optimizations efficiently on AI accelerators            To tackle the challenges posed by dynamicities, we present
+given that a friendly SIMT programming model is lacking.                 XY-Serve, a versatile, Ascend NPU [44, 45] native, and end-
+We illustrate this issue in Fig. 1(b). Performance already               to-end production LLM-serving system. The main idea is to
+struggles with unpredictable and varying input/output token              introduce an abstraction to bridge the gap between varying
+lengths, these optimizations can further exacerbate the issue.           high-level workloads and fixed hardware-friendly low-level
+   For example, Prefix Reusing increases the variability in              meta-primitives. Specifically, XY-Serve features a token-wise
+input prompt lengths, as the number of cached prefixes de-               scheduling mechanism that batches tokens in chunks. Tokens
+pends on both query history and real-time memory availabil-              could be from either prefill, verify, or decode stages. Then the
+ity. With Speculative Decoding, the decode stage no longer               token chunks will be processed by three core components:
+processes one token at a time. Instead, it handles a dynam-              Task Decomposition, Task Reordering, and Meta Kernels.
+ically varying speculative length of tokens [47]. This new                  Task Decomposition is a mechanism to decompose and
+stage is referred to as the Verify stage [3, 59]. It also trans-         map dynamic workloads onto hardware-friendly meta primi-
+forms the attention mask from a standard causal mask into a              tives. For Attention computations, it unifies the P/D/V stages
+more complex, dynamically generated version. Additionally,               through dynamic tiling, generating hardware-friendly tile-
+SplitFuse combines the prefill and decode stages into a sin-             based computational tasks. Each task computes a basic GEMM-
+gle batch, further complicating the management of multiple               Softmax-GEMM pattern. For Linear computations, it decom-
+stages within one batch.                                                 poses dynamic-shaped GEMM operations into a small set of
+   These dynamicities pose significant challenges for LLM                basic GEMM primitives with fixed tile sizes without any ex-
+computations, particularly in Linear and Attention modules.              tra overhead on AI accelerators with tile-based programming
+First, the uncertainty of input lengths leads to arbitrary ma-           models.
+trix shapes in Linear operations, complicating optimization                 After decomposition, Task Reordering reorganizes decom-
+                                                                         posed tasks and schedules them for hardware processing
+                                                                         cores. The goal of reordering is to smooth out varying task
+
+
+
+                                                                   315
+XY-Serve: End-to-End Versatile Production Serving for Dynamic LLM Workloads                                    ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+sizes at a fine-grained level, balancing workload on differ-                        Input Tokens       Output Tokens    Std. Deviation       P80 Length              Speculation Length
+ent cores for high execution efficiency. For the Attention                 20k                                                                            1k
+
+                                                                                                                                                                                              8
+module, P/D/V tasks have drastically different granularity;                16k                                                                            0.8k
+
+thus, reordering of decomposed tasks is essential to achieve                                                                                                                                  6
+                                                                           12k                        11.00k                                              0.6k
+load balance. For the Linear module, task reordering is an                                             8.87k                444
+                                                                                                                                                                                              4
+effective approach to improve L2 cache locality and mitigate                  8k
+                                                                                                                                                403
+                                                                                                                                                          0.4k
+
+                                                                                            3.88k                           260                 242
+bank conflicts.                                                               4k
+                                                                                            2.13k                                                         0.2k
+                                                                                                                                                                                              2
+                                                                                    1.36k                                                29
+   With Task Decomposition and Reordering, it is possible                           1.17k            0.27k
+                                                                                                     0.15k
+                                                                                                                                   22
+                                                                                                                                   75    98
+                                                                                                                                                                                              0
+to construct efficient kernels for Attention and Linear. For                        Conv.   Coding   API     Agent     Conv.    Coding API     Agent             0          200    Time (s)
+                                                                                   (a) The Distribution of Input/Ouput length                                    (b) Speculation Length
+the Attention module, we propose meta kernels to efficiently
+parallelize computations of GEMM-Softmax-GEMM patterns
+with different tile sizes, without needing to differentiate                   Figure 2. Dynamic Input/Output and Speculation Length.
+which P/D/V stage they originate from. With this decou-
+pling approach, it is feasible to integrate a range of optimiza-           2.1 Dynamics of LLM Inference
+tions seamlessly and efficiently, including Prefix Reusing,
+                                                                           The dynamics of LLMs manifests across multiple dimen-
+PageAttention [41], SplitFuse, Speculative Decoding, and
+                                                                           sions. First, input and output lengths vary widely across re-
+FlashAttention [31]. These optimizations work synergisti-
+                                                                           quests. Fig. 2(a) presents length distributions collected from
+cally within our meta kernels, achieving superior perfor-
+                                                                           widely–adopted open-source benchmarks (Conversation [9],
+mance. Moreover, our Attention meta kernels come with
+                                                                           Coding [8]API [10], and Agent [11]). These distributions
+aggressive on-chip Cube Core-Vector Core orchestration
+                                                                           span broad ranges that differ markedly across scenarios,
+pipelines, together with novel schemes to handle various
+                                                                           so a single inference batch often contains both extremely
+kinds of attention masks dynamically. These low-level tech-
+                                                                           long and very short sequences. Compounding this challenge,
+niques minimize off-chip memory accesses and maximize
+                                                                           Prefix Reusing omits portions of inputs, further increasing
+on-chip workload balance and execution efficiency.
+                                                                           length dynamism and unpredictability. Second, speculative
+   For the Linear module, we first design and implement
+                                                                           decoding introduces an additional verify stage, converting to-
+a set of highly efficient meta kernels with fixed tile sizes.
+                                                                           ken generation from one-token-per-step to multiple tokens
+To handle arbitrary input shapes dynamically, we employ
+                                                                           per step. Fig. 2(b) shows a runtime trace from SpecServe
+virtual padding at the on-chip memory level, coupled with
+                                                                           [36], where the target model is Llama-3.1-70B-Instruct and
+selective HBM reads and writes, and do not introduce any ac-
+                                                                           the draft model is Llama-3.2-1B-Instruct. The trace reveals
+tual padding overhead. In other words, our approach allows
+                                                                           temporal fluctuations in speculation length, compounding
+matrix computations to seamlessly handle dynamic shapes
+                                                                           overall dynamism. These optimizations collectively reshape
+while preserving the performance benefits of fixed-shape
+                                                                           attention masks into irregular trapezoidal patterns, as il-
+optimizations.
+                                                                           lustrated in Fig. 1(b). Within individual inferences, batched
+   Experimental evaluation shows that our attention kernels
+                                                                           inputs of heterogeneous lengths and characteristics pose
+achieve higher efficiency in production workloads, outper-
+                                                                           substantial optimization challenges.
+forming current SOTA implementations(torch-npu PFA [19]
+and IFA [18]) by on average of 21.5%. Our Linear kernels                   2.2 Coarse-grained Tile-based Architecture
+not only support arbitrary matrix shapes but also improve
+                                                                           2.2.1 Ascend NPU. Built on Huawei’s DaVinci architec-
+performance by an average 14.6% over existing baselines. In
+                                                                           ture [44, 45], the Huawei Ascend NPU is a high-performance
+end-to-end evaluation, XY-Serve achieves improvement up
+                                                                           AI processor. Fig. 3(a) illustrates its structure, which primar-
+to 89% over Ascend-vLLM [21] on publicly available datasets
+                                                                           ily consists of AIC (AI Core) and AIV (AI Vector) compo-
+[20] and 95% improvement on our in-house industry work-
+                                                                           nents. The AIC, similar to Nvidia’s Tensor Core, handles
+loads. Finally, we conduct a comparative evaluation against
+                                                                           matrix computations, while the AIV is responsible for vector
+GPU-based inference systems. In terms of end-to-end MFU
+                                                                           operations. The Memory Transfer Engine (MTE) manages
+and MBU, XY-Serve performs on par with the best GPU
+                                                                           data movement. The computational units and memory ac-
+implementations.
+                                                                           cess units within the AIC and AIV can operate in parallel to
+                                                                           overlap different operations.
+                                                                           2.2.2 Tile-Based Architecture v.s. SIMT. Conventional
+2   Background                                                             GPUs are renowned for their CUDA Cores based on SIMT
+In this section we first characterize the dynamics of LLM                  architecture, which employ techniques such as Branch Predi-
+inference and then, using Ascend NPU as a concrete example,                cation [37] or Warp Compaction [33] to achieve fine-grained
+present an architectural abstraction based on a tile-based                 control over programs at nearly the single-thread level. As a
+programming model.                                                         result, they can avoid performance loss while maintaining
+
+
+
+                                                                     316
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                                                                                                                                                                            Mingcong Song et al.
+
+(a) Architecture                                                       AI Cores × 20~25
+                                                                                                                                                                                                            kvLen
+                                                                                                                                                                                                                                  Prefill Attention
+                                                                                                                                                                                                                                                                   Challenge 1                     Decode Attention
+                                          L2                             AIC
+                                                                                                                                                                                                                              Tiling                     Shape-regular                      K/V Cache         PA                       K/V Cache
+                                        Cache
+
+
+
+
+                                                                                                                                                                                                   qLen
+                                                                          MTE2
+                                                                                                        L0A Buffer                                                                                                                                           units
+                                                                                               MTE1
+                                                                                     L1 Buffer MTE1                                                 Cube Unit           L0C Buffer
+                                                                                                        L0B Buffer                                                                                                                                                                           Reduced bandwidth utilization
+                                                                                                                                                                                                                 Ideal workload
+                                         Communicate via
+                                          last-level-cache
+                                                                                                                                                                                                                                                                                                    Verify Attention
+ HBM                                                                                                                      FixPip
+                                                                                                                                                                                                             Reused Prefix                               Shape-irregular                          KV len
+                                                                                     Scalar Unit                                                                                                                      Tiling                                 units
+
+
+
+
+                                                                                                                                                                                                   qLen
+
+
+
+
+                                                                                                                                                                                                                                                                                    Q len
+                                                                                       AIV #1                                                                               Without Direct
+                                                                                         AIV #2                                                                  x            Datapath
+                                                                          MTE2                                                            Vector Unit                 Compute Unit                                                                                                               Various irregular masks
+                                                                                             Unified                                                                                                                       Real-world workload
+                                                                                             Buffer                                                                   Memory Unit
+                                                                          MTE3                                                            Scalar Unit                 Datapath
+
+
+
+
+                                                                                                                                                                                                    Input
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                       Output
+                                                                                                                                                                                                                              QKV project
+                                                                                                                                                                                                               LayerNorm
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                  LayerNorm
+                                                                                                                                                                                                                                                                                                  O Project
+(b) Programming Model
+
+
+
+
+                                                                                                                                                                                                                                Linear
+
+
+
+
+                                                                                                                                                                                                                                                                                                   Linear
+                                                                                                                                                                                                                                            RopE
+                                                                                                                                                                                                                                                         Prefill    Decode
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                              FFN
+                            Load IN                          Process                   OUT                                                Load IN            Process                  OUT
+                                                                                                                                                                                                                                                                             Verify
+                                                                                                                                                                                                                                                         Atten.     Atten.   Atten.
+                                                                                                       NPU tile-based
+                                                                           threads
+
+
+
+
+                                      Warp                                                                              Coarser-grained                  grouped into a
+                                                                             × 32
+ GPU-SIMT
+            Finer-grained
+
+
+
+
+                                                                                                                                                         tile for single-
+                                                                                                                                                           instruction
+
+
+
+                                                                                                                                                                                                    Challenge 2                                                              Challenge 3                                                  Load Input
+
+
+
+
+                                                                                                                                                                                                                                                                                                              Merge & Rearrange
+ Automatically Inactive
+                                                                                                                                               Manually                 Manually                          Length of Input Tokens                       GEMM operations
+                                                                                                                                           Padding or Masking      Unpadding or Masking
+                                                                                                                                                                                                     Prefix                                               N     K
+
+
+
+
+                                                                                                                                                                                                                                                                              Batch Size
+                                                                                                                                                                                                    Reusing                                        M                                              ...
+                                                                                                                                                                                                                                                                    ×
+                                                                                                                                                                                                     Spec.
+Figure 3. (a) The Micro-architecture of Ascend 910B. (b)                                                                                                                                            Decoding                                                                                                                       Write back
+Comparison of Tiled-based Architecture and SIMT.                                                                                                                                                         The shape becomes
+                                                                                                                                                                                                           more dynamic
+                                                                                                                                                                                                                                                   All dimensions can be
+                                                                                                                                                                                                                                                       arbitrary value
+                                                                                                                                                                                                                                                                                           Various input
+                                                                                                                                                                                                                                                                                           combinations
+                                                                                                                                                                                                                                                                                                                                  Memory operation
+                                                                                                                                                                                                                                                                                                                                     overhead
+
+
+
+                                                                                                                                                                                                            Figure 4. Challenges Posed by Dynamic Workloads.
+programmer-friendly interfaces when dealing with dynamic
+inputs. In contrast, we focus on Coarse-grained Tile-based
+Architecture, an abstraction of common AI accelerators, with                                                                                                                                       are already struggling with the dynamic input and output
+Ascend NPU as a typical example. These accelerators fea-                                                                                                                                           length of LLMs. To make things tougher, the introduction of
+ture a datapath where a fixed-width tile of data is grouped                                                                                                                                        new technologies further increases the diversity and dynam-
+together and executed by the same operation in a single                                                                                                                                            icity of the workload, leading to MFU and MBU issues of the
+instruction. This architecture has the potential for higher                                                                                                                                        current NPU kernels, as illustrated in Fig. 5. In this section,
+computation capacity. However, workload dynamism (e.g.,                                                                                                                                            we detailed these challenges.
+dynamic shapes or sparse/memory patterns of input data)
+complicates programming and degrades performance.                                                                                                                                                  3.1 Diverse Attention
+   As illustrated in Fig. 3(b), in the SIMT architecture, it is                                                                                                                                    Firstly, for prefill Attention, without any optimizations, the
+easy to set boundary conditions or patterns for data, with the                                                                                                                                     query length equals the key-value length, resulting in a
+hardware automatically reorganizing or deactivating unused                                                                                                                                         square-shaped Attention score matrix and a triangular mask.
+threads. However, in tile-based architectures, both memory                                                                                                                                         This shape is ideal for optimization [46], as it’s easy to tile
+access and computation face challenges when dealing with                                                                                                                                           the workload into shape-regular units. The current SOTA
+irregular data patterns. Typical solutions involve complex                                                                                                                                         torch-npu kernel can efficiently handle it, achieving an MFU
+padding/unpadding or mask operations, which result in ad-                                                                                                                                          of 53%.
+ditional computation and memory overhead. Consequently,                                                                                                                                               However, in real-world scenarios involving prefixes, parts
+efficiently supporting dynamic workloads on tile-based ar-                                                                                                                                         of the key and value are reused from the K/V cache [14, 61],
+chitectures is a laborious task.                                                                                                                                                                   transforming the Attention score shape from a square to a
+                                                                                                                                                                                                   rectangle with arbitrary dimensions. Tiling the Attention
+2.2.3 Abstraction Generality. This abstraction may also                                                                                                                                            score will produce many irregular units, which degrades the
+applicable to current GPUs. As GPUs evolve, the Tensor                                                                                                                                             performance of the kernel. Specifically, the MFU drops to
+Core has become increasingly important, and Nvidia has                                                                                                                                             47% and 30%, as shown in Fig. 5(a). While the reuse of the K/V
+introduced a dedicated Tensor Memory Accelerator (TMA),                                                                                                                                            cache theoretically reduces computation, the decline in ker-
+both of which are tile-based units. This trend indicates that                                                                                                                                      nel efficiency offsets this benefit, resulting in no meaningful
+GPUs are moving toward a Tile-based Architecture. Recently,                                                                                                                                        end-to-end performance improvement.
+Nvidia began to introduce a tile-based programming model                                                                                                                                              Similarly, Speculative Decoding (SD) [27, 43, 49] reshapes
+to GPUs [13], proving the generality of this hardware ab-                                                                                                                                          decode Attention to resemble prefill Attention but with a
+straction across various accelerators. Therefore, the same                                                                                                                                         shorter query length. Different SD algorithms generate to-
+issues also exist on current GPUs.                                                                                                                                                                 kens with varying causal structures, resulting in diverse
+                                                                                                                                                                                                   masks during the verify stage. The irregular pattern of the
+3                           Challenge                                                                                                                                                              mask makes it challenging to implement efficient tiling. As a
+As illustrated in Fig. 4, an LLM serving system with main-                                                                                                                                         result, torch-npu uses the kernel for prefill Attention equipped
+stream optimizations can be primitively divided into Linear                                                                                                                                        with a full mask as a fallback. This fallback prevents verify-
+and P/D/V three types of Attention modules. AI accelerators                                                                                                                                        specific optimizations, leading to an MBU lower than 30%.
+
+
+
+                                                                                                                                                                                             317
+XY-Serve: End-to-End Versatile Production Serving for Dynamic LLM Workloads                                                                                          ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+                  Ideal Shape       with Prefix Reuse       with Chunked Prefill         Batch size=4        Batch size=8            (a) Summary Table for GEMM [M,K]×[K, N]=[M,N]             (b) The MFU of GEMM Operations
+                                                                                                                                                      M            N           K
+                                                                                                                                                                               K                   QKV    OProj   GateUp   Down      QK   SV
+                  (a) The MFU of Prefill Attention                         (b) The MBU of Verify Attention
+                                                                                                                                                              (kvHead + 2*               1.0
+  100%                                                                                                                                      QKV tokenNumhead) * headSizehiddenSize
+                                                                                                                                                                                         0.8
+      80%                                                                                                                                   OProj tokenNum hiddenSize hiddenSize
+                                                                                                                                   Linear                                                0.6
+                                                                                                                                           GateUp tokenNum 2 * interSize hiddenSize                              Unstable
+      60%
+MFU
+
+
+
+
+                                                                                                                                           Down tokenNum hiddenSize        InterSize     0.4                   Performance
+      40%                                                                                                                                    QK   tokenNum       kvLen     headSize      0.2
+                                                                                                                                    Att.
+                                                                                                                                             SV   tokenNum      headSize     kvLen
+      20%
+                                                                                                                                    * The red numbers vary with the input                      0         1k         2k          3k             4k
+                                                                                                                                    ** the blue numbers vary with the different models                        Sequence Length
+            128       1k           2k           3k            4k 128          1k             2k             3k          4k
+                              Sequence Length                                        Sequence Length
+                                                             Atten. Latency         Prefill        Verify      Decode
+                     Block
+                   size=128
+                                    Block
+                                   size=64
+                                                   Block
+                                                  size=32    Mem. Latency           Rearrange            Merge                         Figure 6. GEMM Operations in LLMs and their MFU.
+                  (c) The MBU of Decode Attention                   (d) Latency Overhead of Memory Operations
+
+      100%                                                                                                        59%
+      80%
+                                                                                                                                   6(b), employing a general-purpose GEMM kernel (torch-npu
+                                                                                   13%
+MBU
+
+
+
+
+      60%
+                                                                                                  39%                              2.1 linear operator [17]) to accommodate all possible results
+      40%                                                                                                                          in unstable performance and fails to achieve optimal utiliza-
+      20%
+                                                                                                                                   tion across all GEMM operations.
+            128       1k            2k          3k            4k          4P1V0D      1P12V0D           1P1V32D
+                              Sequence Length                      *xPyDzV denotes the batch size for PDV
+                                                                                                                                   3.3 Hybird P/D/V Stages
+             Figure 5. The MFU and MBU of Attention Kernel.                                                                        In practical systems, P/D/V stages may exist independently
+                                                                                                                                   or coexist simultaneously, leading to arbitrary combinations
+                                                                                                                                   of interleaved P/D/V stages within a given scheduling bud-
+   Lastly, unlike Linear, where tokens from different batches                                                                      get. For Linear operations, tokens from different stages can
+can share weights, decode Attention requires each token to                                                                         reuse the same large model weights. Therefore, it is straight-
+have its own independent K/V cache, making reuse impossi-                                                                          forward to group them together and treat them as the left
+ble. This leads to inherently memory-bounded computations.                                                                         matrix in a GEMM operation. In contrast, handling Atten-
+PagedAttention [41] further fragments the K/V cache access                                                                         tion operations is significantly more complex. Tokens from
+patterns, limiting access to small block-sized portions in-                                                                        different stages and batches need to be processed using their
+stead of large contiguous blocks. As illustrated in Fig. 5(c),                                                                     respective K/V. As a result, different combinations of P/D/V
+the MBU decreases as block size becomes small, exacerbating                                                                        stages require different optimization methods. Enumerating
+the memory bottleneck of the decode stage.                                                                                         and tailoring optimizations for each possible combination of
+                                                                                                                                   stages and batches is highly labor-intensive and impractical.
+3.2 Dynamic GEMM                                                                                                                      A common alternative is a batch-by-batch execution, such
+GEMM is a core operation in LLMs. Beyond the four GEMM                                                                             as selective batching [58], which processes each batch inde-
+operations in the Linear section, the query-key (𝑄𝐾) and                                                                           pendently by invoking the corresponding Attention kernel.
+score-value (𝑆𝑉 ) computations in Attention also rely on                                                                           However, this method introduces additional memory over-
+GEMM. We summarize all of GEMM operations in Fig. 6(a).                                                                            head from splitting, rearranging, and merging data, which de-
+The 𝑀 dimension is tied to the number of tokens. For Lin-                                                                          grades overall system performance. As shown in Fig. 5(d), the
+ear operations, the dimensions 𝑁 and 𝐾 are influenced by                                                                           memory overhead may account for more than 50%. Further-
+ℎ𝑖𝑑𝑑𝑒𝑛𝑆𝑖𝑧𝑒, which varies with the architecture of the LLM.                                                                         more, batch-by-batch processing leads to inefficient utiliza-
+For Attention operations, the 𝑁 and 𝐾 dimensions are depen-                                                                        tion of computational resources, further limiting efficiency.
+dent on the token K/V length. The number of tokens in the
+prefill and verify stages is highly dynamic, and this variabil-
+ity is further amplified by the introduction of Prefix Reusing                                                                     4       Overview of XY-Serve
+[14, 61], making token lengths even more unpredictable. Con-                                                                       To address the aforementioned challenges, we developed XY-
+sequently, the 𝑀, 𝑁 , and 𝐾 dimensions in GEMM operations                                                                          Serve, a versatile end-to-end production LLM serving system.
+for LLM are all dynamically changing.                                                                                              As illustrated in Fig.7(a), it is built on four key components:
+   Most AI accelerators are typically optimized for specific                                                                       Token-wise Scheduling, Dynamic Task Decomposition and
+tile sizes, such as 16 × 16. Therefore, designing GEMM on AI                                                                       Reordering, Meta-Attention, and SmoothGEMM.
+accelerators to support arbitrary shapes while ensuring high
+performance is inherently challenging. Irregular shapes com-                                                                       4.1 Token-wise Scheduling
+plicate parallelism and load balancing, causing inefficiencies                                                                     When a user’s request enters the system, it first passes through
+in workload distribution across processing units. Moreover,                                                                        the APC (Automatic Prefix Caching) module, which matches
+the optimization space for flexible algorithms to adapt to                                                                         the incoming prompt against existing prompts in the K/V
+diverse shapes is complex. Additionally, handling boundary                                                                         cache, enabling token-wise reuse. Any unmatched tokens are
+conditions for non-uniform matrix sizes introduces over-                                                                           added to the scheduling queues. Consequently, the prompt
+head, which further affects performance. As shown in Fig.                                                                          length in the scheduling queues is the user’s input length
+
+
+
+                                                                                                                             318
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                                                                        Mingcong Song et al.
+
+
+(a) Overview of XY-Serve                                                                                                               Token-wise Scheduling                             Dynamic Task            Dynamic Task
+                                                                                                                                                                                         Decomposition            Reordering
+
+
+
+
+                                                                                                         length of tokens
+                                               Scheduling Queues
+
+
+
+
+                                                                                                          Select a budget
+   Automatic Prefix Caching                                                                                                  Chunk 1
+                                                                                                                                                    budget Length
+                                                                                                                                                                                             Token                 Task
+    Incoming
+     Prompts         APC                      Prefill          Verify Decode                                                                                      Reserved slots             Table                 Table
+                                                                                                                             Chunk 2                                                                         Meta-primitives
+                             Cached
+                                                                                                                                               Split long prefill across chunks                  §4 Meta-           §5 Smooth
+                             Prompts                                                                                         Chunk 3                                                             Attention            GEMM
+
+ (b) Task Decomposition and                                                                Tile 1       tileSize                                  Tile 3
+                                                                                                                                                                               Core 1                      Task Table
+
+
+
+
+                                                                   tokenNum
+   Reordering for Attention                              Stage 1                         kvLen
+                                                                                                                                                                               Core 2               CoreID Task Allocation
+                                                                                                                                                                                                           [tileID, headID]
+                                                                                                                                                                               Core 3
+                                                                                           Tile 2                                                 Tile 2                       Core 4
+   Chunk               Token Table                                                                                                                                                                  Core 1 [3,1], [5,2], [6,1]
+                                                                                                                  Sorted by                                                    Core 4
+           StageID Start tokenNum kvLen tileSize                                                               tileSize×kvLen                                                  Core 3               Core 2 [3,2], [5,1], [6,2]
+                                                                                           Tile 3                                                 Tile 1
+           Stage 1   0      362   1318    128                                                                                                                                  Core 2               Core 3 [2,1], [1,2], [4,1]
+           Stage 2 362        1   1657     16            Stage 2                           Tile 4                                                 Tile 5                       Core 1               Core 4 [2,2], [1,1], [4,2]
+           Stage 3 363       53   1986     64            Stage 3
+
+
+
+
+                                                                                                                                                                                  ...
+                                                                                           Tile 5                                                 Tile 6                                           Allocate tasks in the order of
+           Stage 4 416       1    2036     16            Stage 4                                                                                                                                     symmetrical-round robin
+                                                                                           Tile 6                                                 Tile 4
+
+(c) Task Decomposition and Reordering for Linear                                                                                                                               mID x nID                   Task Table
+                          Token Table                                                               K                                             nTile                    1    2    3   4
+   Chunk
+
+
+
+
+                                                                                                                                       mTile
+                                                                                                                             nLen                                                                  CoreID Task Allocation
+                                                                                                                                                                       1
+                                                                              tokenNum
+                                            tileSize                                                                                                                                                           [mID, nID]
+           Operation Start tokenNum nLen [mTile, nTile] Concatenate
+
+
+
+
+                                                                                                                                                             Mapping
+             QKV       0      417   12288 [32, 128]
+                                                        into a single
+                                                           tensor
+                                                                                                    ×                                                                  2                           Core 1 [1,1], [3,1], [4,3], [2,3]
+                                                                                                                                                                                                   Core 2 [1,2], [3,2], [4,4], [2,4]
+             OProj     0      417    4096  [32, 64]                                                                                                                    3
+
+
+                                                                                                          K
+            GateUp     0      417   22016 [32, 256]                                                                                                                                                Core 3 [2,1], [4,1], [3,3], [1,3]
+                                                                                                                                                                       4
+             Down      0      417    4096  [32, 64]                                 Activation                              Weight               Result                                            Core 4 [2,2], [4,2], [3,4], [1,4]
+                                                                                                                                                                        Offline-profiled order
+
+
+                                                               Figure 7. Overview of XY-Serve.
+
+minus the length of tokens already cached in the K/V cache.                                                                 or verify tasks. Prefill-only chunks are scheduled when the
+Since both the user’s input and the cached token lengths are                                                                queue contains no decode or speculative tokens. Therefore,
+dynamically variable, the prompt lengths in the scheduling                                                                  there is no task starvation problem.
+queues become even more dynamic. The scheduling queues
+also include decode and speculative tokens from previous                                                                    4.2 Task Decomposition
+requests awaiting processing.                                                                                               While token-wise scheduling improves efficiency by reduc-
+   As shown in Fig. 7(a), the composition of P/D/V stages                                                                   ing bubbles and optimizing resource utilization, the four
+in the scheduling queues is inherently unpredictable, with                                                                  levels of dynamism it introduces pose significant challenges
+token counts for each stage varying arbitrarily and each                                                                    for execution, especially on AI accelerators with tile-based
+stage having a distinct historical K/V length. Additionally,                                                                programming models.
+the total token count in a chunk may not always match the                                                                      To address these challenges, we propose a dynamic decom-
+budgeted length and can fall below the budget under a low                                                                   position mechanism that converts dynamic workloads into
+system load.                                                                                                                hardware-friendly, tile-based computational units. Using the
+   Previous works have proposed scheduling strategies, which                                                                Token-Table, each stage is logically decomposed into tile
+execute different stages in a prefill-priority or decode-priority                                                           blocks. At the tile level, computation modules can process
+manner [58], or combine tokens from decode and prefill in                                                                   these blocks in parallel without distinguishing their P/D/V
+a single step [24]. However, these strategies only focus on                                                                 stage origin. Importantly, this tiling decomposition is purely
+simple combinations of P/D stages. To create a more flexi-                                                                  logical, requiring no changes to the physical data layout.
+ble scheduling strategy that addresses the four levels of dy-                                                                  In the following sections, we present a detailed analysis of
+namism discussed above, our scheduling operates entirely at                                                                 how tiling decomposition is applied to Attention and Linear.
+the granularity of individual tokens, regardless of their origin.
+It selects a fixed-budget length of tokens from the schedul-                                                                4.2.1 Attention Decomposition. For attention, the Token-
+ing queues to form chunks, which may include tokens from                                                                    Table contains entries for each P/D/V stage, with each entry
+prefill, verify, and decode stages. To improve first-token la-                                                              specifying key attributes, including the stageID, the start
+tency, prefill requests are prioritized. If a user’s prefill prompt                                                         position, the number of tokenNum, the historical kvLen, and
+exceeds the budget length, it is split into smaller parts to                                                                the tileSize. As shown in Fig. 7(b), stage-1 (P) is decomposed
+ensure that each scheduled chunk remains within the bud-                                                                    into three tiling blocks, while stage-2 and stage-4 (D) are
+get. To minimize interruptions caused by prefill on decode                                                                  each divided into one tiling block, and stage-3 (V) is also
+and maintain a stable Time Between Tokens (TBT), certain                                                                    decomposed into one tiling block. Each tiling block consists
+slots are reserved for decode and speculative tokens. Conse-                                                                of ℎ𝑒𝑎𝑑𝑁𝑢𝑚 tiling units, resulting in a total of 6 × ℎ𝑒𝑎𝑑𝑁𝑢𝑚
+quently, in most batches, there is a mixture of partial decode                                                              tiling units at the tiling level.
+
+
+
+                                                                                                        319
+XY-Serve: End-to-End Versatile Production Serving for Dynamic LLM Workloads                 ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+4.2.2 Linear Decomposition. For Linear operations, since                   offline optimization to determine the most efficient task allo-
+tokens from different stages are concatenated into a single                cation strategies for linear ops. This involves profiling and
+tensor, they needn’t be differentiated between stages and                  customizing task allocation for each shape to maximize per-
+can be processed uniformly. In the Token-Table, each Linear                formance. The optimized strategies are stored for use during
+operator corresponds to a single entry shown in 7(c). The                  execution. During runtime, XY-Serve leverages the Token-
+four primary Linear operations are QKV, OProj, GateUp, and                 Table to identify the current shape and uses this information
+Down. For these operations, the start position is set to 0, indi-          to retrieve the corresponding pre-optimized Task-Table. The
+cating that all tokens are processed from the beginning of the             Task-Table is then passed to the Linear module, guiding it to
+concatenated tensor. The tokenNum equals the total number                  execute tasks in an optimized manner.
+of tokens in the currently scheduled chunk. Tiling is per-
+formed on the result matrix of dimensions 𝑡𝑜𝑘𝑒𝑛𝑁𝑢𝑚 ×𝑛𝐿𝑒𝑛,
+where each tiling block corresponds to a submatrix of the                  5   Meta-Attention
+result. Each tiling block is assigned to a single AI core, allow-          After request scheduling and task assignment, the inputs
+ing different cores to process distinct blocks in parallel. Each           for the Attention module are organized into unified tiles.
+Linear operator has its own specific 𝑡𝑖𝑙𝑒𝑆𝑖𝑧𝑒, determined by               However, these tiles are still hybird of PDV tasks, with vari-
+the 𝑡𝑜𝑘𝑒𝑛𝑁𝑢𝑚 and 𝑛𝐿𝑒𝑛 shapes of the operation.                             ous shapes and masks. Moreover, the KV Cache layout for
+                                                                           these tiles may be either contiguous or consist of discrete
+4.3 Task Reordering                                                        blocks. Enumeratively customizing optimizations for all pos-
+After decomposing the dynamic workloads from P/D/V mixed                   sible inputs is labor-intensive and non-scalable. Therefore,
+stages into fundamental tile units, it is necessary to reorder             we propose Meta-Attention, where “meta” signifies “unified”
+these tile units and generate a Task-Table to enhance perfor-              and “primitive.” It further unifies the mask handling for tiles
+mance. The Task-Table is responsible for scheduling these                  and the management of the KV Cache. By decomposing the
+tile units onto the hardware, with each entry specifying a                 Attention computation into the fundamental operations of
+coreID and the list of tiles assigned to that core. Based on               GEMM-Softmax-GEMM, it significantly reduces optimiza-
+this Task-Table, Attention, and Linear can simply retrieve                 tion difficulty and is more conducive to push the hardware
+the corresponding tile units according to their coreID. This               to its limit.
+approach not only maximizes hardware efficiency but also
+simplifies the design of Attention and Linear kernels.
+                                                                           5.1 Meta-Attention Design
+4.3.1 Attention Reordering. After performing dynamic                       5.1.1 Handling Token-wise Processing. The core re-
+tiling on the various stages, the resulting tiles exhibit varying          quirement for supporting both Prefix Caching and Chunked
+values for 𝑡𝑖𝑙𝑒𝑆𝑖𝑧𝑒 and 𝑘𝑣𝐿𝑒𝑛. This variation can lead to                  Prefill is that the attention module must be capable of han-
+load imbalances during parallel processing. To address this,               dling arbitrary K/V cache lengths and performing token-wise
+we calculate the computational load of each tile as its area,              K/V cache reuse. SGLang [61] initially proposed a radix tree
+defined as 𝑡𝑖𝑙𝑒𝑆𝑖𝑧𝑒 × 𝑘𝑣𝐿𝑒𝑛. For efficient scheduling, the tiles           to manage the historical K/V cache, with a node hosting a
+are initially sorted based on their computational load, from               single token, thus achieving token-wise reusing. However,
+largest to smallest. Subsequently, the tiles are allocated to the          recent work has shown that increasing the node granularity
+AI cores in a symmetrical round-robin fashion. As depicted                 to block-wise can boost decode token throughput by 16%
+in Fig. 7(b), assuming there are four AI cores, the tile units are         [16]. Moreover, the lack of block-wise token management
+assigned in the sequence core-1, core-2, core-3, core-4, core-4,           precludes state-of-the-art optimizations like FlashMLA [4].
+core-3, core-2, core-1, and so forth, repeating this pattern to            Consequently, SGLang is gradually adding support for block-
+ensure a balanced and efficient allocation of computational                wise token management, which, however, introduces partial
+tasks. This approach is designed to quickly obtain a relatively            matching problems.
+optimal arrangement, without causing significant latency                      As displayed in Fig. 8(a), since they match the K/V cache
+overhead compared to other heuristic algorithms.                           in block granularity, the partially matched block at the tail
+    This task scheduling information is stored in the Task-                will not be reused, causing some recomputation overhead
+Table and passed to the Attention module. The Task-Table                   and non-unified management of the K/V Cache, which de-
+guides the Attention module to perform parallel processing                 grades the performance. In contrast, we maintains block-wise
+efficiently, leveraging both the head and tile dimensions. This            management while achieving token-wise reuse, supporting
+mechanism ensures balanced computation across AI cores,                    arbitrary-length matching and optimal throughput.
+maximizing hardware utilization.                                              As illustrated in 8(b), to support a robust token-wise K/V
+                                                                           cache reusing, when a mismatch occurs at a particular node,
+4.3.2 Linear Reordering. Given that only a limited set                     we use a copy-on-write mechanism to create a new block,
+of fixed shapes is necessary to be supported, we perform                   refresh the new data into this block, and then add the block
+
+
+
+                                                                     320
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                                       Mingcong Song et al.
+
+
+   (a) Block Wise K/V Reuse                (b) Token Wise K/V Reuse                                Sequence-based Speculation
+                                                                                                                                                           kvLen        specLen
+   Radix Tree                              Radix Tree                                                                           Mask                                              No additional
+                0, 2, 12, 10
+                                                               0, 2, 12, 10                             √       ×       ×   ×           qLen                                       processing
+                                                   9, 15, 3, 22           26, 27, 8, 11                                                specLen        specLen×kvLen
+                                                                                                                                                                                      Remain
+      9, 15, 3, 22       26, 27, 8, 11                                                                                                                                                Casual
+                                             19, 25, 14, 4         19, 25, 20, 18
+                                                                                                       Low Acceptance Rate
+                                will not
+       19, 25, 20, 18                          24, 16, 5, 17      copy-on-write                    Tree-based Speculation                        Entirely Valid     Speculative Mask
+                               be reused
+                                             33, 28, 30, 31                                                  ×                                           kvLen        specLen
+                                                                                                                                                                                          specLen
+    Load K/V to Attention Kernel              Load K/V to Attention Kernel
+                                                                                                          √     × Mask qLen
+                                                                                                                    √
+        Non-unified managing
+                                                                                                            ×           √          specLen          specLen×kvLen
+
+
+
+
+                                                                                                                                                                                    ...
+                                              Seamlessly managing historic
+          of the K/V Cache                      and generated K/V Cache
+                                                                                                       High Acceptance Rate                         Added row-by-row before softmax
+        Matched             Particially       Newly Generated                 ID for Each
+        Tokens            Matched Tokens          Tokens             19         Token
+                                                                                                            Figure 9. Speculative Decoding Algorithms.
+             Figure 8. Token-wise K/V Cache Reuse.
+                                                                                                  of the mask for each row. This method efficiently supports
+back into the radix tree. If additional new blocks are gener-                                     arbitrary speculation lengths. Once the mask is adjusted, the
+ated after this mismatch, these blocks are directly inserted                                      subsequent computation follows the standard prefill process.
+as child nodes of the mismatched block in the radix tree.                                         Using the speculative mask as a mediator, we can efficiently
+   This mechanism effectively manages both historical and                                         support a wide range of speculative algorithms.
+newly generated K/V data, seamlessly merging them using                                           5.2 Meta-Attention Optimizations
+copy-on-write to ensure the continuity of the K/V cache.
+During the prefill attention process, the corresponding K/V                                       5.2.1 Tile-Based Cube-Vector Orchestration. Pipelin-
+blocks—both historical and newly generated—are read based                                         ing the execution of Attention is well studied in FlashAt-
+on the block table. We also track the actual number of tokens                                     tention3 [46] and other works. In this work, we focus on
+in the last block, ensuring accurate token-wise processing.                                       addressing the dynamicity of the workload and selecting the
+                                                                                                  optimal pipelining method based on workload characteris-
+5.1.2 Minimizing Mask for Speculative Decoding. Spec-                                             tics. Through Task Decomposition and Reordering, along
+ulative execution can be classified into two types: sequence-                                     with processing for Mask and K/V cache, the Attention mod-
+based speculation[27, 43, 49, 60] and tree-based speculation[29,                                  ule obtains units that are regular and have balanced loads. As
+42]. Sequence-based speculation generates multiple tokens                                         a result, the processor only needs to consider how to execute
+within a single sequence; however, its acceptance rate is                                         the current units efficiently.
+generally low. In contrast, tree-based speculative algorithms                                        The key to ensuring optimal Attention performance lies
+generate predictions for multiple sequences simultaneously,                                       in managing intermediate data transfers exclusively through
+organizing them in a tree structure. This approach can fur-                                       the L2 cache, thus avoiding the high cost of HBM accesses.
+ther improve the acceptance rate of speculation.                                                  For sequences with shorter lengths (𝑘𝑣𝐿𝑒𝑛 is small), splitting
+   Both types require support for arbitrary speculation lengths.                                  along the K/V dimension is unnecessary, as it would intro-
+Furthermore, due to the complex causal structure of tokens,                                       duce additional computation and updates. In such cases, a
+tree-based speculation employs an irregular mask, which is                                        three-stage pipeline can be effectively utilized. This pipeline
+not well-suited for tile-based programming models. By ana-                                        overlaps the latency of the softmax operation with the 𝑄𝐾
+lyzing the structure of this mask, we can identify regularities                                   and 𝑆𝑉 stages, as illustrated in Fig. 10(a).
+that enable efficient processing.                                                                    However, when dealing with extremely long sequences,
+   As illustrated in Fig 9, the speculative decoding extends the                                  splitting along the K/V dimension becomes essential due to
+causal mask of standard prefill (𝑞𝐿𝑒𝑛 ×𝑘𝑣𝐿𝑒𝑛) by introducing                                      L2 cache limitations. This necessity introduces an additional
+a 𝑠𝑝𝑒𝑐𝐿𝑒𝑛 × (𝑘𝑣𝐿𝑒𝑛 +𝑠𝑝𝑒𝑐𝐿𝑒𝑛) region. Within this region, the                                      computation stage, where the 𝑆𝑜 𝑓 𝑡𝑚𝑎𝑥 operation is divided
+𝑠𝑝𝑒𝑐𝐿𝑒𝑛 × 𝑘𝑣𝐿𝑒𝑛 is entirely valid, while only the 𝑠𝑝𝑒𝑐𝐿𝑒𝑛 ×                                       into two distinct steps: 𝑆𝑜 𝑓 𝑡𝑚𝑎𝑥 and Update. Consequently,
+𝑠𝑝𝑒𝑐𝐿𝑒𝑛 section requires special handling, referred to as the                                     the pipeline expands to four stages: 𝑄𝐾 → 𝑆𝑜 𝑓 𝑡𝑚𝑎𝑥 →
+‘Speculative Mask’.                                                                               𝑆𝑉 → Update, as depicted in Fig. 10(b).
+   For sequence-based speculation, the speculative mask re-                                          For fully decode-based tasks, we can adopt a new pipeline
+mains causal, and no additional processing is required, allow-                                    design, as shown in Fig. 10(c). It optimizes performance fur-
+ing the direct application of our mask-free approach. In tree-                                    ther and addresses the memory-bound issue of decode. Since
+based speculation, we generate only the 𝑠𝑝𝑒𝑐𝐿𝑒𝑛 × 𝑠𝑝𝑒𝑐𝐿𝑒𝑛                                         the Query in the decode stage consists of only a single token,
+part of the mask externally, which is then passed to the ker-                                     the 𝑄𝑢𝑒𝑟𝑦 matrix is reduced to a vector. Consequently, the
+nel and applied to the corresponding attention score matrix.                                      𝑄𝐾 and 𝑆𝑉 computations transition from general matrix
+   Our design processes the speculative mask row-by-row,                                          operations to matrix-vector operations. Executing these op-
+enabling precise control over the start position and length                                       erations on cube unit would lead to inefficient utilization of
+
+
+
+                                                                                            321
+XY-Serve: End-to-End Versatile Production Serving for Dynamic LLM Workloads                                                                                                ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+                        QK           Softmax            S×V       Update            QK&Softmax       n   tile n        Idle
+                                                                                                                                                                Selective Read                               Selective Write
+
+
+
+
+                                                                                                                                                              Tokens
+             (a) Three-Stage Pipeline                             Overlap the computation of softmax with QK, SV
+
+
+
+
+                                                                                                                                               Tokens
+                                                                                                                                                                       Token                                          Token
+
+
+
+
+                                                                                                                                               Cumu.
+     Cube     1     2                    1          3         2               4      3           5   ...           n      n+2                                          Table     M
+                                                                                                                                                                                          ×                      M    Table
+    Vector                   1                  2                     3                  4           ...               n+1
+                                                                                                                                                                                           Virtual Padding
+             (b) Four-Stage Pipeline                                      Segment dimension for long sequences
+                                                                                                                                                        HBM                              On-chip Buffers                       HBM
+     Cube     1     2                   1           3             2        4        3      5             n   ...
+                                                                                                             n+2
+    Vector               1                  2            1            3       2       4       3          n+1 ... n
+                                                                                                                                                          (a) Virtual Padding along the M Dimension
+             (c) Two-Stage Pipeline                                    Simultaneously loading K Cache and V
+                                                                        Cache enhance bandwidth utlization                                                                                             Load by page
+                                                                                                                                                                                         Set to zero
+    Cube                         1                  2                     3                  4             ...                n
+                                                                                                                                                                                         in Softmax
+    Vector      1            2            3             4            5                   n+1               ...                                            Load by page
+             Move the QK to Vector Unit and fuse it with softmax into a single operation    time
+                                                                                                                                                         ×                           K                       ×          K
+                                                                                                                                                                       N
+                                                                                                                                                                                                         Reduced
+                  Figure 10. Pipeline of Meta-Attention.                                                                                                                                      N           in SV
+
+                                                                                                                                                        Query × Key                           Attention Score × Value
+                                                                                                                                                             (b) Padding-Free along the N, K Dimensions
+resources. To address this, we move the 𝑄𝐾 operation to the
+vector unit and fuse the 𝑄𝐾 and 𝑆𝑜 𝑓 𝑡𝑚𝑎𝑥 operations into                                                                                     Figure 11. Handling Arbitrary Shapes of GEMM Operations.
+a single operator. This fused operator ensures that the exe-
+cution time for the vector unit aligns closely with the time
+required for the cube unit to perform the 𝑆𝑉 operation, ef-                                                                                   6.1 Virtual Padding on the M Dimension
+fectively balancing the workload. Furthermore, the cube and                                                                                   As illustrated in Fig. 11(a), the dimension 𝑀 in GEMM is
+vector units can simultaneously access the K/V cache data                                                                                     intrinsically related to the number of tokens. In the case of
+stored in HBM, improving memory bandwidth utilization                                                                                         Linear GEMM, the 𝑀 dimension corresponds to the cumu-
+and further boosting overall performance.                                                                                                     lative token count across P/D/V stages, while in Attention
+                                                                                                                                              GEMM, it is determined by the token count in each stage. In
+5.2.2 Pipeline Selection Strategy. The selection of the
+                                                                                                                                              cube-based or tensor-based AI accelerators, matrix computa-
+pipeline depends on the workload and hardware parameters.
+                                                                                                                                              tions are typically constrained by a minimum tiling size (e.g.,
+For decode-only workloads, the two-stage pipeline is acti-
+                                                                                                                                              16 × 16 for cube cores). A common practice is to pad the 𝑀
+vated as it is decode-dedicated. For mixed workloads with
+                                                                                                                                              dimension to align with a multiple of the tiling size. How-
+different task types, it is important to ensure that their inter-
+                                                                                                                                              ever, this dynamic padding introduces non-trivial memory
+mediate data fit in the cache to avoid memory access. The
+                                                                                                                                              overhead and degrades performance.
+size of intermediate data for each tile is determined by the
+                                                                                                                                                 To mitigate these issues, we replace the physical padding
+product of 𝑡𝑖𝑙𝑒𝑆𝑖𝑧𝑒 and 𝑠𝑒𝑞𝐿𝑒𝑛. When processing 𝑐𝑜𝑟𝑒𝑁𝑢𝑚
+                                                                                                                                              in global memory with virtual padding on the chip, combined
+tiles simultaneously, we use Eq. (1) as the criterion. If the
+                                                                                                                                              with the selective read and write mechanisms shown in Fig.
+hardware cache size is greater than 𝛼 times the total amount
+                                                                                                                                              11(a). This approach allows for efficient handling of matrices
+of data across all cores (𝛼 is a tuning parameter), we choose
+                                                                                                                                              with arbitrary shapes. Specifically, on-chip buffer allocations
+the three-stage pipeline; otherwise, the four-stage pipeline
+                                                                                                                                              are made in tiling-size units to fully exploit the hardware’s
+is used to further divide the data.
+                                                                                                                                              computational potential. During data transfer from global
+                                                                                                                                              memory to the on-chip buffer, selective read operations copy
+                                                        𝐶𝑜𝑟𝑒𝑁𝑢𝑚
+                                                          ∑︁                                                                                  only the actual, non-padding data. Similarly, selective write
+             𝐶𝑎𝑐ℎ𝑒𝑆𝑖𝑧𝑒 > 𝛼 ×                                                      (𝑆𝑒𝑞𝐿𝑒𝑛𝑖 × 𝑡𝑖𝑙𝑒𝑆𝑖𝑧𝑒𝑖 )                          (1)         operations ensure that only the non-padding outputs are
+                                                              𝑖
+                                                                                                                                              written back to global memory.
+                                                                                                                                                 Because the virtual padding regions do not interfere with
+6       SmoothGEMM                                                                                                                            the computational results of the non-padding regions, this ap-
+As discussed earlier, designing a matrix multiplication op-                                                                                   proach guarantees the correctness of the matrix computation
+eration that supports arbitrary shapes while maintaining                                                                                      results. Moreover, by limiting computations to fixed-shape
+high performance across all possible shapes is a significant                                                                                  matrix multiplications, we can apply highly customized op-
+challenge. To address this, we adopt a memory-compute                                                                                         timizations for these fixed shapes, achieving both high effi-
+co-design strategy. Instead of optimizing matrix multipli-                                                                                    ciency and flexibility for dynamic workloads.
+cation for every possible shape, we focus on maximizing
+performance for fixed shapes. To handle arbitrary shapes                                                                                      6.2 Optimizations for N and K Dimensions
+effectively, we introduce virtual padding at the on-chip mem-                                                                                 For GEMM ops in Attention, dimensions 𝑁 and 𝐾 are tied
+ory level, along with selective read and write mechanisms.                                                                                    to the sequence length, which can take arbitrary values. In
+This approach allows matrix computations to accommodate                                                                                       theory, padding would be required for these dimensions.
+a wide range of shapes seamlessly while still benefiting from                                                                                 However, this is naturally handled by the K/V cache’s block
+the performance advantages of fixed-shape optimizations.                                                                                      page structure, which stores and reads data in blocks aligned
+
+
+
+                                                                                                                                        322
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                                    Mingcong Song et al.
+
+                 interSize,                        interSize,                         interSize,
+    Model       hiddenSize        Model           hiddenSize        Model            hiddenSize          offline profiling to explore possible access patterns and iden-
+   Llama3 8B    14336, 4096   Llama3 70B (TP=8)   3584, 1024    Llama3 405B (TP=8) 6656, 2048            tify the most efficient inter-core distribution strategy. Due to
+   Qwen2.5 7B   18944, 3584   Qwen2.5 32B (TP=4) 6912, 1280     Qwen2.5 72B (TP=8) 3696, 1024
+                                                                                                         the limited number of shapes to handle, this offline tuning is
+   DeepSeek 7B 11008, 4096    DeepSeek 67B (TP=8) 2752, 1024    DeepSeek V3 (TP=8)    2304, 896
+                                                                                                         agile and only takes a few minutes.
+Figure 12. Part of the Mainstream LLM Models’ Intermedi-                                                 7    Evaluation
+ateSize and HiddenSize (after tensor-parallelism).
+                                                                                                         7.1 XY-Serve Implementation
+                                                                                                         We built an Ascend-native inference system based on vLLM
+to multiples of tile size. As shown in Fig. 11(b), by reading                                            [41], leveraging Ascend intrinsic to implement core modules
+entire blocks, the read length inherently conforms to the                                                such as SmoothGEMM, Meta-Attention, and other essen-
+required hardware tile size. Furthermore, this padding does                                              tial operators like normalization, activation, and embedding.
+not affect the final Attention computation because we explic-                                            These operators were exposed to the Python API via py-
+itly set the values in the padded regions to zero during the                                             bind11 [12] and seamlessly replaced the corresponding GPU
+𝑆𝑜 𝑓 𝑡𝑚𝑎𝑥 calculation. This ensures that the padded values are                                           kernels in vLLM, enabling vLLM to support the Ascend NPU.
+effectively excluded from the Attention score. Additionally,                                                To reduce the overhead of frequent Python calls, we of-
+since the padded data is reduced during the Attention 𝑠𝑐𝑜𝑟𝑒                                              floaded the entire model-forward process to C++, integrat-
+× 𝑣𝑎𝑙𝑢𝑒 operation, it does not influence the shape of the final                                          ing the optimized operators into a single C++ function. This
+output. Therefore, matrix multiplication for arbitrary shapes                                            model-forward function is then exposed to vLLM for invo-
+can be efficiently supported without introducing additional                                              cation, ensuring a streamlined and efficient execution path.
+padding overhead for the 𝑁 and 𝐾 dimensions.                                                             Additionally, we replaced the native vLLM scheduler with a
+                                                                                                         token-wise scheduling strategy, integrating workload decom-
+6.3 Handling Dynamic Shapes                                                                              position and computation task reordering to better support
+                                                                                                         dynamic workloads. We redesigned the speculative decod-
+Optimizing GEMM operations for arbitrary shapes has been
+                                                                                                         ing framework in vLLM, enabling token tree construction
+widely studied, as seen in projects like Triton [52] and CUT-
+                                                                                                         and metadata generation for Meta-Attention. These enhance-
+LASS [47]. These approaches make no prior assumptions
+                                                                                                         ments allow us to implement tree-based speculative decod-
+about the load’s characteristics, instead assuming the load
+                                                                                                         ing algorithms, such as Lookahead Decoding [60], further
+could be any value across all dimensions. This leads to defin-
+                                                                                                         improving inference performance.
+ing numerous possible hardware configuration parameters
+like 𝑡𝑖𝑙𝑒𝑆𝑖𝑧𝑒 and 𝑤𝑎𝑟𝑝𝑁𝑢𝑚 and setting different optimiza-                                                7.2 Performance of Meta-Attention
+tion branches for all potential shapes. Generating the opti-
+                                                                                                         In this section, we evaluate the performance of the atten-
+mal kernel is done through online solving or offline tuning,
+                                                                                                         tion kernel under dynamic workloads typically encountered
+which introduces a complex optimization space and unstable
+                                                                                                         in real-world systems. The comparison targets are Prompt-
+performance.
+                                                                                                         FlashAttention (PFA) [19] and IncreFlashAttention (IFA) [18]
+   However, in the Linear module, the GEMM operation’s
+                                                                                                         from torch-npu 2.1[7]. We compare their performance in two
+𝑁 and 𝐾 dimensions are determined by model parameters,
+                                                                                                         scenarios: when P/D/V stages are mixed and when they ap-
+which are summarized in Fig. 12. These parameters are suf-
+                                                                                                         pear individually.
+ficiently large that even after tensor parallelism (TP), there
+are still enough tasks to tile, so a larger 𝑡𝑖𝑙𝑒𝑆𝑖𝑧𝑒 can be used.                                        7.2.1 Attention for P/D/V Mixed Batch. We selected
+Additionally, these dimensions are typically multiples of the                                            recently released benchmarks for two common LLM infer-
+hardware tile size (e.g., 16), eliminating the need for extra                                            ence scenarios (Coding[8] and Conversation[9]) from Azure
+padding. Therefore, the GEMM in the Linear part only needs                                               and BurstGPT. After setting the budget length at 4𝑘 and run-
+to consider variations in the 𝑀 dimension, which is restricted                                           ning them end-to-end in the XY-Serve system, we analyzed
+to integer multiples of 𝑡𝑖𝑙𝑒𝑆𝑖𝑧𝑒 between 1 and the budget                                                cases with mixed P/D/V stages in one batch. As shown in
+length after virtual padding.                                                                            Fig. 13, we broke down the latency of one Attention layer
+   This makes the Linear part’s GEMM relatively regular,                                                 for different models. In systems with Speculative Decod-
+with the number of cases to consider significantly reduced.                                              ing enabled, the actual decode stage accounts for a small
+This enables customized optimization for these specific shapes,                                          proportion. Moreover, Meta-Attention delivers an average
+especially for optimizations that are hard to implement stat-                                            performance increase of 11% and 26% over the SOTA NPU
+ically, such as swizzling [22]. Swizzling improves matrix                                                kernels in the two scenarios. This is firstly attributed to Meta-
+multiplication performance by changing the task allocation                                               Attention’s own optimization and secondly to Task Reorder-
+order across AI cores, enhancing L2 cache hit rates. Instead                                             ing, which achieves fast load-balancing with less than 1%
+of determining the optimal allocation strategy for swizzling                                             latency overhead. In the Conversation scenario, the shorter
+online through complex theoretical formulas, we conduct                                                  average input leads to more mixed stages in the same budget
+
+
+
+                                                                                                   323
+XY-Serve: End-to-End Versatile Production Serving for Dynamic LLM Workloads                                                                                 ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+   Letency                                                                        Meta-                Meta-                          Relative Latency         PFA           PFA (without Concatenate)            Meta-Attention
+ Breakdown         Prefill     Verify         Decode        Reordering           Attention        Attention+Greedy
+  100%
+                                          Coding                                    Conversation                             1.00
+  80%
+                                                                                                                              0.75         Qwen2-7B                                             Qwen2-7B
+  60%                                                                                                                                     ChunkSize=4k                                         ChunkSize=8k
+                                                                                                                              0.50
+  40%
+                                                                                                                              0.25
+  20%
+                                                                                                                                     4k     16k       28k     40k      52k       64k     4k        16k    28k     40k       52k   64k
+   0
+              Qwen       Qwen       Llama          Llama           Qwen           Qwen          Llama    Llama                        Cumulative Sequence Length                             Cumulative Sequence Length
+             2.5-72B    2.5-32B     2-13B           2-7B          2.5-72B        2.5-32B        2-13B     2-7B
+
+
+                                                                                                                            Figure 15. Long Sequence Attention with Chunked Prefill.
+            Figure 13. Performance of P/D/V Mixed Batch.
+                                                                                                                                     Relative     PFA    Concatenate         BatchSize=8       BatchSize=128    BatchSize=32     IFA
+                                                                                                                                     Latency      Meta-Attention             BatchSize=64      BatchSize=16       Meta-Attention
+            Relative Latency            PFA         PFA (Without Concatenate)                   Meta-Attention
+                                                                                                                                          (a) Llama2-7B Verify Attention                       (b) Llama2-7B Decode Attention
+              Llama2-7B Prefill with Prefix                          Qwen2-7B Prefill with Prefix                                                                                      1.0
+ 1.00
+                                                                                                                             1.00                                                      0.8
+ 0.75                                                                                                                                                                                  0.6
+                                                                                                                             0.10                                                      0.4
+ 0.50
+                                         SeqLen=4k                                                                                                                                     0.2
+                                                                                                  SeqLen=8k                  0.01                                                      0
+ 0.25                                                                                                                                 512 1k      2k 4k       512 1k    2k      4k           128    256     512     1k       2k    4k
+                                                                                                                                                  Sequence Length                                         Sequence Length
+  0
+        0         1k           2k             3k           4k 0             1k             2k           3k       4k
+                  Matched Prefix Length                                  Matched Prefix Length                               Figure 16. Performance of Verify and Decode Attention.
+ Figure 14. Performance of Prefill Attention with Prefix.
+                                                                                                                            pipeline parallelism [23, 50]. On the other hand, it reduces
+                                                                                                                            the impact of prefill on decoding interruptions [24]. The
+length, highlighting Meta-Attention’s dynamic workload-                                                                     Chunked Prefill method splits long sequences into multi-
+handling ability and resulting in greater performance gains.                                                                ple chunks, processing them sequentially. After processing
+Furthermore, because the reordering of attention tasks can                                                                  each chunk, the corresponding keys and values are stored
+be designed flexibly, we experimented with replacing the                                                                    in the K/V cache for reuse by subsequent chunks. Fig. 15
+symmetric round-robin policy by a greedy algorithm [56].                                                                    shows the performance of our Chunked Prefill method for
+This change yields only a marginal improvement, while the                                                                   long sequences (with chunk sizes set to 4𝑘 and 8𝑘 and a
+extra reordering overhead largely offsets its benefit.                                                                      sequence length of up to 64𝑘). The results demonstrate that
+                                                                                                                            our performance surpasses PFA across all sequence lengths.
+7.2.2 Prefill Attention with Arbitrary Prefix. In practi-
+                                                                                                                            Even when comparing pure computation time with PFA, our
+cal systems, the length of the matched system prefix can vary
+                                                                                                                            kernel shows an improvement up to 22.2%.
+arbitrarily. Therefore, it is crucial to assess performance un-
+der arbitrary-length prefix reuse. To simulate this behavior,                                                               7.2.4 Speculative Decoding. Next, we evaluate the per-
+we adjust the number of reused tokens for an input prompt,                                                                  formance of the verify kernel under different context lengths.
+token by token, and evaluate performance under different                                                                    We compare the performance with a 𝑏𝑎𝑡𝑐ℎ𝑆𝑖𝑧𝑒 = 4, 𝑠𝑝𝑒𝑐𝐿𝑒𝑛 =
+lengths of system prefix matched. Fig. 14 shows the perfor-                                                                 31 and a 𝑏𝑎𝑡𝑐ℎ𝑆𝑖𝑧𝑒 = 8, 𝑠𝑝𝑒𝑐𝐿𝑒𝑛 = 15. Fig. 16(a) shows that,
+mance under different system prefix reuse (ranging from 0                                                                   across different context lengths, our kernel consistently out-
+to 4𝑘) for 4𝑘 and 8𝑘 prompt inputs. The results show that as                                                                performs PFA. Furthermore, as the context length increases,
+the system prefix increases, the processing time of our meta-                                                               the performance improvement becomes increasingly time-
+attention kernel decreases. However, the PFA kernel does                                                                    consuming as the historical length grows. Even when exclud-
+not benefit from prefix reuse, primarily because its prefill                                                                ing this concatenation operation from PFA and comparing
+kernel does not support PagedAttention and only accepts                                                                     only the pure computation time, our kernel still demonstrates
+continuous 𝑄, 𝐾, and 𝑉 . When we concatenate the prefix hits                                                                an average improvement of 28.6%.
+from the K/V cache with the new 𝐾 and 𝑉 , the concatenation
+time increases as the reuse length grows, counteracting the                                                                 7.2.5 Decode Performance. In the decode phase, both
+benefit of prefix reuse. Even when comparing the computa-                                                                   the context length and batch size can vary arbitrarily. To
+tion time of the PFA kernel (excluding the K/V concatenation                                                                flexibly support decoding with arbitrary context lengths,
+process), our kernel performs an average of 22.4% better.                                                                   we enable PagedAttention optimization. To evaluate decod-
+                                                                                                                            ing performance under such conditions, we measure perfor-
+7.2.3 Chunked Prefill with Long Sequences. For pro-                                                                         mance across different context lengths and batch sizes. Fig.
+cessing long sequences, chunking the sequence into smaller                                                                  16 presents the performance of Llama2-7B under varying
+segments is a widely used approach. On the one hand, chunk-                                                                 sequence lengths and batch sizes. The results show that, com-
+ing allows for sequence parallelization by combining it with                                                                pared to the IFA kernel, our kernel achieves performance
+
+
+
+                                                                                                                      324
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                             Mingcong Song et al.
+
+
+              QKV Project        O Project        GateUp         Down              vLLM’s main optimizations (Chuncked Prefill, PagedAtten-
+                                                                                   tion, and Prefix Reusing) and has been accepted by the official
+MFU         Torch-npu Linear              v.s.   SmoothGEMM                        vLLM. It primarily utilizes GEMM provided by torch-npu
+(%)
+  75                                                                               and Fused-Attention operators for computation. The test
+  50                                                                               data is divided into three scenarios: ShareGPT, Prefill-heavy,
+                       Llama2-7B                            Llama2-7B
+  25                                                                               and Decode-heavy.
+  100
+                                                                                      As shown in Fig. 18, we measure performance under fixed
+  75                                                                               request rates per second (QPS) of 4, 8, 16, and 32 for each
+  50                    Llama2-13B                         Llama2-13B              test dataset. The following metrics are collected: average
+  25                       (TP=2)                             (TP=2)               Time-to-First-Token (TTFT), average Time-between-Tokens
+                                                                                   (TBT), and achieved QPS. Even without enabling advanced
+  100
+   75
+                                                                                   features such as prefill-chunked-batching and P/D/V fusing,
+   50                                                                              XY-Serve demonstrates a clear performance advantage over
+                       Qwen2.5-32B                         Qwen2.5-32B
+   25
+                         (TP=4)                              (TP=4)
+                                                                                   the baseline. Specifically, XY-Serve achieves an achieved QPS
+                                                                                   improvement of up to 79% across various workload types.
+  100
+  75
+                                                                                   Additionally, it delivers 64% lower average TTFT and 57%
+  50
+                                                                                   lower average TBT latency. This improvement is primarily
+                       Qwen2.5-72B                         Qwen2.5-72B             attributed to the efficient optimization for operators.
+  25
+                         (TP=8)                              (TP=8)                   With the dynamic scheduling optimizations of prefill-
+        0      1k      2k   3k       4k      0   1k    2k       3k      4k
+                            Sequence Length                                        chunked-batching and PDV fusing enabled, XY-Serve further
+                                                                                   gains an achieved QPS improvement up to 89% and reduces
+              Figure 17. Linear GEMM Performance.                                  average TBT latency by 69% across all scenarios. This out-
+                                                                                   come underscores XY-Serve’s strong support for dynamic
+                                                                                   workloads, effectively benefiting from these enhancements.
+                                                                                      When prefill-chunked-batching is enabled, the length of
+improvements across all combinations of batch size and se-
+                                                                                   tokens processed in each prefill is effectively maintained at
+quence length, with average 12.9% improvements.
+                                                                                   the budgeted length, improving MFU and reducing TTFT
+                                                                                   under high-pressure conditions. However, enabling P/D/V
+7.3 Performance of SmoothGEMM
+                                                                                   fusing results in a slight deterioration of TTFT latency in
+In practical systems, the input length from users can vary                         the Decode-heavy scenario under high throughput pressure.
+arbitrarily, ranging from 0 to the maximum length supported                        In this case, the number of decodes fused with the prefill
+by the model. For long sequences, to minimize the impact of                        increases, which slightly impacts the TTFT.
+prefill on decode and to optimize sequence parallelization, we
+typically adopt the Chunked Prefill strategy, which imposes                        7.4.2 In-House Industry Workloads. We also report XY-
+a constraint on the maximum chunk length, such as 4𝑘. In                           Serve performance on one of our in-house workloads. The
+real-world scenarios, lengths smaller than the chunk size                          average input length for this workload is 2169 tokens, using
+may also be encountered. To evaluate performance across                            a Llama-like 66B model deployed with TP=8. Fig. 19 presents
+different conditions, we assess the LLMs with input lengths                        the performance under an 8-concurrent request load.
+ranging from 1 to the budget length (4096).                                           Compared to Ascend vLLM, without any optimizations,
+   We compare the performance of linear operators (𝑄𝐾𝑉 ,                           our system achieves an achieved QPS improvement of 16%.
+𝑂𝑃𝑟𝑜 𝑗, GateUp, and 𝐷𝑜𝑤𝑛) using shapes derived from differ-                        When APC is enabled, the performance improvement is fur-
+ent models. As displayed in Fig. 17, the left column shows the                     ther enhanced, reaching 27%. Additionally, we have imple-
+performance of torch-npu, while the right column shows that                        mented speculative execution and scheduling optimizations,
+of SmoothGEMM. The results indicate that SmoothGEMM                                which are independent of each other. When combined, these
+outperforms torch-npu linear by an average of 14.6%, demon-                        optimizations deliver even better results, providing a 95%
+strating superior performance across nearly all tested shapes.                     improvement over the vLLM-APC version.
+Moreover, the performance remains stable, with ideal MFU
+typically achieved for sequence sizes above 1𝑘.                                    7.4.3 Ascend NPUs VS. GPUs. We compared the end-to-
+                                                                                   end inference MFU and MBU between XY-Serve running on
+7.4 End-to-End Evaluation                                                          the 910B and the official vLLM-v0.6.4.post1 on the Nvidia
+7.4.1 vLLM Nightly Benchmarks. For end-to-end bench-                               A800. The measurements were taken during the prefill and
+marking, we use the nightly-benchmarks from the vLLM                               decode stages of the entire forward pass for the Qwen2-7B
+community [20], with Qwen2-7B as the model. The base-                              and Llama2-7B models at TP=1, across various sequence
+line comparison is against vLLM-npu [21], which supports                           lengths. As shown in Fig. 20, XY-Serve achieves MFU and
+
+
+
+                                                                             325
+XY-Serve: End-to-End Versatile Production Serving for Dynamic LLM Workloads                                                                                      ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+1.00
+                                                                                                                                                                                          XY-Server (without prefill-    XY-Server (without
+                                                                                                                                                                 XY-Server   VLLM
+0.75        Achieved QPS                                                                                                                                                              chunked-batching and PDV Fusing)      PDV Fusing)
+0.50
+0.25
+
+   1
+
+ 0.1             TTFT
+0.01
+
+
+   1
+
+  0.1            TBT
+ 0.01
+
+
+            QPS=4           QPS=8           QPS=16          QPS=32           Dynamic QPS       QPS=4             QPS=8            QPS=16    QPS=32 Dynamic QPS   QPS=4        QPS=8          QPS=16          QPS=32       Dynamic QPS
+                                      ShareGPT                                                                       Sonnet (Prefill-heavy)                                     Sonnet (Decode-heavy)
+
+                                                                        Figure 18. End-to-End Evaluation on Nightly Benchmarks.
+
+
+            vLLM             vLLM +
+                             Prefix Reuse
+                                                        XY-Serve (Without
+                                                        Optimization)
+                                                                                      XY-Serve +
+                                                                                      Prefix Reuse
+                                                                                                                 XY-Serve
+                                                                                                                 + ALL
+                                                                                                                                           7.5 Technology Generality on GPUs
+   1.0                                                                                                                                     To demonstrate the generality of the proposed optimizations,
+   0.8                                                                                                                                     we migrate the Meta-Attention and SmoothGEMM modules
+   0.6
+                                                                                                                                           to the GPU platform using Triton [52] and JIT compiler. The
+   0.4
+   0.2
+                                                                                                                                           official Triton kernels [6, 15] serve as the baseline. For Meta-
+   0.0                                                                                                                                     Attention, it still handles the mixed PDV tasks in a single
+                 Achieved QPS                                   TTFT                                      TBT                              kernel with Task Decomposition and Reordering, whereas
+                                                                                                                                           the baseline processes them separately. For Smooth-GEMM,
+Figure 19. End-to-end Evaluation on Industry Benchmark.
+                                                                                                                                           we retain Virtual-padding, which narrows arbitrary GEMM
+                                                                                                                                           shapes to a small, fixed set; offline tuning is then applied
+                    MFU of Prefill Stage                                        MBU of Decode Stage
+                   GPU A800                   Ascend910B                         GPU A800                   Ascend910B
+                                                                                                                                           only to this limited set. The baseline, in contrast, must still
+  0.8                                                                                                                                      cope with all possible shapes. The benchmark of this eval-
+  0.6                                                                                                                                      uation is similar of Section 7.2.1 and 7.3. As shown in Fig.
+  0.4                                                                                                                                      21, Meta-Attention reduces latency by an average of 11%
+  0.2
+                                                                                                                                           in coding and 15% in conversation relative to the baseline,
+            1k       2k
+                 Llama2-7B
+                          4k               1k  2k
+                                            Qwen2-7B
+                                                     4k                  1k       2k   4k
+                                                                               Llama2-7B
+                                                                                                        1k  2k
+                                                                                                         Qwen2-7B
+                                                                                                                  4k                       while SmoothGEMM improves hardware utilization by an
+                                                                                                                                           average of 18% over the baseline.
+Figure 20. Comparison between Ascend NPUs and GPUs.
+    Letency                                Meta-Attention            Prefill     Verify       Decode
+                                                                                                                                           8    Related Work
+  Breakdown
+ 100%
+                                                Coding                                        Conversation                                 Attention Optimization: FA1 [31] and FA2 [30] optimize
+  80%                                                                                                                                      the prefill stage by tiling computations to avoid HBM ac-
+  60%                                                                                                                                      cess, improving performance. FA3 [51] further enhances
+  40%                                                                                                                                      performance through parallelism between softmax and ma-
+  20%                                                                                                                                      trix operations. FastAttention [46] extends FA2 from GPUs
+    0
+              Qwen           Qwen          Llama        Llama              Qwen           Qwen          Llama        Llama
+                                                                                                                                           to Ascend NPUs, while FlashDecoding [5] improves decod-
+             2.5-72B        2.5-32B        2-13B         2-7B             2.5-72B        2.5-32B        2-13B         2-7B
+                                                                                                                                           ing efficiency for small batches by splitting along the se-
+                            QKV Project                   O Project                 GateUp                 Down
+   MFU
+   (%)
+                                                                                                                                           quence dimension. Recent works [55] further optimize de-
+       75                                                                                                                                  coding performance by transforming GEMV operations into
+       50                                                                                                                                  GEMM operations when sharing prefixes. While these tech-
+       25                                                                                                                                  niques primarily target either the prefill or decode phases,
+            0          1k             2k           3k           4k       0          1k             2k           3k           4k            POD-Attention [39] simultaneously optimizes both, maxi-
+                       BaselineGEMM                              v.s.                    SmoothGEMM                                        mizing computational power and bandwidth. Our approach
+                                                                                                                                           addresses dynamic deployment via prefix reuse with spec-
+Figure 21. Performance of                                                        Meta-Attention                              and           ulative algorithms, decomposing workloads into hardware-
+SmoothGEMM on GPU platform.                                                                                                                friendly meta-primitives that streamline attention design.
+                                                                                                                                              Previous work FlashInfer [56] supports various Attention
+MBU similar to the A800. Notably, in terms of MBU, XY-                                                                                     optimizations. However, it only generates kernels for prefill,
+Serve demonstrates a clear advantage over GPUs, showing                                                                                    decode, or verify individually. It lacks support for mixed com-
+an improvement up to 17%.                                                                                                                  binations of them, which are common in real-world inference
+
+
+
+                                                                                                                                    326
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                           Mingcong Song et al.
+
+
+scenarios and constitute a primary motivation for our work.           dynamic LLM workloads. It is integrated with task decom-
+Furthermore, it utilizes the CUDA Core to access and manage           position, task reordering, and meta kernels (Meta-Attention
+data for the Tensor Core, with cooperation through shared             and SmoothGEMM). With its flexibility to handle diverse
+memory. However, there is no direct datapath between the              dynamic workloads, XY-Serve sets a new benchmark for ef-
+Vector Core and Cube Core in NPUs. Moreover, the Memory               ficiency and adaptability in production-grade LLM inference
+Engine for the Cube Core is not designed to handle dynamic            systems.
+sparse patterns. As a result, it fails in our scenario.
+   Attention-Mask Mechanism: Some sparse optimization
+works [56, 57] treat masked attention as a sparse tensor.             Acknowledgement
+However, since they typically focus on general high-sparsity          We appreciate all the constructive comments from all the
+tensors, they adopt online compilation to organize the sparse         anonymous reviewers and shepherd Seonjin Na. This work
+tensor. In LLMs, masks exhibit low sparsity and are dynami-           was supported in part by the National Science and Tech-
+cally changing. As a result, the benefits of these approaches         nology Major Project under Grant 2022ZD0115200; in part
+may not offset the overhead of online compilation, making             by the Northern IC Technology Innovation Center (Beijing)
+them unsuitable for our scenario. By contrast, we employ              Co., Ltd under Grant QYJS20232801B; in part by the NSFC
+static decomposition, which avoids online compilation and             under Grant 62125403, Grant 92464302, Grant U24B20164
+achieves higher efficiency.                                           and Grant 92164301; in part by Shanghai Municipal Science
+   Linear Optimization: Existing techniques like swizzling            and Technology Major Project; in part by the Natural Sci-
+[22], split-k [1], and ping-pong [2] are commonly used in             ence Foundation of Jiangsu Province Basic Research Program
+linear optimization. Our approach shows that supporting               under Grant BK20243042; in part by the Beijing National Re-
+specific matrix shapes is sufficient for dynamic LLM work-            search Center for Information Science and Technology; and
+loads. By optimizing these shapes offline using the above             in part by the Beijing Advanced Innovation Center for Inte-
+techniques, we store the configurations and apply them dur-           grated Circuits.
+ing online execution to achieve optimal performance.
+   Serving Systems: Several prior works have addressed                References
+the dynamics of modern inference systems. Orca [58] tackles
+                                                                       [1] [n. d.]. Accelerating Llama3 FP8 Inference with Triton Kernels. https:
+output length variability through iteration-level schedul-                 //pytorch.org/blog/accelerating-llama3/?hss_channel=lcp-78618366/.
+ing, while PagedAttention [41] optimizes KV cache memory               [2] [n. d.]. Deep Dive on CUTLASS Ping-Pong GEMM Kernel | PyTorch.
+allocation by eliminating waste from fixed-length alloca-                  https://pytorch.org/blog/cutlass-ping-pong-gemm-kernel/.
+tions. There are also some optimizations introduce dynamics            [3] [n. d.]. Faster Text Generation with Self-Speculative Decoding. https:
+                                                                           //huggingface.co/blog/layerskip.
+to inference: SmartSpec [48] dynamically adjusts specula-
+                                                                       [4] [n. d.]. [Feature] integrate FlashMLA · Issue 4384 · sgl-project/sglang —
+tion lengths and modifies P/D ratios within batches. More-                 github.com. https://github.com/sgl-project/sglang/issues/4384. [Ac-
+over, it intelligently enables or disables speculation based               cessed 08-07-2025].
+on workload characteristics and selects appropriate specu-             [5] [n. d.]. Flash-Decoding for Long-Context Inference. https://pytorch.
+lation strategies. These optimizations collectively form the               org/blog/flash-decoding/.
+                                                                       [6] [n. d.]. Fused Attention &x2014; Triton documentation — triton-
+motivation of our work. Building upon these advances, we
+                                                                           lang.org. https://triton-lang.org/main/getting-started/tutorials/06-
+propose a unified request scheduling, KV cache manage-                     fused-attention.html. [Accessed 14-07-2025].
+ment, and computation kernels. Our approach addresses ad-              [7] [n. d.].     GitHub - Ascend/Pytorch: Ascend PyTorch Adapter
+ditional complexities in real-world inference systems while                (Torch_npu). Mirror of https://gitee.com/ascend/pytorch. https:
+providing a platform that maintains both compatibility and                 //github.com/Ascend/pytorch.
+                                                                       [8] [n. d.]. GitHub - Azure/AzurePublicDataset: Microsoft Azure Traces —
+performance across these optimization techniques.
+                                                                           github.com. https://github.com/Azure/AzurePublicDataset. [Accessed
+   Moreover, the interruption of prefill on decode can in-                 12-03-2025].
+crease TBT. Two strategies have been proposed to address               [9] [n. d.]. GitHub - HPMLL/BurstGPT: A ChatGPT(GPT-3.5) & GPT-4
+this: SplitFuse [24, 25, 34], which divides the Prefill phase              Workload Trace to Optimize LLM Serving Systems — github.com.
+into smaller chunks and fuses chunks with decode and dis-                  https://github.com/HPMLL/BurstGPT. [Accessed 12-03-2025].
+aggregated LLMs [35, 38, 50, 62], which separate Prefill and          [10] [n. d.]. GitHub - HPMLL/BurstGPT: A ChatGPT(GPT-3.5) & GPT-4
+                                                                           Workload Trace to Optimize LLM Serving Systems — github.com.
+Decode across different machines. XY-Serve supports both                   https://github.com/HPMLL/BurstGPT. [Accessed 27-07-2025].
+two deployments. It also enables seamless transitions be-             [11] [n. d.]. GitHub - kvcache-ai/Mooncake: Mooncake is the serving plat-
+tween Prefill and Decode roles in disaggregated setups.                    form for Kimi, a leading LLM service provided by Moonshot AI. —
+                                                                           github.com. https://github.com/kvcache-ai/Mooncake. [Accessed
+                                                                           26-07-2025].
+Conclusion                                                            [12] [n. d.]. GitHub - Pybind/Pybind11: Seamless Operability between
+                                                                           C++11 and Python. https://github.com/pybind/pybind11.
+In this work, we introduced XY-Serve, an end-to-end pro-              [13] [n. d.]. Introducing Tile-Based Programming in Warp 1.5.0 | NVIDIA
+duction serving system designed to tackle the challenges of                Technical Blog — developer.nvidia.com. https://developer.nvidia.c
+
+
+
+
+                                                                327
+XY-Serve: End-to-End Versatile Production Serving for Dynamic LLM Workloads                                 ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA
+
+
+     om/blog/introducing-tile-based-programming-in-warp-1-5-0/. [Ac-                        arXiv:2302.01318 (2023).
+     cessed 08-07-2025].                                                               [30] Tri Dao. 2023. Flashattention-2: Faster attention with better parallelism
+[14] [n. d.]. Introduction — vLLM. https://docs.vllm.ai/en/latest/automat                   and work partitioning (2023). arXiv preprint arXiv:2307.08691 (2023).
+     ic_prefix_caching/apc.html.                                                       [31] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré.
+[15] [n. d.]. Matrix Multiplication &x2014; Triton documentation — triton-                  2022. Flashattention: Fast and memory-efficient exact attention with
+     lang.org. https://triton-lang.org/main/getting-started/tutorials/03-                   io-awareness. Advances in Neural Information Processing Systems 35
+     matrix-multiplication.html. [Accessed 14-07-2025].                                     (2022), 16344–16359.
+[16] [n. d.]. Support Page Size > 1 for FA3 by hebiao064 · Pull Request 4832           [32] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weis-
+     · sgl-project/sglang — github.com. https://github.com/sgl-project/sg                   senborn, Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani,
+     lang/pull/4832. [Accessed 08-07-2025].                                                 Matthias Minderer, Georg Heigold, Sylvain Gelly, Jakob Uszkoreit, and
+[17] [n. d.]. Torch.Nn-Native PyTorch APIs-PyTorch2.1-API List-PyTorch                      Neil Houlsby. 2021. An Image is Worth 16x16 Words: Transformers
+     Network Model Porting and Training Guide-Model Development                             for Image Recognition at Scale. In International Conference on Learning
+     (PyTorch)-7.0.0-CANN Commercial Edition-Ascend Documentation-                          Representations. https://openreview.net/forum?id=YicbFdNTTy
+     Ascend Community. https://www.hiascend.com/document/detail/en/                    [33] Wilson W.L. Fung, Ivan Sham, George Yuan, and Tor M. Aamodt.
+     canncommercial/700/modeldevpt/ptmigr/ptaoplist_000006.html.                            2007. Dynamic Warp Formation and Scheduling for Efficient GPU
+[18] [n. d.].       Torch_npu.Npu_incre_flash_attention.                https:              Control Flow. In 40th Annual IEEE/ACM International Symposium on
+     //www.hiascend.com/doc_center/source/zh/Pytorch/60RC2/ap                               Microarchitecture (MICRO 2007). 407–420. doi: 10.1109/MICRO.2007.30
+     iref/apilist/ptaoplist_000788.html.                                               [34] Connor Holmes, Masahiro Tanaka, Michael Wyatt, Ammar Ah-
+[19] [n. d.].      Torch_npu.Npu_prompt_flash_attention.                https:              mad Awan, Jeff Rasley, Samyam Rajbhandari, Reza Yazdani Am-
+     //www.hiascend.com/doc_center/source/zh/CANNCommunit                                   inabadi, Heyang Qin, Arash Bakhtiari, Lev Kurilenko, et al. 2024.
+     yEdition/80RC1alpha001/apiref/fmkadptapi/ptaoplist_000142.html.                        Deepspeed-fastgen: High-throughput text generation for llms via mii
+[20] [n. d.]. vLLM Nightly-Benchmarks. https://github.com/vllm-project/                     and deepspeed-inference. arXiv preprint arXiv:2401.08671 (2024).
+     vllm/tree/main/.buildkite/nightly-benchmarks.                                     [35] Cunchen Hu, Heyang Huang, Liangliang Xu, Xusheng Chen, Jiang Xu,
+[21] [n. d.]. vLLM support for Ascend NPU. https://github.com/vllm-                         Shuang Chen, Hao Feng, Chenxi Wang, Sa Wang, Yungang Bao, et al.
+     project/vllm/pull/8054.                                                                2024. Inference without interference: Disaggregate llm inference for
+[22] 2020. Optimizing Compute Shaders for L2 Locality Using Thread-                         mixed downstream workloads. arXiv preprint arXiv:2401.11181 (2024).
+     Group ID Swizzling. https://developer.nvidia.com/blog/optimizing-                 [36] Kaiyu Huang, Hao Wu, Zhubo Shi, Han Zou, Minchen Yu, and
+     compute-shaders-for-l2-locality-using-thread-group-id-swizzling/.                      Qingjiang Shi. 2025. Specserve: Efficient and slo-aware large language
+[23] Amey Agrawal, Junda Chen, Íñigo Goiri, Ramachandran Ramjee, Chao-                      model serving with adaptive speculative decoding. arXiv preprint
+     jie Zhang, Alexey Tumanov, and Esha Choukse. 2024. Mnemosyne:                          arXiv:2503.05096 (2025).
+     Parallelization strategies for efficiently serving multi-million context          [37] Kevin Skadron Jiayuan Meng. [n. d.]. Dynamic Warp Subdivision for
+     length llm inference requests without approximations. arXiv preprint                   Non-Speculative Runahead SIMT Gather. https://www.nvidia.com/c
+     arXiv:2409.17264 (2024).                                                               ontent/GTC/posters/03_Meng_Dynamic_Warp_Subdivision.pdf.
+[24] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun                  [38] Yibo Jin, Tao Wang, Huimin Lin, Mingyang Song, Peiyang Li, Yipeng
+     Kwatra, Bhargav Gulavani, Alexey Tumanov, and Ramachandran Ram-                        Ma, Yicheng Shan, Zhengfan Yuan, Cailong Li, Yajing Sun, et al. 2024.
+     jee. 2024. Taming Throughput-Latency Tradeoff in LLM Inference                         P/d-serve: Serving disaggregated large language model at scale. arXiv
+     with Sarathi-Serve. In 18th USENIX Symposium on Operating Systems                      preprint arXiv:2408.08147 (2024).
+     Design and Implementation (OSDI 24). 117–134.                                     [39] Aditya K Kamath, Ramya Prabhu, Jayashree Mohan, Simon Peter,
+[25] Amey Agrawal, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhar-                      Ramachandran Ramjee, and Ashish Panwar. 2024. POD-Attention:
+     gav S Gulavani, and Ramachandran Ramjee. 2023. Sarathi: Efficient                      Unlocking Full Prefill-Decode Overlap for Faster LLM Inference. arXiv
+     llm inference by piggybacking decodes with chunked prefills. arXiv                     preprint arXiv:2410.18038 (2024).
+     preprint arXiv:2308.16369 (2023).                                                 [40] Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B Brown, Ben-
+[26] Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared                        jamin Chess, Rewon Child, Scott Gray, Alec Radford, Jeffrey Wu, and
+     Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam,                           Dario Amodei. 2020. Scaling laws for neural language models. arXiv
+     Girish Sastry, Amanda Askell, Sandhini Agarwal, Ariel Herbert-Voss,                    preprint arXiv:2001.08361 (2020).
+     Gretchen Krueger, Tom Henighan, Rewon Child, Aditya Ramesh,                       [41] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+     Daniel M. Ziegler, Jeffrey Wu, Clemens Winter, Christopher Hesse,                      Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+     Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess,                    2023. Efficient memory management for large language model serving
+     Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya                     with pagedattention. In Proceedings of the 29th Symposium on Operating
+     Sutskever, and Dario Amodei. 2020. Language models are few-shot                        Systems Principles. 611–626.
+     learners. In Proceedings of the 34th International Conference on Neural           [42] Yaniv Leviathan, Matan Kalman, and Yossi Matias. 2023. Fast inference
+     Information Processing Systems (Vancouver, BC, Canada) (NIPS ’20).                     from transformers via speculative decoding. In International Conference
+     Curran Associates Inc., Red Hook, NY, USA, Article 159, 25 pages.                      on Machine Learning. PMLR, 19274–19286.
+[27] Tianle Cai, Yuhong Li, Zhengyang Geng, Hongwu Peng, Jason D Lee,                  [43] Yuhui Li, Fangyun Wei, Chao Zhang, and Hongyang Zhang. 2024.
+     Deming Chen, and Tri Dao. [n. d.]. Medusa: Simple llm inference                        Eagle: Speculative sampling requires rethinking feature uncertainty.
+     acceleration framework with multiple decoding heads, 2024. URL                         arXiv preprint arXiv:2401.15077 (2024).
+     https://arxiv.org/abs/2401.10774 ([n. d.]).                                       [44] Heng Liao, Jiajin Tu, Jing Xia, Hu Liu, Xiping Zhou, Honghui Yuan,
+[28] Nicolas Carion, Francisco Massa, Gabriel Synnaeve, Nicolas Usunier,                    and Yuxing Hu. 2021. Ascend: a scalable and unified architecture for
+     Alexander Kirillov, and Sergey Zagoruyko. 2020. End-to-end object                      ubiquitous deep neural network computing: Industry track paper. In
+     detection with transformers. In European conference on computer vision.                2021 IEEE International Symposium on High-Performance Computer
+     Springer, 213–229.                                                                     Architecture (HPCA). IEEE, 789–801.
+[29] Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste                  [45] Heng Liao, Jiajin Tu, Jing Xia, and Xiping Zhou. 2019. DaVinci: A
+     Lespiau, Laurent Sifre, and John Jumper. 2023. Accelerating large                      scalable architecture for neural network computing. In 2019 IEEE Hot
+     language model decoding with speculative sampling. arXiv preprint                      Chips 31 Symposium (HCS). IEEE Computer Society, 1–44.
+
+
+
+
+                                                                                 328
+ASPLOS ’26, March 22–26, 2026, Pittsburgh, PA, USA                                                                                         Mingcong Song et al.
+
+
+[46] Haoran Lin, Xianzhi Yu, Kang Zhao, Lu Hou, Zongyuan Zhan, Stanislav                   Partition. In Proceedings of the 62nd Annual Meeting of the Associ-
+     Kamenev, Han Bao, Ting Hu, Mingkai Wang, Qixin Chang, et al. 2024.                    ation for Computational Linguistics (Volume 1: Long Papers), Lun-
+     FastAttention: Extend FlashAttention2 to NPUs and Low-resource                        Wei Ku, Andre Martins, and Vivek Srikumar (Eds.). Association for
+     GPUs. arXiv preprint arXiv:2410.16663 (2024).                                         Computational Linguistics, Bangkok, Thailand, 11608–11620. doi:
+[47] Xiaoxuan Liu, Cade Daniel, Langxiang Hu, Woosuk Kwon, Zhuohan                         10.18653/v1/2024.acl-long.623
+     Li, Xiangxi Mo, Alvin Cheung, Zhijie Deng, Ion Stoica, and Hao Zhang.            [56] Zihao Ye, Lequn Chen, Ruihang Lai, Wuwei Lin, Yineng Zhang,
+     2024. Optimizing Speculative Decoding for Serving Large Language                      Stephanie Wang, Tianqi Chen, Baris Kasikci, Vinod Grover, Arvind
+     Models Using Goodput. arXiv preprint arXiv:2406.14066 (2024).                         Krishnamurthy, and Luis Ceze. 2025. FlashInfer: Efficient and Cus-
+[48] Xiaoxuan Liu, Cade Daniel, Langxiang Hu, Woosuk Kwon, Zhuohan                         tomizable Attention Engine for LLM Inference Serving. In Eighth
+     Li, Xiangxi Mo, Alvin Cheung, Zhijie Deng, Ion Stoica, and Hao Zhang.                 Conference on Machine Learning and Systems. https://openreview.net
+     2024. Optimizing Speculative Decoding for Serving Large Language                      /forum?id=RXPofAsL8F
+     Models Using Goodput. arXiv:2406.14066 [cs.AI] https://arxiv.org/ab              [57] Zihao Ye, Ruihang Lai, Junru Shao, Tianqi Chen, and Luis Ceze. 2023.
+     s/2406.14066                                                                          SparseTIR: Composable Abstractions for Sparse Compilation in Deep
+[49] Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu                        Learning. In Proceedings of the 28th ACM International Conference
+     Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang,                        on Architectural Support for Programming Languages and Operating
+     Xiaoxiang Shi, et al. 2024. Specinfer: Accelerating large language                    Systems, Volume 3 (Vancouver, BC, Canada) (ASPLOS 2023). Association
+     model serving with tree-based speculative inference and verification.                 for Computing Machinery, New York, NY, USA, 660–678. doi: 10.1145/
+     In Proceedings of the 29th ACM International Conference on Architectural              3582016.3582047
+     Support for Programming Languages and Operating Systems, Volume 3.               [58] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and
+     932–949.                                                                              Byung-Gon Chun. 2022. Orca: A distributed serving system for
+[50] Ruoyu Qin, Zheming Li, Weiran He, Mingxing Zhang, Yongwei Wu,                         Transformer-Based generative models. In 16th USENIX Symposium on
+     Weimin Zheng, and Xinran Xu. 2024. Mooncake: A kvcache-centric dis-                   Operating Systems Design and Implementation (OSDI 22). 521–538.
+     aggregated architecture for llm serving. arXiv preprint arXiv:2407.00079         [59] Jun Zhang, Jue Wang, Huan Li, Lidan Shou, Ke Chen, Gang Chen,
+     (2024).                                                                               and Sharad Mehrotra. 2023. Draft & verify: Lossless large language
+[51] Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ra-                    model acceleration via self-speculative decoding. arXiv preprint
+     mani, and Tri Dao. 2024. Flashattention-3: Fast and accurate attention                arXiv:2309.08168 (2023).
+     with asynchrony and low-precision. arXiv preprint arXiv:2407.08608               [60] Yao Zhao, Zhitian Xie, Chen Liang, Chenyi Zhuang, and Jinjie Gu. 2024.
+     (2024).                                                                               Lookahead: An inference acceleration framework for large language
+[52] Philippe Tillet, Hsiang-Tsung Kung, and David Cox. 2019. Triton: an                   model with lossless generation accuracy. In Proceedings of the 30th
+     intermediate language and compiler for tiled neural network computa-                  ACM SIGKDD Conference on Knowledge Discovery and Data Mining.
+     tions. In Proceedings of the 3rd ACM SIGPLAN International Workshop                   6344–6355.
+     on Machine Learning and Programming Languages. 10–19.                            [61] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Sun, Jeff
+[53] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Alma-                    Huang, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion Sto-
+     hairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal                      ica, Joseph E Gonzalez, et al. [n. d.].       Sglang: Efficient ex-
+     Bhargava, Shruti Bhosale, et al. 2023. Llama 2: Open foundation and                   ecution of structured language model programs, 2024.             URL
+     fine-tuned chat models. arXiv preprint arXiv:2307.09288 (2023).                       https://arxiv.org/abs/2312.07104 ([n. d.]).
+[54] An Yang, Baosong Yang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang                    [62] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xu-
+     Zhou, Chengpeng Li, Chengyuan Li, Dayiheng Liu, Fei Huang, et al.                     anzhe Liu, Xin Jin, and Hao Zhang. 2024. DistServe: Disaggregating
+     2024. Qwen2 technical report. arXiv preprint arXiv:2407.10671 (2024).                 Prefill and Decoding for Goodput-optimized Large Language Model
+[55] Lu Ye, Ze Tao, Yong Huang, and Yang Li. 2024. ChunkAttention: Ef-                     Serving. In 18th USENIX Symposium on Operating Systems Design and
+     ficient Self-Attention with Prefix-Aware KV Cache and Two-Phase                       Implementation (OSDI 24). 193–210.
+
+
+
+
+                                                                                329
+

@@ -1,0 +1,1122 @@
+  APERTURE: Algorithm-System Co-optimization for
+       Temporal Graph Network Inference
+                Yiqing Wang                                     Hailong Yang                                         Enze Yu
+            Beihang University                              Beihang University                                 Beihang University
+    State Key Laboratory of Complex &               State Key Laboratory of Complex &                            Beijing, China
+      Critical Software Environment                   Critical Software Environment                          22371494@buaa.edu.cn
+               Beijing, China                                  Beijing, China
+         yiqingwang@buaa.edu.cn                         hailong.yang@buaa.edu.cn
+
+               Qingxiao Sun∗                                       Kejie Ma                                       Kaige Zhang
+             Beihang University                              Beihang University                               Beihang University
+                Beijing, China                                  Beijing, China                                   Beijing, China
+          qingxiaosun@buaa.edu.cn                           kejiema@buaa.edu.cn                            kaige.zhang@buaa.edu.cn
+
+                                        Chenhao Xie                                         Depei Qian
+                                      Beihang University                                Beihang University
+                                        Beijing, China                                    Beijing, China
+                                    fenahuhu@gmail.com                                 depeiq@buaa.edu.cn
+
+Abstract                                                                        CCS Concepts: • Computer systems organization →
+Temporal Graph Networks (TGNs) are widely used to model                         Neural networks.
+evolving relationships in dynamic graphs. However, existing
+                                                                                Keywords: Temporal Graph Networks, Inference System,
+inference systems enforce a step-wise paradigm: processing
+                                                                                Parallel Execution, Memory Efficiency
+each temporal graph sequentially with a memory update
+followed by aggregation. We break this dependency by de-                        ACM Reference Format:
+coupling memory updates from aggregation while preserv-                         Yiqing Wang, Hailong Yang, Enze Yu, Qingxiao Sun, Kejie Ma, Kaige
+ing prediction accuracy, thereby enabling a global view for                     Zhang, Chenhao Xie, and Depei Qian. 2026. APERTURE: Algorithm-
+fine-grained parallelism control. This design unlocks new                       System Co-optimization for Temporal Graph Network Inference.
+optimization opportunities but introduces three system-level                    In Proceedings of the 31st ACM SIGPLAN Annual Symposium on
+challenges: managing intermediate multi-state representa-                       Principles and Practice of Parallel Programming (PPoPP ’26), January
+tions, curbing memory-bound update overheads, and select-                       31 – February 4, 2026, Sydney, NSW, Australia. ACM, New York, NY,
+ing a safe yet efficient aggregation granularity. We present                    USA, 13 pages. https://doi.org/10.1145/3774934.3786450
+APERTURE, a TGN inference framework that bridges algo-
+rithmic semantics and system design. To address the above
+                                                                                1    Introduction
+challenges, APERTURE (1) jointly aggregates temporal states
+via computation graph transformation, (2) minimizes redun-                      Graph Neural Networks (GNNs) have emerged as fundamen-
+dant memory traffic through dependency-aware update re-                         tal building blocks across a wide spectrum of domains [12,
+construction; (3) selects the optimal granularity by analyti-                   31, 37]. By combining message passing over graph structures
+cally modeling. The experimental results show that APER-                        with neural operations, GNNs effectively capture complex
+TURE achieves up to 59.3× speedup over state-of-the-art                         dependencies among entities (i.e., graph nodes), thereby en-
+baselines without compromising accuracy.                                        abling accurate predictions in tasks such as node classifica-
+                                                                                tion and community detection [19, 32, 37]. However, most
+∗ Corresponding author.
+                                                                                real-world graphs are dynamic, with interactions continu-
+                                                                                ously evolving over time. Static GNNs lack the temporal
+                                                                                modeling capability to handle such evolving data.
+                                                                                   To support dynamic graphs, Temporal Graph Networks
+                                                                                (TGNs) extend static GNNs by transforming the input stream
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         of timestamped interactions into a sequence of temporal
+tional License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                graphs [18, 22, 26, 36]. To capture dependencies across tem-
+© 2026 Copyright held by the owner/author(s).                                   poral graphs, TGNs maintain a persistent node memory, anal-
+ACM ISBN 979-8-4007-2310-0/2026/01                                              ogous to the hidden state in recurrent neural networks: af-
+https://doi.org/10.1145/3774934.3786450                                         ter each temporal graph is processed, the node memory is
+
+
+
+                                                                          564
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                       Wang, Yang, and Yu et al.
+
+ s   Indexed states       f   Indexed features                                 can be deferred and aggregated jointly. However, a naive
+     Memory update            GNN aggregation                                  transformation fails to deliver real performance gains. On
+                                       × s                                     one hand, handling multiple temporal states in node mem-
+ s                    s                                s           ...
+                                                                               ory triggers recurrent GPU memory management overhead.
+                      f                                f                       On the other hand, aggregating these temporal states with
+                                          (a)                                  separate kernels leads to redundant computation and un-
+                                                                               derutilized GPU resources. Challenge 1: how to defer the exe-
+ s                    s                      s                                 cution of multiple temporal states with lightweight memory
+                      ...                   f                                  management and efficient aggregation?
+                                         (b)                                      After optimizing GNN aggregation, the performance bot-
+                                                                               tleneck shifts to the memory update stage. Prior systems
+Figure 1. Comparison between (a) baseline TGN inference                        process one temporal graph at a time, where dependencies
+paradigm and (b) decoupled TGN inference paradigm. Re-                         are implicitly carried through node memory handoffs. When
+moving unnecessary sequential dependencies enables mem-                        multiple temporal states are retained, these handoffs ex-
+ory update restructure and GNN aggregation parallelism.                        pose cross-graph dependencies, resulting in redundant global
+                                                                               memory reads and writes. In prior step-wise processing para-
+                                                                               digm, this overhead remained hidden, as each temporal graph
+updated, and the resulting temporal state is propagated step-                  was processed independently. However, when memory up-
+wise to subsequent graphs, thereby accumulating long-range                     dates are organized back-to-back, the limitation becomes
+context [1, 10, 18]. Owing to this capability, TGNs have been                  evident: updated states are written to global memory, and
+widely adopted in both academic research [6, 20, 34, 39, 41,                   in the next step, they must be read again for further com-
+42] and industrial applications, ranging from recommenda-                      putation, creating excessive traffic across temporal graphs.
+tion platforms [21, 24] to financial fraud detection [4, 35]                   Challenge 2: how to support cross-graph state updates with-
+and intelligent transportation systems [8, 13].                                out incurring prohibitive global memory traffic from localized
+   Recent efforts have sought to optimize specific compo-                      node-memory handoffs?
+nents of TGN inference. TGL [41] introduces a temporal                            A further difficulty lies in determining the appropriate ag-
+graph format to accelerate sampling, while ETC [5] reduces                     gregation granularity, i.e., the number of memory updates ac-
+input transfers by eliminating redundant accesses and recon-                   cumulated before performing a joint GNN aggregation. From
+structing layouts on GPUs. TGOpt [29] employs deduplica-                       a performance perspective, larger granularity is favorable: it
+tion, memoization, and precomputation to cut redundancy                        lowers the number of aggregations, reducing computation
+in sampling, computation, and loading, and TGLite [30]                         cost; with fewer aggregations, it also reduces synchroniza-
+extends TGOpt with additional system-level abstractions.                       tion points between memory updates, reducing coordination
+While these systems deliver notable improvements, they all                     overhead. However, larger granularity also prolongs the life-
+remain bound to the same step-wise processing paradigm,                        time of temporal states, raising peak memory consumption
+leaving broader opportunities unaddressed.                                     and risking oversubscription. Because inference precludes
+   In this paradigm (Figure 1 (a)), inference must traverse tem-               costly autotuning, granularity must be determined ahead
+poral graphs strictly in chronological order, enforcing two                    of execution with negligible overhead. Challenge 3: how to
+coupled stages: (1) the memory update stage, which refreshes                   select an aggregation granularity that maximizes efficiency
+per-node memory with new interactions and produces up-                         while guaranteeing memory safety?
+dated temporal states; and (2) the GNN aggregation stage,                         To address these challenges, we present APERTURE, an
+which applies message passing over updated states and node                     end-to-end TGN inference framework that maximizes perfor-
+features to generate predictions. However, we observe that                     mance while ensuring memory safety. APERTURE achieves
+only memory updates require chronological ordering across                      this by separating memory updates from GNN aggregation
+temporal graphs. The dependency in Figure 1 (a), which                         and exploiting a global view to restructure updates and par-
+forces each memory update to wait for the preceding GNN                        allelize read-only aggregation. For Challenge 1, APERTURE
+aggregation, is unnecessary for semantic correctness and                       remaps sampled results into a global feature map, and lever-
+can be safely removed. This insight motivates us to decouple                   ages this layout to pre-allocate memory space and eliminate
+memory updates from GNN aggregation, as illustrated in                         duplicate operations during aggregation. For Challenge 2,
+Figure 1 (b), thereby enabling opportunities for restructur-                   APERTURE constructs a state-based DAG in parallel and
+ing memory updates and parallelizing aggregations that are                     leverages the global dependency information to optimize
+unattainable under the conventional paradigm.                                  memory update execution and reduce memory traffic. For
+   To exploit these opportunities in practice, the rigid step-                 Challenge 3, APERTURE models temporal state lifetimes, us-
+wise execution must be broken by transforming the Compu-                       ing an analytical model to select granularity and a topological
+tation Graph (CG) of TGN so that multiple memory updates                       traversal to track peak memory usage.
+
+
+
+                                                                         565
+APERTURE: Algorithm-System Co-optimization for Temporal Graph Network Inference PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+  To the best of our knowledge, this is the first work to                                       Table 1. Components of a temporal graph.
+overcome the inherent limitations of the step-wise TGN par-
+adigm, bridging the gap between algorithmic and systemic                                    Component       Description
+optimization. The contributions are as follows1 :                                           Node IDs        Identifiers for all nodes in the temporal graph.
+    • We comprehensively analyze the temporal sensitivity                                   Dstnode IDs     Destination nodes involved in interactions.
+      of the two stages involved in TGN inference and illus-                                Latest Nbrs     Latest neighbors of destination nodes.
+                                                                                            Latest Times    Timestamps of the latest interactions.
+      trate the opportunities for parallel execution brought
+      about by breaking inherent dependencies.
+    • We propose three novel modules including CG trans-
+                                                                                      𝑢 to 𝑣 at time 𝑡 involves the destination nodes 𝑢 and 𝑣; thus,
+      formation engine, memory update manager, and aggre-
+                                                                                      two messages are produced:
+      gation granularity calculator, which reduce redundant
+      operations and global memory accesses while maxi-                                               𝑚𝑢𝑣 = MSG(𝑠𝑢 , 𝑠 𝑣 , 𝐸𝑢𝑣 (𝑡), 𝑡 − 𝑡𝑢 )
+      mizing efficiency under memory constraints.                                                                                                              (2)
+                                                                                                      𝑚 𝑣𝑢 = MSG(𝑠 𝑣 , 𝑠𝑢 , 𝐸𝑢𝑣 (𝑡), 𝑡 − 𝑡 𝑣 )
+    • We develop a TGN inference framework APERTURE
+      that coordinates algorithmic and systemic optimiza-                             where MSG(·) is a learnable module (e.g., MLP), 𝑠𝑢 and 𝑠 𝑣
+      tions to accelerate the entire pipeline without accuracy                        are the latest states of 𝑢 and 𝑣, 𝐸𝑢𝑣 (𝑡) is the edge feature, and
+      loss. The experimental results show that APERTURE                               (𝑡 − 𝑡 · ) encodes the elapsed time since the node’s last update.
+      achieves a maximum speedup of 59.3× in end-to-end                                  (2) GNN aggregation: After memory updates, TGNs apply
+      inference compared to the state-of-the-art work.                                temporal GNN layers to generate embeddings for prediction.
+                                                                                      Each layer performs message passing with temporal atten-
+2     Background                                                                      tion, combining the updated node states with node features,
+2.1    Temporal Graph Networks                                                        edge features, and time encodings on the temporal graph:
+Temporal Graph Networks (TGNs) are designed for link pre-                                         𝜁𝑢 (𝑡) = 𝑠𝑢 (𝑡) ∥ Φ(0)
+diction on dynamic graphs, i.e., predicting whether an edge                                       𝜁 𝑣 (𝑡) = 𝑠 𝑣 (𝑡) ∥ 𝐸𝑢𝑣 (𝑡) ∥ Φ(𝑡 − 𝑡 𝑣 )
+will appear between two nodes at a future timestamp based                                                                                                      (3)
+                                                                                                  𝑟𝑢 (𝑡) = ATTN(𝜁𝑢 (𝑡), 𝜁 𝑣 (𝑡) | 𝑣 ∈ 𝑁 (𝑢, 𝑡))
+on their historical interactions. The input is a stream of
+timestamped edges representing node interactions. To bal-                                        ℎ𝑢 (𝑡) = FFN(𝑟𝑢 (𝑡) ∥ 𝑠𝑢 (𝑡))
+ance temporal ordering with execution parallelism, TGNs                               where Φ(·) encodes time intervals, ATTN denotes attention-
+process edges in fixed-size groups in chronological order. For                        based aggregation [18], and FFN is a feed-forward predictor.
+each group, temporal neighbor sampling constructs a tempo-
+ral graph on the fly by selecting the 𝑘 latest edges per node                         2.2    Existing TGN Inference Systems
+before the current interaction, where 𝑘 limits the number                             Existing TGN systems typically implement the inference
+of temporal neighbors. The resulting sequence of temporal                             pipeline in three stages as follows.
+graphs preserves temporal structure and serves as input to                               (i) Sampling: Construct a temporal graph using temporal
+TGN inference, which consists of two tightly coupled stages:                          neighbor sampling. This stage generates the temporal graph,
+memory update and GNN aggregation.                                                    which serves as the input for the subsequent memory update
+   (1) Memory update: TGN maintains a persistent node mem-                            and aggregation stages. Each temporal graph is composed
+ory, represented as a tensor in which each row corresponds                            of the components listed in Table 1, which together provide
+to the state vector of a unique node identifier. At each step,                        a structured abstraction for subsequent computations.
+node states involved in the current temporal graph are first                             (ii) Memory update: Update node states through NM (Node
+updated using messages generated in the previous step:                                Memory) and RMS (Raw Message Store), as shown in Fig-
+                                  −
+            𝑠𝑢 = UPDT(𝑠𝑢− , AGGR(𝑚𝑘𝑢 | 𝑘 ∈ 𝑁 (𝑢)))                       (1)          ure 2. NM stores node states and timestamps, while RMS stores
+                                                                                      messages and their corresponding timestamps. During exe-
+                                                          − is
+where 𝑠𝑢− denotes the state of node 𝑢 before the update, 𝑚𝑘𝑢
+                                                                                      cution, node states are loaded from NM via node IDs. Time
+the message previously generated from neighbor 𝑘 to 𝑢, and
+                                                                                      features are then computed by encoding times in NM and RMS,
+𝑁 (𝑢) is the neighbor set of 𝑢. AGGR(·) aggregates the stored
+                                                                                      both accessed via node IDs. These features are concatenated
+messages (by mean or most-recent selection [14, 18, 25]), and
+                                                                                      with messages from RMS (also accessed via node IDs) to form
+UPDT(·) updates the node state, typically implemented with
+                                                                                      raw messages. Finally, the node states and raw messages are
+recurrent units such as RNNs [7, 14] or GRUs [3, 18].
+                                                                                      processed together to update the node states.
+  After states are updated, the current interactions generate
+                                                                                         The updated node states are written back to both NM (via
+new messages that will be consumed in the next step. For
+                                                                                      node IDs) and RMS (via dstnode IDs and latest Nbrs). The
+each interaction in the temporal graph, edge 𝑒𝑢𝑣 from node
+                                                                                      times from RMS are written back to NM (via node IDs), and
+1 The artifact for this paper is publicly available on Zenodo under DOI [27].         the latest Times are written back to RMS (via dstnode IDs).
+
+
+
+                                                                                566
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                               Wang, Yang, and Yu et al.
+
+
+   (iii) GNN aggregation: Apply temporal attention layers to                               loading               computation                   update
+aggregate the updated node states with features and time                                                         updated
+                                                                                                                  states
+encodings, generating link-prediction outputs.
+   Prior studies mainly target optimizations for the three                                                    Memory update
+stages. ETC [5] proposes a three-step data access policy with                                        node     raw
+                                                                                          states                    states   states      tfeats
+inter-batch pipeline for reducing redundant data accesses                                            states   msg
+                                                                                     Node IDs                  Node IDs Node IDs
+and preload time. TGOpt [29] targets storage and compu-
+tation redundancies in TGAT [33] inference. These redun-                                                           Time encoding
+dancies include intra-batch repeated edge interactions, inter-
+batch duplicate embedding calculations, and repeated time-                                         timesNM                             timesRMS
+                                                                                                Node IDs                            Node IDs
+encoding operations. TGOpt addresses them through three
+techniques: deduplication, memoization, and precomputa-
+tion. TGLite [30] extends TGOpt by providing lightweight                                  NM.s        NM.t          RMS.s      RMS.s     RMS.t
+abstractions and composable operators for programming                                Node IDs          Node IDs Dstnode IDs Latest Nbrs Latest Times
+TGNs. It introduces a set of TBlock based operators such as
+temporal neighborhood sampling, scatter or segmented com-                               Figure 2. Illustration of memory update stage.
+putations that can be flexibly composed to build customized
+inference pipelines. Cascade [2] supports training with large
+batch sizes by exploiting spatial independence in scattered                      order to obtain {𝑆 (𝑡 ) }, and postpone/reorder/parallelize the
+events. Overall, these approaches still operate within the                       read-only aggregation as long as it reads the same snapshots,
+step-wise paradigm, missing broader opportunities for en-                        yielding identical {𝑌 (𝑡 ) } to step-wise execution.
+hancing parallelism and efficiency.
+   Numerous works have studied system optimizations for                          3     Motivation
+static or snapshot-based GNNs [9, 11, 15–17, 21, 23, 28, 38,                     Decoupling memory updates from GNN aggregation can
+40], but their techniques do not naturally extend to temporal                    break the rigid step-wise paradigm in TGN inference sys-
+scenarios, where sequential dependencies dominate.                               tems, opening up system-level optimization opportunities.
+                                                                                 We make three observations based on profiling the TGN
+2.3   Potential Decoupling Opportunities                                         model over the lastfm dataset on A100 GPU.
+Our primary analysis focuses on the semantic correctness of
+the decoupling between memory updates and GNN aggrega-                           3.1   Observation 1: Multi-states aggregation is
+tion. Specifically, we model TGN inference as discrete steps                           accuracy-neutral but performance-sensitive
+𝑡 = 1, . . . ,𝑇 . Let 𝑆𝑢(𝑡 ) denote node 𝑢’s state after processing              The rigid sequential processing of traditional TGNs limits
+step 𝑡 (i.e., after memory updates), and let 𝑌𝑢(𝑡 ) be the output                parallelism and underutilizes hardware. A natural way to
+embedding used for prediction at step 𝑡. A generic TGN step                      improve efficiency is to process multiple temporal graphs
+can be written as:                                                               together, which we term the inference step size. However, as
+                                                                                shown in Figure 3, larger step sizes cause significant accuracy
+           𝑆𝑢(𝑡 ) = Upd 𝑆𝑢(𝑡 −1) , MsgAggupd                                     degradation due to causal violations: memory updates must
+                                                                               follow strict temporal order to ensure correct state evolution.
+                      {(𝑆 𝑣(𝑡 −1) ,𝜓 upd (Δ𝑡 𝑣𝑢 )) | 𝑣 ∈ N𝑢(𝑡 ) } ,  (4)            However, we observe that the dependency forcing each
+                                                                                 memory update to wait for the preceding GNN aggregation
+                           
+          𝑌𝑢(𝑡 ) = Agg 𝑆𝑢(𝑡 ) , MsgAggread
+                                                                                 is not semantically necessary. Although memory updates
+                                                                               require temporal consistency, GNN aggregation only reads
+                      {(𝑆 𝑣(𝑡 ) ,𝜓 read (Δ𝑡 𝑣𝑢 )) | 𝑣 ∈ N𝑢(𝑡 ) } .   (5)
+                                                                                 node states without modifying them and is therefore not
+The decoupling is semantics-preserving under the follow-                         constrained by temporal order. This insight enables the de-
+ing sufficient conditions: (C1) Read-only read path - Agg                        coupling of memory updates from aggregation: multiple
+and MsgAggread do not modify 𝑆 (𝑡 ) and do not feed back                         memory updates can be executed sequentially while preserv-
+into Upd; (C2) Deterministic temporal encoding - 𝜓 read (Δ𝑡)                     ing temporal semantics, followed by a single GNN aggrega-
+depends only on timestamps (independent of execution or-                         tion over the resulting states. We refer to this as multi-state
+der/parallelism); (C3) Permutation invariance - MsgAggread                       aggregation, governed by a granularity parameter Γ. The
+is permutation-invariant over the neighbor multiset. Under                       experimental results confirm that multi-state aggregation
+C1–C3, the evolution of states {𝑆 (𝑡 ) } is fully determined                     preserves model quality (See Section 5.3).
+by the update recurrence alone, and the read path at step                           We implement a naive computation graph transformation
+𝑡 is a pure function of the snapshot 𝑆 (𝑡 ) (and timestamps).                    (Naive-CG) that executes Γ memory updates in sequence,
+Therefore, we may execute all memory updates in temporal                         materializes the intermediate node states, and then performs
+
+
+
+                                                                           567
+APERTURE: Algorithm-System Co-optimization for Temporal Graph Network Inference PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                                                                           AP
+                    0.85                                                                                                                           LD+ST                                    mem_cell       time
+                                                                                           AUC                                                     67.9%                                     24.8%         7.4%
+ Accuracy Metrics
+
+
+
+
+                    0.80
+                                                                                                            0%                               25%                    50%                 75%                    100%
+
+                    0.75
+                                                                                                                           Figure 5. Time breakdown of memory update stage.
+                    0.70
+                           0           2            4                6            8           10
+
+
+
+
+                                                                                                                                             92%
+                                                         Step Size                                                         40
+
+
+
+
+                                                                                                                                            34.
+                                                                                                          Percentage (%)
+Figure 3. Inference accuracy when processing multiple tem-                                                                 30
+
+
+
+
+                                                                                                                                       56%
+
+
+
+                                                                                                                                                   87%
+poral graphs simultaneously. AP and AUC denote Average
+
+
+
+
+                                                                                                                                      20.
+
+
+
+                                                                                                                                                  17.
+Precision and Area Under the ROC Curve, respectively.                                                                      20
+
+
+
+
+                                                                                                                                                         1%
+
+
+
+                                                                                                                                                                   8%
+                                                                                                                                                                  6%
+                                                                                                                           10
+
+
+
+
+                                                                                                                                 3%
+
+
+
+
+                                                                                                                                                                           1%
+                                                                                                                                                        6.5
+
+
+
+                                                                                                                                                               5.5
+
+
+
+                                                                                                                                                                                 6%
+                                                                                                                                                              5.0
+                                                                                                                                4.1
+
+
+
+
+                                                                                                                                                                                       1%
+
+                                                                                                                                                                                              0%
+
+                                                                                                                                                                                                    0%
+
+                                                                                                                                                                                                          0%
+
+                                                                                                                                                                                                                0%
+                                                                                                                                                                          3.4
+                                  GNN Aggregation                        Memory Management
+
+
+
+
+                                                                                                                                                                                1.7
+
+                                                                                                                                                                                      0.2
+
+                                                                                                                                                                                            0.0
+
+                                                                                                                                                                                                   0.0
+
+                                                                                                                                                                                                         0.0
+
+                                                                                                                                                                                                               0.0
+                                  Memory Update                                                                             0
+
+
+
+
+                                                                                                                                      0%
+
+                                                                                                                                76% %
+                                                                                                                                74% %
+                                                                                                                                72% %
+                                                                                                                                70% %
+                                                                                                                                68% %
+                                                                                                                                65% %
+                                                                                                                                63% %
+                                                                                                                                61% %
+                                                                                                                                59% %
+                                                                                                                                57% %
+                                                                                                                                55% %
+                                                                                                                                        %
+                                                                                                                                      5%
+                           8.38                                                            8.70
+
+
+
+
+                                                                                                                                    -80
+                                                                                                                                    -78
+                                                                                                                                    -76
+                                                                                                                                    -74
+                                                                                                                                    -72
+                                                                                                                                    -70
+                                                                                                                                    -68
+                                                                                                                                    -65
+                                                                                                                                    -63
+                                                                                                                                    -61
+                                                                                                                                    -59
+                                                                                                                                    -57
+                                                                                                                                   >8
+
+
+
+
+                                                                                                                                   <5
+                                                                           7.93
+
+
+
+
+                                                                                                                                78%
+                           3.64                           6.25
+ Time (s)
+
+
+
+
+                                        5.66
+                                                                                           6.60
+                    5                      2.80           3.97
+                                                                           5.70
+                                                                                                         Figure 6. Percentage distribution of repeated nodes across
+                           1.64
+                                                                                                         consecutive memory update stages.
+                           3.10            1.98
+                                                          1.91
+                                                  0.37               0.29 1.94        0.23 1.87
+                                           0.88
+                    0
+                            1           100          200                   300            400            graphs have more than 70% repeated nodes between succes-
+                                                  Granularity                                            sive updates. This reveals substantial opportunity for fusing
+                                                                                                         repeated accesses, motivating techniques that minimize cross-
+Figure 4. Time breakdown of naive computation graph trans-                                               graph traffic and reuse updated states.
+formation as the aggregation granularity increases.
+                                                                                                         3.3                    Observation 3: Aggregation granularity affects
+                                                                                                                                both performance and memory usage
+a single GNN aggregation over their concatenation. Figure 4
+reports the breakdown as Γ increases: GNN aggregation time                                               Aggregation granularity Γ is pivotal for inference perfor-
+decreases due to reuse and fewer kernel launches, memory                                                 mance and memory usage. As shown in Figure 7, runtime
+update time remains nearly unchanged, yet the end-to-end                                                 declines in both memory update and GNN aggregation stages
+time first drops and then grows, eventually exceeding the                                                as Γ increases. In memory update stage, larger Γ reduces
+no-transformation baseline. The inflection is driven by re-                                              inter-aggregation synchronization points, so each node state
+peated (de)allocations and large-state concatenations, whose                                             is updated fewer times across temporal boundaries. In GNN
+overhead scales with Γ and offsets the aggregation gains.                                                aggregation, larger Γ improves reuse via deduplication, elim-
+These findings suggest that while multi-state aggregation is                                             inates redundant computation and feature loads, and lowers
+accuracy-neutral, fully realizing its performance potential                                              kernel-launch overhead. The auxiliary overhead remains
+requires a careful CG transformation engine.                                                             nearly flat. However, peak GPU memory usage increases
+                                                                                                         with Γ, as shown in Figure 8. For example, wiki-talk reaches
+3.2                   Observation 2: Localized node-memory updates                                       OOM near Γ/Γmax ≈ 0.3, whereas lastfm sustains larger Γ.
+                      incur excessive memory access overhead                                             This motivates selecting the largest Γ per workload and de-
+Figure 5 breaks down the execution time of memory updates,                                               vice that remains within memory capacity.
+showing that the majority of cost is dominated by global
+load/store operations, while the actual update logic and time                                            4                  Methodology
+encoding account for only a small fraction. This indicates                                               We present APERTURE, a decoupled TGN inference frame-
+that memory updates are highly memory-bound, and reduc-                                                  work that decouples memory update from GNN aggregation
+ing redundant global accesses is critical for efficiency.                                                and exposes a global state view for fine-grained scheduling.
+   We further analyze consecutive temporal graphs and mea-                                               Figure 9 overviews three cooperating modules.
+sure the overlap in nodes (Node IDs). As shown in Figure 6, a                                              The CG Transformation Engine introduces a global fea-
+large portion of graphs exhibit high redundancy: over 70% of                                             ture map to eliminate allocator/concatenation overhead. It
+
+
+
+                                                                                                   568
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                       Wang, Yang, and Yu et al.
+
+
+                     250                                                                    and per-graph processing reintroduces imbalance. We adopt
+                                                               GNN Aggregation
+                     200                                                                    a remap-dedup-unmap pipeline: remap assigns offsets via a
+                                                               Memory Update
+                                                                                            prefix-sum over preceding graphs to enable inter-temporal-
+                                                               Auxiliary Overhead
+ Time (ms)
+
+
+
+
+                     150                                                                    graph deduplication; after deduplication, unmap restores
+                     100
+                                                                                            the original per-graph partition. This design balances work
+                                                                                            across thread blocks, eliminates redundant kernel launches,
+                      50                                                                    and preserves the boundaries of temporal graphs with negli-
+                       0
+                                                                                            gible overhead.
+                              100        300        500            700        900
+                                                 Granularity                                4.1.2 Global Feature Map Management. Building on the
+                                                                                            deduplicated results, APERTURE manages all intermediate
+        Figure 7. Time breakdown vs. granularity Γ on lastfm.                               data at the granularity of states. A state corresponds to the
+                                                                                            update of a specific node at a particular temporal step, and
+                              lastfm     wiki-talk       A100 (40GB) Memory Limit           serves as the basic unit of both memory updates and GNN
+                                                                                            aggregation. Managing data at this fine granularity avoids
+                     40
+ Memory Usage (GB)
+
+
+
+
+                                                                                            redundant storage of unreferenced entries on the GPU.
+                     30                                                                        A state is described by three attributes: (1) node_id: the
+                                                                                            original node identifier that the state corresponds to; (2)
+                     20                                                                     level_id: the temporal step index, where 1 ≤ level_id ≤
+                     10                                                                     𝑇 and 𝑇 is the total number of temporal graphs in the input
+                                                                                            sequence; (3) uniq_id: the position of this state among dedu-
+                      0                                                                     plicated entries at the same level. A state can be referenced
+                          0         20      40          60               80     100
+                                           Granularity Ratio (%)                            in two complementary ways: the pair ⟨level_id, node_id⟩
+                                                                                            associates the state with its original graph entity, while the
+Figure 8. Peak GPU memory usage vs. Γ/Γmax on wiki-talk                                     pair ⟨level_id, uniq_id⟩ uniquely determines its storage
+and lastfm. The Γmax is the per-sequence upper bound.                                       location in the global structure.
+                                                                                               To store states compactly, we organize them into a CSR-
+                                                                                            style global feature map. Let 𝑛 ℓ denote the number of distinct
+first performs remap-dedup-unmap preprocessing for siz-
+                                                                                            states at level ℓ. The prefix sums 𝑆 ℓ are calculated as:
+ing and balanced work, then preassigns per-state slots and
+                                                                                                                      ℓ −1
+builds a block-diagonal adjacency, executing a single zero-                                                           ∑︁
+redundancy aggregation kernel to remove repeated loads,                                                        𝑆ℓ =          𝑛𝑘 ,   𝑆1 = 0                   (6)
+                                                                                                                      𝑘=1
+computation, and kernel launches.
+   The Memory Update Manager re-expresses updates at state                                  so that the storage address of state ⟨level_id, uniq_id⟩
+granularity and builds a state-based DAG to make producer-                                  (addr) is calculated as:
+consumer relations explicit. It materializes per-state tempo-                                                addr = 𝑆 level_id + uniq_id                     (7)
+ral inputs and recomposes consecutive levels when depen-
+                                                                                               This design provides two key advantages. First, recurrent
+dencies permit, forwarding updated values on-chip to avoid
+                                                                                            GPU memory allocations are eliminated by assigning each
+intermediate global memory accesses.
+                                                                                            state a pre-determined slot in the feature map, producing
+   The Aggregation Granularity Calculator analytically mod-
+                                                                                            a compact representation that significantly reduces mem-
+els runtime and memory, estimates peak usage via topologi-
+                                                                                            ory usage compared to baseline 𝑂 (𝑇 × 𝑁 ) storage, where 𝑇
+cal traversal of state lifetimes, and selects the granularity that
+                                                                                            is the number of temporal graphs and 𝑁 is the total num-
+minimizes inference time under the given memory budget.
+                                                                                            ber of node identifiers in the dynamic graph. Second, the
+4.1                    CG Transformation Engine                                             ⟨level_id, uniq_id⟩ indexing scheme directly maps each
+                                                                                            state to its storage location, avoiding repeated scatter-gather
+4.1.1 Data Remapping Preprocessing. APERTURE pre-
+                                                                                            operations and facilitating downstream aggregation.
+allocates space for intermediate states, requiring the sizes of
+all sampling outputs. This prevents overlapping CPU-side                                    4.1.3 Zero Redundancy Aggregation. Instead of launch-
+sampling with GPU execution; we therefore migrate the en-                                   ing separate sparse aggregations for temporal graphs, APER-
+tire temporal graph sampling procedure to the GPU. To sim-                                  TURE constructs a block-diagonal sparse matrix by concate-
+plify analysis and scheduling of memory updates, we dedu-                                   nating their adjacency structures along the diagonal, and
+plicate sampled results within current temporal graphs. Sam-                                multiplies it with the global feature map in one operation.
+pling is inherently balanced because each temporal graph                                    This design offers multiple benefits. First, redundant mem-
+selects a fixed number of targets with bounded neighbors;                                   ory accesses are avoided due to one-time feature loading.
+deduplication, by contrast, yields variable per-graph sizes,                                Second, repeated kernel launches are eliminated, where 𝑇
+
+
+
+                                                                                      569
+APERTURE: Algorithm-System Co-optimization for Temporal Graph Network Inference PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+temporal graphs                                                 node states storage               CG Transformation Engine §Section 4.1
+                                                                                                                                                                                     ...
+t0t0                                                                                              Data Remapping             Zero Redundancy
+   t1t1                   Node Memory       Raw Message Store                                      Preprocessing                Aggregation          f              f
+                                                                                                   §Section 4.1.1              §Section 4.1.3
+                                                                                                                                                   t0
+                   load             store                load                 store                                                                  t1                              ...
+                                                                                                    Global Feature Map Management
+                                             ×                                                               §Section 4.1.2                            t2   f
+               s               s+                   s                    s+           ...
+  t0                            f                                        f
+       t1t1                                      t1                                                                                               Memory Update Manager §Section 4.2
+          t2                                       t2                                                       l0          l1
+                                                        Aggregation Granularity                    Global                                           State-based           Per-state
+                   Problem Formulation                                                             Feature s0→s0+       s1                             DAG               Timedelta
+                      §Section 4.3.1                          Calculator                                                                           Construction         Materialization
+                                                             §Section 4.3                           Map                                            §Section 4.2.1       §Section 4.2.2
+               Peak Memory Estimation             Adaptive Granularity Selection
+                    §Section 4.3.2                        §Section 4.3.3                      s0                 s 0+        s1            s 1+      Cross-level State Recomposition
+                                                                                                                                                              §Section 4.2.3
+
+
+                                                                     Figure 9. Overview of APERTURE design.
+
+small-scale sparse aggregations are replaced with one kernel.                                              Step 2: Per-state parent lookup (one thread per state). Given
+Third, both intra- and inter-step redundancies are removed                                              a state (ℓ, 𝑣), a thread first queries 𝑀NM along the time axis
+by accessing deduplicated features in the global layout.                                                to obtain the parent level ℓ𝑝 as the nearest non-−1 entry for
+                                                                                                        node 𝑣 (i.e., the most recent NM update of 𝑣 at or before
+4.2            Memory Update Management                                                                 ℓ). This yields the first parent (ℓ𝑝 , 𝑣). It then reads 𝑢 from
+4.2.1 State-based DAG Construction. To feed a global                                                    𝑀RMS [ℓ𝑝 , 𝑣]: if 𝑢 = −1, the state has only the NM parent;
+feature map, APERTURE must recover all state dependencies,                                              otherwise the second parent is (ℓ𝑝 , 𝑢).
+otherwise obscured by NM/RMS. We attach a lightweight meta-                                                Example. For the state (ℓ=2, 𝑣=0), scanning 𝑀NM [:, 0] back-
+data field parent_states to each state descriptor to record the                                         ward finds 0 (the value of ℓ𝑝 ), looking up 𝑀RMS [0, 0] returns
+minimal dependency set for subsequent computations, with-                                               2 (the value of 𝑢), so the two parents are (0, 0) and (0, 2).
+out changing the canonical references ⟨level_id, node_id⟩                                                  Remark. For small graphs with few nodes, we materialize
+and ⟨level_id, uniq_id⟩. Let 𝑠 be a state with node_id = 𝑣                                              a per-node prefix fill along levels so that 𝑀NM [ℓ, 𝑣] already
+and level_id = ℓ, the minimal parent set satisfies:                                                     stores ℓ𝑝 for every (ℓ, 𝑣). This optimization removes the back-
+                                                                                                        ward scan, reducing the complexity of Step 2 to 𝑂 (1). For
+                                                   
+                                                        {⟨𝑣, ℓ𝑝 ⟩},
+                                                                                                       large graphs, we keep the on-the-fly scan design to avoid
+                      parent_states(𝑠) ∈                                                    (8)         the extra 𝑂 (𝑇 𝑁 ) preprocessing and storage cost.
+                                                        {⟨𝑣, ℓ𝑝 ⟩, ⟨𝑢, ℓ𝑝 ⟩}
+                                                                                                        4.2.2 Per-state Timedelta Materialization. We further
+where 𝑢 is the latest Nbrs (LNid) paired with 𝑣 when a raw                                              materialize per-state temporal inputs to avoid redundant
+message (𝑣, 𝑢) is involved at level ℓ𝑝 (ℓ𝑝 < 𝑙). Intuitively,                                           global NM/RMS accesses in memory update stages.
+NM updates always include the state’s own node memory                                                     Computation pattern. For each state 𝑠 = (ℓ, 𝑣) with
+𝑣; RMS-involved updates additionally depend on the sibling                                              parent key (ℓ𝑝 , 𝑣, 𝑢) in the state DAG, we use the lookup
+indexed by LNid.                                                                                        function 𝜅 (·) to read the required timestamps:
+    We materialize only LNid in parent_states (sentinel if ab-                                                                                                 
+                                                                                                              (𝑡 NM, 𝑡 RMS ) = 𝜅 (𝑠, RMS.t), 𝜅 (𝑠, LatestTimes) . (9)
+sent); 𝑣 is implicit from node_id. We also record a single
+parent level ℓ𝑝 in parent_states: the parent(s) are co-level                                                                    𝜏 (𝑠) = Φ(𝑡 RMS − 𝑡 NM ) .              (10)
+(i.e., share the same level_id), so one level_id suffices.                                              Therefore, 𝜏 (𝑠) is a pure function of read-only NM/RMS
+This design keeps the dependency DAG lightweight: each                                                  entries selected by 𝜅 (𝑠), with no cross-state dependence, and
+state carries 𝑂 (1) metadata, with at most one explicit parent                                          its cost is dominated by global-memory access rather than
+(its node_id plus a single parent level_id), thereby reduc-                                             arithmetic.
+ing DAG-construction complexity.                                                                           Same addressing pattern as DAG construction. Both
+    Parallel construction. As shown in Figure 10, we pro-                                               time prefill and DAG construction resolve the same parent
+pose a two-step kernel that builds state dependencies in                                                key 𝜅 (𝑠) via the Nid-level and DNid-LNid tables: (i) DAG
+parallel.                                                                                               construction uses 𝜅 (𝑠) to emit parent edges (ℓ𝑝 , 𝑣) and op-
+    Step 1: Initialize two 𝑇 ×𝑁 tables. (i) The Nid-level table                                         tionally (ℓ𝑝 , 𝑢); (ii) Time prefill uses 𝜅 (𝑠) to fetch both parent
+𝑀NM [ℓ, 𝑣] records, for node 𝑣 and level ℓ, the nearest prior                                           timestamps and produces the encoded temporal feature 𝜏 (𝑠).
+level ℓ𝑝 ≤ ℓ at which 𝑣’s NM was updated; entries are initial-                                             Parallel materialization. As shown in Figure 11, we ma-
+ized to −1 when absent. (ii) The DNid-LNid table 𝑀RMS [ℓ, 𝑣]                                            terialize 𝜏 (𝑠) per state using the same 𝜅 (𝑠) as in Section 4.2.1.
+stores the latest neighbor 𝑢 (LNid) paired with destination                                                Step 1: Initialize two 𝑇 ×𝑁 time tables. (i) RMS-time 𝑇RMS .
+node 𝑣 (DNid) at level ℓ for raw-message updates (𝑣, 𝑢).                                                Initialize all entries to −1, then set 𝑇RMS [0, 𝑣] to the initial
+
+
+
+                                                                                                  570
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                             Wang, Yang, and Yu et al.
+
+
+  1 init    Nid: Node IDs DNid: Dstnode IDs LNid: Latest Nbrs                    1 init                                 2 lookup
+  Nid-level table  DNid-LNid table         Nid DNid LNid                        DNid-LNid table TRMS table              TRMS table      TNM table
+   0 0 0 -1          2 -1 0 -1       T0 0,1,2     0,2 2,0                        2 -1 0 -1 a0 a1 a2 a3                 a0 a1 a2 a3 e0 e1 e2 e3
+T -1 1     1   1    T -1 -1 3      2       T1 1,2,3       2,3      3,2          T -1 -1 3          2   t0 -1 t1 -1     t0 -1 t1 -1 a0 a1 a2 -1
+   2   2   2   2       1   0 -1 -1         T2 0,1,2,3     1,0      0,1            1  0 -1 -1           -1 -1 t2 t3     -1 -1 t2 t3 -1 a1 t1 a3
+        N                   N                                                          N
+  2                                        DAG i: level id, j: node id           Nid-level table        TNM table               TimeDelta
+  Nid-level table    DNid-LNid table       0-0  0-1      0-2      i-j             0 0 0 -1             e0 e1 e2 e3     a0-e0 a1-e1 a2-e2
+   0 0 0 -1           2 -1 0 -1                                                 T -1 1         1   1   a0 a1 a2 -1           a1-a1 t1-a2 a3-e3
+                                                   1-1     1-2      1-3
+  -1 1     1   1      -1 -1 3      2                                              2    2       2   2   -1 a1 t1 a3     t0-a0 a1-a1 t2-t1 t3-a3
+   2   2   2   2       1   0 -1 -1         2-0     2-1     2-2      2-3                    N
+
+                                                                                Figure 11. Example of timedelta computation. 1 Initialize
+Figure 10. Example of state-based DAG construction. 1 Ini-                      the 𝑇𝑅𝑀𝑆 ,𝑇𝑁 𝑀 based on DNid-LNid and Nid-level tables. 2
+tialize the Nid-level and DNid-LNid tables from local indices.                  Lookup both tables to resolve parent times, producing the
+ 2 Lookup both tables to resolve parent states, producing                       timedelta (right). The colors of nodes correspond to their
+the global DAG (right). The colors of nodes correspond to                       index sources (Nid, LNid) and parent times.
+their index sources (Nid, LNid) and states in DAG.
+
+                                                                                   We define the consumers in level ℓ+1 that depend on a
+                                                                                unique producer in level ℓ as the composable subset. To iden-
+timestamps. For ℓ ≥ 1, write latest timestamps only to entries                  tify this subset, we scan the maintained SDAG in parallel: for
+(ℓ, 𝑣) indicated by the DNid-LNid table (i.e., where a pair                     each state in ℓ+1, we test whether its parent resides in ℓ; these
+(𝑣, LNid) exists at level ℓ); keep other entries at −1 to be                    checks are independent across states and thus incur negligi-
+resolved by predecessor lookup at query time. (ii) NM-time                      ble overhead. At execution, the kernel (i) directly reuses the
+𝑇NM . Initialize all entries to −1, then set𝑇NM [0, 𝑣] to the initial           materialized temporal inputs for both levels, avoiding extra
+timestamps. For any (ℓ, 𝑣), obtain 𝑇NM [ℓ, 𝑣] by a predecessor                  fetches and remapping; (ii) computes the update at ℓ and
+lookup in 𝑇RMS , i.e. scan column 𝑣 backward along the level                    forwards the result to ℓ+1 via registers or shared memory,
+axis from ℓ to the nearest non-empty entry (level ℓ) and set                    avoiding intermediate materialization; and (iii) writes back
+𝑇RMS [ℓ ′, 𝑣] to 𝑇NM [ℓ, 𝑣] (Row 0 provides the initializer, so this            only the final state of ℓ+1 to global memory (the intermediate
+lookup always succeeds).                                                        state at ℓ is consumed on-chip and never spilled). This de-
+   Step 2: Per-state parent lookup (one thread per state). Launch               sign reduces global-memory round trips and kernel-launch
+one thread per state as enumerated by the Nid-level table;                      overhead, improving on-chip reuse while meeting temporal-
+each thread writes to the orange slots in the figure. For a                     ordering requirements. For portions that are not directly
+state (ℓ, 𝑣): (1) obtain 𝑡 RMS by a predecessor lookup in column                fusible, we reuse threads that finish early within the fused
+𝑣 of 𝑇RMS , i.e., take the nearest prior non-empty entry at or                  kernel to perform global-to-global (G2G) data movement,
+before ℓ; (2) obtain 𝑡 NM by the same predecessor rule in 𝑇NM                   thereby still avoiding an additional kernel launch.
+(nearest prior non-empty in column 𝑣 at or before ℓ); (3)
+compute Δ𝑡 (𝑠) = 𝑡 RMS − 𝑡 NM and record it. After all Δ𝑡 (𝑠)                   4.3    Aggregation Granularity Calculator
+values are produced, run a single encoding pass to obtain                       4.3.1 Problem Formulation. Let 𝑇 denote the number of
+𝜏 (𝑠) = Φ(Δ𝑡 (𝑠)). Both predecessor lookups are guaranteed                      temporal steps. We model the total cost as:
+to succeed by construction (row 0 initialization and the NM
+parent definition), so no case handling is required.                                  min 𝑇MU (Γ) + 𝑇AGG (Γ),        s.t. 𝑀peak (Γ) ≤ 𝑀max,      (11)
+                                                                                       Γ
+   Example. For the dark-orange state (ℓ=2, 𝑣=1), step (1)                      where 𝑇MU (Γ) and 𝑇AGG (Γ) are the costs of memory update
+finds 𝑇RMS [2, 1] empty and backtracks to obtain 𝑎 1 ; step (2)                 and aggregation, 𝑀peak (Γ) is the peak memory usage. We
+reads 𝑇NM [2, 1] = 𝑎 1 ; hence Δ𝑡 (𝑠) = 𝑎 1 − 𝑎 1 = 0.                          find that the total workload during inference is roughly con-
+   Remark. Obtained time features are stored in a contigu-                      stant, but increasing Γ improves the locality and parallelism
+ous buffer 𝑇 ; each state keeps 𝑂 (1) metadata, an integer                      of memory updates and GNN aggregation. Therefore, the
+time_idx(𝑠) pointing to the row 𝑇 [time_idx(𝑠)].                                inference cost theoretically decreases with increasing Γ, as
+                                                                                supported by the experimental results in Section 3.3. Conse-
+4.2.3 Cross-level State Recomposition. Leveraging (1)
+                                                                                quently, we set Γ as large as memory budget permits, which
+an explicit state-based DAG (SDAG) (Section 4.2.1), (2) per-
+                                                                                motivates the peak memory estimation below.
+state materialization of temporal inputs (Section 4.2.2), and
+(3) management of states in global feature map across the en-                   4.3.2 Peak Memory Estimation. Although inference op-
+tire pipeline (Section 4.1.2), we recompose the state operators                 erates in an online fashion, our preprocessing stage provides
+of adjacent levels into a single kernel execution.                              complete visibility into each temporal graph, including the
+
+
+
+                                                                          571
+APERTURE: Algorithm-System Co-optimization for Temporal Graph Network Inference PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+deduplicated-node upper bound. This enables a conservative                     Table 2. Graph datasets (𝑑 denotes feature dimension).
+yet accurate estimation of peak GPU memory usage under
+any given granularity Γ, avoiding costly fallback while still                      Dataset      # Nodes       # Edges    max(t)   𝑑𝑣    𝑑𝑒
+capturing the substantial gains enabled by larger Γ. Users                         lastfm          1,980     1,293,103    1.4e8   128   128
+may specify whether to move edge/node features, NM, and                            reddit      2,601,977       672,447    2.7e6   128   128
+RMS to GPU memory. We define:                                                      wiki            9,928       157,474    2.7e6   128   128
+                                                                                   mooc            7,047       411,749    2.6e6   128   128
+    • 𝑁ˆ : deduplicated-node upper bound per temporal graph;
+    • 𝑁˜ := (1 + 𝜖) 𝑁ˆ : safety-margined node count, 𝜖 > 0;                        wiki-talk   1,140,149     7,833,140    1.2e9   100   172
+                                                                                   gdelt          16,682   191,290,882    1.8e5   128   128
+    • 𝑘: number of sampled neighbors per node;
+    • 𝑏: bytes per feature element;
+    • dimout, dimtime : dimensions of states, time features.
+                                                                             memory and raw message store) are stored in host memory
+The worst-case number of nodes and edges under Γ are:                        and fetched on demand. In TGLite-GPU, the above tensors
+                   𝑁˜ Γ = Γ · 𝑁˜ ,      𝐸 Γ = 𝑁˜ Γ · 𝑘          (12)         are stored in device memory to avoid H2D transfers. How-
+                                                                             ever, on large graphs (e.g., gdelt), keeping multiple tensors
+where 𝑘 is the sampled fanout per node. We estimate the                      resident in GPU memory can lead to out-of-memory (OOM)
+total peak memory usage as:                                                  failures. All methods are executed under the same configu-
+                                                                             rations for fair comparison.
+         𝑀peak (Γ) = 𝑁˜ Γ · dimout · 𝑏 + 𝑁˜ Γ · dimtime · 𝑏                     Hardware Configuration - All experiments run on a
+                     |       {z      } |         {z       }                  server with Intel Xeon Gold 6336Y CPU and NVIDIA A100
+                          GlobalState             TimeDelta                  GPU (40 GB). To demonstrate hardware portability and mem-
+                       + 𝑓agg ( 𝑁˜ Γ , 𝐸 Γ ) +fixed overheads   (13)         ory safety guarantees of APERTURE, we also report end-to-
+                         | {z }                                              end results on a second server with Intel Xeon Gold 6230R
+                           Aggregation
+                                                                             CPU and NVIDIA RTX 4090 GPU (24 GB).
+   where 𝑏 is the number of bytes per feature element, and                      Following prior works [2, 5, 18, 29, 30], we split each
+𝑓agg is a model-specific aggregation cost function obtained                  dataset into train/val/test with a 70/15/15 ratio. We train
+via static operator graph analysis. The fixed overhead ac-                   on the training split and report results on the held-out test
+counts for storage components, node features, edge features,                 split. For small datasets, we process temporal graphs in fixed-
+NM, and RMS, that may reside on either CPU or GPU. We                        size groups of 200; for large datasets, we use 2000. To reduce
+determine their contribution to GPU memory by parsing                        measurement noise, we repeat each experiment five times
+the experiment configuration, which specifies whether each                   and report the mean.
+component is moved to device memory.
+                                                                             5.2   End-to-End Performance
+4.3.3 Adaptive Granularity Selection. Once preprocess-
+                                                                             As shown in Figure 12, APERTURE consistently outperforms
+ing concludes and prior to graph construction, we determine
+                                                                             TGLite across all datasets and models on both A100 and
+the aggregation granularity Γ for the subsequent process. By
+                                                                             RTX 4090. On A100, it yields an average speedup of 29.19×
+evaluating the 𝑀peak (Γ) function with respect to hardware
+                                                                             over TGLite-CPU and 21.15× over TGLite-GPU. On RTX 4090,
+constraints, we select the maximal feasible Γ with negligible
+                                                                             the average speedup further increases to 34.53× over TGLite-
+runtime overhead. In this way, APERTURE supports adaptive
+                                                                             CPU and 27.85× over TGLite-GPU.
+granularity selection while remaining robust to allocator
+                                                                                Hardware-wise - we observe larger relative speedups
+variance and workload irregularities.
+                                                                             on RTX 4090: memory updates are highly memory-bound,
+                                                                             and our global feature map plus a single block-diagonal zero-
+5     Evaluation
+                                                                             redundancy aggregation reduce redundant global accesses
+5.1   Experimental Setup                                                     and kernel launches, which disproportionately benefits de-
+To validate the effectiveness of APERTURE, we conduct com-                   vices under tighter memory bandwidth pressure.
+prehensive experiments across diverse workloads.                                Dataset-wise - the gains align with redundancy profiles.
+   Model and Datasets - We adopt three representative                        For TGN on lastfm and gdelt, speedups are especially high:
+models including TGN [18], TGAT [33] and JODIE [14]. As                      these graphs have many more edges than nodes, so elim-
+listed in Table 2, we use standard datasets from [29, 33, 41],               inating repeated feature loads and consolidating aggrega-
+where wiki-talk and gdelt are large-scale.                                   tion removes substantial computation and traffic. For TGAT
+   Baselines - We compare APERTURE with state-of-the-                        on wiki-talk, we see notably higher gains than those for
+art baseline TGLite [30]. We further compare with two im-                    TGN: aggregation-side redundancy is significantly reduced,
+plementations of TGLite: TGLite-CPU and TGLite-GPU. In                       whereas TGN still bears memory-update traffic; wiki-talk
+TGLite-CPU, the node/edge features and state tensors (node                   also exhibits tighter memory headroom at larger Γ. For wiki,
+
+
+
+                                                                       572
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                       Wang, Yang, and Yu et al.
+
+
+                                                                                    TGLite-CPU                        TGLite-GPU                                APERTURE
+  Speedup vs TGLite-CPU
+
+
+                            60
+                                                                            45.9x        45.0x
+                                                                                                                                                                                               41.7x
+                                                                                                                                                                                                          38.0x
+                            40                                                                                                          32.7x
+                                                                                                                                                               36.7x
+                                                                   30.5x                                                                          29.0x
+                                   27.9x                                                                                                                                                                              26.1x
+                                                                                                                          24.8x                                          25.3x                                                  25.2x
+                                             21.4x        21.4x                                   19.0x                                                                           20.5x
+                            20                                                                               14.2x
+
+
+                             0
+                                  TG
+                                    N        AT        DI
+                                                         E
+                                                                  TG
+                                                                    N        AT       DI
+                                                                                        E
+                                                                                                 TG
+                                                                                                   N         AT        DI
+                                                                                                                           E
+                                                                                                                                    TG
+                                                                                                                                        N         AT        DI
+                                                                                                                                                                E
+                                                                                                                                                                       TG
+                                                                                                                                                                         N         AT       DI
+                                                                                                                                                                                                E
+                                                                                                                                                                                                         TG
+                                                                                                                                                                                                           N          AT        DI
+                                                                                                                                                                                                                                  E
+                                           TG        JO                    TG       JO                    TG         JO                         TG        JO                     TG       JO                      TG          JO
+                                        lastfm                         wiki-talk                        reddit                                  wiki                           mooc                               gdelt
+  Speedup vs TGLite-CPU
+
+
+
+
+                                                                                                               (a) A100 GPU
+                                                                            59.3x
+                                                                                                                                                                                                          50.1x
+                            50                                                           42.7x                                                                           42.2x                 43.3x
+                                   37.5x                           37.3x                                                                                       36.7x              34.8x
+                                                          28.8x                                                           30.5x                   31.5x
+                                             27.5x                                                                                      26.7x                                                                         28.0x
+                                                                                                  24.1x                                                                                                                         22.8x
+                            25                                                                               17.8x
+
+
+
+                             0
+                                  TG
+                                    N        AT        DI
+                                                         E
+                                                                  TG
+                                                                    N        AT       DI
+                                                                                        E
+                                                                                                 TG
+                                                                                                   N         AT        DI
+                                                                                                                           E
+                                                                                                                                    TG
+                                                                                                                                        N         AT        DI
+                                                                                                                                                                E
+                                                                                                                                                                       TG
+                                                                                                                                                                         N         AT       DI
+                                                                                                                                                                                                E
+                                                                                                                                                                                                         TG
+                                                                                                                                                                                                           N          AT        DI
+                                                                                                                                                                                                                                  E
+                                           TG        JO                    TG       JO                    TG         JO                         TG        JO                     TG       JO                      TG          JO
+                                        lastfm                         wiki-talk                        reddit                                  wiki                           mooc                               gdelt
+                                                                                                             (b) RTX 4090 GPU
+
+
+                                            Figure 12. Performance speedup of APERTURE and TGLite-GPU over that of TGLite-CPU.
+
+                                                      GA (SOTA)                      TE (SOTA)                            MU (SOTA)                            SD (SOTA)                        LD (SOTA)
+                                                      GA (APERTURE)                  TE (APERTURE)                        MU (APERTURE)                        SD (APERTURE)                    LD (APERTURE)
+                            100
+                                        10.4%                           10.3%                     10.5%                                 9.9%                           9.6%
+                                                      0.6%                          0.3%                          0.5%                               0.6%                         0.6%
+                                                                                                                                                                                                       35.2%
+                             80
+                                        25.6%                           30.0%                                                       30.5%
+                                                                                                  30.3%                                                                32.3%
+      Normalized Time (%)
+
+
+
+
+                                                      1.6%                                                                                                                                                        0.4%
+                                           5.2%                                     2.0%                          2.5%                               1.7%                         1.7%                 8.4%
+                             60                                         4.7%                                                            4.2%                                                                      0.4%
+                                                                                                      4.9%                                                             4.3%
+                                                      0.1%
+                                                                                    1.6%                          0.1%                               0.1%                         0.1%
+                                                                                                                                                                                                       28.0%
+                             40
+
+                                        58.8%                                                                                       55.4%                                                                         0.6%
+                                                                        55.0%                     54.3%                                                                53.8%                           1.8%
+                             20                                                                                                                                                                                   0.0%
+                                                                                                                                                                                                       26.6%
+
+                                                      2.2%                          1.6%                          2.5%                               2.2%                         2.4%                            1.9%
+                              0
+                                              lastfm                       wiki-talk                      reddit                                wiki                         mooc                             gdelt
+
+                                                           Figure 13. Runtime breakdown of the components involved in APERTURE.
+
+mooc, and reddit, which are relatively sparser, improvements                                                                      AUC/AP as TGLite (up to rounding), indicating that decou-
+are more uniform across models and mainly come from ker-                                                                          pling memory updates from GNN aggregation is semantics-
+nel consolidation rather than heavy redundancy removal.                                                                           preserving and does not alter node-state evolution. Thus, the
+                                                                                                                                  performance gains incur no loss in predictive quality.
+5.3                         Prediction Accuracy
+We verify that APERTURE preserves model quality by com-                                                                           5.4       Breakdown Analysis
+paring Area under Curve (AUC, threshold-independent clas-                                                                         Figure 13 reports the normalized runtime breakdown across
+sification accuracy) and Average Precision (AP, ranking pre-                                                                      datasets for TGN on A100 GPU. For clarity, we map each
+cision) against baseline systems across all datasets and three                                                                    runtime stage to the corresponding APERTURE components
+models. As shown in Table 3, APERTURE attains the same                                                                            as follows.
+
+
+
+                                                                                                                     573
+APERTURE: Algorithm-System Co-optimization for Temporal Graph Network Inference PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+   Table 3. Prediction accuracy comparison (AP / AUC).                                                                         wiki-talk            lastfm           Perfect Estimation Line
+                                                                                                                               gdelt                reddit
+
+
+
+
+                                                                                     Estimated Peak Memory (GB)
+                                         AP / AUC                                                                 20.0
+  DT     System                                                                                                                                                                                      50
+                  lastfm wiki-talk reddit       wiki      mooc      gdelt                                         17.5
+                                                                                                                                                                                                     40
+         TGLite 0.85/0.87 0.96/0.95 0.99/0.99 0.98/0.99 0.99/0.99 0.98/0.98                                       15.0
+ TGN
+          Our 0.85/0.87 0.96/0.95 0.99/0.99 0.98/0.99 0.99/0.99 0.98/0.98                                         12.5                                                                               30
+      TGLite 0.73/0.77 0.89/0.87 0.99/0.99 0.95/0.95 0.98/0.98 0.98/0.98                                          10.0
+ TGAT                                                                                                                                                                                                20
+       Our 0.73/0.77 0.89/0.87 0.99/0.99 0.95/0.95 0.98/0.98 0.98/0.98                                             7.5
+         TGLite 0.73/0.79 0.96/0.95 0.98/0.99 0.89/0.93 0.99/0.99 0.97/0.97                                        5.0                                                                               10
+ JODIE
+          Our 0.73/0.79 0.96/0.95 0.98/0.99 0.89/0.93 0.99/0.99 0.97/0.97                                          2.5
+                                                                                                                         2.5    5.0   7.5 10.0 12.5 15.0 17.5 20.0 20              30   40    50
+                                                                                                                                        Measured Peak Memory (GB)
+
+• GA (GNN Aggregation): Zero-Redundancy Aggregation
+  and Aggregation Granularity Calculator, which consolidate                          Figure 14. Estimated and measured peak memory usage.
+  aggregation into a single kernel to reduce redundant loads,
+  computations, and launches.                                                                                                                      lastfm                  gdelt
+• TE (Time Encoding): Per-state Timedelta Materialization,
+                                                                                                                                                              100
+
+
+
+
+                                                                                       End to End Time (s)
+  which precomputes time deltas to avoid repeated times-                                                          2.0
+  tamp access and improve parallelism.                                                                                                                         75
+                                                                                                                  1.5
+• MU (Memory Update): State-based DAG Construction, Cross-
+                                                                                                                  1.0                                          50
+  level State Recomposition, and Global Feature Map Manage-
+  ment, which jointly reduce memory traffic and manage-                                                           0.5                                          25
+  ment overhead across temporal levels.
+                                                                                                                         2 6 10 14 18 22 26 30 34 38                2 6 10 14 18 22 26 30 34
+• SD (Sample and Dedup): Data Remapping Preprocessing,                                                                    Aggregation Granularity                    Aggregation Granularity
+  which remaps and deduplicates sampled graphs on GPU
+  before aggregation.                                                               Figure 15. Performance varies with aggregation granularity.
+• LD (Loading): Also reduced by Zero-Redundancy Aggrega-
+  tion, which minimizes redundant edge-indexed loads.
+                                                                                      Percentage of Total Time
+
+
+
+
+                                                                                                                                                  State-based DAG Construction
+The most significant effect of APERTURE is that the dominant
+costs of GA and MU nearly vanish, dropping to only single-                                                        9%                       7.8%
+
+digit percentages across all datasets.                                                                            6%
+                                                                                                                                                                                             2.8%
+                                                                                                                  3%                                                1.2%
+5.5    Aggregation Granularity Analysis                                                                                        0.4%                    0.8%                    1.0%
+
+5.5.1 Peak Memory Estimation. We evaluate the 𝑀peak (Γ)                                                           0%
+                                                                                                                           lastfm wiki-talk reddit                  wiki       mooc          gdelt
+function by comparing estimated peak memory usage with
+measured peaks across datasets on TGN. As shown in Fig-                             Figure 16. Overhead normalized to end-to-end inference.
+ure 14, the estimator is consistently conservative (upward-
+biased), with an average relative error of 14.14%, which
+avoids OOM re-executions in practice while still enabling                           are negligible, the former is a single contiguous tensor ini-
+large feasible Γ for improved performance.                                          tialization, the latter a lightweight function evaluation. As
+                                                                                    shown in Figure 16, DAG construction dominates the over-
+5.5.2 Performance Difference. We vary Γ and measure                                 head but remains under 10% of end-to-end time across all
+end-to-end inference performance. As shown in Figure 15, in-                        workloads. The DAG construction of wiki-talk and gdelt ac-
+creasing Γ consistently reduces runtime, as memory update                           counts for a larger fraction due to their node-heavy and
+stage involves fewer inter-aggregation synchronizations,                            edge-heavy characteristics, respectively. The DAG construc-
+while GNN aggregation stage benefits from higher reuse                              tion cost scales with the number of nodes/edges, whereas
+(deduped features), fewer loads, and fewer kernel launches.                         the inference performance depends mainly on the chosen
+The auxiliary overhead remains nearly flat.                                         group size and dataset redundancy.
+
+5.6    Overhead Analysis                                                            6                              Conclusion and Future Work
+We profile three sources of overhead: (i) one-time allocation                       APERTURE breaks the step-wise TGN inference paradigm by
+of the global feature map, (ii) state-based DAG construction                        decoupling memory updates from GNN aggregation. It com-
+(including preparation for temporal-feature computation),                           bines global feature map management, dependency-aware
+and (iii) aggregation-granularity selection. The first and third                    update restructuring, and analytical granularity selection to
+
+
+
+                                                                              574
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                   Wang, Yang, and Yu et al.
+
+
+improve inference efficiency while guaranteeing memory                             [11] Zhihao Jia, Sina Lin, Rex Ying, Jiaxuan You, Jure Leskovec, and Alex
+safety. The evaluation results across configurations show                               Aiken. 2020. Redundancy-free computation for graph neural networks.
+end-to-end gains without accuracy loss, indicating that the                             In Proceedings of the 26th ACM SIGKDD International Conference on
+                                                                                        Knowledge Discovery & Data Mining. 997–1005.
+decoupling methodology paves a promising system opti-                              [12] Weiwei Jiang, Jiayun Luo, Miao He, and Weixi Gu. 2023. Graph neural
+mization road for TGNs. For future work, we plan to support                             network for traffic forecasting: The research progress. ISPRS Interna-
+strict QoS online serving by segmented preprocessing and                                tional Journal of Geo-Information 12, 3 (2023), 100.
+consistent granularity selection with peak memory bound.                           [13] Duc Kieu, Tung Kieu, Peng Han, Bin Yang, Christian S Jensen, and Bac
+We also plan to extend APERTURE to multi-GPU execution                                  Le. 2024. TEAM: Topological evolution-aware framework for traffic
+                                                                                        forecasting. Proceedings of the VLDB Endowment 18, 2 (2024), 265–278.
+via partitioned feature maps and DAG-guided updates with                           [14] Srijan Kumar, Xikun Zhang, and Jure Leskovec. 2019. Predicting
+boundary exchange.                                                                      dynamic embedding trajectory in temporal interaction networks. In
+                                                                                        Proceedings of the 25th ACM SIGKDD international conference on knowl-
+Acknowledgments                                                                         edge discovery & data mining. 1269–1278.
+                                                                                   [15] Fangxin Liu, Shiyuan Huang, Ning Yang, Zongwu Wang, Haomin Li,
+This work is supported by National Natural Science Founda-                              and Li Jiang. 2025. CROSS: Compiler-Driven Optimization of Sparse
+tion of China (No. 62322201, U23B2020, 62402525, U22A2028                               DNNs Using Sparse/Dense Computation Kernels. In 2025 IEEE Interna-
+and 92373110), the Fundamental Research Funds for the Cen-                              tional Symposium on High Performance Computer Architecture (HPCA).
+tral Universities (JKF-2025012343648 and JKF-20240598), and                             IEEE, 963–976.
+State Key Laboratory of Complex & Critical Software Envi-                          [16] Xiaobo Lu, Jianbin Fang, Lin Peng, Chun Huang, Zixiao Yu, and Tiejun
+                                                                                        Li. 2025. Gator: Accelerating Graph Attention Networks by Jointly
+ronment (SKLCCSE-2025ZX-04).                                                            Optimizing Attention and Graph Processing. ACM Transactions on
+                                                                                        Architecture and Code Optimization 22, 2 (2025), 1–24.
+References                                                                         [17] Sudipta Mondal, Susmita Dey Manasi, Kishor Kunal, Ramprasath S,
+ [1] Ke Cheng, Peng Linzhi, Junchen Ye, Leilei Sun, and Bowen Du. 2024.                 and Sachin S Sapatnekar. 2022. GNNIE: GNN inference engine with
+     Co-neighbor encoding schema: A light-cost structure encoding method                load-balancing and graph-specific caching. In Proceedings of the 59th
+     for dynamic link prediction. In Proceedings of the 30th ACM SIGKDD                 ACM/IEEE Design Automation Conference. 565–570.
+     Conference on Knowledge Discovery and Data Mining. 421–432.                   [18] Emanuele Rossi, Ben Chamberlain, Fabrizio Frasca, Davide Eynard,
+ [2] Yue Dai, Xulong Tang, and Youtao Zhang. 2025. Cascade: A                           Federico Monti, and Michael Bronstein. 2020. Temporal graph
+     Dependency-aware Efficient Training Framework for Temporal Graph                   networks for deep learning on dynamic graphs. arXiv preprint
+     Neural Network. In Proceedings of the 30th ACM International Confer-               arXiv:2006.10637 (2020).
+     ence on Architectural Support for Programming Languages and Operat-           [19] Oleksandr Shchur and Stephan Günnemann. 2019. Overlapping
+     ing Systems, Volume 2. 95–110.                                                     community detection with graph neural networks. arXiv preprint
+ [3] Rahul Dey and Fathi M Salem. 2017. Gate-variants of gated recurrent                arXiv:1909.12201 (2019).
+     unit (GRU) neural networks. In 2017 IEEE 60th international midwest           [20] Guangming Sheng, Junwei Su, Chao Huang, and Chuan Wu. 2024.
+     symposium on circuits and systems (MWSCAS). IEEE, 1597–1600.                       Mspipe: Efficient temporal gnn training via staleness-aware pipeline.
+ [4] Mingjiang Duan, Da He, Tongya Zheng, Lingxiang Jia, Mingli Song,                   In Proceedings of the 30th ACM SIGKDD Conference on Knowledge
+     Xinyu Wang, and Zunlei Feng. 2025. Global Attribute-Association                    Discovery and Data Mining. 2651–2662.
+     Pattern Aggregation for Graph Fraud Detection. In Proceedings of the          [21] Jie Sun, Zuocheng Shi, Li Su, Wenting Shen, Zeke Wang, Yong Li,
+     AAAI Conference on Artificial Intelligence, Vol. 39. 11616–11624.                  Wenyuan Yu, Wei Lin, Fei Wu, Bingsheng He, and Jingren Zhou. 2025.
+ [5] Shihong Gao, Yiming Li, Yanyan Shen, Yingxia Shao, and Lei Chen.                   Helios: Efficient distributed dynamic graph sampling for online gnn
+     2024. Etc: Efficient training of temporal graph neural networks over               inference. In Proceedings of the 30th ACM SIGPLAN Annual Symposium
+     large-scale dynamic graphs. Proceedings of the VLDB Endowment 17, 5                on Principles and Practice of Parallel Programming. 2–15.
+     (2024), 1060–1072.                                                            [22] Rakshit Trivedi, Mehrdad Farajtabar, Prasenjeet Biswal, and Hongyuan
+ [6] Shihong Gao, Yiming Li, Xin Zhang, Yanyan Shen, Yingxia Shao, and                  Zha. 2019. Dyrep: Learning representations over dynamic graphs. In
+     Lei Chen. 2024. Simple: Efficient temporal graph neural network                    International conference on learning representations.
+     training at scale with dynamic data placement. Proceedings of the ACM         [23] Chunyang Wang, Desen Sun, and Yuebin Bai. 2023. PiPAD: pipelined
+     on Management of Data 2, 3 (2024), 1–25.                                           and parallel dynamic GNN training on GPUs. In Proceedings of the
+ [7] Stephen Grossberg. 2013. Recurrent neural networks. Scholarpedia 8,                28th ACM SIGPLAN Annual Symposium on Principles and Practice of
+     2 (2013), 1888.                                                                    Parallel Programming. 405–418.
+ [8] Jindong Han, Weijia Zhang, Hao Liu, Tao Tao, Naiqiang Tan, and                [24] Ruijie Wang, Jingyuan Huang, Yutong Zhang, Jinyang Li, Yufeng Wang,
+     Hui Xiong. 2024. Bigst: Linear complexity spatio-temporal graph                    Wanyu Zhao, Shengzhong Liu, Charith Mendis, and Tarek Abdelzaher.
+     neural network for traffic forecasting on large-scale road networks.               2024. Tgonline: Enhancing temporal graph learning with adaptive
+     Proceedings of the VLDB Endowment 17, 5 (2024), 1081–1090.                         online meta-learning. In Proceedings of the 47th International ACM
+ [9] Kezhao Huang, Jidong Zhai, Zhen Zheng, Youngmin Yi, and Xipeng                     SIGIR Conference on Research and Development in Information Retrieval.
+     Shen. 2021. Understanding and bridging the gaps in current GNN                     1659–1669.
+     performance optimizations. In Proceedings of the 26th ACM SIGPLAN             [25] Xiaoyun Wang, Minhao Cheng, Joe Eaton, Cho-Jui Hsieh, and Felix
+     Symposium on Principles and Practice of Parallel Programming. 119–                 Wu. 2018. Attack graph convolutional networks by adding fake nodes.
+     132.                                                                               arXiv preprint arXiv:1810.10751 (2018).
+[10] Shenyang Huang, Farimah Poursafaei, Jacob Danovitch, Matthias Fey,            [26] Xuhong Wang, Ding Lyu, Mengjian Li, Yang Xia, Qi Yang, Xinwen
+     Weihua Hu, Emanuele Rossi, Jure Leskovec, Michael Bronstein, Guil-                 Wang, Xinguang Wang, Ping Cui, Yupu Yang, Bowen Sun, and Zhenyu
+     laume Rabusseau, and Reihaneh Rabbany. 2023. Temporal graph bench-                 Guo. 2021. Apan: Asynchronous propagation attention network for
+     mark for machine learning on temporal graphs. Advances in Neural                   real-time temporal graph embedding. In Proceedings of the 2021 inter-
+     Information Processing Systems 36 (2023), 2056–2073.                               national conference on management of data. 2628–2638.
+
+
+
+
+                                                                             575
+APERTURE: Algorithm-System Co-optimization for Temporal Graph Network Inference PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+[27] Yiqing Wang. 2025. PPoPP26_AE_APERTURE_CODE. https://doi.org/                       Augmentation in Graph Fraud Detection. In Proceedings of the ACM
+     10.5281/zenodo.17710612                                                             on Web Conference 2025. 5308–5319.
+[28] Yuke Wang, Boyuan Feng, Gushu Li, Shuangchen Li, Lei Deng, Yuan                [36] Jiaxuan You, Tianyu Du, and Jure Leskovec. 2022. ROLAND: graph
+     Xie, and Yufei Ding. 2021. {GNNAdvisor}: An adaptive and efficient                  learning framework for dynamic graphs. In Proceedings of the 28th
+     runtime system for {GNN} acceleration on {GPUs}. In 15th USENIX                     ACM SIGKDD conference on knowledge discovery and data mining.
+     symposium on operating systems design and implementation (OSDI 21).                 2358–2366.
+     515–531.                                                                       [37] Muhan Zhang and Yixin Chen. 2018. Link prediction based on graph
+[29] Yufeng Wang and Charith Mendis. 2023. Tgopt: Redundancy-aware                       neural networks. Advances in neural information processing systems
+     optimizations for temporal graph attention networks. In Proceedings of              31 (2018).
+     the 28th ACM SIGPLAN Annual Symposium on Principles and Practice               [38] Kai Zhong, Shulin Zeng, Wentao Hou, Guohao Dai, Zhenhua Zhu, Xue-
+     of Parallel Programming. 354–368.                                                   cang Zhang, Shihai Xiao, Huazhong Yang, and Yu Wang. 2023. CoGNN:
+[30] Yufeng Wang and Charith Mendis. 2024. Tglite: A lightweight pro-                    An algorithm-hardware co-design approach to accelerate GNN infer-
+     gramming framework for continuous-time temporal graph neural                        ence with minibatch sampling. IEEE Transactions on Computer-Aided
+     networks. In Proceedings of the 29th ACM International Conference                   Design of Integrated Circuits and Systems 42, 12 (2023), 4883–4896.
+     on Architectural Support for Programming Languages and Operating               [39] Yuchen Zhong, Guangming Sheng, Tianzuo Qin, Minjie Wang, Quan
+     Systems, Volume 2. 1183–1199.                                                       Gan, and Chuan Wu. 2023. Gnnflow: A distributed framework for
+[31] Shiwen Wu, Fei Sun, Wentao Zhang, Xu Xie, and Bin Cui. 2022. Graph                  continuous temporal gnn learning on dynamic graphs. arXiv preprint
+     neural networks in recommender systems: a survey. Comput. Surveys                   arXiv:2311.17410 (2023).
+     55, 5 (2022), 1–37.                                                            [40] Hongkuan Zhou, Ajitesh Srivastava, Hanqing Zeng, Rajgopal Kannan,
+[32] Zonghan Wu, Shirui Pan, Fengwen Chen, Guodong Long, Chengqi                         and Viktor Prasanna. 2021. Accelerating large scale real-time GNN
+     Zhang, and Philip S Yu. 2020. A comprehensive survey on graph neural                inference using channel pruning. arXiv preprint arXiv:2105.04528
+     networks. IEEE transactions on neural networks and learning systems                 (2021).
+     32, 1 (2020), 4–24.                                                            [41] Hongkuan Zhou, Da Zheng, Israt Nisa, Vasileios Ioannidis, Xiang
+[33] Da Xu, Chuanwei Ruan, Evren Korpeoglu, Sushant Kumar, and Kannan                    Song, and George Karypis. 2022. TGL: a general framework for tem-
+     Achan. 2020. Inductive representation learning on temporal graphs.                  poral GNN training on billion-scale graphs. Proceedings of the VLDB
+     arXiv preprint arXiv:2002.07962 (2020).                                             Endowment 15, 8 (2022), 1572–1580.
+[34] Yuanyuan Xu, Wenjie Zhang, Ying Zhang, Maria Orlowska, and                     [42] Hongkuan Zhou, Da Zheng, Xiang Song, George Karypis, and Viktor
+     Xuemin Lin. 2024. TimeSGN: Scalable and effective temporal graph                    Prasanna. 2023. Disttgl: Distributed memory-based temporal graph
+     neural network. In 2024 IEEE 40th International Conference on Data                  neural network training. In Proceedings of the International Conference
+     Engineering (ICDE). IEEE, 3297–3310.                                                for High Performance Computing, Networking, Storage and Analysis.
+[35] Jie Yang, Rui Zhang, Ziyang Cheng, Dawei Cheng, Guang Yang, and                     1–12.
+     Bo Wang. 2025. Grad: Guided Relation Diffusion Generation for Graph
+                                                                                    Received 2025-09-01; accepted 2025-11-10
+
+
+
+
+                                                                              576
+

@@ -1,0 +1,861 @@
+   VDHA: Vector-Driven Hash Aggregation for Sparse
+     Matrix-Sparse Vector Multiplication on GPUs
+                              Yuchen Li                                                                  Zhe Pan
+        Department of Computer Science and Technology,                              Department of Computer Science and Technology,
+                     Tsinghua University                                                         Tsinghua University
+                        Beijing, China                                                              Beijing, China
+              liyuchen24@mails.tsinghua.edu.cn                                                 pz@mail.tsinghua.edu.cn
+
+                               Peng Qu                                                               Youhui Zhang
+   Department of Computer Science and Technology, Beijing                   Department of Computer Science and Technology, Beijing
+    National Research Center for Information Science and                     National Research Center for Information Science and
+              Technology, Tsinghua University                                          Technology, Tsinghua University
+                       Beijing, China                                                     Zhongguancun Laboratory
+               qp2018@mail.tsinghua.edu.cn                                                      Beijing, China
+                                                                                         zyh02@mail.tsinghua.edu.cn
+
+Abstract                                                                        CCS Concepts: • Computing methodologies → Shared
+Sparse matrix-sparse vector multiplication (SpMSpV) is a                        memory algorithms; • Computer systems organization
+core primitive in graph analytics and scientific computing,                     → Single instruction, multiple data.
+also arising in spiking neural networks for event-driven
+                                                                                Keywords: SpMSpV, sparse matrix, GPU, Hashing, SNN
+spike propagation. On GPUs, the performance of the preva-
+lent and efficient SpMSpV paradigm is often bottlenecked                        ACM Reference Format:
+by the write-back phase of accumulating non-zero multi-                         Yuchen Li, Zhe Pan, Peng Qu, and Youhui Zhang. 2026. VDHA:
+ply–accumulate results; its many-to-one index scatter pat-                      Vector-Driven Hash Aggregation for Sparse Matrix-Sparse Vector
+tern causes severe conflicts and poor bandwidth utilization                     Multiplication on GPUs. In Proceedings of the 31st ACM SIGPLAN An-
+on GPUs. We present VDHA, a GPU-based weighted SpM-                             nual Symposium on Principles and Practice of Parallel Programming
+SpV kernel that leverages block-private hash tables for local                   (PPoPP ’26), January 31 – February 4, 2026, Sydney, NSW, Australia.
+aggregation, substantially reducing write conflicts and im-                     ACM, New York, NY, USA, 14 pages. https://doi.org/10.1145/3774
+                                                                                934.3786447
+proving memory coalescing. To further amplify this benefit,
+we incorporate column splitting with lightweight reorder-
+ing to expose more locality, and employ a fetch–compute–                        1     Introduction
+writeback pipeline to overlap hash computation with mem-
+ory accesses. Extensive evaluation on over 300 matrices with                    The sparse matrix-sparse vector multiplication (SpMSpV)
+more than 5 million nonzeros, including web-scale graphs                        computes y = Ax with both the matrix A and the input
+(Konect/LAW) and scientific workloads (SuiteSparse), shows                      vector x being sparse. SpMSpV is frequently used in ma-
+that VDHA consistently outperforms state-of-the-art base-                       chine learning [8] and scientific computing [3, 5, 32, 41].
+lines. On web graphs, it achieves a 1.41× geometric-mean                        It also serves as a fundamental primitive in graph analyt-
+speedup (up to 3.42×), while on SuiteSparse it delivers 1.13×                   ics, underlying core algorithms such as breadth-first search
+(up to 2.55×). We also provide a lightweight predictive model                   (BFS), PageRank and personalized PageRank, and it is the
+that identifies matrices favorable to VDHA with 91.3% accu-                     algebraic backbone of many graph frameworks including
+racy.                                                                           GraphBLAS [15], Gunrock [34], GraphBLAST [39], Graph-
+                                                                                Mat [33].
+                                                                                   Beyond these domains, SpMSpV also appears in event-
+                                                                                driven workloads such as spiking neural networks (SNNs),
+                                                                                where spike delivery can be naturally formulated as sparse
+                                                                                matrix-sparse vector multiplication [9]. Moreover, both
+                                                                                brain-inspired neural models and real-world graphs (e.g.,
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         social networks) are known to exhibit highly clustered, small-
+tional License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                world connectivity patterns [35], which create opportunities
+© 2026 Copyright held by the owner/author(s).                                   for exploiting locality in SpMSpV execution.
+ACM ISBN 979-8-4007-2310-0/2026/01                                                 SpMSpV can be implemented under two execution para-
+https://doi.org/10.1145/3774934.3786447                                         digms: Row-major methods traverse CSR rows and are
+
+
+
+                                                                          259
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                             Yuchen Li, Zhe Pan, Peng Qu, and Youhui Zhang
+
+
+naturally aligned with CSR-based SpMV. Some implementa-                  • Shared-memory hash aggregation. Intermediate re-
+tions can be regarded as direct extensions of SpMV, obtained               sults are first accumulated in a shared-memory hash ta-
+by adding value validation [33]. Alternatively, methods                    ble and flushed only when the table becomes sufficiently
+such as tileSpMSpV [18] and BerryBees [26] adopt bitmap-                   full, reducing the write-back conflicts and promoting coa-
+compressed frontiers together with masking of visited nodes,               lesced writes.
+and are specifically optimized for unweighted BFS-style tra-             • Short/long-column decomposition with reordering.
+versals. However, for weighted SpMSpV, row-major traversal                 We first classify columns by their length (the number of
+still scans all matrix rows regardless of vector sparsity, and             nonzeros) into short and long categories. Long columns
+the bitmask cannot avoid loading matrix indices. As a result,              are further split into smaller segments and reordered to
+row-major methods cannot fully exploit vector sparsity.                    improve locality and raise aggregation density, thereby
+   Column-major SpMSpV, in contrast, follows a vector-                     maximizing the benefit of shared-memory accumulation.
+driven paradigm: the computation consists of a fetch phase,              • Overlapping memory and computation. We design a
+which gathers matrix columns corresponding to nonzeros                     pipeline that overlaps irregular global memory accesses
+in the vector, and a write-back phase, which uses column in-               with hash computation, effectively hiding hash computa-
+dices to update the result vector, essentially an index-scatter            tion latency behind memory stalls and making aggrega-
+where multiple entries may map to the same position.                       tion nearly free.
+   On CPUs, representative studies include fgSpMSpV [10],
+work-efficient SpMSpV [2], and HAM-SpMSpV [37]. On
+                                                                            To systematically evaluate VDHA, we consider two bench-
+GPUs, prior work has explored different write-back meth-
+                                                                         marks. The first consists of over 100 large-scale web graphs
+ods and kernel selection: graph analytics frameworks (e.g.,
+                                                                         from the Konect [19] and LAW [6, 7] collections, which are
+Gunrock [34]) use atomic instructions to directly handle
+                                                                         representative of graph analytics workloads where weighted
+write conflicts; FastSpMSpV [40] adopts a sort–reduce ap-
+                                                                         SpMSpV is most critical (e.g., PageRank and Personalized
+proach to avoid conflicts, and Adaptive SpMSpV [20] selects
+                                                                         PageRank on web graphs). The second includes over 200
+write-back strategies (atomic vs. sort) based on matrix char-
+                                                                         matrices from the SuiteSparse [11] collection, a widely used
+acteristics, while also adapting load-balancing granularity
+                                                                         benchmark that covers diverse domains such as scientific
+and switching to row-major SpMSpV or SpMV under dense
+                                                                         computing, engineering, and optimization. Both benchmarks
+vectors.
+                                                                         contain only matrices with at least 5 million nonzeros. To-
+   However, we observe that in some cases the two preva-
+                                                                         gether, these datasets allow us to assess both the practical
+lent write-back strategies—atomic updates and sort-based
+                                                                         impact on real graph workloads and the generality across
+updates—both fail to achieve satisfactory bandwidth utiliza-
+                                                                         broader application scenarios.
+tion: the former suffers from scattered index updates and
+                                                                            Across four vector sparsity levels (0.01, 0.05, 0.10, 0.20;
+frequent conflicts, while the latter relies on costly global
+                                                                         defined as the fraction of nonzeros in the input vector),
+sorting (see Section 3).
+                                                                         VDHA outperforms the best-of-seven baselines (including
+   Similar challenges arise in SpGEMM, where hashing has
+                                                                         cuSPARSE, two row-major SpMSpV kernels using value val-
+been used effectively to aggregate partial products and elimi-
+                                                                         idation [30, 31], and the four representative column-major
+nate intra-row conflicts [12, 13, 25, 28, 36]. However, SpMSpV
+                                                                         SpMSpV kernels from [20, 34, 40]), achieving geometric-
+lacks the natural row partitioning of SpGEMM: instead of
+                                                                         mean speedups of 1.41× on Konect/LAW (up to 3.42×) and
+resolving conflicts only within a single row, it must handle
+                                                                         1.13× on SuiteSparse (up to 2.55×).
+all intermediate updates across the matrix. As a result, a hash
+                                                                            Contributions. This paper makes the following contri-
+table can only eliminate a portion of the write conflicts, while
+                                                                         butions:
+the remaining updates still require global atomic writes. This
+leads to two key questions: whether SpMSpV provides suffi-
+cient locality for hash aggregation, and whether the benefit             • VDHA algorithm. By enhancing locality and reducing
+of fewer write conflicts can outweigh the overhead of the                  hashing overhead, we realize a practical and efficient hash-
+hash table.                                                                based solution for weighted SpMSpV on GPUs
+   To address these challenges, we propose a vector-driven               • Systematic comparison. We conduct a comprehensive
+hash-aggregation (VDHA) algorithm for weighted SpM-                        evaluation against SOTA baselines, across over 100 real-
+SpV (both the matrix and the input vector contain general                  world network graphs and over 200 scientific graphs with
+weights) on GPUs. VDHA reduces write-back conflicts                        a wide range of vector sparsities, demonstrating consis-
+via local aggregation in shared memory, enhances locality                  tent speedups.
+through column decomposition with reordering, and reduces                • Lightweight Performance Prediction. We provide a
+hash cost by pipelining computation with memory access.                    lightweight analysis method to quickly assess whether a
+Concretely, we propose VDHA:                                               matrix benefits from VDHA, facilitating its integration
+                                                                           into adaptive frameworks.
+
+
+
+                                                                   260
+VDHA: Vector-Driven Hash Aggregation for SpMSpV on GPUs                                                                                   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+2         Background:                                                                                                               if the entry is active, the value is then loaded(lines 7,8). BFS-
+2.1         General-Purpose Graphics Processing Units:                                                                              like unweighted SpMSpV systems such as TileSpMSpV [18]
+                                                                                                                                    and BerryBees [26] further incorporate an output mask to
+  Programming and execution model. A GPU kernel is
+                                                                                                                                    avoid unnecessary updates to inactive result entries, thus
+launched as a grid of thread blocks (CTAs), each consist-
+                                                                                                                                    reducing redundant work during traversal.
+ing of multiple warps (typically 32 threads). Thread blocks
+are scheduled onto streaming multiprocessors (SMs), where
+                                                                                                                                    Algorithm 1 Matrix-driven SpMSpV (CSR / pull)
+per-block register and shared-memory usage determine the
+maximum number of resident warps (occupancy).                                                                                       Input: 𝐴 in CSR: (row_ptr, indices, values) with 𝑁 rows;
+                                                                                                                                        dense vector 𝑥 with value array 𝑥 and bitmask 𝑏𝑚;
+   Memory system. Global memory provides high band-                                                                                 Output: Result vector 𝑦
+width but also long latency (hundreds of cycles). To mitigate                                                                        1: for all 𝑟 ← 0 to 𝑁 in parallel do
+this, each SM has a private L1 cache and a configurable parti-                                                                       2:    𝑠𝑡𝑎𝑟𝑡 ← 𝑟𝑜𝑤_𝑝𝑡𝑟 [𝑟 ], 𝑒𝑛𝑑 ← 𝑟𝑜𝑤_𝑝𝑡𝑟 [𝑟 + 1]
+tion of on-chip SRAM (shared memory) that can serve either                                                                           3:    𝑟𝑒𝑠 ← 0
+as additional cache capacity or as an explicitly managed                                                                             4:     for 𝑗 ← 𝑠𝑡𝑎𝑟𝑡 to 𝑒𝑛𝑑 do
+scratchpad, backed by a large device-wide L2 cache. Equally                                                                          5:         𝑐𝑜𝑙 ← 𝑖𝑛𝑑𝑖𝑐𝑒𝑠 [ 𝑗]
+important is memory coalescing: global accesses are issued                                                                           6:         𝑚𝑎𝑠𝑘 ← 𝑏𝑚[𝑐𝑜𝑙]
+in cache-line transactions (e.g., 128 B), so contiguous, well-                                                                       7:         if mask then
+aligned warp accesses are merged into fewer transactions,                                                                            8:             𝑟𝑒𝑠 ← 𝑟𝑒𝑠 ⊕ (𝑣𝑎𝑙𝑢𝑒𝑠 [ 𝑗] ⊗ 𝑥 [𝑐𝑜𝑙])
+while scattered addresses fragment into many small ones,                                                                             9:    𝑦 [𝑟 ] ← 𝑟𝑒𝑠
+wasting bandwidth and exposing latency.
+   Latency hiding. SMs keep many warps resident simulta-                                                                               In contrast, the vector-driven paradigm iterates only over
+neously; when one warp stalls on memory, the scheduler is-                                                                          the nonzeros of x. Algorithm 2 illustrates the vector-driven
+sues instructions from another ready warp. This fine-grained                                                                        paradigm of SpMSpV. For each active entry in x, the corre-
+multithreading allows latency to be hidden as long as suffi-                                                                        sponding column of the CSC matrix is fetched (line 4, the
+cient parallelism and occupancy are maintained.                                                                                     fetch step), and the partial products (i.e., 𝑚𝑎𝑡_𝑣𝑎𝑙 ⊗ 𝑣_𝑣𝑎𝑙)
+                                                                                                                                    are generated toward the result vector according to the
+2.2         SpMSpV                                                                                                                  row indices of the column. These partial results are then
+SpMSpV can be organized under two paradigms: matrix-                                                                                written back to y (line 7, the write_back step). Represen-
+driven (row-major) and vector-driven (column-major). Figure 1                                                                       tative column-major SpMSpV approaches include FastSpM-
+illustrates the differences in their computation flows and                                                                          SpV [40] and GPU graph frameworks such as Gunrock [34].
+work patterns.                                                                                                                      Hybrid methods such as Adaptive SpMSpV [20] combine
+                                                                                                                                    both paradigms depending on vector sparsity.
+                                                                      1     0     1     1     bitmask
+                                                                                                                                    Algorithm 2 Vector-driven SpMSpV (CSC / push)
+    x0          x2 x3                                                 x0 * x2 x3              value
+                                                                                ×                                                   Input: 𝐴 in CSC: (col_ptr, indices, values); 𝑥 in sparse for-
+    a00 a01           a03   a00x0 a22x2 a03x3                   ...   a00 a01           a03     a00x0+a01·0+a03x3       ...             mat: (idx, val); vector length 𝑛
+          a11         a13                           a13x3       ...         a11         a13     a11·0+a13x3             ...
+                                    +           +           =                                                       =               Output: Result vector 𝑦
+                a22                     a22x2                   ...               a22           a22x2                   ...
+                                                                ...                                                     ...
+                                                                                                                                     1: for all 𝑖 ← 0 to 𝑛 in parallel do
+    a30               a33   a30x0                   a33x3             a30               a33     a30x0+a33x3
+                                                                                                                                     2:    𝑐𝑜𝑙 ← 𝑖𝑑𝑥 [𝑖], 𝑣_𝑣𝑎𝑙 ← 𝑣𝑎𝑙 [𝑖]
+                                                                                                                                     3:    𝑠𝑡𝑎𝑟𝑡 ← col_ptr[𝑐𝑜𝑙], 𝑒𝑛𝑑 ← col_ptr[𝑐𝑜𝑙 + 1]
+                  a) Col-major SpMSpV                                             b) Row-major SpMSpV
+                                                                                                                                     4:    𝑖𝑛𝑑_𝑙𝑖𝑠𝑡, 𝑣𝑎𝑙_𝑙𝑖𝑠𝑡 = fetch(𝑖𝑛𝑑𝑖𝑐𝑒𝑠, 𝑣𝑎𝑙𝑢𝑒𝑠, 𝑖)
+Figure 1. Comparison of SpMSpV paradigms. (a) Column-                                                                                5:     for 𝑗 ← 0 to 𝑙𝑒𝑛(𝑖𝑛𝑑_𝑙𝑖𝑠𝑡) do
+major: iterate over nonzero entries of the input vector, fetch                                                                       6:         𝑖𝑛𝑑 ← 𝑖𝑛𝑑_𝑙𝑖𝑠𝑡 [ 𝑗], 𝑚𝑎𝑡_𝑣𝑎𝑙 ← 𝑣𝑎𝑙_𝑙𝑖𝑠𝑡 [ 𝑗]
+columns and accumulate partial products into the output. (b)                                                                         7:         write_back(𝑦 [𝑖𝑛𝑑], 𝑚𝑎𝑡_𝑣𝑎𝑙 ⊗ 𝑣_𝑣𝑎𝑙)
+Row-major: iterate over matrix rows and use a bitmask to
+skip inactive vector entries.
+                                                                                                                                       Different kinds of work-balance methods (fetch stage).
+                                                                                                                                    In the fetch phase, each nonzero in the vector indexes a col-
+   Matrix-driven SpMSpV approaches iterate over matrix                                                                              umn of the CSC matrix and loads the corresponding 𝑖𝑛𝑑𝑖𝑐𝑒𝑠
+rows (CSR), treating the input vector as dense. Algorithm 1                                                                         and 𝑣𝑎𝑙𝑢𝑒𝑠 into 𝑖𝑛𝑑_𝑙𝑖𝑠𝑡 and 𝑣𝑎𝑙_𝑙𝑖𝑠𝑡. Since column lengths
+illustrates this matrix-driven paradigm. In this scheme, each                                                                       are highly irregular, different load-balancing strategies are
+nonzero in a row first checks the corresponding position in a                                                                       used to assign these column workloads to CTAs. We high-
+bitmap to confirm whether the vector entry is active(line 6);                                                                       light three representative methods:
+
+
+
+                                                                                                                              261
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                             Yuchen Li, Zhe Pan, Peng Qu, and Youhui Zhang
+
+
+   (1) Direct-mapped. Each active column is assigned to                  as linear probing (i.e., probing the next slot until an empty
+one CTA, with no prefix-scan overhead. This simple strategy              or matching entry is found).
+is commonly used in implementations without fine-grained                    In hash-based SpGEMM, each output column maintains its
+load balancing, such as NaiveSpMSpV [30].                                own small hash table, and its size can be estimated through
+   (2) Block-mapped. Multiple short columns are grouped                  lightweight precomputation. In contrast, SpMSpV produces
+for a CTA, and a block-level prefix scan computes their com-             a single output vector, so all intermediate updates converge
+bined nonzero count, as used in graph frameworks like Gun-               to one logical output column. This substantially increases
+rock [34].                                                               the required aggregation capacity, necessitating a different
+   (3) Global-mapped. For each nonzero in the input vector,              design from conventional per-column hash accumulators.
+the corresponding column length is first recorded. A global
+inclusive scan over these column lengths yields the total                3     Motivation
+number of matrix entries to be accessed, which is then evenly            The write-back phase is one of the central bottlenecks of
+partitioned so that each CTA processes a segment of similar              GPU-based SpMSpV. Existing strategies fall into two main
+size, following methods used in merge-based SpMV [24, 31].               categories, both with substantial drawbacks:
+                                                                            Atomic write-back suffers from severe address con-
+          Direct Map                         Block Map
+                                                                         tention (many-to-one updates) and uncoalesced stores,
+                                                                         which prevent effective utilization of global bandwidth.
+                                                                         Sort-based write-back requires costly global sorts and
+                                                                         large temporary buffers, resulting in prohibitively high
+                                                                         overhead.
+                                                                            We benchmarked both strategies on an NVIDIA A100
+                                                                         (peak bandwidth 1555 GB/s). At input sparsity 0.1 on it-2004,
+                                                                         atomic write-back sustains about 270 GB/s, while sort-and-
+          Global Map                                                     reduce reaches only 43.3 GB/s during the sorting stage. Un-
+                                                                         der global load balancing, these write-back stages dominate
+                                                                         overall runtime: atomic write-back accounts for more than
+                                             Block 0     Block 1
+                                                                         30% of execution time, whereas sort-based write-back con-
+                                                                         sumes over 70%. As input density increases, the bandwidth
+                                             Block 2     Block 3
+                                                                         of atomic write-back drops further (e.g., 251 GB/s at sparsity
+                                                                         0.2), while sort-based remains nearly constant (∼45 GB/s).
+                                                                            These limitations motivate us to explore a hash-based
+                                                                         write-back scheme, inspired by hash based SpGEMM meth-
+Figure 2. Illustration of three load-balancing strategies in             ods [12, 13, 25, 28, 36]. However, as noted in Section 1, SpM-
+fetch step (matrix in CSC format). Cells with the same color             SpV lacks SpGEMM’s row partitioning: hashing alleviates
+represent column segments assigned to the same CTA.                      only local conflicts, with remaining ones still handled by
+                                                                         global atomics. Therefore, for hashing to be effective, the
+                                                                         matrix must exhibit sufficient locality, and the hash compu-
+   Different kinds of write-back (write-back stage). In                  tation must be lightweight enough to offset its overhead.
+column-major SpMSpV, partial products (𝑣_𝑣𝑎𝑙 ⊗ 𝑚_𝑣𝑎𝑙) are                   To examine these conditions, we conduct a case study
+accumulated into the output 𝑦 [𝑖𝑛𝑑] during the write-back                on the it-2004 matrix, a large-scale web graph. We analyze
+stage, which naturally leads to many-to-one updates. Several             its locality, evaluate processing strategies that enhance it,
+strategies are commonly used to realize this write-back:                 and discuss techniques to amortize the extra cost of hash
+   (1) Atomic write-back. Directly accumulates each partial              computation.
+product into the output using global atomics.
+   (2) Sort-based write-back. Buffers (row, val) pairs, sorts            3.1   Write-back Locality
+them by row index, and reduces duplicates so that each row               To quantify the exploitable write-back locality in practice,
+is written once, thereby avoiding global atomics.                        we introduce two complementary metrics:
+   (3) Hash-based aggregation. Hash aggregation is a light-
+weight accumulation strategy widely used in sparse kernels                   Local overlap ratio 𝜌 (𝑇 ). With a hash table of capacity
+such as hash-based SpGEMM [12, 13, 25, 28, 36]. Instead of               𝑇 , each partial product either accumulates into an existing
+emitting every update to global memory, partial products                 entry or inserts a new one; once the table is full, a flush
+are inserted into a small shared-memory hash table. Each                 is triggered. Let 𝐹 (𝑇 ) denote the total number of flushed
+update is stored as a (key, value) pair, where the key is the            entries and 𝑁 the total number of intermediate products. We
+row index; collisions are resolved using simple schemes such             define 𝜌 (𝑇 ) = 1 − 𝐹 𝑁(𝑇 ) .
+
+
+
+                                                                   262
+VDHA: Vector-Driven Hash Aggregation for SpMSpV on GPUs                           PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+  Intuitively, 𝜌 (𝑇 ) measures the fraction of updates that                    On it-2004, after decomposition and reordering, the local
+can be temporally aggregated before being written back. A                   overlap ratio 𝜌 (𝑇 ) improves markedly: with 𝑇 = 2048, 𝜌
+higher 𝜌 (𝑇 ) indicates stronger temporal locality and fewer                reaches 89.8%, 65.3%, and 23.8% at vector densities of 100%,
+global write transactions.                                                  10%, and 1%, respectively; 𝛾 also increases to 2.607, 0.863, and
+                                                                            0.294 in these three cases. Note that 𝛾 may exceed 1, as hash-
+   Coalescing factor 𝛾. On GPUs, memory accesses from                       ing reduces total memory access in write-back; with good
+threads within a warp are merged into aligned memory sec-                   memory coalescing, the effective utilization per transaction
+tions (e.g., 128B). Suppose 𝐴 denotes the memory bytes to                   can be greater than 100%
+be written back, and 𝑀 the number of 128 B transactions                        These results demonstrate that splitting long columns and
+required to serve the warp-level loads. We define 𝛾 = 𝑀 𝐴    ·128 .         reordering their segments is effective in enhancing locality,
+   Intuitively, 𝛾 measures the degree of spatial coalescing: it is          making hash-based aggregation substantially more benefi-
+the fraction of useful payload bytes within all memory trans-               cial than with naive processing. Evaluating on benchmarks
+actions. A higher 𝛾 indicates that consecutive threads tend                 shows that the atomic-unit utilization decreases from 22.99%
+to access consecutive memory locations, leading to fewer                    to 12.82% after applying these optimizations, indicating that
+wasted bytes per transaction and higher effective bandwidth                 far fewer global atomic conflicts reach the write-back stage.
+utilization.
+   On it-2004, we observe that with 𝑇 = 2048, 𝜌 reaches
+51.0%, 35.0%, and 14.8% at vector density = 100%, 10%, and                  3.3   Irregular Memory Accesses
+1%, respectively. Meanwhile, 𝛾 reaches 0.744, 0.499, and 0.280.             The conventional fetch–writeback flow of GPU SpMSpV is
+   Taken together, 𝜌 and 𝛾 provide a comprehensive view of                  dominated by irregular global-memory behavior. On it-2004,
+locality: 𝜌 quantifies temporal aggregation, while 𝛾 quantifies             our NCU profiling shows that the atomic write-back stage
+spatial coalescing.                                                         accounts for over 45% of stall cycles, and nearly 90% of these
+                                                                            stalls are long scoreboard waits on global memory. A long
+3.2   Skewed Nonzero Distributions                                          scoreboard wait occurs when a warp is blocked until a pend-
+Many real-world graphs (e.g., social networks) exhibit highly               ing global-memory load or store completes, meaning that
+skewed length distributions: a small fraction of columns                    even high occupancy cannot hide the latency of uncoalesced
+are extremely long, while the majority remain short. For                    loads and scattered stores.
+example, on it-2004 matrix, only 1.4% of its columns (≥256                     To address this, we restructure the execution into a three-
+nonzeros) account for more than 70% of the total nonzeros,                  stage fetch–compute–writeback pipeline. Compared with
+with an average length of 1403 compared to the overall mean                 the conventional two-stage design, the additional compute
+of just 27.9.                                                               stage performs hash aggregation while the next tile of data
+   This extreme skew indicates that a small fraction of ultra-              is being fetched asynchronously (e.g., via cp.async). In
+long columns dominate the workload. Moreover, within each                   this way, memory latency that would otherwise cause stalls
+long column, row indices never overlap, meaning that hash                   is overlapped with useful hash computation, reducing the
+aggregation provides no benefit when the column is larger                   apparent cost of aggregation, which includes computing
+than the hash table size.                                                   hash indices and resolving collisions within shared memory
+   Existing SpMSpV kernels address irregular column lengths                 through linear probing.
+generally in two ways. A block-mapped strategy assigns                         This design proves effective in practice. With the addi-
+equal numbers of columns to each CTA, while global balanc-                  tional compute phase, the stall ratio drops from over 45% to
+ing distributes all nonzeros evenly across CTAs using prefix                about 15%, still dominated by long scoreboard stalls (68.9%),
+sums and searches. Neither approach exploits the limited                    but with significantly fewer total stall cycles. These results
+locality within long columns, so both fall short of improving               confirm that irregular memory latency can be successfully
+hash effectiveness.                                                         exploited to mask the cost of hashing, making hash-based
+   Similar skew patterns have also been reported in RoDe [27],              write-back practical with minimal cost. Consistently, we ob-
+which alleviates imbalance by decomposing long rows into                    serve that the fetch–compute–writeback pipeline reduces
+smaller segments. Building on this insight, we adopt a                      the hash computation cost from 16.7% to 12.3%.
+split-and-reorder strategy. We first split long columns into                   In summary, through the above analysis, we address the
+segments so that each can be processed within a block. In ad-               two key questions posed in Section 1. First, vector process-
+dition, we introduce a lightweight reordering step that aligns              ing increases graph locality, thereby improving the effective-
+neighboring segments to enhance adjacency and improve                       ness of hash aggregation. Second, the cost of hashing can
+hash reuse. Short columns are still handled directly with the               be largely hidden through pipelining with memory access.
+block-mapped method. This design not only balances the                      Taken together, these results indicate that hash-based aggre-
+workload across blocks but also strengthens locality, which                 gation is a promising and practical direction for SpMSpV on
+is crucial for effective hash aggregation.                                  modern GPUs.
+
+
+
+                                                                      263
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                              Yuchen Li, Zhe Pan, Peng Qu, and Youhui Zhang
+
+
+4     Method                                                             increases the likelihood of overlap across adjacent segments
+We target a vector-driven SpMSpV with the matrix stored                  and substantially improves the effectiveness of hash-based
+in CSC format and a sparse input vector. Figure 3 illustrates            aggregation, as illustrated in Figure 4.
+our overall workflow: (①) long columns are split into smaller               This reordering is lightweight: it sorts only the segment
+segments, while short columns are directly mapped; (②)                   metadata rather than the nonzeros inside each segment. If the
+large segments are reordered to enhance locality; and (③) all            number of segments is 𝑆, the sort cost is 𝑂 (𝑆 log 𝑆) with 𝑆 ∼
+segments are block-mapped to GPU SMs and aggregated in                   nnzlong /SPLIT_SIZE, which is much smaller than sorting
+shared memory before flushing.                                           all nonzeros. We do not reorder small columns, since their
+   Based on this workflow, our design consists of two coordi-            number can be on the same order as the input vector length,
+nated stages, with an additional pipelined execution scheme              and sorting them would incur disproportionate overhead.
+to reduce hash computation costs:
+                                                                         4.2   Hash aggregation
+   (1) Vector processing. The input vector is scanned to
+identify active columns, which are classified as short or long.          After vector processing, column segments are block-mapped
+Long columns are further split and reordered, producing                  to GPU SMs, where each CTA maintains a private shared-
+segments that are then assigned to GPU blocks.                           memory hash table. The purpose of this table is twofold: (1)
+   (2) Block-level aggregation. Each block processes its as-             Local aggregation — accumulate partial products for identical
+signed segment using a private hash table in shared memory.              row indices within the CTA, eliminating intra-block conflicts
+Partial products are accumulated locally and then flushed in             and producing coalesced writes; (2) Partially ordered flush —
+partial order, reducing global write conflicts and improving             the hash table reorganizes scattered row updates into a more
+coalescing efficiency.                                                   sequential layout; entries are written in the bucket order
+   (3) Fetch–compute–writeback pipeline. To exploit the                  defined by the hash function, which improves spatial locality
+memory stalls observed in atomic write-back, we restructure              and reduces memory transactions during flushing.
+the execution into a three-stage pipeline. During hash in-                  Unlike SpGEMM, SpMSpV cannot eliminate all conflicts
+sertions and aggregations on the current tile, asynchronous              because multiple CTAs inevitably update the same rows.
+copy instructions (e.g., cp.async) are issued to fetch the next          Thus global atomics remain necessary, but local aggrega-
+tile from global memory.                                                 tion reduces their frequency substantially. To keep the hash
+   The following subsections provide detailed descriptions               efficient, we employ atomicCAS with linear probing. Un-
+of these three stages.                                                   bounded probing may lead to long collision chains and warp
+                                                                         divergence; therefore we cap the number of probes by a
+                                                                         threshold FALLBACK_ITER. Once this limit is exceeded, the
+4.1   Vector Processing                                                  update falls back to a global atomic operation.
+In a vector-driven SpMSpV, each nonzero (idx, val) in the                   Although these conflicts require atomic instructions when
+input vector selects a column 𝑐 of the CSC-stored matrix 𝐴.              writing back to global memory, they also reduce the relative
+Its adjacency range is given by offset[c] to offset[c+1], so             cost of hash fallback. This allows us to make a better trade-off
+the column length is simply len = offset[c+1] − offset[c],               between probing in the hash table and the fallback strategy.
+and the associated vector value is 𝑥𝑐 . We therefore represent
+this column by a tuple (start, len, 𝑥𝑐 ).                                Algorithm 3 Hash-based insertion with fallback
+    Columns shorter than LEN_THRES are treated as small
+                                                                          1: function Insert(𝐻, 𝑖𝑛𝑑, val)
+columns, while longer ones are long columns. Each long col-
+                                                                          2:     ℎ ← hash_func(𝑖𝑛𝑑) % 𝑇 𝐴𝐵𝐿𝐸_𝑆𝐼𝑍 𝐸
+umn is further split into segments of at most SPLIT_SIZE
+                                                                          3:     cnt ← 0
+nonzeros. For the 𝑖-th segment, the starting position is start_i
+                                                                          4:     while cnt < 𝐹𝐴𝐿𝐿𝐵𝐴𝐶𝐾_𝐼𝑇 𝐸𝑅 do
+= start + 𝑖 · SPLIT_SIZE, and its length is len_i = min(len −
+                                                                          5:         𝑜𝑙𝑑 ← atomicCAS(&𝐻 .𝑘𝑒𝑦 [ℎ], −1, 𝑖𝑛𝑑)
+𝑖 · SPLIT_SIZE, SPLIT_SIZE), and the vector value remains
+                                                                          6:         if 𝑜𝑙𝑑 == −1 or 𝑜𝑙𝑑 == 𝑖𝑛𝑑 then
+𝑥𝑐 , where 𝑖 is the segment index. For efficient processing,
+                                                                          7:             UpdateHash(𝐻 .𝑣𝑎𝑙 [ℎ], val)
+long-column segments are first aggregated at the CTA level
+                                                                          8:             return
+and then appended contiguously to a global queue.
+                                                                          9:         ℎ ← next_hash(ℎ)
+    After splitting, the segments from the same column remain
+                                                                         10:         cnt ← cnt + 1
+consecutive and will be mapped to the same SM. However,
+                                                                         11:     Fallback(𝑖𝑛𝑑, val)
+these intra-column segments contain disjoint row indices
+and therefore provide no opportunity for aggregation. In
+contrast, segments from different columns may share over-                   Alg. 3 illustrates the pseudocode for hash-based inser-
+lapping rows. To expose this cross-column locality, we sort all          tion, where 𝐻 is the shared memory hash table and each
+segments by the row index of their first nonzero, so that seg-           update is a key–value pair (𝑖𝑛𝑑, 𝑣𝑎𝑙). The starting hash po-
+ments covering nearby index ranges are placed together. This             sition is computed using hash_func. Each thread attempts
+
+
+
+                                                                   264
+VDHA: Vector-Driven Hash Aggregation for SpMSpV on GPUs                   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+
+
+Figure 3. Overview of the VDHA design. Columns are first classified by length; long columns are split into smaller segments
+(①) and further reordered to enhance locality (②). Both the reordered long segments and short columns are then block-mapped
+to GPU SMs for hash aggregation, and the aggregated results are finally written back atomically (③).
+
+to claim the slot via atomicCAS, where -1 denotes an empty          is to use the stall time of irregular memory accesses to per-
+entry. If atomicCAS returns -1 or the target index, the in-         form hash updates, thereby hiding much of the hashing cost.
+sertion succeeds and UpdateHash updates the value. Other-           Algorithm 4 illustrates the execution flow with double buffer-
+wise, next_hash continues probing. Once the probe count             ing. The kernel executes the following steps:
+exceeds FALLBACK_ITER, the update falls back to a direct               1. Asynchronous fetch. The next segment of indices and
+global atomic: the pair (𝑖𝑛𝑑, val) is added to result[𝑖𝑛𝑑]          values is fetched from global memory into shared memory
+using atomicAdd.                                                    using cp.async, which proceeds in the background (line 5).
+                                                                       2. Hash aggregation. While the next segment is being
+4.3   Compute pipeline                                              fetched, threads aggregate the current segment into the
+                                                                    shared-memory hash table (line 7).
+To further reduce the cost of hash computation, we imple-
+                                                                       3. Synchronization and flush. After the hash computa-
+ment the fetch–compute–writeback pipeline that overlaps
+                                                                    tion of the current segment finishes, threads issue cp.async.
+global-memory fetches with local aggregation. The key idea
+
+
+
+                                                              265
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                             Yuchen Li, Zhe Pan, Peng Qu, and Youhui Zhang
+
+
+                                                                         this design better aligns with locally clustered indices, im-
+                                                                         proving memory coalescing when results are written back
+                                                                         to global memory. To reduce collisions, we use linear prob-
+                                                                         ing with a fixed stride (ℎ + 𝐶)%table_size instead of the
+                                                                         usual (ℎ +1) scheme. This reduces collision probability when
+                                                                         nonzeros are locally distributed.
+                                                                            Hash table update policy: If all items belong to the same
+                                                                         column in one step (e.g., long-column segment), updates can
+                                                                         be performed directly with H_val[idx] += val, avoiding
+                                                                         atomics. Otherwise, atomic operations (atomicAdd) are nec-
+                                                                         essary to ensure correctness.
+
+                                                                         5.2   Parameter Choices
+                                                                         Hash table size: 2048 entries, sufficient for typical CTA
+                                                                         aggregation. The difference between 𝜌 (2048) and 𝜌 (4096) is
+                                                                         minor (for vector densities of 100%, 10%, and 1%, 𝜌 (4096) is
+Figure 4. Column decomposition and reorder. Columns are
+                                                                         91.6%, 67.8%, and 26.2%, while 𝜌 (2048) reaches 89.8%, 65.3%,
+transposed for visualization: each bar denotes a column seg-
+                                                                         and 23.8%), a smaller table size facilitates higher occupancy.
+ment, where the left edge marks the starting row index and
+                                                                            Launch configuration: On NVIDIA A100 (SM80), each
+the width indicates its nonzero count. Long columns are split
+                                                                         SM provides up to 168 KB shared memory and can schedule
+into shorter segments (①) and then reordered by starting
+                                                                         up to 64 warps. A 2048-entry hash table consumes 16 KB
+row index to improve locality (②).
+                                                                         (4B key + 4B value per entry), and double-buffering requires
+                                                                         additional shared memory. Under these constraints, an SM
+Algorithm 4 Fetch–Compute–Flush pipeline                                 can host about ∼8 CTAs concurrently. To ensure full warp
+Input: Column segments 𝑠𝑒𝑔; two shared-memory buffers                    utilization, each CTA must contain at least 64/8 = 8 warps,
+     𝑏𝑢 𝑓 [0], 𝑏𝑢 𝑓 [1]; shared-memory hash table 𝐻                      which corresponds to 256 threads per block. This configura-
+Output: Result vector 𝑦                                                  tion balances occupancy with per-CTA memory demands.
+  1: Fetch(𝑠𝑒𝑔0 , 𝑏𝑢 𝑓 [0])                                                 Column splitting and thresholds: SPLIT_SIZE = 256,
+  2: Sync()                                                              ensuring long columns are cut into segments that fit exactly
+  3: for 𝑖 = 0 to 𝑁 segs do                                              within a block. LEN_THRES = 128, which ensures that long
+  4:     if 𝑖 ≠ 𝑁𝑠𝑒𝑔𝑠 − 1 then                                           columns are handled with dedicated CTAs for balanced work-
+  5:          Fetch(𝑠𝑒𝑔𝑖+1 , 𝑏𝑢 𝑓 [(𝑖 + 1)%2])                           load, while avoiding an excessive number of segments that
+  6:     𝑖𝑛𝑑, 𝑣𝑎𝑙 ← 𝑏𝑢 𝑓 [𝑖%2]                                           would otherwise increase processing overhead.
+  7:     insert(𝐻, 𝑖𝑛𝑑, 𝑣𝑎𝑙)
+  8:     Sync()                                                          6     Evaluation
+  9:     if hash table full or 𝑖 == 𝑁𝑠𝑒𝑔𝑠 − 1 then                       6.1   Experimental Setup
+ 10:          Flush(𝐻, 𝑦)                                                We evaluate our method on two categories of datasets:
+                                                                           SuiteSparse Matrix Collection: This set includes sparse
+                                                                         matrices from diverse domains such as scientific computing,
+wait_group to ensure that the next segment has been fully
+                                                                         engineering, and optimization. We selected square matrices
+loaded into shared memory (line 2,8). Aggregated entries
+                                                                         with more than 5 million nonzeros, resulting in over 200 test
+remain in the shared-memory hash table until it approaches
+                                                                         cases.
+capacity, at which point they are flushed to global memory
+                                                                           Web-scale Network Graphs: We further included large
+in bulk before processing continues (line 10).
+                                                                         real-world graphs from Konect and LAW. Similarly, we only
+   This design enables a steady overlap: while segment 𝑡 is
+                                                                         considered square matrices with more than 5 million nonze-
+being computed, segment 𝑡+1 is already in fetch, effectively
+                                                                         ros, yielding over 100 test cases. These datasets primarily
+reducing the cost of hash computation.
+                                                                         represent social networks and web graphs.
+                                                                           To provide a comprehensive evaluation, we compare our
+5     Implementation
+                                                                         method against several representative baselines:
+5.1   Hash Table Design and Operations                                     Row-major SpMV: We adopt NVIDIA cuSPARSE as the
+Hash function and probing strategy: We adopt a sim-                      representative implementation.
+ple modulo hash (𝑖%table_size), which preserves the low-                   Row-major SpMSpV: Following the Adaptive SpMSpV
+order bits of indices. Compared with multiplicative hashing,             work [20], we implement value-validation variants on top of
+
+
+
+                                                                   266
+VDHA: Vector-Driven Hash Aggregation for SpMSpV on GPUs                         PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+HolaSpMV [31] and NaiveSpMV [30], which are open-source.                  Table 1. Speedup and best fraction on Konect and LAW
+Each accessed entry of 𝑥 is checked using a bit mask [33].                datasets.
+Other row-major designs such as tileSpMSpV [18] and Berry-
+Bees [26] are tailored for unweighted BFS with visited mask                Baseline \ Sparsity        0.01           0.05      0.10      0.20
+and are thus not applicable in our weighted setting.                                              G-mean: 8.93       4.24      2.85      1.91
+   Column-major SpMSpV: We faithfully implement four                       cuSPARSE
+                                                                                                   Max: 33.40        8.89      5.00      7.08
+column-major kernels described in Adaptive-SpMSpV. These
+                                                                                                 G-mean: 91.66      53.07      38.90    26.93
+cover both atomic and sort-based write-back, each with bal-                NaiveSpMSpV
+                                                                                                 Max: 3015.74      1464.87    990.00   658.16
+anced and unbalanced scheduling variants. For clarity, we
+refer to them as BlockSort, BlockAtomic, GlobalSort, and Glob-             HolaSpMSpV
+                                                                                                  G-mean: 7.41       3.69      2.49      1.64
+alAtomic in the following tables and discussion. Among                                             Max: 27.05        8.43      5.01      3.01
+them, GlobalSort corresponds to the sort–reduce strategy                                          G-mean: 8.61      8.86       8.44      8.03
+                                                                           BlockSort
+of FastSpMSpV [40], while BlockAtomic closely resembles                                            Max: 56.23       53.65     37.48     35.81
+the atomic-based implementation in Gunrock [34].                                                  G-mean: 4.42       4.16      4.24      4.46
+   Together, these baselines cover both state-of-the-art row-              GlobalSort
+                                                                                                   Max: 8.25         7.33      6.91      7.94
+major SpMV (cuSPARSE), row-major SpMSpV, and column-
+                                                                                                  G-mean: 5.06      5.86       5.73      5.56
+major SpMSpV, ensuring a broad and fair comparison.                        BlockAtomic
+                                                                                                   Max: 63.37       67.02     48.48     60.68
+   All experiments were conducted on a server equipped
+with an NVIDIA A100 GPU (40GB HBM2e memory) and an                                                G-mean: 1.47       1.48      1.53      1.63
+                                                                           GlobalAtomic
+                                                                                                   Max: 2.85         4.46      5.35      6.11
+AMD EPYC 7742 CPU. We compiled all kernels and baselines
+with CUDA nvcc 12.5, enabling the -O3 optimization flag.                                          G-mean: 1.38       1.42      1.44      1.41
+                                                                           Best of 7
+Both our method and baselines were executed in the same                                            Max: 2.85         3.42      3.17      2.37
+software and hardware environment to ensure fairness.                      Best%                      92.9%         91.3%     90.5%     86.5%
+
+
+6.2   SpMSpV Performance                                                  arrays to validate activity. In contrast, column-major SpM-
+We evaluate the performance of our method with random                     SpV methods scale more directly with the number of active
+input vectors at four sparsity levels (0.01, 0.05, 0.1, and 0.2).         nonzeros, so our relative speedup against these baselines
+   Figure 5 presents results on both Web-scale graphs (left)              remains roughly stable across sparsity levels.
+and SuiteSparse matrices (right). Each row corresponds to                    We further note that the impact of load balancing differs
+one sparsity level, thus yielding eight subfigures in total.              across strategies. Block-level methods (e.g., BlockAtomic,
+   To summarize across datasets, Table 1 and 2 report the geo-            BlockSort) are sensitive to skewed nonzero distributions:
+metric mean (GeoMean) speedup of our method over other                    some CTAs receive little work while others are heavily
+baselines on Konect & LAW and SuiteSparse benchmark, as                   loaded, which explains why our method achieves very high
+well as the maximum observed speedup and the fraction of                  maximum speedups over them. NaiveSpMSpV, which directly
+cases where our method achieves the best performance.                     maps threads to rows without explicit balancing, suffers even
+   Across the four sparsity levels (0.01, 0.05, 0.1, 0.2), our            more from workload skew and thus shows particularly poor
+method achieves an average speedup of 1.41× on Konect                     performance. By contrast, global strategies (GlobalAtomic,
+(up to 3.42×) and 1.13× on SuiteSparse (up to 2.55×). While               GlobalSort) distribute work more evenly across CTAs and
+the least favorable cases naturally yield lower gains due to              therefore avoid such extreme slowdowns.
+dataset-specific structure, the minimum speedups observed                    At the same time, we also observe that the gains vary
+are 0.57× on Konect and 0.54× on SuiteSparse. In addition,                significantly between web graphs and scientific matrices. To
+it attains the best performance in about 90.3% of Konect                  understand this gap, we next analyze how locality metrics
+cases and 59.5% of SuiteSparse cases overall, confirming that             affect VDHA’s performance and present a lightweight pre-
+the advantage is consistent across sparsity levels. A more                dictive model to estimate whether a matrix benefits from our
+fine-grained analysis is provided in Section 6.4.                         method.
+   When examining individual baselines, we find that our
+advantage over cuSPARSE and row-major SpMSpV methods                      6.3   Ablation and Sensitivity Studies
+is more pronounced at low input sparsity. That is because                 We conducted an ablation study and a sensitivity analysis
+both approaches perform redundant work proportional to                    to quantify the contribution of each optimization stage and
+the number of matrix nonzeros, which leads to inefficiency                evaluate parameter choices.
+when the input vector is sparse. cuSPARSE executes computa-                  As shown in Table 4, we compare hash, hash+split, and
+tions insensitive to input sparsity, while row-major methods              hash+split+reorder, with normalized performance of 0.689×,
+must traverse the entire matrix and access auxiliary mask                 0.947×, and 1.000×, respectively. The split step improves
+
+
+
+                                                                    267
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                             Yuchen Li, Zhe Pan, Peng Qu, and Youhui Zhang
+
+
+
+
+Figure 5. Efficient performance of our method versus baselines at different sparsity. Efficient performance is defined as efficient
+NNZ divided by runtime, where efficient NNZ denotes the number of matrix nonzeros multiplied by the input vector sparsity.
+Left: web-scale graphs (Konect & LAW). Right: SuiteSparse matrices.
+
+load balance for long columns. Without splitting, the hash-                 We then examine the sensitivity of VDHA to the hash-
+only variant suffers from severe workload skew: threads                  table size and split size. Table 5 reports the normalized per-
+processing extremely long columns generate disproportion-                formance across all tested configurations. VDHA achieves
+ately many intermediate updates, which largely exceed the                its best performance at HASH_TABLE_SIZE = 2048 and
+capacity of the per-CTA hash table and result in poor perfor-            SPLIT_SIZE = 256, while all tested configurations remain
+mance. The reorder step improves the reuse of long-column                within 0.8215×–1.000× of peak performance. This parameter
+segments within the hash table. Without reordering, seg-                 choice balances two factors: (i) providing enough shared-
+ments from a single long column do not overlap in the hash               memory capacity to maximize the benefits of aggregation,
+table, limiting the effectiveness of shared-memory aggre-                and (ii) avoiding excessive shared-memory usage that would
+gation. Reordering these segments increases cross-column                 reduce occupancy, as discussed in Section 5.2.
+overlap and enhances aggregation efficiency, as discussed in
+Section 3.2.
+
+
+
+
+                                                                   268
+VDHA: Vector-Driven Hash Aggregation for SpMSpV on GPUs                          PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+Table 2. Speedup and best fraction on SuiteSparse datasets.                our vector processing introduces little benefit but adds over-
+                                                                           head, making VDHA less effective. Therefore, our approach
+ Baseline \ Sparsity       0.01         0.05      0.10      0.20           is less advantageous on diagonal-like structure.
+                       G-mean: 6.53     3.68      2.60      1.80
+ cuSPARSE
+                        Max: 41.61      10.47     6.27      9.54
+                                                                               Toward Fast Predictors. While 𝜌 and 𝛾 explain perfor-
+                       G-mean: 10.80     7.81      6.28      5.51          mance behavior well, they are runtime metrics and cannot be
+ NaiveSpMSpV
+                       Max: 11817.54   5613.71   3835.80   5200.53         obtained without executing the kernel. To enable lightweight
+                       G-mean: 5.51     3.18      2.26      1.80           prediction, we introduce two simple structural statistics that
+ HolaSpMSpV
+                        Max: 31.88      9.31      6.29      10.14          can be computed directly from the matrix.
+                       G-mean: 6.41     6.05      5.84      5.71               We denote the two structural indicators as (i) bandwidth
+ BlockSort
+                        Max: 55.39      57.59     53.56     73.18          index 𝐵, defined as the average distance between the topmost
+                       G-mean: 5.41     5.13      4.50      5.24           and bottommost nonzeros per column in the CSC matrix, and
+ GlobalSort                                                                (ii) variance index 𝑉 , defined as the column-wise variance
+                        Max: 9.07       8.59      8.77      8.55
+                       G-mean: 1.99     2.04      1.95      1.85           of nonzeros. Together with the number of rows, the total
+ BlockAtomic                                                               number of nonzeros, and the input vector sparsity, we train a
+                        Max: 53.94      57.67     60.35    109.23
+                                                                           simple decision tree classifier following the methodology of
+                       G-mean: 1.64     1.64      1.66      1.73
+ GlobalAtomic                                                              Adaptive SpMSpV [20]. We use 70% of matrices for training
+                        Max: 4.81       8.42      9.92      11.01
+                                                                           and 30% for testing. On the test set, the decision tree achieves
+                       G-mean: 1.20     1.17      1.11      1.05
+ Best of 7                                                                 91.3% accuracy (measured by F1 score).
+                        Max: 2.55       2.29      2.11      2.15
+                                                                               Furthermore, if we fall back to a naive implementation
+ Best%                    68.9%        63.6%     56.5%     48.8%           (BlockAtomic) when the predictor estimates VDHA to be
+                                                                           suboptimal, the geometric-mean speedup on the SuiteSparse
+                                                                           dataset across all four vector sparsities improves from 1.13×
+6.4   Performance Characterization and Predictive                          to 1.16×. If fallback to the best among all seven baselines
+      Modeling                                                             (best-of-7), the adaptive scheme further achieves 1.22×
+                                                                           speedup.
+To better understand when VDHA performs well—and why
+                                                                               Our predictor uses five lightweight structural features
+it may underperform on certain matrices—we conduct a
+                                                                           (num_rows, num_nnzs, vector sparsity, bandwidth index 𝐵,
+matrix-level performance characterization on representative
+                                                                           and variance index 𝑉 ) and achieves good accuracy. Adding
+matrices. Based on these observations, we further develop a
+                                                                           more features (e.g., Adaptive SpMSpV uses 13 matrix and
+lightweight predictive model to quickly determine whether
+                                                                           vector features) may improve accuracy further but increases
+or not VDHA is beneficial for a given input. Table 3 sum-
+                                                                           extraction overhead, presenting a trade-off for future work.
+marizes the selected datasets, including their dimensions,
+number of nonzeros (nnz), and structural characteristics(𝜌
+and 𝛾).
+                                                                           7   Related Works
+   Impact of Locality and Coalescing. We jointly analyze                   The optimization of SpMSpV has been driven primarily by
+the role of the local aggregation rate 𝜌 and the coalescing                graph analytics workloads. GPU frameworks such as Gun-
+factor 𝛾. A larger 𝜌 means more updates can be absorbed                    rock [34], GraphBLAST [39], push-pull library [38], Graph-
+into the shared-memory hash table, reducing the number                     Lab [22], MultiGraph [17], Graphpad [1], Ligra [29], and
+of global writes. At the same time, a larger 𝛾 reflects more               GSwitch [23] incorporate SpMSpV as a core primitive to ac-
+coalesced memory transactions, lowering bandwidth waste.                   celerate fundamental applications including BFS, PageRank,
+Together, high 𝜌 and high 𝛾 mean that many updates are                     and personalized PageRank. Beyond frameworks, dedicated
+aggregated and written back in contiguous sections, which                  GPU kernels have also been proposed. Approaches such
+directly translates into higher effective bandwidth.                       as TileSpMSpV [18] and BerryBees [26] specifically target
+   Table 3 shows representative cases. Web graphs such as                  unweighted BFS by employing a tiled format with output
+it-2004 and sk-2005 exhibit strong temporal locality (𝜌) and               masking, in which frontier vectors are binary and results
+irregular accesses that are greatly improved after reordering              are accumulated using atomicOr. BerryBees further exploits
+(better 𝛾), leading to substantial speedups.                               bit-level tensor cores on recent GPUs to accelerate these
+   In contrast, some matrices exhibit near-diagonal nonzero                operations.
+structures, such as atmosmodl and G3_circuit. For these ma-                   Other works developed more general-purpose kernels:
+trices, VDHA expansion generates few overlapping updates,                  FastSpMSpV [40] introduced a reduce-based method to avoid
+resulting in low 𝜌 and limited improvement in 𝛾. Moreover,                 atomics via global reducing, while Adaptive SpMSpV [20]
+when nonzeros are distributed in a highly regular fashion,                 selected among multiple kernels (row/col-major, atomic- or
+
+
+
+                                                                     269
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                   Yuchen Li, Zhe Pan, Peng Qu, and Youhui Zhang
+
+
+                             Table 3. Statistics and locality/coalescing metrics of representative datasets.
+
+   Metric          it-2004     sk-2005     mycielskian19           inline_1     delaunay_n24     roadNet-CA      atmosmodl      G3_circuit
+   Group            LAW          LAW         Mycielski         GHS_psdef           DIMACS10         SNAP         Bourchtein        AMD
+   Rows             41.2M        50.6M        393K               503K                16.7M          1.97M          1.49M           1.59M
+   NNZs             1.15B        1.95B        903M               36.8M               101M           5.53M          10.3M           7.66M
+   𝜌 0.1 (2048)     0.665        0.664        0.491              0.472               0.137          0.085          0.126           0.131
+   𝛾 0.1 (2048)     0.793        0.617        0.399              0.490               0.199          0.149          0.196           0.189
+   Speedup          1.69×        1.92×        1.59×              1.74×               0.91×          0.68×          0.65×           0.65×
+
+   Thumbnail
+
+
+Table 4. Ablation study of individual optimization compo-                         RoDe [27] highlighted that real-world matrices often ex-
+nents. Performance is normalized to the full VDHA pipeline                     hibit highly skewed nonzero distributions, and addressed this
+(hash + split + reorder).                                                      by decomposing matrices into a regular part and a residual
+                                                                               part processed separately.
+     Method                        Normalized Performance                         A large body of SpGEMM research has focused on han-
+                                                                               dling the many-to-one write-back of intermediate products.
+     Hash only                                0.689×                           Hash-based methods [12, 13, 25, 28, 36] use shared-memory
+     Hash + split                             0.947×                           hash tables to temporarily store and combine intermediate
+     Hash + split + reorder                   1.000×                           products before writing them back. Sort-based [4, 21] or
+                                                                               merge-based approaches [16] first generate candidate triples
+Table 5. Parameter sensitivity of VDHA under different                         and then sort or merge them to accumulate results in order.
+hash-table and split sizes (normalized average speedup).
+
+                                  Hash-table size                              8    Conclusion
+         Split size      1024      2048    3072          4096                  This paper presents VDHA, a GPU-based SpMSpV algo-
+             64         0.9779    0.9346 0.8831         0.8215                 rithm targeting the costly write-back problem. VDHA com-
+            128         0.9254    0.9449 0.9109         0.8818                 bines long-column decomposition with reordering, shared-
+            256         0.9784    1.0000 0.9848         0.9704                 memory hash aggregation, and a fetch–compute–writeback
+            512         0.8953    0.9225 0.9031         0.9329                 pipeline to improve locality, reduce conflicts, and reduce hash
+                                                                               costs. Experiments on over 300 SuiteSparse and web-scale
+                                                                               matrices with more than 5 million nonzeros show consis-
+sort-based, different load-balancing strategies) using heuris-
+                                                                               tent gains over state-of-the-art baselines, with up to 3.42×
+tics on matrix statistics. These efforts highlight the chal-
+                                                                               speedup (1.41× on average) on web graphs and up to 2.55×
+lenges of avoiding write conflicts and balancing workloads.
+                                                                               (1.13× on average) on scientific matrices. We further pro-
+   On CPUs, related efforts such as HAM-SpMSpV [37], work-
+                                                                               pose a lightweight analysis method to predict when VDHA
+efficient SpMSpV [2], and Regu2D-SpMV [14] demonstrate
+                                                                               is beneficial, achieving 91.3% accuracy.
+efficient sparse computations by leveraging cache locality,
+vectorization, and work-efficient load balancing.
+   Besides being studied directly, SpMSpV can also be viewed
+as a special case of SpMV, SpMM, or SpGEMM. Graph-                             Acknowledgments
+Mat [33] observed that SpMSpV can be implemented on                            This work was supported by the National Natural Sci-
+top of SpMV by adding a lightweight bitmask to validate                        ence Foundation of China under Grant No. 62250006,
+vector entries before reading values, thereby reducing                         the National Key Research and Development Program
+some unnecessary memory accesses. HOLA-SpMV [31] and                           of China under Grant 2025YFB3003200, The Tsinghua Uni-
+Naive-SpMV [30] employ two fundamentally different load-                       versity Initiative Scientific Research Program, under Grant
+balancing strategies. HOLA-SpMV uses lightweight global                        No.2022Z11ZRB002, The Suzhou-Tsinghua Innovation Lead-
+balancing to equalize CTA workloads, whereas Naive-SpMV                        ership Program, under Grant No.20222002100, The Jiangsu
+avoids balancing entirely, incurring no overhead but relying                   Provincial Science and Technology Program, Grant No.
+on GPU parallelism to mask imbalance.                                          BE2023005-3.
+
+
+
+                                                                         270
+VDHA: Vector-Driven Hash Aggregation for SpMSpV on GPUs                                       PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+References                                                                                  multiplication by iterative row merging. SIAM Journal on Scientific
+ [1] Michael J Anderson, Narayanan Sundaram, Nadathur Satish,                               Computing 37, 1 (2015), C54–C71. doi:10.1137/130948811
+     Md Mostofa Ali Patwary, Theodore L Willke, and Pradeep Dubey. 2016.               [17] Changwan Hong, Aravind Sukumaran-Rajam, Jinsung Kim, and P
+     Graphpad: Optimized graph primitives for parallel and distributed                      Sadayappan. 2017. MultiGraph: Efficient graph processing on GPUs.
+     platforms. In 2016 IEEE International Parallel and Distributed Processing              In 2017 26th International Conference on Parallel Architectures and
+     Symposium (IPDPS). IEEE, 313–322. doi:10.1109/IPDPS.2016.86                            Compilation Techniques (PACT). IEEE, 27–40. doi:10.1109/PACT.2017.48
+ [2] Ariful Azad and Aydin Buluç. 2017. A work-efficient parallel sparse               [18] Haonan Ji, Huimin Song, Shibo Lu, Zhou Jin, Guangming Tan, and
+     matrix-sparse vector multiplication algorithm. In 2017 IEEE Interna-                   Weifeng Liu. 2023. TileSpMSpV: A Tiled Algorithm for Sparse Matrix-
+     tional Parallel and Distributed Processing Symposium (IPDPS). IEEE,                    Sparse Vector Multiplication on GPUs. In Proceedings of the 51st Inter-
+     688–697. doi:10.1109/IPDPS.2017.76                                                     national Conference on Parallel Processing (Bordeaux, France) (ICPP ’22).
+ [3] Ariful Azad, Mathias Jacquelin, Aydin Buluç, and Esmond G. Ng. 2017.                   Association for Computing Machinery, New York, NY, USA, Article 9,
+     The Reverse Cuthill-McKee Algorithm in Distributed-Memory. In                          11 pages. doi:10.1145/3545008.3545028
+     2017 IEEE International Parallel and Distributed Processing Symposium             [19] Jérôme Kunegis. 2013. Konect: the koblenz network collection. In
+     (IPDPS). 22–31. doi:10.1109/IPDPS.2017.85                                              Proceedings of the 22nd international conference on world wide web.
+ [4] Nathan Bell and Michael Garland. 2012. Cusp: Generic parallel algo-                    1343–1350. doi:10.1145/2487788.2488173
+     rithms for sparse matrix and graph computations. Version 0.3. 0 35                [20] Min Li, Yulong Ao, and Chao Yang. 2021. Adaptive SpMV/SpMSpV
+     (2012).                                                                                on GPUs for Input Vectors of Varied Sparsity. IEEE Transactions on
+ [5] Thierry P. Berger, Julien Francq, Marine Minier, and Gaël Thomas. 2016.                Parallel and Distributed Systems 32, 7 (2021), 1842–1853. doi:10.1109/
+     Extended Generalized Feistel Networks Using Matrix Representation                      TPDS.2020.3040150
+     to Propose a New Lightweight Block Cipher: Lilliput. IEEE Trans.                  [21] Weifeng Liu and Brian Vinter. 2014. An efficient GPU general sparse
+     Comput. 65, 7 (2016), 2074–2089. doi:10.1109/TC.2015.2468218                           matrix-matrix multiplication for irregular data. In 2014 IEEE 28th inter-
+ [6] Paolo Boldi, Marco Rosa, Massimo Santini, and Sebastiano Vigna. 2011.                  national parallel and distributed processing symposium. IEEE, 370–381.
+     Layered Label Propagation: A MultiResolution Coordinate-Free Or-                       doi:10.1109/IPDPS.2014.47
+     dering for Compressing Social Networks. In Proceedings of the 20th                [22] Yucheng Low, Danny Bickson, Joseph Gonzalez, Carlos Guestrin, Aapo
+     international conference on World Wide Web, Sadagopan Srinivasan,                      Kyrola, and Joseph M. Hellerstein. 2012. Distributed GraphLab: a
+     Krithi Ramamritham, Arun Kumar, M. P. Ravindra, Elisa Bertino, and                     framework for machine learning and data mining in the cloud. Proc.
+     Ravi Kumar (Eds.). ACM Press, 587–596. doi:10.1145/1963405.1963488                     VLDB Endow. 5, 8 (April 2012), 716–727. doi:10.14778/2212351.2212354
+ [7] Paolo Boldi and Sebastiano Vigna. 2004. The WebGraph Framework                    [23] Ke Meng, Jiajia Li, Guangming Tan, and Ninghui Sun. 2019. A pattern
+     I: Compression Techniques. In Proc. of the Thirteenth International                    based algorithmic autotuner for graph processing on GPUs. In Pro-
+     World Wide Web Conference (WWW 2004). ACM Press, Manhattan,                            ceedings of the 24th Symposium on Principles and Practice of Parallel
+     USA, 595–601. doi:10.1145/988672.988752                                                Programming. 201–213. doi:10.1145/3293883.3295716
+ [8] Chih-Chung Chang and Chih-Jen Lin. 2011. LIBSVM: A library for                    [24] Duane Merrill and Michael Garland. 2016. Merge-based sparse matrix-
+     support vector machines. ACM Trans. Intell. Syst. Technol. 2, 3, Article               vector multiplication (spmv) using the csr storage format. Acm Sigplan
+     27 (May 2011), 27 pages. doi:10.1145/1961189.1961199                                   Notices 51, 8 (2016), 1–2. doi:10.1145/3016078.2851190
+ [9] Jiajie Chen, Le Yang, and Youhui Zhang. 2022. GaBAN: a generic and                [25] Yusuke Nagasaka, Akira Nukada, and Satoshi Matsuoka. 2017. High-
+     flexibly programmable vector neuro-processor on FPGA. In Proceedings                   performance and memory-saving sparse general matrix-matrix multi-
+     of the 59th ACM/IEEE Design Automation Conference (San Francisco,                      plication for nvidia pascal gpu. In 2017 46th International Conference
+     California) (DAC ’22). Association for Computing Machinery, New                        on Parallel Processing (ICPP). IEEE, 101–110. doi:10.1109/ICPP.2017.19
+     York, NY, USA, 931–936. doi:10.1145/3489517.3530561                               [26] Yuyao Niu and Marc Casas. 2025. BerryBees: Breadth first search
+[10] Yuedan Chen, Guoqing Xiao, Kenli Li, Francesco Piccialli, and Albert Y                 by bit-tensor-cores. In Proceedings of the 30th ACM SIGPLAN Annual
+     Zomaya. 2022. fgSpMSpV: A fine-grained parallel SpMSpV framework                       Symposium on Principles and Practice of Parallel Programming. 339–354.
+     on HPC platforms. ACM Transactions on Parallel Computing 9, 2 (2022),                  doi:10.1145/3710848.3710859
+     1–29. doi:10.1145/3512770                                                         [27] Meng Pang, Xiang Fei, Peng Qu, Youhui Zhang, and Zhaolin Li. 2024.
+[11] Timothy A Davis. 2019. Algorithm 1000: SuiteSparse: GraphBLAS:                         A row decomposition-based approach for sparse matrix multiplication
+     Graph algorithms in the language of sparse linear algebra. ACM                         on GPUs. In Proceedings of the 29th ACM SIGPLAN Annual Symposium
+     Transactions on Mathematical Software (TOMS) 45, 4 (2019), 1–25. doi:10                on Principles and Practice of Parallel Programming. 377–389. doi:10.114
+     .1145/3322125                                                                          5/3627535.3638470
+[12] Julien Demouth. 2012. Sparse matrix-matrix multiplication on the gpu.             [28] Mathias Parger, Martin Winter, Daniel Mlakar, and Markus Steinberger.
+     In Proceedings of the GPU technology conference, Vol. 3.                               2020. Speck: Accelerating gpu sparse matrix-matrix multiplication
+[13] Zhaoyang Du, Yijin Guan, Tianchan Guan, Dimin Niu, Linyong Huang,                      through lightweight analysis. In Proceedings of the 25th ACM SIGPLAN
+     Hongzhong Zheng, and Yuan Xie. 2022. OpSparse: a highly optimized                      Symposium on Principles and Practice of Parallel Programming. 362–375.
+     framework for sparse general matrix multiplication on GPUs. IEEE                       doi:10.1145/3332466.3374521
+     Access 10 (2022), 85960–85974. doi:10.1109/ACCESS.2022.3196940                    [29] Julian Shun and Guy E Blelloch. 2013. Ligra: a lightweight graph pro-
+[14] Xiang Fei and Youhui Zhang. 2021. Regu2D: Accelerating Vector-                         cessing framework for shared memory. In Proceedings of the 18th ACM
+     ization of SpMV on Intel Processors through 2D-partitioning and                        SIGPLAN symposium on Principles and practice of parallel programming.
+     Regular Arrangement. In Proceedings of the 50th International Confer-                  135–146. doi:10.1145/2517327.2442530
+     ence on Parallel Processing (Lemont, IL, USA) (ICPP ’21). Association             [30] Markus Steinberger, Andreas Derlery, Rhaleb Zayer, and Hans-Peter
+     for Computing Machinery, New York, NY, USA, Article 77, 11 pages.                      Seidel. 2016. How naive is naive SpMV on the GPU?. In 2016 IEEE
+     doi:10.1145/3472456.3472479                                                            High Performance Extreme Computing Conference (HPEC). IEEE, 1–8.
+[15] John R Gilbert, Steve Reinhardt, and Viral B Shah. 2006. High-                         doi:10.1109/HPEC.2016.7761634
+     performance graph algorithms from parallel sparse matrices. In Inter-             [31] Markus Steinberger, Rhaleb Zayer, and Hans-Peter Seidel. 2017. Glob-
+     national Workshop on Applied Parallel Computing. Springer, 260–269.                    ally homogeneous, locally adaptive sparse matrix-vector multiplica-
+[16] Felix Gremse, Andreas Hofter, Lars Ole Schwen, Fabian Kiessling,                       tion on the GPU. In Proceedings of the International Conference on
+     and Uwe Naumann. 2015. GPU-accelerated sparse matrix-matrix                            Supercomputing. 1–11. doi:10.1145/3079079.3079086
+
+
+
+
+                                                                                 271
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                            Yuchen Li, Zhe Pan, Peng Qu, and Youhui Zhang
+
+
+[32] Liang Sun, Shuiwang Ji, and Jieping Ye. 2009. A least squares for-                 doi:10.1109/HPCA61900.2025.00109
+     mulation for a class of generalized eigenvalue problems in machine            [37] Lei Xu, Haipeng Jia, Yunquan Zhang, Luhan Wang, and Xianmeng
+     learning. In Proceedings of the 26th Annual International Conference               Jiang. 2024. HAM-SpMSpV: an Optimized Parallel Algorithm for
+     on Machine Learning (Montreal, Quebec, Canada) (ICML ’09). As-                     Masked Sparse Matrix-Sparse Vector Multiplications on multi-core
+     sociation for Computing Machinery, New York, NY, USA, 977–984.                     CPUs. In Proceedings of the 33rd International Symposium on High-
+     doi:10.1145/1553374.1553499                                                        Performance Parallel and Distributed Computing (Pisa, Italy) (HPDC ’24).
+[33] Narayanan Sundaram, Nadathur Satish, Md Mostofa Ali Patwary, Sub-                  Association for Computing Machinery, New York, NY, USA, 160–173.
+     ramanya R. Dulloor, Michael J. Anderson, Satya Gautam Vadlamudi,                   doi:10.1145/3625549.3658680
+     Dipankar Das, and Pradeep Dubey. 2015. GraphMat: high performance             [38] Carl Yang, Aydın Buluç, and John D Owens. 2018. Implementing push-
+     graph analytics made productive. Proc. VLDB Endow. 8, 11 (July 2015),              pull efficiently in GraphBLAS. In Proceedings of the 47th International
+     1214–1225. doi:10.14778/2809974.2809983                                            Conference on Parallel Processing. 1–11. doi:10.1145/3225058.3225122
+[34] Yangzihao Wang, Andrew Davidson, Yuechao Pan, Yuduo Wu, Andy                  [39] Carl Yang, Aydın Buluç, and John D Owens. 2022. GraphBLAST: A
+     Riffel, and John D Owens. 2016. Gunrock: A high-performance graph                  high-performance linear algebra-based graph framework on the GPU.
+     processing library on the GPU. In Proceedings of the 21st ACM SIGPLAN              ACM Transactions on Mathematical Software (TOMS) 48, 1 (2022), 1–51.
+     symposium on principles and practice of parallel programming. 1–12.                doi:10.1145/3466795
+     doi:10.1145/2851141.2851145                                                   [40] Carl Yang, Yangzihao Wang, and John D Owens. 2015. Fast sparse
+[35] Duncan J. Watts and Steven H. Strogatz. 1998. Collective dynamics                  matrix and sparse vector multiplication algorithm on the GPU. In
+     of ‘small-world’ networks. Nature 393, 6684 (01 Jun 1998), 440–442.                2015 IEEE International Parallel and Distributed Processing Symposium
+     doi:10.1038/30918                                                                  Workshop. IEEE, 841–847. doi:10.1109/IPDPSW.2015.77
+[36] Min Wu, Huizhang Luo, Fenfang Li, Yiran Zhang, Zhuo Tang, Kenli Li,           [41] Alwin Zulehner and Robert Wille. 2019. Matrix-Vector vs. Matrix-
+     Jeff Zhang, and Chubo Liu. 2025. HSMU-SpGEMM: Achieving High                       Matrix Multiplication: Potential in DD-based Simulation of Quantum
+     Shared Memory Utilization for Parallel Sparse General Matrix-Matrix                Computations. In 2019 Design, Automation & Test in Europe Conference
+     Multiplication on Modern GPUs. In 2025 IEEE International Symposium                & Exhibition (DATE). 90–95. doi:10.23919/DATE.2019.8714836
+     on High Performance Computer Architecture (HPCA). IEEE, 1452–1466.
+                                                                                   Received 2025-09-01; accepted 2025-11-10
+
+
+
+
+                                                                             272
+

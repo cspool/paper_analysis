@@ -1,0 +1,1209 @@
+MixFusion: A Patch-Level Parallel Serving System for
+        Mixed-Resolution Diffusion Models
+                  Desen Sun                                     Zepeng Zhao                                     Yuke Wang
+            University of Waterloo                       Carnegie Mellon University                           Rice University
+              Waterloo, Canada                                Pittsburgh, USA                                  Houston, USA
+           desen.sun@uwaterloo.ca                        zepengz@andrew.cmu.edu                             yuke.wang@rice.edu
+
+Abstract
+Text-to-Image (T2I) diffusion models have recently attracted
+significant attention due to their ability to synthesize high-
+fidelity photorealistic images. However, serving diffusion
+models would suffer from hardware underutilization in real-
+world settings due to highly variable request resolutions. To
+this end, we present MixFusion, a parallel serving System
+that exploits fine-grained patch-level parallelism to enable
+efficient batching of mixed-resolution requests. Specifically,
+MixFusion introduces a novel patch-based processing work-
+flow, significantly enabling concurrent processing across
+heterogeneous requests. Furthermore, MixFusion incorpo-
+rates a patch-tailored cache management policy to exploit                       Figure 1. Assume three requests, Req1, Req2, and Req3,
+the patch-level locality benefits. In addition, MixFusion fea-                  where each requiring processing over N steps, from St N to
+tures an SLO-aware scheduling strategy with lightweight                         St 0. (a) Process requests sequentially. (b) Process requests
+online latency prediction. Extensive evaluation demonstrates                    in parallel, achieving higher GPU utilization.
+that MixFusion achieves 30.1% higher SLO satisfaction com-
+pared to the state-of-the-art solutions on average. Our code
+is available at https://github.com/desenSunUBW/mixfusion.
+                                                                                1   Introduction
+CCS Concepts: • Computing methodologies → Massively                             Over recent years, Text-to-Image (T2I) diffusion models have
+parallel algorithms; Machine learning; Artificial intel-                        become increasingly popular [11] and have been instru-
+ligence; • Computer systems organization → Parallel                             mental for many companies, including Google Imagen [52],
+architectures.                                                                  Adobe Firefly [1], OpenAI DALLE [42], etc. Users have ex-
+                                                                                ploited diffusion models for various purposes, such as de-
+Keywords: Patch Management, Diffusion Model Serving,                            signing scenes [5, 12, 24, 64], characters [54, 58], or posters
+Mixed-Resolution Batching                                                       [6, 17, 37], primarily due to their ability to generate images
+                                                                                with superior quality. T2I diffusion models synthesize im-
+                                                                                ages from Gaussian noise by iteratively denoising, adopting
+ACM Reference Format:
+Desen Sun, Zepeng Zhao, and Yuke Wang. 2026. MixFusion: A                       both ResNet [20] and Transformer [55] architectures.
+Patch-Level Parallel Serving System for Mixed-Resolution Diffusion                 Unlike LLMs, which can efficiently handle variable se-
+Models. In Proceedings of the 31st ACM SIGPLAN Annual Sympo-                    quence lengths through KV caching [26], diffusion models
+sium on Principles and Practice of Parallel Programming (PPoPP ’26),            require multiple steps of computation-intensive attention
+January 31 – February 4, 2026, Sydney, NSW, Australia. ACM, New                 without reusable KV caches. Consequently, heterogeneity
+York, NY, USA, 15 pages. https://doi.org/10.1145/3774934.3786420                in tensor shapes propagates throughout the entire diffu-
+                                                                                sion pipeline, limiting parallel execution opportunities and
+                                                                                preventing the system from scaling batch size. For exam-
+                                                                                ple, generating three SDXL requests of different resolutions
+                                                                                (512×512, 768×768, and 1024×1024) on H100 executes in 9.5s
+                                                                                when processing them concurrently in a batch, compared
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         to 17.8s when executed sequentially. In real-world serving
+tional License.
+PPoPP ’26, Sydney, NSW, Australia
+                                                                                scenarios, users frequently request images of different res-
+© 2026 Copyright held by the owner/author(s).                                   olutions for diverse application needs [18, 30, 31, 42, 46],
+ACM ISBN 979-8-4007-2310-0/2026/01                                              leading to long waiting times as disability to handle mixed
+https://doi.org/10.1145/3774934.3786420                                         resolution requests simultaneously.
+
+
+
+                                                                          522
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                 Desen Sun, Zepeng Zhao, and Yuke Wang
+
+
+                                                                                                    U-Net                         DiT
+                                     MixFusion System
+                                                                                                                                                                 Resnet
+                     Scalable Patch Partitioning and Operator Design(§4)                                                                ...
+                                Compressed Sparse Patch Format
+    Request 1
+  {Prompt: P_1,
+                                                                                                                                                               Transformer
+ Res: 1024x1024}
+                                Patch-Tailored Diffusion Operators
+
+    Request 2
+                                       Patch Edge Stitcher
+  {Prompt: P_2,
+
+
+
+
+                                                                                                                                                     Decoder
+  Res: 512x512}
+                                Patch-Level Cache Reuse(§5)                      Prompt
+                                                                                          Prompt
+                                                                                          Encoder
+                                                                                                    Denoising
+                                                                                                     Step N
+                                                                                                                Denoising
+                                                                                                                Step N-1
+                                                                                                                            ...          Denoising
+                                                                                                                                          Step 0
+    Request 3                     Patch-Aware Caching Strategy
+  {Prompt: P_3,
+ Res: 1024x1024}
+                                   Batching Patches in Cache
+    Request 4
+  {Prompt: P_4,
+  Res: 768x768}        Goodput-Optimized SLO-Driven Scheduling(§6)               Figure 3. Latent Diffusion Model Structure. Two main types
+                              Mixed-Resolution Throughput Analyzer               of backbones in the Diffusion model: U-Net and Diffusion
+                                SLO-Based Scheduling Algorithm                   Transformer (DiT).
+
+
+                   Figure 2. Overview of MixFusion.
+
+                                                                                 would normally be included if the entire image were pro-
+                                                                                 cessed as a whole. Second, patch-level locality leveraging
+   Prior studies have explored optimizing the performance                        can introduce severe overhead. Cache-based mechanisms
+of diffusion models. Some works [14, 15, 28] exploit patch                       can further enhance the performance of diffusion models.
+parallelism to reduce latency on multiple GPUs. Another                          However, combining patch-level processing with caching
+category of studies seek to reuse the cache to accelerate                        is challenging due to the additional overhead introduced
+inference [2, 10, 21, 39, 47, 61, 67]. While these methods ef-                   by fine-grained cache management online. Specifically, the
+fectively reduce request latency and mitigate waiting times,                     reuse decisions must be made for each patch in every iter-
+they remain insufficient to achieve a high Service Level Ob-                     ation, resulting in hundreds of decisions for a single image
+jective (SLO) which is necessary in building a strong serving                    generation. And cache management operations (e.g., insert,
+system, as they overlook the complexities introduced by                          delete, query) also require careful design. Third, diverse
+mixed-resolution configurations.                                                 SLO requirements further complicate scheduling. In practice,
+   With the above insights, we propose a patch-level paral-                      service vendors schedule tasks by their deadline to maxi-
+lelization strategy that restructures heterogeneous diffusion                    mize SLO satisfaction. However, the scheduling algorithm is
+workloads into uniform computational units. Our key ob-                          hard to design due to challenging latency prediction, which
+servation is that most operations in diffusion models (e.g.,                     depends on both batch size and resolution combinations,
+Linear, FeedForward, and Cross Attention) primarily op-                          leading to substantial search space.
+erate on “local” (pixel level) rather than “global” (image level)                   To address these problems, we propose MixFusion, a serv-
+information. Although originally designed to process full                        ing system that exploits fine-grained patch-level parallelism
+images, these operations can be decomposed into smaller                          to enable efficient batching of mixed-resolution requests
+sub-operations over individual patches. Once patches share                       (Figure 2). The design of Mixfusion comprises several key
+identical shapes, heterogeneous requests can be combined                         components: (1) A Patched inference mechanism (§4). To
+as a single batch, converting resolution diversity into paral-                   enhance batch size, we first identify operations that require
+lelizable work. For a simple illustration (Figure 1), there are                  cross-patch context and then introduce two mechanisms that
+3 requests with different resolutions. Without customization,                    enable patched inference without hurting quality. MixFu-
+these requests must be processed sequentially due to mis-                        sion utilizes a novel patch management format to efficiently
+matched input shapes (Figure 1(a)), leading to underutilized                     determine patch positions. Additionally, it incorporates a
+GPUs. In contrast, by segmenting the requests into fine-                         boundary stitcher to overlap memory movement overhead.
+grained patches with uniform shapes, they can be processed                       (2) A patch level cache manager (§5). To fully exploit the
+concurrently in a single batch (Figure 1(b)), significantly                      locality inherent in diffusion models, MixFusion employs a
+improving parallel efficiency.                                                   cache manager that determines reuse selection at the patch
+   Despite patch-level decomposition enables higher degrees                      granularity. The manager coalesces fine-grained cache op-
+of parallelism, several challenges still prevent us from fully                   erations into batches for simultaneous execution, thereby
+achieving these benefits. First, partitioning an image intro-                    improving parallel throughput. (3) An SLO-aware scheduling
+duces cross-patch dependencies. For example, Convolution                         algorithm (§6). MixFusion integrates an SLO-aware sched-
+operator in U-Net based diffusion models aggregates infor-                       uler that maximizes SLO satisfaction under heterogeneous
+mation from adjacent pixels at each location. If we split                        workloads. To support optimal decisions based on task la-
+images naively, computations near patch boundaries become                        tency, we further introduce a precise latency predictor. To
+inaccurate because each patch lacks the adjacent pixels that                     sum up, we make the following contributions:
+
+
+
+                                                                           523
+MixFusion: A Patch-Level Parallel Serving System for Mixed-Resolution Diffusion...   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                                                               Table 1. Communication cost comparison between tensor
+                                                                               parallelism (TP) and patch parallelism (Distrifusion).
+
+                                                                                                   Model     TP   Distrifusion
+                                                                                                   SDXL    1.33G     0.42G
+                                                                                                    SD3    25.05G   12.52G
+
+
+
+                                                                               or Diffusion Transformer (DiT) [13, 31, 45]. U-Net com-
+                                                                               bines ResNet blocks and Transformer blocks, while DiT only
+                                                                               has Transformer blocks. The Transformer blocks apply self-
+                                                                               attention to refine visual details and cross-attention to en-
+                                                                               hance text–image alignment. After completing all denoising
+                                                                               steps, a decoder upsamples the output to the target resolu-
+                                                                               tion. Although DiT models are generally considered more
+                                                                               powerful, U-Net–based models remain widely adopted due
+                                                                               to their lightweight architecture [62] and strong capability
+                                                                               in condition alignment. In fact, most auto-regressive image
+                                                                               processing [8, 23, 33] services employ U-Net–based diffusion
+                                                                               models as decoders, leveraging their efficiency to produce
+                                                                               images with sharper details and clearer text.
+                                                                                  Although diffusion models are capable of synthesizing
+Figure 4. Two T2I diffusion optimization techniques. (a)                       high-quality images, they incur substantial overhead due
+Distrifusion splits the image into multiple patches and dis-                   to the iterative generation process. This challenge becomes
+patches them to different GPUs. (b) Block Caching leverages                    even more severe in mixed-resolution serving, where diver-
+the locality, reusing block output from the previous step, and                 sity between the input and output shapes obstructs batch-
+skipping the corresponding block in the current step.                          level optimization, thereby limiting overall efficiency.
+
+                                                                               2.2   System Optimizations for GenAI Applications
+      • We propose a novel patch-based decomposition and
+                                                                               To mitigate the heavy overhead in the T2I diffusion model,
+        batching strategy for mixed-resolution diffusion work-
+                                                                               prior studies have primarily pursued two directions: Paral-
+        loads. This approach not only enhances parallelism
+                                                                               lelism and Locality Exploration.
+        but also preserves critical context information.
+                                                                                  Parallelism Exploration with Patching. One promis-
+      • We introduce a patch-specific online cache manage-
+                                                                               ing direction for accelerating diffusion is to patchify im-
+        ment policy tailored to fully exploit the abundant patch-
+                                                                               ages and distribute the patches evenly across multiple GPUs
+        level locality efficiently.
+                                                                               [14, 15, 28]. Figure 4(a) illustrates this approach: each image
+      • We design a patch-aware scheduling algorithm that
+                                                                               is partitioned into two patches, which are then assigned to
+        coalesces patch tasks with online latency prediction,
+                                                                               separate GPUs for concurrent processing. To mitigate syn-
+        achieving superior SLO satisfaction and goodput.
+                                                                               chronization overhead, the system performs the AllGather
+      • Evaluation demonstrates that MixFusion improves
+                                                                               operation asynchronously and scatters cached states to each
+        parallel efficiency and achieves higher SLO satisfaction
+                                                                               GPU. Compared to Tensor Parallelism (TP), this Patch Par-
+        compared to existing approaches.
+                                                                               allelism also reduces the communication cost by utilizing
+                                                                               AllGather over AllReduce. Table 1 demonstrates that Patch
+2     Background
+                                                                               Parallelism reduces at least twice communication costs com-
+2.1    Diffusion Models                                                        pared to TP.While this strategy enhances parallelism, it still
+Text-to-Image (T2I) diffusion models [13, 46] are generative                   lacks support for mixed-resolution serving. Specifically, it
+models that take a prompt and Gaussian noise as input and                      constrains each request to a fixed number of patches deter-
+generate a realistic image aligned with the prompt. Figure 3                   mined by the number of GPUs, which hinders patch size
+depicts the structure of diffusion model. The Prompt En-                       unification, failing to batch requests with diverse resolutions.
+coder converts the prompt into embeddings used by every                        Moreover, it only exchanges stale cross-GPU context for
+denoising iteration. The model then progressively predicts                     approximation rather than sharing up-to-date information,
+and removes noise, gradually transforming the noisy input                      further exacerbating accuracy degradation.
+into a high-quality image. The denoising component typi-                          Locality Exploration with Caching Another optimiza-
+cally adopts one of two architectures: U-Net [42, 46, 50, 63]                  tion technique is caching. Prior studies have observed that
+
+
+
+                                                                         524
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                     Desen Sun, Zepeng Zhao, and Yuke Wang
+
+
+                                                                            Original       DistriFusion     Ghost Zone         MixFusion
+     Generate
+    Individually
+                   512          768             1024
+Patching with
+Naive Stitch
+                   Patched Inference in Batch Naive Stitch                     Prompt: Two sinks that are in a kitchen near a window.
+                                                 Boundary
+    MixFusion
+                                                  Stitcher               Figure 6. Image quality with three patch management meth-
+                         5     10      15      20       25               ods. Distrifusion generates a clear image but is far from origi-
+                                 Latency (s)                             nal. Ghost Zone has low quality and is separated into 4 parts.
+                                                                         MixFusion generates good quality and is close to the origi-
+                                                                         nal one.
+Figure 5. Latency Comparison with generation individually,
+naive stitching and Patch Edge Stitcher.
+
+block outputs evolve gradually across denoising steps, en-               When context is exchanged to enable heterogeneous process-
+abling the reuse of previously computed results [38, 39, 61].            ing, it results in complex, multi-directional patch placements.
+Figure 4(b) illustrates the central idea: the caching technique          Figure 5 demonstrates that naively stitching will degrade
+records the output of each block and selectively reuses it               performance (details in Section 4.3). (b) Degraded quality
+in subsequent steps. To keep a balance between efficiency                due to stale KV cache. Figure 6 shows the image gener-
+and quality, prior works typically rely on offline profiling             ated from the same prompt. Although Distrifusion generates
+to determine the skipped blocks in each step. While this                 clear images, the content is far from the original genera-
+method reduces computation overhead, it enforces a static                tion. Consequently, efficient context completion is critical
+model configuration in which reuse decisions are predefined,             for ensuring both accuracy and scalability.
+limiting adaptability to dynamic input shape variations.                    Mismatched Skipped Blocks: Prior work has introduced
+   Beyond these two categories of optimization, several other            caching mechanisms to reduce redundant computation in
+research directions have been explored. Some studies identify            diffusion models [38, 61], typically by reusing outputs from
+inefficiencies in the iterative denoising process and propose            designated blocks across denoising steps. However, these
+reducing the number of denoising steps [2, 34–36, 53, 62].               solutions rely on fixed caching patterns that fail to adapt
+Others focus on structural redundancy within diffusion mod-              to resolution changes, making them unsuitable for mixed-
+els, advocating the introduction of sparsity to enhance effi-            resolution serving scenarios. To highlight this limitation, we
+ciency [29, 66, 68, 69]. These approaches are orthogonal to              evaluate the model at resolutions 512, 768, and 1024 across
+our work, and advanced techniques from these directions                  1,000 runs with random seeds, applying the Block Caching
+can be seamlessly integrated into MixFusion to further boost             strategy [61] to measure the distribution of skipped blocks.
+performance.                                                             Figure 7 demonstrates that the set of skipped blocks varies
+                                                                         substantially across different resolutions, indicating the inef-
+3    Challenges and Motivations                                          ficiency of applying a single caching strategy uniformly.
+While prior work leverages patching to hide communica-                      Explosive Combination: Prior work often relies on of-
+tion overhead across multiple GPUs [14, 15, 28] (discussed               fline latency profiling [3, 4, 7, 51] to schedule requests under
+in Section 2.2), our approach aggregates multiple patches to             SLO constraints. However, this strategy becomes infeasible in
+maximize parallel throughput and incorporates caching to                 the presence of an explosive combination of resolutions. We
+reduce computational overhead. However, this design intro-               demonstrate this by measuring latency across all resolution
+duces several key challenges: Inefficient Context Exchanging,            combinations with 3 requests, using the mixed-resolution
+Mismatched Skipped Blocks, and Explosive Combination.                    batching method described in Section 4. With three resolu-
+   Inefficient Context Exchanging: Enabling patch-level                  tions, there are eight possible combinations. Figure 8 reports
+parallelism in heterogeneous diffusion workloads requires                the average latency for each. “LMH” denotes a batch with
+coordinating and integrating the results of concurrent patch             one request each at low, medium, and high resolutions. The
+processing. We identify two critical inefficiencies in exist-            results exhibit substantial variability–—batches composed
+ing patching methods [14, 15, 28] that prevent successful                entirely of high resolution requests can be up to 68 % slower
+scaling and accurate generation. (a) Complex Cross-Patch                 than those with only low resolution requests. To capture this
+Context Exchange and Stitching. Existing methods pro-                    variability, all combinations need profiling. If a GPU supports
+cess requests sequentially, failing to exchange the necessary            up to 𝑀 concurrent requests and there are 𝑁 resolutions,
+                                                                                                                      Í𝑀 𝑖+𝑁 −1
+cross-patch context within a batch of concurrent requests.               the number of unique combinations is 𝑖=1          𝐶 𝑁 −1 , which
+
+
+
+                                                                   525
+MixFusion: A Patch-Level Parallel Serving System for Mixed-Resolution Diffusion...           PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+                                                                                                                             0 1       0 1        0 1 2      0 1 2 3
+                                                                                                     Req                     2 3       2 3        3 4 5      4 5 6 7
+                                                                                  Req
+                                                                         Req               Req        4                                           6 7 8      8 9 10 11
+                                                                                   2
+                                                                          1                 3                                                               12 13 14 15
+                                                                                    (a) Requests                                     (c) Patch Partition
+                                                                                                                                   ResolutionOffset [ ]      0 8 17 33
+                                                             RequestStart [ ] 0 0 0 0 4 4 ... 4 13 13 ... 13 17 17 ... 17
+                                                             RequestEnd [ ] 3 3 3 3 12 12 ... 12 16 16 ... 16 32 32 ... 32   0 1 ... 3 0 1 ... 3 0 1 ... 8 0 1 ... 15
+                                                               PatchData [ ] 0 1 2 3 0 1 ... 8 0 1 ... 3 0 1 ... 15                  RequestOffset [ ]     0 4 8 17 33
+
+                                                                            (b) Naïve Patch Management                         (d) Offset-Based Compression
+
+
+
+    Figure 7. Average sav- Figure 8. Latency with Figure 9. Patch management policy. (a) Requests with various resolutions.
+    ings from skipped com- the same batch size but (b) Naive Patch Management. (c) Reorder and consider the patches as
+    putations.             the different combina- sparse arrays. (d) Exploit offset to record position.
+                           tion.
+
+Table 2. Quality Comparison: Replicate vs. Patch Edge                              data as sparse arrays (Figure 9(c)). Owing to the locally dense
+Stitcher (PES)                                                                     distribution of patches within a single image, we only record
+                                                                                   request and resolution metadata for each patch. After com-
+                      Method           PSNR(↑)   SSIM(↑)                           pressing the sparse batch, we log the offset of the first patch
+                Replicate, 4 Patches     9.54      0.45                            per request (Figure 9(d)) and the resolution offsets needed
+                  PES, 64 Patches       22.13      0.77
+                  PES, 16 Patches       24.84      0.81
+                                                                                   for Self-Attention (details in Section 4.2). Each patch identi-
+                  PES, 4 Patches        28.82      0.88                            fies corresponding request via the index, allowing it to tra-
+                                                                                   verse all associated patches by scanning from RequestOffset
+                                                                                   [index] to RequestOffset [index + 1].
+grows rapidly with 𝑀 and 𝑁 . Consequently, efficient latency
+estimation without full profiling is essential.
+                                                                                   4.2      Patch-Tailored Diffusion Operators
+4     Patched Inference with Batching                                              Most operators in diffusion models, including Linear, Feed-
+In this section, we first introduce how we manage the patches.                     Forward, and Cross Attention, operate independently for
+Next, we describe our approach for addressing missing con-                         each pixel and can thus be considered “pixel-wise” oper-
+text during inference.                                                             ators. In contrast, certain operators require context from
+                                                                                   other patches; otherwise, the output would be fragmented.
+4.1    Compressed Sparse Patch Format                                              Typically, two operators require context information for con-
+Unlike prior work [14, 15, 28], which primarily targets dis-                       sistent image generation: Self-Attention and Convolution.
+tributing computation across multiple GPUs, our patching                              Patch-based Self-Attention Module: Despite some Self-
+mechanism partitions images along both the height and                              Attention in vision transformer models having causal masks,
+width dimensions, selecting the patch size as the greatest                         almost all Self-Attention in text-to-image diffusion models
+common divisor of all resolutions in the corresponding di-                         are processed without a mask [13, 31, 36, 45, 46] and aggre-
+mension. This approach allows patches to be processed con-                         gate each pixel with all other pixels within the same image. It
+currently and leverages up-to-date data. However, operations                       operates on three inputs: query, key, and value. The query to-
+such as Convolution and Self-Attention exhibit dependencies                        ken computes with all keys, applies a Softmax, and performs
+across patches, making efficient patch localization critical.                      another dot product with all values. Although this process
+   Inspired by the Compressed Sparse Row (CSR) format com-                         is straightforward for unpatched image, it becomes signifi-
+monly employed for irregular data structures, we introduce                         cantly more complex with patched image. As illustrated in
+a novel Compressed Sparse Patch (CSP) representation to ef-                        Figure 10(a), accurate Self-Attention computation in patched
+ficiently manage image patches (Figure 9). CSP performs a                          configuration requires each patch to compute with all other
+similar structure as block compressed sparse matrix. The                           patches, forming a Cartesian product of interactions. This
+main difference is, CSP supports diverse block sizes, and the                      complexity makes it difficult to implement efficient GPU
+block is always at the left-top of the total matrix, while block                   kernels. To address this, we reconstruct patches back into
+compressed sparse matrix configures a fixed-size block, and                        the full image before executing Self-Attention. To further
+one sparse matrix may contain multiple blocks. Consider                            enable parallel execution, we group requests by resolution,
+four pending requests sorted by arrival time (Figure 9(a)).                        which can be achieved simply and efficiently by exploiting
+Naively storing latent information for each patch individu-                        CSP format, to achieve efficient batched attention.
+ally (Figure 9(b)) results in memory inefficiency and obstructs                       Patch-based Convolution: Convolution operator ap-
+recovering images by resolution (Section 4.2). To mitigate                         plies a small kernel to aggregate features from neighboring
+this, we first reorder requests by resolution and treat patch                      pixels. The kernel size ranges from 1 to 3 in T2I diffusion
+
+
+
+                                                                            526
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                             Desen Sun, Zepeng Zhao, and Yuke Wang
+
+
+                                                                                                 GMem                         GMem                    GMem
+
+                                              P0    P1                                               P0                          P0                       P0
+
+
+
+
+                                                                                                                                                                Edge Stitcher
+                                                                 Filter Kernel   Thread                       TB0     SMem              TB2    SMem
+      Q             K                    V                                        Block
+                                              P2    P3                                               P1        P0                P1     P2                P1
+      P0            P0               P0                                          Fused
+                                             (b) Naïve Unpatched Convolution     Kernel
+      P1            P1               P1                                                              P2                          P2                       P2
+                                                                                                               P1                       P3
+      P2            P2               P2                                          P0 P1
+                                                                                                              TB1     SMem              TB3    SMem
+      P3            P3               P3                                          P2 P3               P3                          P3                       P3
+                                                         P0      P1
+           Matmul
+
+                    (Softmax)
+
+                                Matmul
+
+
+
+
+                                                                                                                                                   Overlapped
+           Batch
+
+
+
+
+                                Batch
+
+
+
+
+                                                                                               TB0            TB0          TB2          TB2
+
+
+
+
+                                                                                                                                                                Group Norm
+                                                                                 Shared        P0 Group P0                  P2 Group P2
+                                                                                 Memory
+                                                         P2      P3                                  Norm                        Norm
+                                                                                               P1              P1           P3          P3
+                                                                                 Global        TB1            TB1          TB3          TB3
+  (a) Naïve Self-Attention                     (c) Naïve Patched Convolution     Memory                   (d) Fused GroupNorm Kernel with Edge Stitcher
+
+
+Figure 10. Patch based operators in T2I diffusion model. (a) Naive Self-Attention operation, which computes interactions
+across all patches. (b) Unpatched Convolution. (c) Naive convolution after patching, which gathers boundaries from neighboring
+patches (d) Patch Edge Stitcher, which enables boundary stitching combined with GroupNorm.
+
+models [41, 46, 50]. When the kernel size exceeds 1, com-                                  does not exist in diffusion models because diffusion gener-
+putation requires adjacent pixel values, introducing cross-                                ates images from noise, where the adjacent boundaries have
+patch dependencies. As illustrated in Figure 10 (b), unpatched                             no similarities. Figure 6 displays the image generated by
+convolution proceeds seamlessly across the image, whereas                                  ghost zone. Obviously, the ghost zone generates low-quality
+patched convolution encounters boundary issues. For ex-                                    images with clear boundaries between patches. In contrast,
+ample, processing the bottom-right corner of 𝑃0 requires                                   we propose a lightweight patch edge stitcher that exploits
+boundary data from 𝑃1 and 𝑃2 , while 𝑃 0 simultaneously pro-                               the boundaries from other patches while reducing the mem-
+vides its boundaries to these patches. These dependencies are                              ory footprint. The key observation is that convolution in
+complicated by two forms of diversity: (a) Direction Diversity.                            diffusion models typically follow a GroupNorm operation
+Patches must stitch both row and column boundaries. Row                                    [41, 46, 50]. Therefore, we fuse the stitching operation into
+boundaries align with memory layout, but column stitch-                                    the GroupNorm kernel. As illustrated in Figure 10 (d), we
+ing incurs irregular memory access. (b) Position Diversity.                                relocate boundary pixels during normalization operations,
+Each patch has different neighbor positions, for example, 𝑃0                               mitigating redundant memory footprint. Specifically, each
+stitches on the right and bottom, while 𝑃3 stitches on the                                 GPU thread block (TB) normalizes one patch and checks
+top and left (Figure 10(c)). To enhance parallelism, we record                             whether its boundary pixels are required by other patches.
+each patch’s adjacent neighbors during splitting and pad                                   Such dependencies are prepared during patch splitting. The
+with 0 when a neighbor is absent. This metadata supports                                   boundary pixels required by other patches are temporarily
+uniform and efficient boundary stitching across all patches.                               saved in shared memory. After completing all normalizations
+Additionally, we employ a tailored stitcher to overlap mem-                                in the current TB, the TB then locate the target patches of
+ory movement overhead arising from these diversities.                                      those boundaries and write them back to global memory.
+                                                                                           This design overlaps edge stitching with other normaliza-
+4.3    Patch Edge Stitcher                                                                 tions, ensuring the convolution’s accuracy without addi-
+                                                                                           tional synchronization. The result in Figure 5 demonstrates
+We conduct an experiment to quantify the overhead of stitch-
+                                                                                           the minimal overhead from our stitcher, allowing patched
+ing. Each resolution is assigned four requests in our evalu-
+                                                                                           execution to achieve its intended parallel throughput. We
+ation. Figure 5 demonstrates that naive stitching (fetching
+                                                                                           also evaluate the quality comparison between ghost zone
+all required boundaries and concatenating them with target
+                                                                                           (replicate) and Patch Edge Stitcher. Table 2 indicates that
+patches) offsets the performance gains of patch-level par-
+                                                                                           Patch Edge Stitcher generates much better quality compared
+allelism, highlighting the necessity for an efficient stitcher.
+                                                                                           to simply replicating the boundaries.
+Ghost Zone is another technique that is widely adopted by
+prior scientific computations to solve the patch boundary
+problem, such as stencil. It simply replicates the boundaries                              5     Exploiting Patch-Level Locality
+for each patch. Although it works for high-quality images,                                 To maintain image quality and reduce computational over-
+which exhibit locality among adjacent pixels, this feature                                 head, we propose a patch-level cache reuse strategy. We
+
+
+
+                                                                                     527
+MixFusion: A Patch-Level Parallel Serving System for Mixed-Resolution Diffusion...                   PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                                          Recomputed Patches                                                           4 5 6 7 … …          444 555 666 777 131314
+                                                                                                                                                             13   14 Mask
+                                                                                                                                                                 14
+  U-Net/DiT                                   0 1 2                                                                                                       2 Slice
+                              3 Recompute                       4 Combine                        Block Output          4 5 6 7 … …
+                  Block
+                                              3 4 5                                                                       Common                                       Reused
+      Block     Calculation                                                                 444 555 666 777 131314
+                                                                                                             13   14
+                                                                                                                 14                          400 511 644 755 1366 1477 Cache
+        0                                     6 7 8                                                                                    3 Compose
+                                                                                                         1 Compare     13 14 … … … …
+               3
+                                                                                                                            New
+                Input                          Mask   Cached Patches        Output                                                            400 511 644 755 1366 1477 Updated
+              0 1 2                          0 1 2       0 1 2   0 1 2                      000 111 444 555 666 777
+      Block                                                    4                                                       0 1 … … … …            0 1 … … … …             Removed
+                               Cache                     3 4 5   3 4 5
+        k     3 4 5                          3 4 5                                                Cache Pool               Expired
+                              Predictor                                                                                                4 Update
+              6 7 8                          6 7 8       6 7 8   6 7 8
+                               1 Predict
+                                                  2 Retrieval
+      Block                                 Cache Pool                                                       Figure 12. Batching Patches in Cache.
+        n                                                        5 Update
+
+
+
+   Figure 11. Patch-level cache reuse system overview.                                        To efficiently manage the cache system, we adopt a batch-
+                                                                                           ing strategy to amortize the cache overhead by processing
+                                                                                           them concurrently. We employ a map to store cache data,
+determine whether to reuse the cache dynamically before
+                                                                                           where each patch is assigned a unique identifier, and each
+each block in each step, ensuring that only patches with
+                                                                                           block maintains an independent cache. Figure 12 depicts the
+significant deviations from cached data are recomputed. To
+                                                                                           overall design. When a block needs to generate a mask or
+minimize the overhead from cache operations, we coalesce
+                                                                                           compute a masked output, it submits indices which consist
+multiple cache operations to process them simultaneously.
+                                                                                           of each patch’s unique ID along with intermediate results
+5.1    Patch-aware Caching Strategy                                                        to the cache system as input. By comparing these indices
+                                                                                           with the entries stored in the cache, the system identifies
+Figure 11 depicts the workflow of patch-level caching, which
+                                                                                           three distinct sets ( 1 ): Common Set: IDs present in both the
+is applied before every blocks in T2I diffusion models. When
+                                                                                           cache and the input indices. When receiving new data, the
+a new input comes, Cache Reuse Predictor (Later discussed
+                                                                                           cache system verifies whether the cache should replace the
+in Section 7) compares input and cache from the previous
+                                                                                           masked patched in the input ( 2 ). New Set: IDs present only
+step ( 1 ). The predictor generates a mask determining the
+                                                                                           in the input indices, which will be inserted into the cache.
+reusability for each patch. ( 2 ). The input and generated
+                                                                                           Unmasked regions are recomputed and then updated in the
+mask are subsequently forwarded to the current block ( 3 ).
+                                                                                           cache, while the New Set provides missing indices and coa-
+For pixel-wise operators, recomputing only the unmasked
+                                                                                           lesces them for updating ( 3 ). Expired Set: IDs present only
+patches is sufficient. However, as discussed in Section 4.2,
+                                                                                           in the cache. Since preemption is not allowed in MixFusion,
+certain operations rely on features from other patches to
+                                                                                           each patch will stay on GPU until it finishes. Once the cache
+preserve quality. If masked patch values are directly used
+                                                                                           system detects IDs that is only in the cache system, it con-
+as inputs for such operations, the result may mismatch in
+                                                                                           cludes that the corresponding patch has exited. Finally, the
+shapes or output with significant errors. Fortunately, prior
+                                                                                           system removes expired entries from the Expired Set ( 4 ).
+studies [14, 28] observe that the outputs of operators from
+                                                                                           By coalescing these operations, the cache system enables
+adjacent steps are sufficiently similar, allowing us to reuse
+                                                                                           scalable patch reuse in parallel execution.
+the results from the previous step to fill the masked patches.
+After the block execution, part of the output is imprecise
+due to the masked processing pattern. Therefore, we use
+                                                                                           6      SLO-Aware Scheduler
+the mask again to replace the masked patches with cache,                                   6.1      Mixed-Resolution Throughput Analyzer
+which is generated from the last step ( 4 ). Finally, the system                           Admitting a new request into the current batch requires care-
+updates the input and output of this block for the next step                               ful consideration. For instance, when the Schedule Decider
+( 5 ).                                                                                     considers admitting a new task into the current batch, the
+                                                                                           task introduces additional overhead. While this may improve
+5.2    Batching Patches in Cache                                                           overall throughput, it can also increase batch latency, risking
+Since we should access cache every single operation to load                                SLO violations for some tasks. Such complex trade-off em-
+or save data, it is obvious that cache management affects the                              phasizes the importance of accurate latency prediction. To
+extent of benefit from caching. In SD3 [13], it takes 40 to 50                             make efficient scheduling decisions, MixFusion employs a
+ms to process one step with 24 blocks, which means we have                                 Throughput Analyzer that forecasts the future latency of the
+to use less than 2 ms to complete all the cache operations for                             potential batch. Conventional systems often rely on offline
+a single block, otherwise we cannot gain any profits even if                               profiling to estimate model execution latency [3, 7, 51], while
+all blocks can be skipped. To achieve this, the cache system                               such solution performs bad on mixed-resolution T2I diffu-
+should support three fundamental operators: query, delete,                                 sion serving system. This scenario introduces a significantly
+and update/insert.                                                                         larger set of possible task combinations, making exhaustive
+
+
+
+                                                                                     528
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                    Desen Sun, Zepeng Zhao, and Yuke Wang
+
+
+offline profiling infeasible. Moreover, since MixFusion com-              Algorithm 1: MixFusion schedule algorithm
+bines requests into a single batch, the actual latency is typi-             Input: 𝑤𝑎𝑖𝑡_𝑞𝑢𝑒𝑢𝑒, 𝑎𝑐𝑡_𝑞𝑢𝑒𝑢𝑒
+cally less than the sum of per-task latencies. Overestimating               Output: 𝑎𝑐𝑡𝑖𝑣𝑒_𝑞𝑢𝑒𝑢𝑒
+this latency discourages admitting new tasks, ultimately re-              1 while True do
+ducing system throughput.                                                 2     𝑐𝑢𝑟 _𝑡𝑎𝑠𝑘 ← 𝑔𝑒𝑡_𝑙𝑒𝑎𝑠𝑡_𝑠𝑙𝑎𝑐𝑘_𝑡𝑎𝑠𝑘 (𝑤𝑎𝑖𝑡_𝑞𝑢𝑒𝑢𝑒)
+   Based on these considerations, the Throughput Analyzer                 3     𝑎𝑐𝑡_𝑡𝑎𝑠𝑘 ← 𝑔𝑒𝑡_𝑙𝑒𝑎𝑠𝑡_𝑠𝑙𝑎𝑐𝑘_𝑡𝑎𝑠𝑘 (𝑎𝑐𝑡_𝑞𝑢𝑒𝑢𝑒)
+employs Multilayer Perceptron (MLP) for latency prediction.               4     𝑝𝑟𝑒𝑑_𝑙𝑎𝑡𝑒𝑛𝑐𝑦 ← 𝑝𝑟𝑒𝑑𝑖𝑐𝑡𝑜𝑟 (𝑐𝑢𝑟 _𝑡𝑎𝑠𝑘, 𝑎𝑐𝑡𝑖𝑣𝑒_𝑞𝑢𝑒𝑢𝑒)
+The MLP model takes three inputs: the task number for each                5     /*SLO Violation Analyze*/
+resolution, the ongoing resolution number, and the total                  6     if time_out(cur_task, pred_latency) then
+patch number. We generate 200 diverse resolution combina-                 7          𝑑𝑖𝑠𝑐𝑎𝑟𝑑𝑠 (𝑐𝑢𝑟 _𝑡𝑎𝑠𝑘)
+tions and evaluate their latencies as the dataset, where 80 %             8          continue
+of which is the train set and the remaining is the eval set. The          9     end
+MLP model achieves high prediction accuracy, with errors                 10     /*Schedule Mode Decision*/
+of less than 3.7 % compared to the actual latency, indicating            11     if switch_mode(cur_task, pred_latency) then
+negligible runtime overhead.                                             12          𝑐𝑢𝑟 _𝑡𝑎𝑠𝑘 ← 𝑢𝑝𝑑𝑎𝑡𝑒_𝑡𝑎𝑠𝑘 ()
+                                                                         13          𝑝𝑟𝑒𝑑_𝑙𝑎𝑡𝑒𝑛𝑐𝑦 ←
+6.2   SLO-based Scheduling Algorithm                                                  𝑢𝑝𝑑𝑎𝑡𝑒_𝑙𝑎𝑡𝑒𝑛𝑐𝑦 (𝑐𝑢𝑟 _𝑡𝑎𝑠𝑘, 𝑎𝑐𝑡_𝑞𝑢𝑒𝑢𝑒)
+                                                                         14     end
+In mixed-resolution settings, each request may have distinct             15     /*Schedulability test*/
+resolution and SLO requirements, and the system’s ability to             16     if time_out(act_task, pred_latency) then
+split requests into arbitrary patch sizes further complicates            17          break
+the decision of an optimal strategy, which necessitates an               18     end
+effective scheduling algorithm. Suppose there are 𝑀 different            19     else
+resolutions, with Ni , 𝑖 ∈ 𝑀 requests in the waiting queue.              20          act_queue.enqueue(cur_task)
+Moreover, each request has distinct urgency, leading to an               21     end
+exponentially growing search space. Completing such an                   22 end
+exhaustive schedule selection within a single scheduling
+period is therefore highly challenging.
+   To address this challenge, we introduce a heuristic schedul-          7    Implementation
+ing algorithm that reduces scheduling overhead to a practical
+                                                                         We implement MixFusion with 12.5K line of codes in Python
+level while preserving high SLO satisfaction (Algorithm 1).
+                                                                         and C++/CUDA based on PyTorch [43] and following the
+First, we define the slack score for request i as:
+                                                                         system design principles of vLLM [26]. Stable Diffusion [56]
+                                                                         is ported into our framework and decomposed into three
+                               𝐷𝐷𝐿𝑖 − 𝐶𝑖 − 𝑃𝑖                            stages: Preparation, Denoising, and Postprocessing to imple-
+                    𝑆𝑙𝑎𝑐𝑘𝑖 =
+                                   𝑆𝐴𝑖                                   ment both baseline and MixFusion more flexibly. Common
+   Here, 𝐷𝐷𝐿𝑖 and 𝑆𝐴𝑖 denote the SLO constraint and the                  components of the sampler are reorganized to enable batch
+standalone model latency of request 𝑖, respectively. 𝐶𝑖 repre-           denoising across variable denoising steps. We further inte-
+sents the time consuming since request 𝑖 arrived, and 𝑃𝑖 is the          grate xformers [27] to accelerate both baseline and MixFu-
+predicted time of the remaining stages. The slack score quan-            sion. For prediction tasks, we leverage Scikit-learn [44] to
+tifies request urgency, with lower scores indicating higher              train the MLP-based Throughput Analyzer and cuML [49]
+priority for earlier execution. This scheduling procedure can            for cache predictor. The cache predictor employs a Random
+be performed in parallel with the denoising computation.                 Forest Classifier on the GPU to achieve high performance
+   The scheduler is designed to balance throughput and SLO               while Throughput Analyzer is on CPU to hide the scheduling
+requirements, providing an efficient and systematic approach.            overhead. We collect input-output similarity metrics (MSE)
+The scheduler chooses either the most urgent request to pre-             across all blocks and timesteps for 1K inference requests,
+vent starvation or the one that maximizes throughput im-                 which are then used to train cache predictor.
+provement for the current batch. If the most urgent request
+still has a relatively relaxed slack, the scheduler switches             8    Experiment
+to a throughput-optimized mode and selects the next can-                 Platform: We conduct our experiments on a server equipped
+didate (lines 11-14). This selection process continues until             with an H100-80GB GPU and an AMD EPYC 9534 64-core
+no additional requests can be admitted without violating                 CPU. The software stack consists of Ubuntu 18.04, CUDA
+SLO constraints (lines 16–18). If a candidate cannot meet its            12.3, and PyTorch 2.2.2.
+deadline even when processed immediately, it is discarded,                  Models: We evaluate our system using Stable Diffusion
+consistent with prior approaches (lines 6-9) [32, 57].                   3 [13] and Stable Diffusion XL [46]. By default, we process 50
+
+
+
+                                                                   529
+MixFusion: A Patch-Level Parallel Serving System for Mixed-Resolution Diffusion...                                                           PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                             Nirvana-SLO                Mix-Cache-SLO                MixFusion-SLO                                                  Table 3. Quality Score comparison.
+                             Nirvana-Goodput            Mix-Cache-Goodput            MixFusion-Goodput
+SLO Satisfaction (%)
+
+
+
+
+                       100                                        100
+                                                                                                      0.4                                 Model      Method             SDXL                  SD3
+
+
+
+
+                                                                                                            Goodput (Req/s)
+                        90                                  1.0    90
+                        80                                         80
+                        60                                         60                                 0.3                                                       COCO diffusiondb COCO diffusiondb
+                        40                                  0.5    40
+                                                                                                      0.2                                            Original   14.92      16.24      14.79      16.65
+                        20                                         20
+                                                                                                                                      CLIP (↑)
+                                                                                                                                                    MixFusion   15.43      16.62      15.13      17.06
+                                                                                                      0.1
+                         0                                          0
+                              0.8   0.9   1.0   1.1   1.2               0.1   0.2   0.3   0.4   0.5                                                  Original   31.92      35.56      28.94      32.38
+                                    QPS (Req/s)                               QPS (Req/s)                                                 FID (↓)
+                                      SDXL                                       SD3
+                                                                                                                                                    MixFusion   28.85      33.42      26.56      38.01
+
+
+                             Figure 13. End-to-End SLO satisfaction ratio.
+                                                                                                                                    2.4× longer. The larger variance in SD3 limits the arriving
+                                                                                                                                    rate of large resolution requests, but leaves more room for
+steps for both SD3 and SDXL. Following common practice [2,                                                                          scheduling optimization. This is also the reason why MixFu-
+40, 50, 66], we adopt three widely used resolutions, 512 × 512,                                                                     sion outperforms Mixed-Cache more in SD3, demonstrating
+768×768, and 1024×1024, noted as Low, Medium, and High, as                                                                          the effectiveness of our scheduling algorithm. In conclusion,
+the baseline settings. Unless otherwise noted, all experiments                                                                      MixFusion achieves 5.33× and 1.06× higher goodput when
+are conducted with float16 precision.                                                                                               achieving 90 % [70] SLO (green line in Figure 13) over NIR-
+   Baseline: We compare MixFusion with the following                                                                                VANA and Mixed-Cache, respectively.
+systems: (1) NIRVANA [2]: The state-of-the-art T2I diffu-                                                                              Quality: Table 3 reports the CLIP [48] and FID [22] scores
+sion serving system. We also incorporate the ORCA [65] to                                                                           for both datasets and both models. The CLIP score measures
+enhance its batch size. (2) Distrifusion [28]: A distributed                                                                        alignment between generated images and input prompts,
+parallel inference engine for diffusion. We only evaluate it                                                                        with higher values indicating stronger semantic consistency,
+on multiple GPUs. (3) Mixed-Cache: A variant of our ap-                                                                             while the FID score evaluates distance between the generated
+proach that replaces our SLO-aware scheduler with an FCFS                                                                           images and the datasets, with a lower value representing
+scheduler while enabling batching. All scheduling methods                                                                           closer to the dataset. MixFusion achieves CLIP and FID
+have a maximum batch size of 12 due to memory limits.                                                                               scores comparable to the original models, demonstrating
+   Workload: We use COCO [9] and DiffusionDB [60] to                                                                                that our system obtains comparable quality as prior studies
+evaluate how much MixFusion affects the image quality.                                                                              [25, 28].
+From each dataset, we sample 5K text–image pairs to con-
+struct evaluation subsets for quality measurement. We gen-                                                                          8.2     Sensitivity Study
+erate input streams following a Poisson distribution, consis-                                                                       Scalability. We further extend our evaluation to 2, 4, and 8
+tent with prior work [19], where all resolutions contribute                                                                         H100 GPUs within a single node to assess scalability. For all
+equally to the whole workload. Following the convention in                                                                          methods except Distrifusion, we employ data parallelism to
+Clockwork [19], we configure the SLO requirement as 5×                                                                              improve load balancing. Upon the arrival of a new request,
+the execution latency for each resolution setting.                                                                                  we select the GPU that has the lowest workload and dispatch
+                                                                                                                                    the request accordingly. Figure 15 demonstrates that Mix-
+8.1                          End-to-End Performance                                                                                 Fusion achieves the highest SLO satisfaction across all con-
+We first display the end-to-end performance of MixFusion with                                                                       figurations. In contrast, NIRVANA and Distrifusion exhibit
+default environment settings.                                                                                                       opposing behaviors: NIRVANA performs relatively better un-
+   Performance: We first evaluate MixFusion with various                                                                            der heavy workloads, while Distrifusion only maintains high
+QPS (Query Per Second) for both models. We only set diffu-                                                                          SLO satisfaction under light workloads. NIRVANA employs
+siondb [60] as the default database in performance evaluation                                                                       ORCA to form batches, thereby increasing the likelihood
+since MixFusion’s performance is not affected by prompts.                                                                           of incorporating additional large-resolution requests due
+Figure 13 presents the end-to-end SLO and goodput results.                                                                          to longer execution time, leading to stable SLO satisfaction
+Compared to NIRVANA, MixFusion achieves 30.1 % higher                                                                               under heavy workloads. Distrifusion, however, processes
+SLO satisfaction on average while maintaining over 90 %                                                                             requests sequentially, which offers lower latency but fails to
+SLO. The improvement is particularly pronounced on SDXL,                                                                            sustain high throughput under heavy workloads.
+where larger batch sizes provide greater performance gains.                                                                         Workflow Efficiency. We further evaluate scenarios where
+Specifically, SLO satisfaction drops sharply for SD3 as QPS                                                                         one resolution dominates the workload (50 %) while the other
+increases, while it remains largely stable for SDXL. This is                                                                        two share the remaining 50 %. We conduct an experiment
+because latency gaps across resolutions are less pronounced                                                                         with QPS of 8.8 req/s for SDXL and 3.2 req/s for SD3 on 8
+in SDXL: generating a high resolution image takes only 1.3×                                                                         GPUs. AS Figure 14 shows that MixFusion demonstrates the
+the time of generating a low one, whereas SD3 requires over                                                                         highest SLO satisfaction and goodput all the time. Although
+
+
+
+                                                                                                                              530
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                                                                                                                                    Desen Sun, Zepeng Zhao, and Yuke Wang
+
+
+                                 Distrifusion-SLO                     Nirvana-SLO                Mix-Cache-SLO                 MixFusion-SLO                                                                        Table 4. Quality Analysis
+                                 Distrifusion-Goodput                 Nirvana-Goodput            Mix-Cache-Goodput             MixFusion-Goodput
+
+                                         100                                               100
+                                          90                                                90                                         3
+                                                                                                                                                                                                           Method                         SDXL [46]                            SD3 [13]
+                      SLO Satisfaction
+
+
+
+
+                                          80                                          6     80
+                                                                                                                                                                                                                                       PSNR(↑) SSIM(↑)                    PSNR(↑) SSIM(↑)
+
+
+
+
+                                                                                                                                           Goodput
+                                                                                                                                           (Req/s)
+                                          60                                                60                                         2
+                           (%)
+
+
+
+
+                                                                                      4
+                                          40                                                40
+                                                                                                                                                                                   Distrifusion, 8 Patches                              10.96    0.49                       9.35      0.38
+                                                                                                                                       1
+                                                                                      2                                                                                          MixFusion, Patch Size=128,
+                                          20                                                20                                                                                                                                          22.13               0.77             inf              1.0
+                                                                                      0                                                0
+                                                                                                                                                                                   64 Patches, w/o cache
+                                           0                                                 0
+                                                  Low        Medium         High                  Low         Medium        High                                                 MixFusion, Patch Size=256,
+                                                         Distribution                                        Distribution                                                                                                               24.84               0.81             inf              1.0
+                                                            SDXL                                                 SD3                                                               16 Patches, w/o cache
+                                                                                                                                                                                 MixFusion, Patch Size=512,
+                                                                                                                                                                                                                                        28.82               0.88             inf              1.0
+                                                                                                                                                                                    4 Patches, w/o cache
+                               Figure 14. Performance under various distribution.                                                                                                        MixFusion
+                                                                                                                                                                                                                                        18.57               0.67            15.96          0.72
+                                                                                                                                                                                         threshold=1
+                                                                                                                                                                                         MixFusion,
+                                           Distrifusion-SLO              Nirvana-SLO             Mix-Cache-Cache-SLO          MixFusion-SLO                                                                                             18.67               0.68            16.47          0.74
+                                           Distrifusion-Goodput          Nirvana-Goodput         Mix-Cache-Goodput            MixFusion-Goodput                                         threshold=0.1
+SLO Satisfaction(%)
+
+
+
+
+                      100                                                100                                    100                                                                      MixFusion,
+
+
+
+
+                                                                                                                                                         Goodput(Req/s)
+                       90                                         2       90                                     90                                  6                                                                                  18.70               0.68            16.47          0.74
+                       75                                                 75                             3       75                                                                    threshold=0.01
+                                                                                                         2                                           4
+                         50                                       1        50                                    50
+
+                         25                                                25                            1       25                                  2
+
+                             0                                    0         0                            0        0                                  0
+                                         0.2 0.4 0.6 0.8 1.0                    0.4 0.8 1.2 1.6 2.0                    0.8 1.6 2.4 3.2 4.0
+                                               QPS (Req/s)                          QPS (Req/s)                             QPS (Req/s)                                                Distrifusion-SLO                   Nirvana-SLO                 Mix-Cache-Cache-SLO           MixFusion-SLO
+                                               SDXL-2 GPU                           SDXL-4 GPU                              SDXL-8 GPU
+                                                                                                                                                                                       Distrifusion-Goodput               Nirvana-Goodput             Mix-Cache-Goodput             MixFusion-Goodput
+SLO Satisfaction(%)
+
+
+
+
+                      100                                              100                                      100                                  3
+                       90                                         0.75 90                                1.5     90                                      Goodput(Req/s)                              100                                        100                                       3
+                       75                                               75                                       75                                                                                   90                                         90
+                                                                                                                                                     2
+
+
+
+
+                                                                                                                                                                                  SLO Satisfaction
+                                                                  0.50                                   1.0                                                                                          80                                    6    80
+                         50                                             50                                       50
+
+
+
+
+                                                                                                                                                                                                                                                                                              Goodput
+                                                                                                         0.5                                         1                                                                                                                                    2
+
+
+
+
+                                                                                                                                                                                                                                                                                              (Req/s)
+                         25                                       0.25     25                                    25                                                                                   60                                         60
+                                                                                                                                                                                                                                            4
+
+
+
+
+                                                                                                                                                                                       (%)
+                             0                                    0.00      0                            0.0      0                                  0
+                                                                                                                                                                                                      40                                         40
+                                         0.2 0.4 0.6 0.8 1.0                    0.4 0.8 1.2 1.6 2.0                    0.8 1.6 2.4 3.2 4.0                                                                                                                                                1
+                                               QPS (Req/s)                          QPS (Req/s)                             QPS (Req/s)                                                                                                     2
+                                                                                                                                                                                                      20                                         20
+                                               SD3-2 GPU                            SD3-4 GPU                               SD3-8 GPU
+                                                                                                                                                                                                                                            0                                             0
+                                                                                                                                                                                                       0                                          0
+                                                                                                                                                                                                            3x       5x          10x                      3x         5x            10x
+                                                                                                                                                                                                                 SLO Scale                                       SLO Scale
+Figure 15. SDXL and SD3 end-to-end SLO change with                                                                                                                                                                 SDXL                                            SD3
+
+different number of GPUs.
+                                                                                                                                                                                           Figure 16. Performance under various SLO scale.
+MixFusion only outperforms a little over Mixed-Cache when
+serving SDXL model due to similar SLO constraints, it mani-
+fests up to 11.4 % SLO improvement and 1.1× higher goodput                                                                                                                      of 3 corresponds to one request per resolution. The baseline
+than Mixed-Cache with over 90 % SLO on SD3. Moreover,                                                                                                                           benefits from batching only when requests share the same
+MixFusion demonstrates superior performance when high-                                                                                                                          resolution, resulting in rapid throughput gains as batch size
+resolution requests dominate the workload, highlighting its                                                                                                                     increases. Patched Batching depicts an average 13 % through-
+scalability under various scenarios.                                                                                                                                            put improvements by processing diverse resolution requests
+SLO Scale. We further evaluate MixFusion under different                                                                                                                        concurrently. The overhead introduced by splitting is mini-
+SLO scales to examine its behavior across varying constraints.                                                                                                                  mal, particularly for SD3, which operates on token sequences
+We adopt the same configurations as in the workflow study                                                                                                                       rather than 2D latent states. SDXL exhibits higher relative
+and display the results in Figure 16. Notably, NIRVANA out-                                                                                                                     improvement than SD3 due to its lower reliance on atten-
+performs Mixed-Cache when the SLO is set to 3× the baseline                                                                                                                     tion, which limits the benefits of batching. We observe that
+latency on SD3. This advantage comes from the ORCA sched-                                                                                                                       SD3 incurs higher cache management overhead due to a
+uling algorithm, which prioritizes newly arriving requests,                                                                                                                     greater number of blocks per denoising step (24 in SD3 ver-
+enabling more requests to complete within strict deadlines.                                                                                                                     sus 7 in SDXL). Overall, cache management overhead scales
+Nevertheless, MixFusion still achieves higher SLO satisfac-                                                                                                                     modestly with batch size, demonstrating the efficiency of
+tion than NIRVANA.                                                                                                                                                              MixFusion’s batched cache handling.
+                                                                                                                                                                                   Patch size analysis. We evaluate MixFusion’s perfor-
+8.3                                      Ablation Study                                                                                                                         mance across different patch size configurations. As illus-
+Performance Breakdown We assess the performance im-                                                                                                                             trated in Figure 18, throughput increases with the patch size
+pact of two extra components introduced by MixFusion,                                                                                                                           growing, which primarily stems from less splitting overhead,
+splitting and cache management, by comparing the base-                                                                                                                          which explains why SDXL manifests a larger decline than
+line. We exploit a variant called Patched Batching (which                                                                                                                       SD3 at smaller patch sizes. To mitigate this effect, we con-
+applies only the patch-based batching in Section 4) and Mix-                                                                                                                    figure the patch size as the greatest common divisor of all
+Fusion(which also includes caching from Section 5) to ex-                                                                                                                       resolutions within the batch. Additionally, our scheduling
+plore the benefits and overhead. Figure 17 presents the la-                                                                                                                     algorithm predicts post-batching latency to prevent through-
+tency reductions achieved by each technique. A batch size                                                                                                                       put decline due to unreasonable resolution combination.
+
+
+
+                                                                                                                                                                          531
+MixFusion: A Patch-Level Parallel Serving System for Mixed-Resolution Diffusion...                                                                  PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+                        Naive Batch           Patched Batching                MixFusion                                                 Distrifusion Throughput                  MixFusion Throughput            MixFusion Latency, 1GPU
+                        Split Overhead        Cache Overhead                                                                            Distrifusion Memory                      MixFusion Memory
+
+
+
+
+                                                                                                                                                                                                                                    Consumed Memory(GB)
+                                                                                                                                                                                     80                                       120
+
+
+
+
+                                                                                                                            Throughput(Req/s)
+                                                              30                                                                                4
+                                                                                                                                                                                          3
+                                                                                                                                                                                                                              100
+Latency (s)
+
+
+
+
+                                                Latency (s)
+              20                                                                                                                                                                     60
+                                                                                                                                                                                                                              80
+                                                              20                                                                                                                          2
+                                                                                                                                                2                                    40                                       60
+              10                                                                                                                                                                          1                                   40
+                                                              10                                                                                                                     20
+                                                                                                                                                                                                                              20
+                                                                                                                                                0                                    0    0                                   0
+               0                                               0                                                                                       3        6         9     12            3         6       9        12
+                    3     6       9      12                        3    6         9          12                                                            Batch Size per GPU                     Batch Size per GPU
+                         Batch Size                                    Batch Size                                                                                SDXL                                    SD3
+                           SDXL                                           SD3
+
+
+                                                                                                        Figure 19. Patched batching on throughput and Memory.
+       Figure 17. Latency Overhead from the extra operation.
+
+                                                                                                                                                              Patched Cache Latency               Full Cache Latency
+                                                                                                                                                              Patched Cache Savings               Full Cache Savings
+                         Patch Size 64        Patch Size 128                Patch Size 256
+
+
+
+
+                                                                                                                                                                                                                                                          Computation Savings
+                                                                                                                           1.5                                                        0.8 3                                                 0.8
+                                                       0.4
+
+
+
+
+                                                                                                        Avg. Latency (s)
+              0.4
+Throughput
+
+
+
+
+                                                       0.3                                                                 1.0                                                        0.6 2                                                 0.6
+
+                                                       0.2
+              0.2                                                                                                          0.5                                                        0.4 1                                                 0.4
+                                                       0.1
+                                                                                                                           0.0                                                        0.2 0                                                 0.2
+              0.0                                      0.0                                                                                           512            768       1024                512          768        1024
+                    3      6       9     12                        3   6          9          12                                                               Resolution                                    Resolution
+                          Batch Size                                   Batch Size                                                                               SDXL                                           SD3
+                            SDXL                                          SD3
+
+
+
+Figure 18. Average throughput changing with patch sizes.                                                Figure 20. Computation savings from patched Vs. full imgs.
+
+                                                                                                        DistriFusion, owing to its use of up-to-date data rather than
+   Comparison with DistriFusion. Figure 19 presents the                                                 stale KV caches.
+average throughput and memory consumption of MixFu-                                                     Caching Benefits We conduct an experiment to compare
+sion and DistriFusion. For this evaluation, caching and sched-                                          the effectiveness of patch-level caching versus whole-image
+uling are disabled. We evaluate on 8 GPUs, where batch size                                             caching. We incorporate whole image caching into Patched
+equals 3 means every GPU has each of three resolution re-                                               Batching Inference and determine that a block can only be
+quests on average. MixFusion dispatches these requests                                                  skipped if all patches in the current batch meet the similarity
+evenly to all 8 GPUs, whereas DistriFusion runs as many                                                 threshold. The batch size is set to the maximum capacity
+requests concurrently as possible. Figure 19 demonstrates                                               supported by our GPU. We measure both the average la-
+that MixFusion’s throughput across 8 GPUs increases with                                                tency per request and the computational savings, defined as:
+batch size, reflecting initially low GPU utilization at smaller                                         𝑡𝑜𝑡𝑎𝑙_𝑠𝑘𝑖𝑝𝑒𝑑_𝑝𝑎𝑡𝑐ℎ𝑒𝑠
+batch sizes. In contrast, Distrifusion achieves lower through-                                          / (𝑝𝑎𝑡𝑐ℎ_𝑛𝑢𝑚 × 𝑏𝑙𝑜𝑐𝑘𝑠_𝑛𝑢𝑚 × 𝑠𝑡𝑒𝑝_𝑛𝑢𝑚). Figure 20 demon-
+put on SDXL due to synchronization overhead. Moreover,                                                  strates that patch-level cache reuse consistently outperforms
+its communication overhead increases significantly as batch                                             whole-image caching for both models. SD3 exhibits smaller
+size grows, leading to throughput decreasing on SD3.                                                    time savings compared to SDXL, reflecting its lower over-
+   We further evaluate image quality across varying patch                                               all computation requirements. Note that the computation
+sizes using Peak Signal-to-Noise Ratio (PSNR) [16] and Struc-                                           savings reported in Figure 20 differ slightly from those in
+tural Similarity Index Measure (SSIM) [59] as metrics. PSNR                                             Figure 7, as the latter does not account for cumulative errors.
+measures differences in pixel intensity, whereas SSIM quan-                                                Parameter Decision We further conduct experiments
+tifies similarity between two images. Inf in PSNR indicates                                             to explore the sensitivity of two models: the Throughput
+0 pixel-wise difference, and an SSIM of 1.0 denotes 100 %                                               Analyzer and the Cache Predictor. We first vary the number
+structural similarity. We generate 100 1024 × 1024 images                                               of layers and hidden dimensions of the MLP and evaluate
+using either DistriFusion or MixFusion, and compare them                                                the resulting accuracy. Table 5 shows that a configuration of
+against images synthesized by the original model. Table 4                                               (32, 32, 16) is sufficient for SDXL, while (64, 64, 16) suffices
+shows that larger patch sizes result in more accurate images                                            for SD3. Increasing the depth or hidden dimensions beyond
+generated by MixFusion. The higher quality score compared                                               these settings leads to overfitting and degrades accuracy.
+to DistriFusion originates from pixel approximations in the                                             In addition, SD3’s throughput is easier to predict than that
+Patch Edge Stitcher, whereas the SD3 model achieves 100 %                                               of SDXL, as SD3 does not include convolution operations,
+accuracy due to the absence of convolution operations. No-                                              which introduce non-linear complexities. We also study the
+tably, MixFusion still attains higher PSNR and SSIM than                                                impact of the Cache Predictor. We first vary the similarity
+
+
+
+                                                                                                  532
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                Desen Sun, Zepeng Zhao, and Yuke Wang
+
+
+         Table 5. Parameter setting for MLP model.                               [3] Sohaib Ahmad, Hui Guan, Brian D. Friedman, Thomas Williams,
+                                                                                     Ramesh K. Sitaraman, and Thomas Woo. 2024.                 Proteus: A
+                        Parameters         SDXL    SD3                               High-Throughput Inference-Serving System with Accuracy Scal-
+                         (16, 16, 8)        0.77   0.92                              ing. In Proceedings of the 29th ACM International Conference on
+                        (32, 32, 16)        0.81   0.95                              Architectural Support for Programming Languages and Operating
+                        (64, 64, 16)        0.79   0.96                              Systems, Volume 1 (, La Jolla, CA, USA,) (ASPLOS ’24). Association
+                      (16, 32, 32, 16)      0.77   0.93                              for Computing Machinery, New York, NY, USA, 318–334. doi:10.1145/
+                    (16, 32, 64, 32, 16)    0.79   0.94                              3617232.3624849
+                                                                                 [4] Sohaib Ahmad, Qizheng Yang, Haoliang Wang, Ramesh K. Sitaraman,
+                                                                                     and Hui Guan. 2025. DiffServe: Efficiently Serving Text-to-Image Diffu-
+         Table 6. Parameter setting for MLP model.                                   sion Models with Query-Aware Model Scaling. In Eighth Conference
+                                                                                     on Machine Learning and Systems. https://openreview.net/forum?
+                       Parameters     SDXL           SD3                             id=1N3ShLfcTf
+                  ntrees=50 mdepth=5   0.75          0.72                        [5] Aleksey Bokhovkin, Quan Meng, Shubham Tulsiani, and Angela Dai.
+                 ntrees=100 mdepth=5   0.75          0.72                            2025. SceneFactor: Factored Latent 3D Diffusion for Controllable
+                 ntrees=100 mdepth=20 0.75           0.74                            3D Scene Generation. In Proceedings of the IEEE/CVF Conference on
+                 ntrees=100 mdepth=50 0.75           0.74                            Computer Vision and Pattern Recognition (CVPR). 628–639.
+                 ntrees=500 mdepth=5   0.75          0.72                        [6] Haoyu Chen, Xiaojie Xu, Wenbo Li, Jingjing Ren, Tian Ye, Songhua
+                                                                                     Liu, Ying-Cong Chen, Lei Zhu, and Xinchao Wang. 2025. POSTA:
+                                                                                     A Go-to Framework for Customized Artistic Poster Generation. In
+threshold and measure its sensitivity to image quality. Ta-                          Proceedings of the IEEE/CVF Conference on Computer Vision and
+ble 4 presents the generation quality with various thresholds.                       Pattern Recognition (CVPR). 28694–28704.
+                                                                                 [7] Jinyu Chen, Wenchao Xu, Zicong Hong, Song Guo, Haozhao Wang, Jie
+reports the generation quality under different thresholds.                           Zhang, and Deze Zeng. 2024. OTAS: An Elastic Transformer Serving
+Even with a large threshold of 1, MixFusion consistently                             System via Token Adaptation. arXiv:2401.05031 [cs.DC]
+achieves higher quality than Distrifusion, demonstrating the                     [8] Jiuhai Chen, Zhiyang Xu, Xichen Pan, Yushi Hu, Can Qin, Tom
+robustness of MixFusion. Accordingly, we use 0.1 as the                              Goldstein, Lifu Huang, Tianyi Zhou, Saining Xie, Silvio Savarese, Le
+default threshold throughout the paper unless otherwise                              Xue, Caiming Xiong, and Ran Xu. 2025. BLIP3-o: A Family of Fully
+                                                                                     Open Unified Multimodal Models-Architecture, Training and Dataset.
+specified, as a smaller threshold does not bring a significant                       arXiv:2505.09568 [cs.CV] https://arxiv.org/abs/2505.09568
+quality benefit. Finally, we evaluate the accuracy of the ran-                   [9] Xinlei Chen, Hao Fang, Tsung-Yi Lin, Ramakrishna Vedantam,
+dom forest model under different parameter settings. Table 6                         Saurabh Gupta, Piotr Dollar, and C. Lawrence Zitnick. 2015. Mi-
+shows that SDXL can employ a lightweight configuration                               crosoft COCO Captions: Data Collection and Evaluation Server.
+with 50 trees and a maximum depth of 5, whereas SD3 re-                              arXiv:1504.00325 [cs.CV]
+                                                                                [10] Xinle Cheng, Zhuoming Chen, and Zhihao Jia. 2025. CAT Pruning:
+quires 100 trees with a maximum depth of 20 to achieve                               Cluster-Aware Token Pruning For Text-to-Image Diffusion Models.
+higher accuracy.                                                                     arXiv:2502.00433 [cs.CV] https://arxiv.org/abs/2502.00433
+                                                                                [11] Prafulla Dhariwal and Alexander Nichol. 2021. Diffusion Models
+9    Conclusion                                                                      Beat GANs on Image Synthesis. In Advances in Neural Information
+                                                                                     Processing Systems, M. Ranzato, A. Beygelzimer, Y. Dauphin, P.S.
+This paper proposes MixFusion, an efficient serving sys-                             Liang, and J. Wortman Vaughan (Eds.), Vol. 34. Curran Associates,
+tem for mixed-resolution diffusion models. With the help                             Inc., 8780–8794. https://proceedings.neurips.cc/paper_files/paper/
+of patch-based mixed-resolution inference and patch-level                            2021/file/49ad23d1ec9fa4bd8d77d02681df5cfa-Paper.pdf
+cache reuse strategy, MixFusion succeeds in processing re-                      [12] Abdelrahman Eldesokey and Peter Wonka. 2025. Build-A-Scene: Inter-
+quests concurrently regardless of resolutions, achieving bet-                        active 3D Layout Control for Diffusion-Based Image Generation. In The
+                                                                                     Thirteenth International Conference on Learning Representations.
+ter performance. In addition, MixFusion incorporates an                              https://openreview.net/forum?id=gg6dPtdC1C
+SLO-aware schedule algorithm to maximize the number of                          [13] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim Entezari, Jonas
+requests meeting their SLO requirements. In addition, we                             Müller, Harry Saini, Yam Levi, Dominik Lorenz, Axel Sauer, Fred-
+further prove that our system is easy to scale up to a larger                        eric Boesel, Dustin Podell, Tim Dockhorn, Zion English, Kyle Lacey,
+distributed environment and still outperforms the most ad-                           Alex Goodwin, Yannik Marek, and Robin Rombach. 2024. Scaling
+                                                                                     Rectified Flow Transformers for High-Resolution Image Synthesis.
+vanced patch-based diffusion research.                                               arXiv:2403.03206 [cs.CV] https://arxiv.org/abs/2403.03206
+                                                                                [14] Jiarui Fang, Jinzhe Pan, Xibo Sun, Aoyu Li, and Jiannan Wang. 2024.
+References                                                                           xDiT: an Inference Engine for Diffusion Transformers (DiTs) with
+ [1] Adobe. 2023. Create with Adobe Firefly generative AI. https://www.              Massive Parallelism. arXiv:2411.01738 [cs.DC] https://arxiv.org/abs/
+     adobe.com/products/firefly.html.                                                2411.01738
+ [2] Shubham Agarwal, Subrata Mitra, Sarthak Chakraborty, Srikrishna            [15] Jiarui Fang, Jinzhe Pan, Jiannan Wang, Aoyu Li, and Xibo Sun. 2024.
+     Karanam, Koyel Mukherjee, and Shiv Kumar Saini. 2024. Approxi-                  PipeFusion: Patch-level Pipeline Parallelism for Diffusion Transform-
+     mate Caching for Efficiently Serving Text-to-Image Diffusion Mod-               ers Inference. arXiv:2405.14430 [cs.CV] https://arxiv.org/abs/2405.
+     els. In 21st USENIX Symposium on Networked Systems Design and                   14430
+     Implementation (NSDI 24). USENIX Association, Santa Clara, CA,             [16] Fernando A. Fardo, Victor H. Conforto, Francisco C. de Oliveira,
+     1173–1189. https://www.usenix.org/conference/nsdi24/presentation/               and Paulo S. Rodrigues. 2016. A Formal Evaluation of PSNR as
+     agarwal-shubham                                                                 Quality Measurement Parameter for Image Segmentation Algorithms.
+                                                                                     arXiv:1605.07116 [cs.CV] https://arxiv.org/abs/1605.07116
+
+
+
+                                                                          533
+MixFusion: A Patch-Level Parallel Serving System for Mixed-Resolution Diffusion...            PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+[17] Yifan Gao, Zihang Lin, Chuanbin Liu, Min Zhou, Tiezheng Ge,                       [29] Muyang Li, Ji Lin, Chenlin Meng, Stefano Ermon, Song Han, and
+     Bo Zheng, and Hongtao Xie. 2025. PosterMaker: Towards High-                            Jun-Yan Zhu. 2022. Efficient Spatially Sparse Inference for Condi-
+     Quality Product Poster Generation with Accurate Text Rendering.                        tional GANs and Diffusion Models. In Advances in Neural Information
+     In Proceedings of the IEEE/CVF Conference on Computer Vision and                       Processing Systems, S. Koyejo, S. Mohamed, A. Agarwal, D. Belgrave,
+     Pattern Recognition (CVPR). 8083–8093.                                                 K. Cho, and A. Oh (Eds.), Vol. 35. Curran Associates, Inc., 28858–
+[18] Jiatao Gu, Shuangfei Zhai, Yizhe Zhang, Joshua M. Susskind, and                        28873. https://proceedings.neurips.cc/paper_files/paper/2022/file/
+     Navdeep Jaitly. 2024. Matryoshka Diffusion Models. In The Twelfth                      b9603de9e49d0838e53b6c9cf9d06556-Paper-Conference.pdf
+     International Conference on Learning Representations.           https://          [30] Zongming Li, Tianheng Cheng, Shoufa Chen, Peize Sun, Haocheng
+     openreview.net/forum?id=tOzCcDdH9O                                                     Shen, Longjin Ran, Xiaoxin Chen, Wenyu Liu, and Xinggang Wang.
+[19] Arpan Gujarati, Reza Karimi, Safya Alzayat, Wei Hao, Antoine                           2024. ControlAR: Controllable Image Generation with Autoregressive
+     Kaufmann, Ymir Vigfusson, and Jonathan Mace. 2020. Serving                             Models. arXiv:2410.02705 [cs.CV] https://arxiv.org/abs/2410.02705
+     DNNs like Clockwork: Performance Predictability from the Bottom                   [31] Zhimin Li, Jianwei Zhang, Qin Lin, Jiangfeng Xiong, Yanxin Long,
+     Up. In 14th USENIX Symposium on Operating Systems Design and                           Xinchi Deng, Yingfang Zhang, Xingchao Liu, Minbin Huang, Zedong
+     Implementation (OSDI 20). USENIX Association, 443–462. https:                          Xiao, Dayou Chen, Jiajun He, Jiahao Li, Wenyue Li, Chen Zhang,
+     //www.usenix.org/conference/osdi20/presentation/gujarati                               Rongwei Quan, Jianxiang Lu, Jiabin Huang, Xiaoyan Yuan, Xiaoxiao
+[20] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep                      Zheng, Yixuan Li, Jihong Zhang, Chao Zhang, Meng Chen, Jie Liu,
+     residual learning for image recognition. In Proceedings of the IEEE                    Zheng Fang, Weiyan Wang, Jinbao Xue, Yangyu Tao, Jianchen Zhu,
+     conference on computer vision and pattern recognition. 770–778.                        Kai Liu, Sihuan Lin, Yifu Sun, Yun Li, Dongdong Wang, Mingtao Chen,
+[21] Jaehoon Heo, Adiwena Putra, Jieon Yoon, Sungwoong Yune, Hangyeol                       Zhichao Hu, Xiao Xiao, Yan Chen, Yuhong Liu, Wei Liu, Di Wang,
+     Lee, Ji-Hoon Kim, and Joo-Young Kim. 2025. EXION: Exploiting                           Yong Yang, Jie Jiang, and Qinglin Lu. 2024. Hunyuan-DiT: A Powerful
+     Inter-and Intra-Iteration Output Sparsity for Diffusion Models. In                     Multi-Resolution Diffusion Transformer with Fine-Grained Chinese
+     2025 IEEE International Symposium on High Performance Computer                         Understanding. arXiv:2405.08748 [cs.CV] https://arxiv.org/abs/2405.
+     Architecture (HPCA). 324–337. doi:10.1109/HPCA61900.2025.00034                         08748
+[22] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bernhard                      [32] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng,
+     Nessler, and Sepp Hochreiter. 2017. GANs Trained by a Two Time-                        Xin Jin, Yanping Huang, Zhifeng Chen, Hao Zhang, Joseph E. Gon-
+     Scale Update Rule Converge to a Local Nash Equilibrium. In Advances                    zalez, and Ion Stoica. 2023. AlpaServe: Statistical Multiplexing
+     in Neural Information Processing Systems, I. Guyon, U. Von Luxburg,                    with Model Parallelism for Deep Learning Serving. In 17th USENIX
+     S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan, and R. Garnett (Eds.),              Symposium on Operating Systems Design and Implementation (OSDI
+     Vol. 30. Curran Associates, Inc. https://proceedings.neurips.cc/paper_                 23). USENIX Association, Boston, MA, 663–679. https://www.usenix.
+     files/paper/2017/file/8a1d694707eb0fefe65871369074926d-Paper.pdf                       org/conference/osdi23/presentation/li-zhouhan
+[23] Runhui Huang, Chunwei Wang, Junwei Yang, Guansong Lu, Yun-                        [33] Shiyu Liu, Yucheng Han, Peng Xing, Fukun Yin, Rui Wang, Wei Cheng,
+     long Yuan, Jianhua Han, Lu Hou, Wei Zhang, Lanqing Hong, Heng-                         Jiaqi Liao, Yingming Wang, Honghao Fu, Chunrui Han, Guopeng Li,
+     shuang Zhao, and Hang Xu. 2025. ILLUME+: Illuminating Unified                          Yuang Peng, Quan Sun, Jingwei Wu, Yan Cai, Zheng Ge, Ranchen
+     MLLM with Dual Visual Tokenization and Diffusion Refinement.                           Ming, Lei Xia, Xianfang Zeng, Yibo Zhu, Binxing Jiao, Xiangyu Zhang,
+     arXiv:2504.01934 [cs.CV] https://arxiv.org/abs/2504.01934                              Gang Yu, and Daxin Jiang. 2025. Step1X-Edit: A Practical Framework
+[24] Zehuan Huang, Yuan-Chen Guo, Xingqiao An, Yunhan Yang, Yang-                           for General Image Editing. arXiv:2504.17761 [cs.CV] https://arxiv.org/
+     guang Li, Zi-Xin Zou, Ding Liang, Xihui Liu, Yan-Pei Cao, and Lu                       abs/2504.17761
+     Sheng. 2025. MIDI: Multi-Instance Diffusion for Single Image to 3D                [34] Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan LI, and
+     Scene Generation. In Proceedings of the IEEE/CVF Conference on                         Jun Zhu. 2022. DPM-Solver: A Fast ODE Solver for Diffusion Prob-
+     Computer Vision and Pattern Recognition (CVPR). 23646–23657.                           abilistic Model Sampling in Around 10 Steps. In Advances in Neural
+[25] Xiaoxiao Jiang, Suyi Li, Lingyun Yang, Tianyu Feng, Zhipeng Di, Weiyi                  Information Processing Systems, S. Koyejo, S. Mohamed, A. Agarwal,
+     Lu, Guoxuan Zhu, Xiu Lin, Kan Liu, Yinghao Yu, Tao Lan, Guodong                        D. Belgrave, K. Cho, and A. Oh (Eds.), Vol. 35. Curran Associates, Inc.,
+     Yang, Lin Qu, Liping Zhang, and Wei Wang. 2025. InstGenIE: Gen-                        5775–5787. https://proceedings.neurips.cc/paper_files/paper/2022/
+     erative Image Editing Made Efficient with Mask-aware Caching and                       file/260a14acce2a89dad36adc8eefe7c59e-Paper-Conference.pdf
+     Scheduling. arXiv:2505.20600 [cs.DC] https://arxiv.org/abs/2505.20600             [35] Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan Li, and
+[26] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin                            Jun Zhu. 2023. DPM-Solver++: Fast Solver for Guided Sampling of
+     Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Sto-                           Diffusion Probabilistic Models. arXiv:2211.01095 [cs.LG]
+     ica. 2023. Efficient Memory Management for Large Language Model                   [36] Simian Luo, Yiqin Tan, Longbo Huang, Jian Li, and Hang Zhao. 2024.
+     Serving with PagedAttention. In Proceedings of the 29th Symposium                      Latent Consistency Models: Synthesizing High-Resolution Images with
+     on Operating Systems Principles (<conf-loc>, <city>Koblenz</city>,                     Few-step Inference. https://openreview.net/forum?id=duBCwjb68o
+     <country>Germany</country>, </conf-loc>) (SOSP ’23). Association                  [37] Jian Ma, Yonglin Deng, Chen Chen, Nanyang Du, Haonan Lu, and
+     for Computing Machinery, New York, NY, USA, 611–626. doi:10.1145/                      Zhenyu Yang. 2025. GlyphDraw2: Automatic Generation of Complex
+     3600006.3613165                                                                        Glyph Posters with Diffusion Models and Large Language Models.
+[27] Benjamin Lefaudeux, Francisco Massa, Diana Liskovich, Wenhan                           Proceedings of the AAAI Conference on Artificial Intelligence 39, 6
+     Xiong, Vittorio Caggiano, Sean Naren, Min Xu, Jieru Hu, Marta Tin-                     (Apr. 2025), 5955–5963. doi:10.1609/aaai.v39i6.32636
+     tore, Susan Zhang, Patrick Labatut, Daniel Haziza, Luca Wehrstedt,                [38] Xinyin Ma, Gongfan Fang, Michael Bi Mi, and Xinchao Wang.
+     Jeremy Reizenstein, and Grigory Sizov. 2022. xFormers: A modu-                         2024. Learning-to-Cache: Accelerating Diffusion Transformer via
+     lar and hackable Transformer modelling library. https://github.com/                    Layer Caching. In The Thirty-eighth Annual Conference on Neural
+     facebookresearch/xformers.                                                             Information Processing Systems. https://openreview.net/forum?id=
+[28] Muyang Li, Tianle Cai, Jiaxin Cao, Qinsheng Zhang, Han Cai, Junjie Bai,                ZupoMzMNrO
+     Yangqing Jia, Ming-Yu Liu, Kai Li, and Song Han. 2024. DistriFusion:              [39] Xinyin Ma, Gongfan Fang, and Xinchao Wang. 2024. DeepCache:
+     Distributed Parallel Inference for High-Resolution Diffusion Models.                   Accelerating Diffusion Models for Free. In 2024 IEEE/CVF Conference
+     In Proceedings of the IEEE/CVF Conference on Computer Vision and                       on Computer Vision and Pattern Recognition (CVPR). 15762–15772.
+     Pattern Recognition (CVPR).                                                            doi:10.1109/CVPR52733.2024.01492
+                                                                                       [40] Midjourney. 2023. midjourney. https://www.midjourney.com.
+
+
+
+                                                                                 534
+PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia                                                     Desen Sun, Zepeng Zhao, and Yuke Wang
+
+
+[41] Alexander Quinn Nichol, Prafulla Dhariwal, Aditya Ramesh,                            Karagol Ayan, Tim Salimans, Jonathan Ho, David J Fleet, and Mo-
+     Pranav Shyam, Pamela Mishkin, Bob Mcgrew, Ilya Sutskever,                            hammad Norouzi. 2022. Photorealistic Text-to-Image Diffusion
+     and Mark Chen. 2022. GLIDE: Towards Photorealistic Image                             Models with Deep Language Understanding. In Advances in Neural
+     Generation and Editing with Text-Guided Diffusion Models. In                         Information Processing Systems, S. Koyejo, S. Mohamed, A. Agarwal,
+     Proceedings of the 39th International Conference on Machine                          D. Belgrave, K. Cho, and A. Oh (Eds.), Vol. 35. Curran Associates, Inc.,
+     Learning (Proceedings of Machine Learning Research, Vol. 162), Ka-                   36479–36494. https://proceedings.neurips.cc/paper_files/paper/2022/
+     malika Chaudhuri, Stefanie Jegelka, Le Song, Csaba Szepesvari, Gang                  file/ec795aeadae0b7d230fa35cbaf04c041-Paper-Conference.pdf
+     Niu, and Sivan Sabato (Eds.). PMLR, 16784–16804. https://proceedings.           [53] Desen Sun, Henry Tian, Tim Lu, and Sihang Liu. 2024. Flex-
+     mlr.press/v162/nichol22a.html                                                        Cache: Flexible Approximate Cache System for Video Diffusion.
+[42] OpenAI. 2023. Dalle 3 System Card. https://cdn.openai.com/papers/                    arXiv:2501.04012 [cs.MM] https://arxiv.org/abs/2501.04012
+     DALL_E_3_System_Card.pdf.                                                       [54] Mingze Sun, Junhao Chen, Junting Dong, Yurun Chen, Xinyu Jiang,
+[43] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James                           Shiwei Mao, Puhua Jiang, Jingbo Wang, Bo Dai, and Ruqi Huang.
+     Bradbury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia                        2025. DRiVE: Diffusion-based Rigging Empowers Generation of Ver-
+     Gimelshein, Luca Antiga, Alban Desmaison, Andreas Kopf, Edward                       satile and Expressive Characters. In Proceedings of the IEEE/CVF
+     Yang, Zachary DeVito, Martin Raison, Alykhan Tejani, Sasank Chil-                    Conference on Computer Vision and Pattern Recognition (CVPR).
+     amkurthy, Benoit Steiner, Lu Fang, Junjie Bai, and Soumith Chin-                     21170–21180.
+     tala. 2019. PyTorch: An Imperative Style, High-Performance Deep                 [55] A Vaswani. 2017. Attention is all you need. Advances in Neural
+     Learning Library. In Advances in Neural Information Processing                       Information Processing Systems (2017).
+     Systems, H. Wallach, H. Larochelle, A. Beygelzimer, F. d'Alché-                 [56] Patrick von Platen, Suraj Patil, Anton Lozhkov, Pedro Cuenca, Nathan
+     Buc, E. Fox, and R. Garnett (Eds.), Vol. 32. Curran Associates,                      Lambert, Kashif Rasul, Mishig Davaadorj, and Thomas Wolf. 2022.
+     Inc.      https://proceedings.neurips.cc/paper_files/paper/2019/file/                Diffusers: State-of-the-art diffusion models. https://github.com/
+     bdbca288fee7f92f2bfa9f7012727740-Paper.pdf                                           huggingface/diffusers.
+[44] Fabian Pedregosa, Gaël Varoquaux, Alexandre Gramfort, Vincent                   [57] Chunyang Wang, Yuebin Bai, and Desen Sun. 2023. CD-MSA: Coop-
+     Michel, Bertrand Thirion, Olivier Grisel, Mathieu Blondel, Peter Pret-               erative and Deadline-Aware Scheduling for Efficient Multi-Tenancy
+     tenhofer, Ron Weiss, Vincent Dubourg, Jake Vanderplas, Alexandre                     on DNN Accelerators. IEEE Transactions on Parallel and Distributed
+     Passos, David Cournapeau, Matthieu Brucher, Matthieu Perrot, and                     Systems 34, 7 (2023), 2091–2106. doi:10.1109/TPDS.2023.3276759
+     Édouard Duchesnay. 2011. Scikit-learn: Machine Learning in Python.              [58] Xiyu Wang, Yufei Wang, Satoshi Tsutsui, Weisi Lin, Bihan Wen, and
+     J. Mach. Learn. Res. 12 (nov 2011), 2825–2830.                                       Alex Kot. 2024. Evolving Storytelling: Benchmarks and Methods for
+[45] William Peebles and Saining Xie. 2023. Scalable Diffusion Models                     New Character Customization with Diffusion Models. In Proceedings
+     with Transformers. In 2023 IEEE/CVF International Conference on                      of the 32nd ACM International Conference on Multimedia (Melbourne
+     Computer Vision (ICCV). 4172–4182. doi:10.1109/ICCV51070.2023.                       VIC, Australia) (MM ’24). Association for Computing Machinery, New
+     00387                                                                                York, NY, USA, 3751–3760. doi:10.1145/3664647.3681373
+[46] Dustin Podell, Zion English, Kyle Lacey, Andreas Blattmann, Tim                 [59] Zhou Wang, A.C. Bovik, H.R. Sheikh, and E.P. Simoncelli. 2004. Image
+     Dockhorn, Jonas Müller, Joe Penna, and Robin Rombach. 2023. SDXL:                    quality assessment: from error visibility to structural similarity. IEEE
+     Improving Latent Diffusion Models for High-Resolution Image Syn-                     Transactions on Image Processing 13, 4 (2004), 600–612. doi:10.1109/
+     thesis. arXiv:2307.01952 [cs.CV]                                                     TIP.2003.819861
+[47] Junxiang Qiu, Lin Liu, Shuo Wang, Jinda Lu, Kezhou Chen, and Yanbin             [60] Zijie J. Wang, Evan Montoya, David Munechika, Haoyang Yang, Ben-
+     Hao. 2025. Accelerating Diffusion Transformer via Gradient-Optimized                 jamin Hoover, and Duen Horng Chau. 2023. DiffusionDB: A Large-
+     Cache. arXiv:2503.05156 [cs.CV] https://arxiv.org/abs/2503.05156                     scale Prompt Gallery Dataset for Text-to-Image Generative Models.
+[48] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel                   In Proceedings of the 61st Annual Meeting of the Association for
+     Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin,                 Computational Linguistics (Volume 1: Long Papers), Anna Rogers, Jor-
+     Jack Clark, Gretchen Krueger, and Ilya Sutskever. 2021. Learn-                       dan Boyd-Graber, and Naoaki Okazaki (Eds.). Association for Computa-
+     ing Transferable Visual Models From Natural Language Supervi-                        tional Linguistics, Toronto, Canada, 893–911. doi:10.18653/v1/2023.acl-
+     sion. In Proceedings of the 38th International Conference on Machine                 long.51
+     Learning (Proceedings of Machine Learning Research, Vol. 139), Ma-              [61] Felix Wimbauer, Bichen Wu, Edgar Schoenfeld, Xiaoliang Dai, Ji Hou,
+     rina Meila and Tong Zhang (Eds.). PMLR, 8748–8763.             https://              Zijian He, Artsiom Sanakoyeu, Peizhao Zhang, Sam Tsai, Jonas Kohler,
+     proceedings.mlr.press/v139/radford21a.html                                           Christian Rupprecht, Daniel Cremers, Peter Vajda, and Jialiang Wang.
+[49] Sebastian Raschka, Joshua Patterson, and Corey Nolet. 2020. Machine                  2024. Cache Me if You Can: Accelerating Diffusion Models through
+     Learning in Python: Main developments and technology trends in data                  Block Caching. In 2024 IEEE/CVF Conference on Computer Vision
+     science, machine learning, and artificial intelligence. arXiv preprint               and Pattern Recognition (CVPR). 6211–6220. doi:10.1109/CVPR52733.
+     arXiv:2002.04803 (2020).                                                             2024.00594
+[50] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser,                [62] Yuchen Xia, Divyam Sharma, Yichao Yuan, Souvik Kundu, and Nishil
+     and Björn Ommer. 2022. High-Resolution Image Synthesis with La-                      Talati. 2025. MoDM: Efficient Serving for Image Generation via
+     tent Diffusion Models. In 2022 IEEE/CVF Conference on Computer                       Mixture-of-Diffusion Models. arXiv:2503.11972 [cs.DC] https://arxiv.
+     Vision and Pattern Recognition (CVPR). 10674–10685. doi:10.1109/                     org/abs/2503.11972
+     CVPR52688.2022.01042                                                            [63] Jingyuan Yang, Jiawei Feng, and Hui Huang. 2024. EmoGen: Emo-
+[51] Francisco Romero, Qian Li, Neeraja J. Yadwadkar, and Christos                        tional Image Content Generation with Text-to-Image Diffusion Mod-
+     Kozyrakis. 2021. INFaaS: Automated Model-less Inference Serving.                     els. In 2024 IEEE/CVF Conference on Computer Vision and Pattern
+     In 2021 USENIX Annual Technical Conference (USENIX ATC 21).                          Recognition (CVPR). 6358–6368. doi:10.1109/CVPR52733.2024.00608
+     USENIX Association, 397–411. https://www.usenix.org/conference/                 [64] Yuanbo Yang, Jiahao Shao, Xinyang Li, Yujun Shen, Andreas Geiger,
+     atc21/presentation/romero                                                            and Yiyi Liao. 2025. Prometheus: 3D-Aware Latent Diffusion Models
+[52] Chitwan Saharia, William Chan, Saurabh Saxena, Lala Li, Jay Whang,                   for Feed-Forward Text-to-3D Scene Generation. In Proceedings of the
+     Emily L Denton, Kamyar Ghasemipour, Raphael Gontijo Lopes, Burcu                     IEEE/CVF Conference on Computer Vision and Pattern Recognition
+                                                                                          (CVPR). 2857–2869.
+
+
+
+
+                                                                               535
+MixFusion: A Patch-Level Parallel Serving System for Mixed-Resolution Diffusion...         PPoPP ’26, January 31 – February 4, 2026, Sydney, NSW, Australia
+
+
+[65] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim,                     [68] Jintao Zhang, Haoxu Wang, Kai Jiang, Shuo Yang, Kaiwen Zheng,
+     and Byung-Gon Chun. 2022. Orca: A Distributed Serving Sys-                          Haocheng Xi, Ziteng Wang, Hongzhou Zhu, Min Zhao, Ion Stoica,
+     tem for Transformer-Based Generative Models. In 16th USENIX                         Joseph E. Gonzalez, Jun Zhu, and Jianfei Chen. 2025. SLA: Beyond
+     Symposium on Operating Systems Design and Implementation (OSDI                      Sparsity in Diffusion Transformers via Fine-Tunable Sparse-Linear
+     22). USENIX Association, Carlsbad, CA, 521–538. https://www.usenix.                 Attention. arXiv:2509.24006 [cs.LG] https://arxiv.org/abs/2509.24006
+     org/conference/osdi22/presentation/yu                                          [69] Jintao Zhang, Chendong Xiang, Haofeng Huang, Jia Wei, Haocheng
+[66] Zihao Yu, Haoyang Li, Fangcheng Fu, Xupeng Miao, and Bin Cui.                       Xi, Jun Zhu, and Jianfei Chen. 2025. SpargeAttention: Accurate and
+     2024. Accelerating Text-to-Image Editing via Cache-Enabled Sparse                   Training-free Sparse Attention Accelerating Any Model Inference.
+     Diffusion Inference. Proceedings of the AAAI Conference on Artificial               arXiv:2502.18137 [cs.LG] https://arxiv.org/abs/2502.18137
+     Intelligence 38, 15 (Mar. 2024), 16605–16613. doi:10.1609/aaai.v38i15.         [70] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xu-
+     29599                                                                               anzhe Liu, Xin Jin, and Hao Zhang. 2024. DistServe: Disaggregating
+[67] Zichao Yu, Zhen Zou, Guojiang Shao, Chengwei Zhang, Shengze Xu,                     Prefill and Decoding for Goodput-optimized Large Language Model
+     Jie Huang, Feng Zhao, Xiaodong Cun, and Wenyi Zhang. 2025. AB-                      Serving. In 18th USENIX Symposium on Operating Systems Design
+     Cache: Training-Free Acceleration of Diffusion Models via Adams-                    and Implementation (OSDI 24). USENIX Association, Santa Clara, CA,
+     Bashforth Cached Feature Reuse. arXiv:2504.10540 [stat.ML] https:                   193–210. https://www.usenix.org/conference/osdi24/presentation/
+     //arxiv.org/abs/2504.10540                                                          zhong-yinmin
+
+
+
+
+                                                                              536
+

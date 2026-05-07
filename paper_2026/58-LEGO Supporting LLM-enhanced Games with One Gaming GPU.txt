@@ -1,0 +1,1078 @@
+                                                                                                                                                                                2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+                                                                                                                                                                     LEGO: Supporting LLM-enhanced Games with One
+                                                                                                                                                                                      Gaming GPU
+                                                                                                                                                                                 Han Zhao∗¶ , Weihao Cui∗  ¶ , Zeshen Zhang , Wenhao Zhang∗ , Jiangtong Li , Quan Chen∗ ,
+                                                                                                                                                                                              Pu Pang∗ , Zijun Li∗ , Zhenhua Han† , Yuqing Yang‡ , Minyi Guo∗
+                                                                                                                                                                                          ∗
+                                                                                                                                                                                              Shanghai Jiao Tong University  National University of Singapore  Tongji University
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408477
+
+
+
+
+                                                                                                                                                                                                  †
+                                                                                                                                                                                                    Shanghai Qiji Zhifeng Co., Ltd. ‡ Microsoft Research ¶ Equal Contribution
+
+
+                                                                                                                                                                        Abstract—Artiﬁcial intelligence (AI) has been increasingly                          LatencyWDUJHWV       Renderingtasks Headroom(GPUidle)
+                                                                                                                                                                     applied to gaming, with large language models (LLMs) playing
+                                                                                                                                                                                                                                                                              ŏ                       ŏ
+                                                                                                                                                                     a key role in character control. However, efﬁciently co-locating               BlackMyth:
+                                                                                                                                                                                                                                                                                                                      Timeline
+                                                                                                                                                                     game rendering and LLM inference on one GPU presents
+                                                                                                                                                                     challenges due to resource constraints, diverse latency require-                              16.6ms
+                                                                                                                                                                     ments, and ﬁne-grained task scheduling. We propose LEGO,                                                       LatencyWDUJHW           LatencyWDUJHW
+                                                                                                                                                                                                                                                              Inferencetasks
+                                                                                                                                                                     an algorithm-system co-design that enables the efﬁcient co-
+                                                                                                                                                                     location of LLM inference and game rendering tasks. Algorithm-                 Llama3-8B:
+                                                                                                                                                                                                                                                                                                                      Timeline
+                                                                                                                                                                     wise, LEGO features a resource-oriented layer-skipping adaptor,                                        600ms                    600ms
+                                                                                                                                                                     which distills knowledge from skipped layers to reduce compu-
+                                                                                                                                                                     tational demand while maintaining inference accuracy. System-               Fig. 1: The separate deployment of a game BlackMyth and an
+                                                                                                                                                                     wise, LEGO proposes a headroom-maximizing LLM scheduler,                    LLM inference task using Llama3-8B.
+                                                                                                                                                                     which dynamically partitions inference tasks to utilize available
+                                                                                                                                                                     rendering headroom. Evaluations on an Nvidia RTX 4090 show
+                                                                                                                                                                     that LEGO meets latency targets in all scenarios, improves                     However, existing deployment strategies are not feasible
+                                                                                                                                                                     rendering headroom utilization by up to 28.6%, and reduces
+                                                                                                                                                                     LLM inference accuracy loss by up to 86.3% compared to current              on the client side, as most users have only one GPU on
+                                                                                                                                                                     layer-skipping approaches.                                                  their personal machines. In this case, a natural idea is to
+                                                                                                                                                                                                                                                 leverage cloud-based LLM services. Unfortunately, the end-to-
+                                                                                                                                                                                              I. I NTRODUCTION                                   end network overhead of cloud LLM services typically ranges
+                                                                                                                                                                                                                                                 from 20ms to 110ms [6], [10], [32], [54]. This is unacceptable
+                                                                                                                                                                        Using artiﬁcial intelligence (AI) algorithms to enhance                  for gaming scenarios, where 200 APM and 300 APM scenarios
+                                                                                                                                                                     games has long been a prominent area of research [7], [36].                 require SLOs (Service-Level Objective) of 300 ms and 200
+                                                                                                                                                                     The recent emergence of large language models (LLMs) has                    ms, respectively. More critically, relying on cloud-based LLM
+                                                                                                                                                                     opened up new possibilities for AI applications in gaming [48],             services increases the overall cost of the game and undermines
+                                                                                                                                                                     [53], [63]. For example, the Open Generative AI community                   its market competitiveness.
+                                                                                                                                                                     uses Street Fighter III [3] to evaluate the action skills of                   Meanwhile, we observe considerable underutilization of
+                                                                                                                                                                     LLMs. Similarly, researchers at Alibaba have explored the                   GPU resources when the rendering task runs alone. Experi-
+                                                                                                                                                                     use of LLMs to play the action game Black Myth: Wukong                      mental results on an Nvidia RTX 4090 show that BlackMyth
+                                                                                                                                                                     (BlackMyth) [11]. In these scenarios, the LLM receives en-                  with high visual settings utilizes only 60.8% of the GPU time.
+                                                                                                                                                                     vironment information and character status as prompts and                   This underutilization suggests a promising opportunity to co-
+                                                                                                                                                                     generates combat actions.                                                   locate game rendering and LLM inference on the same gaming
+                                                                                                                                                                        Existing research typically employs separate hardware to                 GPU. However, effectively leveraging this opportunity is non-
+                                                                                                                                                                     support game rendering and LLM inference tasks. Figure 1                    trivial, as the available compute headroom is insufﬁcient,
+                                                                                                                                                                     illustrates the separate deployment of a popular game, Black-               dynamic, and fragmented.
+                                                                                                                                                                     Myth, alongside an LLM inference task using Llama3-8B [16].                    Although 39.2% of the GPU time slice appears idle in
+                                                                                                                                                                     As shown, both game rendering and LLM inference tasks ex-                   BlackMyth, running Llama3-8B [16] in a 100 APM scenario
+                                                                                                                                                                     hibit periodic execution patterns. The default conﬁguration of              requires 41.9% of the GPU time–exceeding the available ca-
+                                                                                                                                                                     BlackMyth is 60 frames per second (FPS), meaning a rendering                pacity. The resource gap only widens under 200 APM and 300
+                                                                                                                                                                     task is generated every 16.6 ms and should be completed                     APM scenarios. Moreover, LLM inference relies on compute
+                                                                                                                                                                     within the same 16.6 ms deadline. Meanwhile, LLM inference                  headroom from multiple rendering tasks for computation. Di-
+                                                                                                                                                                     is designed to simulate player actions at varying skill levels,             rect co-location leads to disordered contention, causing latency
+                                                                                                                                                                     characterized by actions per minute (APM) [1], [2], [7]. An                 violations for rendering tasks. Therefore, effective co-location
+                                                                                                                                                                     average player has an APM of approximately 100, an excellent                demands ﬁne-grained task scheduling, which is challenging.
+                                                                                                                                                                     player around 200, and a professional player about 300. Under                  Since the highest priority in gaming is to ensure the
+                                                                                                                                                                     the 100 APM scenario, an LLM inference task is generated                    player’s visual experience, we should reduce the computational
+                                                                                                                                                                     every 600 ms, with a latency target of 600 ms.                              demands of LLM inference under limited resources. Faced
+
+
+
+
+                                                                                                                                                                            Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+with this demand, layer-skipping [52], [58] and quantiza-                    TABLE I: Representative games that using LLM at runtime.
+tion [24], [41], [46] techniques are two potential solutions.                 Game                 Year    Runtime LLM Usage
+However, current GPUs only support limited formats, which                     AI Roguelite         2023    Live-generate text and mechanics decisions
+means several ﬁxed resource usage levels for LLM inference                    Vaudeville           2023    Dialogues generated in real time
+                                                                              AI Game Master       2025    Procedural quests/characters
+task. This lack of ﬂexibility makes quantization poorly suited                inZOI                2025    LLM-driven NPCs, player-prompt generate
+for dynamic resource conditions in task co-location within                    PUBG Ally            2025    Co-playable LLM agent companion
+gaming. Therefore, in this work, we focus on layer-skipping                   Astrobuilder         2025    NPC behavior/strategic guidance
+techniques as a more adaptable solution.                                      Mecha BREAK          2025    Conversational NPCs via NVIDIA ACE
+                                                                              AI2U                 2025    NPC dialogue & voice generated via LLM
+   Existing layer-skipping methods [52], [58] rely on runtime                 EmemeTown            2025    NPC conversations generated in real time
+discrimination mechanisms to make per-token layer-skipping                    Life of an NPC       2025    LLM-directed town
+decisions. These methods typically optimize for the average
+number of skipped layers across all tokens, rather than en-
+forcing guarantees for individual tokens. As a result, they                 to better use the larger headroom between rendering tasks.
+easily lead to latency violations under strict SLO constraints.                We evaluate LEGO using several popular games and LLM
+Meantime, adapting these methods to enforce strict SLO                      models on a mainstream gaming GPU, the Nvidia RTX 4090.
+guarantee requires skipping layers in advance. This results in              Experimental results show that LEGO consistently meets the
+signiﬁcant accuracy degradation, as they may skip layers that               latency targets for both rendering and LLM inference across
+are deemed important by their own mechanisms.                               all APM scenarios. In addition, LEGO improves rendering
+   To this end, we propose LEGO, an algorithm–system                        headroom utilization by up to 28.6% and reduces accuracy loss
+co-design approach that maintains inference accuracy while                  by up to 86.3% compared to existing layer-skipping methods.
+satisfying the SLOs of both LLM inference and rendering                     Our key contributions are as follows:
+tasks. Algorithm-wise, LEGO proposes a resource-oriented                    • We present a practical solution for integrating LLMs into
+layer-skipping technique that mitigates accuracy degradation                   games without incurring the latency and cost penalties. This
+when layer-skipping decisions are made based solely on re-                     would have a positive impact on the gaming industry.
+source availability. System-wise, LEGO designs a headroom-                  • We design a resource-oriented layer-skipping adaptor to
+maximizing scheduling strategy that enables LLM inference                      distill knowledge from the skipped layers, which could
+to fully utilize available compute resources, thereby further                  reduce the latency drop of LLM.
+reducing the need for layer skipping.                                       • We propose a headroom-maximizing LLM scheduler to
+   Speciﬁcally, LEGO ﬁrst proposes the layer-skipping adap-                    enable LLM inference to utilize all available rendering head-
+tor for task co-location in gaming. Inspired by knowledge                      room. This helps make the optimal layer-skipping strategy.
+distillation methods, the adaptor distills information from the
+skipped layers. For each possible layer-skipping conﬁguration,                            II. BACKGROUND AND M OTIVATION
+LEGO identiﬁes the less important layers and trains an adaptor              A. Trends in Using LLMs in Games
+(a feed-forward network) to distill knowledge from them.                       As of 2025, approximately 7% of all games on Steam (about
+This design mitigates the loss of critical information caused               7,800 out of 110,000) incorporate AI technologies [27]. The
+by SLO-driven layer skipping, thereby preserving the quality                proportion of newly released games adopting LLMs has grown
+of inference. For runtime scheduling, LEGO then designs                     by over 700% compared to 2024 [51]. Among these, 16 games
+an LLM scheduler based on two observations: 1) rendering                    (4 released before 2024 and 12 in 2025) explicitly report using
+headroom exists not only in the gaps between consecutive                    LLMs at runtime [26], [39], [44], [45], [55], [60]. Table I
+rendering tasks but also within individual rendering tasks; 2)              shows the speciﬁc applications of representative games.
+the overall headroom across these tasks can be effectively esti-               More importantly, NVIDIA has introduced the LLM-
+mated, while accurately predicting per-task compute headroom                powered game companion ACE in 2023, which has attracted
+of multiple consecutive rendering tasks is challenging.                     signiﬁcant attention and adoption from game studios [43].
+   At runtime, the LLM scheduler employs a linear regression                Meanwhile, academic interest has surged, with 57, 141, and
+(LR) model for rendering headroom prediction. The model                     159 papers published in 2023, 2024, and 2025, respectively
+takes the overall headroom from the previous three inference                [21], [22], [28], [40], [57]. This surge in both industrial
+windows to predict the headroom of the next one. Based on                   adoption and academic output underscores the increasing
+the prediction, the scheduler determines the appropriate layer-             signiﬁcance and momentum of this emerging ﬁeld.
+skipping strategy for the upcoming LLM inference task. After
+determining the layer skipping, the scheduler splits each LLM               B. LLM workﬂow in Game
+inference task into smaller subtasks to make use of fragmented                 Taking the combat scenario as an example, LLMs simulate
+GPU headroom. For intra-rendering headroom, it monitors                     player behavior to act as characters or enemies with varying
+the start and end of rendering subtasks. When no rendering                  difﬁculty levels. Figure 2 illustrates the workﬂow of LLMs
+subtasks are running, the scheduler dispatches ﬁne-grained                  in such scenarios. As shown, human players continuously
+LLM subtasks to utilize this headroom. Once a rendering                     perform in-game actions at a certain frequency. In response,
+task completes, it switches to coarse-grained LLM subtasks                  LLMs must generate actions at a comparable rate [1], [2], [7].
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+            T+600*0ms action0                                                                                     100APM        200APM        300APM
+                                                                                                   200
+
+
+
+
+                                                                               Normal.Resource
+                                                                                Requirment(%)
+            T+600*1ms action1                                                                      150
+
+ LLM                                                                                            100
+                    …                                                                              50
+            T+600*n ms actionn                                                                      0
+                                                                                                         Llama3­8B   Mistral­7B   Llama3­8B   Mistral­7B   Llama3­8B   Mistral­7B
+                                                                                                               BlackMyth                  FFXVI                    RDR2
+
+
+ Prompt: This is a combat scenario. You are the character. The goal is       Fig. 4: The total resource requirements of Game-LLM co-
+ to reduce the player’s health to zero…                                      location pairs across three APM scenarios.
+ ● scenario description: 50 -100 tokens
+ ● NPC and player statues (health and skills): 200 - 300 tokens
+ ● history effect (actions and their effect): 100 - 300 tokens
+                                                                             client side, as most users have access to only a single GPU
+ Output: Move X0 Y0 Z0 Move X1 Y2 Z2… (4 - 20 tokens)
+                                                                             on their personal machines.
+       Fig. 2: The LLM workﬂow in combat scenarios.                             In this case, there are two possible options for the client:
+                                                                             using cloud-based LLM services or co-locating both tasks on
+                                                                             the same gaming GPU. However, for Azure OpenAI, network
+                                                                             latency ranges from about 20–110 ms within nearby regions
+                                                                             and can reach up to 300 ms across continents [54]. Meanwhile,
+                                                                             using the OpenAI API adds around 300–700 ms of latency
+                                                                             compared to running the model locally [6]. The network
+                                                                             latency is unacceptable for gaming scenarios, where 200 APM
+                                                                             and 300 APM workloads demand SLO targets of 300 ms
+                                                                             and 200 ms, respectively [10], [32]. Moreover, LLM services
+Fig. 3: The execution times of rendering tasks for three games.              rely on large batch sizes to improve resource utilization,
+                                                                             which further increases end-to-end latency. More critically, the
+                                                                             reliance on LLM services signiﬁcantly increases the overall
+   The frequency of human player actions is commonly mea-
+                                                                             cost of the game and reduces its market competitiveness.
+sured using the metric Actions Per Minute (APM). Average
+players typically have an APM of 50–100, excellent players                      Alternatively, we examine the feasibility of local task co-
+range between 150–200, and professional players achieve                      location by proﬁling GPU utilization when game rendering
+250–300. To match the operational frequency of human play-                   runs alone. We select Black Myth: Wukong (BlackMyth), Final
+ers, the LLM’s action generation rate should adapt accordingly.              Fantasy XVI (FFXVI), Red Dead Redemption 2 (RDR2) as
+In this paper, we select three representative scenarios corre-               game benchmarks, and collect 30 minutes of rendering data for
+sponding to APM levels of 100, 200, and 300, representing                    each. All games are conﬁgured with high visual settings (4K
+average, advanced, and professional gameplay.                                resolution) and run at 60 frames per second (FPS). Speciﬁcally,
+   In the 100 APM combat scenario, the LLM should generate                   we measure the compute headroom between the end of one
+one action every 600 milliseconds. The lower part of Figure 2                rendering task and the start of the next.
+illustrates a possible input-output pair for a single action. As                Figure 3 presents the rendering times for the three games.
+shown in the ﬁgure, the LLM input consists of three aspects:                 As shown, all rendering tasks exhibit signiﬁcant compute
+(1) the current game scene’s state information, (2) the current              headroom, referred to as rendering headroom. Speciﬁcally, the
+state information of the character and player, and (3) historical            maximum rendering times for the three games are 10.1 ms,
+action information. The LLM output contains 4–20 tokens,                     9.1 ms, and 7.9 ms, respectively, while the SLO for rendering
+encoding information for one to ﬁve skills. Each skill includes              tasks is 16.6 ms. Over the long term, these games require GPU
+its name and emission direction. Five skills represent a combo,              time slice reservations of 60.8%, 54.8%, and 47.6% to ensure
+referring to consecutive skill executions within a short time.               all rendering tasks meet their latency targets. This suggests
+When the LLM generates the action, the game engine executes                  that co-locating game rendering and LLM inference on the
+the action in the game scene.                                                same gaming GPU is a promising solution.
+   Following prior works [23], [61], key game states (e.g.,                     2) The Challenges of Game-LLM Co-location: Although
+player positions, skill states) are directly accessible from the             task co-location is promising, it faces two key challenges.
+game engine. Since the input length and output length fall                      First, directly co-locating rendering and LLM inference
+within a range, we select 512 as the representative input length             tasks exceeds GPU compute capacity. Figure 4 presents the
+and 16 as the output length throughout the paper.                            total resource demand across three games, two LLM models
+                                                                             (Llama3-8B [16] and Mistral-7B [4]), and three APM scenar-
+C. The Co-location of Game and LLM                                           ios. In the ﬁgure, red bars represent rendering task resource
+  1) Inefﬁciency of Existing Deployment: While existing re-                  consumption, while gray bars indicate LLM inference task
+search typically employs separate hardware for game rendering                demand. The stacked bars show the total resource demand at
+and LLM inference tasks, this approach is not feasible on the                task co-location. As shown, 14 out of 18 scenarios exceed the
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+                               averagetime averagetime averagetime
+                                (300APM)     (200APM)     (100APM)               Resource­orientedlayer­skippingadapting             A Adaptor     Layer
+    100%                                                                                                          A­4                   LLM kernel   Game kernel
+     80%
+                                                                                             A­2
+                                                                                                                                        Intra­rendering headroom
+     60%
+                                                                                     1   2     3      4      5     6     7   8    9     Inter­rendering headroom
+     40%
+                                                                                                                 Support
+     20%
+
+      0%
+                                                                                  Headroom­maximizingscheduling                       GamingGPU
+                                                                                                   Predict         LLM        Submit
+                              NormalizedInferenceTime
+                                                                                                                 scheduler
+Fig. 5: The CDF of LLM inference task execution time under                         Headroom                             Monitor
+                                                                                   Predictor
+LITE using different threshold.                                                                Runtime            Game        Submit
+                                                                                                data              engine
+
+
+compute limit, meaning that existing GPUs lack the capacity                                    Fig. 6: The design overview of LEGO.
+to handle both tasks simultaneously.
+   Second, co-locating rendering and LLM inference tasks
+requires ﬁne-grained task scheduling. Figure 1 illustrates that                  thresholds for different APM scenarios. This ensures the
+a single LLM inference task spans multiple rendering task                        average computation time of LLM inference aligns with the
+periods. Direct co-location leads to severe latency violations in                latency target. Figure 5 presents the LLM inference time on the
+rendering tasks. To ensure both tasks meet their latency targets,                SQuAD-2.0 dataset, with all times normalized to the latency
+LLM inference must utilize the fragmented headroom within                        target. As shown, 47.1% of LLM inference tasks exceed the
+rendering tasks. Moreover, Figure 3 shows that rendering                         predeﬁned latency target, leading to latency violations.
+task execution time ﬂuctuates signiﬁcantly, further increasing                      To enable LITE to meet SLO guarantees, a naive ap-
+scheduling complexity.                                                           proach is to force early layer skipping when there is a risk
+                                                                                 of SLO violation. Building on the above experiment, we
+D. Possible solutions                                                            implement LITE-S, an extension of LITE that incorporates
+   Since ensuring the player’s visual experience is the highest                  SLO constraints. Experimental results show that enforcing
+priority in gaming scenarios, we should reduce the computa-                      SLO guarantees leads to a 27.2% drop in accuracy, primarily
+tional demands of LLM inference tasks. To address this, three                    because LITE-S skips layers that are considered important by
+potential solutions exist: using smaller models, applying quan-                  its own conﬁdence-based mechanism.
+tization techniques, and employing layer-skipping methods.                          Therefore, current layer-skipping methods could not address
+However, the ﬁrst two approaches lack the ﬂexibility to adapt                    the challenges of task co-location in gaming scenarios.
+to dynamic resource conditions in task co-location scenarios.
+Therefore, in this paper, we focus on layer-skipping methods                                                      III. LEGO D ESIGN
+as a more adaptable solution.
+   1) Smaller Model: We collect the overall computational                            In this section, we present LEGO, an algorithm-system
+demand when co-locating tasks with two corresponding small-                      co-design that meets the requirements of task co-location in
+size models. Results show that, while small models can meet                      gaming scenarios. As shown in Figure 6, LEGO proposes
+resource demands in the 100 APM scenario, they fail to                           a resource-oriented layer-skipping adaptor and a headroom-
+support the 200 APM and 300 APM scenarios. Furthermore,                          maximizing LLM scheduler. The adaptor enables LLM infer-
+even in the 100 APM scenario where small models can be                           ence tasks to perform layer skipping based solely on compute
+deployed, they suffer an average inference accuracy drop of                      resources while preserving inference accuracy as much as
+20.41% on the MMLU, ARC-C, and SQuAD-2.0 datasets.1                              possible. The scheduler facilitates ﬁne-grained scheduling of
+   2) Layer-skipping Methods: Existing layer-skipping meth-                      LLM inference tasks, maximizing the utilization of rendering
+ods rely on runtime discrimination mechanisms to make per-                       headroom while ensuring the latency targets of both tasks.
+token layer-skipping decisions. In this work, we adopt LITE                          Speciﬁcally, inspired by knowledge distillation, LEGO in-
+[58] as the baseline method. LITE designs a ﬁnetune method                       troduces a resource-oriented layer-skipping adaptor to dis-
+for the LLM model and deﬁnes a predeﬁned conﬁdence                               till knowledge from skipped layers. When deﬁning a layer-
+threshold for each layer. At runtime, if a token’s conﬁdence                     skipping strategy for a speciﬁc resource usage, LEGO identi-
+score exceeds the threshold at a given layer, LITE skips the                     ﬁes less important layers and then employs an adaptor (a feed-
+remaining layers and outputs the token. As a result, different                   forward network layer) to distill knowledge from the skipped
+tokens may exit the model at different depths.                                   layers. This self-distillation design caters to layer-skipping
+   We measure the inference time of Llama3-8B [16] under                         demands based on resource availability, while preserving in-
+LITE. Speciﬁcally, we conﬁgure LITE with corresponding                           ference quality.
+                                                                                     With the support of the adaptor, the headroom-maximizing
+     1 Currently, there is a lack of mature, standardized datasets speciﬁcally
+                                                                                 LLM scheduler determines the layer-skipping strategy and
+tailored for LLM-based gaming. Therefore, following prior works [8], [14],
+[57], we use datasets that are closely aligned with gaming-related tasks, such   schedules LLM inference tasks to effectively utilize dynamic
+as role-playing and reasoning.                                                   and fragmented rendering headroom at runtime. The scheduler
+
+
+
+
+           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+                                          Llama3­8bonMMLU
+                                          Mistral­7bonMMLU
+                                                                  Llama3­8bonSQUAD
+                                                                 Mistral­7bonSQUAD
+                                                                                                               MMLU and SQuAD-2.0 datasets, under varying layer-
+                                                                                                   Llama3­3B   skipping conﬁgurations. For the experiment, “skipping 1 layer”
+ InferenceAccuracy
+
+
+                      60                                                                           on MMLU
+                                                                                                   Llama3­3B
+                                                                                                               denotes bypassing the ﬁnal transformer layer of the LLM,
+                      40                                                                           on SQUAD    thereby connecting the penultimate transformer layer directly
+                      20                                                                                       to the output layer. Similarly, “skipping N layers” corresponds
+                      0                                                                                        to bypassing the last N transformer layers.
+                           0    1    2      3      4     5     6     7       8     9    10   11   12
+                                                       SkipLayerNumber                                          For reference, the inference accuracy of the Llama3-3B and
+                                                                                                               Mistral-4B models serves as the baseline, as indicated by the
+    Fig. 7: The accuracy drops when skipping layers directly.
+                                                                                                               dashed lines. As shown in Figure 7, both Llama3-8B and
+                                                                                                               Mistral-7B exhibit a pronounced drop in inference accuracy.
+design is based on two key observations: (1) rendering head-                                                   When four layers are skipped, the accuracy falls below the
+room exists not only between rendering tasks but also within                                                   baseline, indicating a substantial loss of model knowledge.
+them, and (2) although predicting each compute headroom of                                                        Theoretically, the inference accuracy drop implies a degra-
+multiple consecutive rendering tasks is difﬁcult, the overall                                                  dation of the latent knowledge representation in the LLM.
+headroom of these tasks can be accurately estimated using a                                                    Direct layer skipping may incur knowledge loss in two
+linear regression (LR) model.                                                                                  ways [17]: (1) the removal of knowledge encoded within in-
+   At runtime, the scheduler employs the LR model to predict                                                   dividual transformer layers, and (2) the disruption of coherent
+rendering headroom. Speciﬁcally, it uses the total headroom                                                    representations between different transformer layers.
+from the previous three inference windows to predict the                                                          Faced with this pronounced performance degradation, we
+available headroom for the next window. For example, in a                                                      propose a two-stage mitigation strategy. First, we identify
+100 APM scenario, each inference window spans the total                                                        transformer layers that contribute less to the overall knowledge
+rendering headroom across 36 rendering tasks. Based on this                                                    representation. Second, we employ a knowledge distillation
+prediction, the scheduler selects an appropriate layer-skipping                                                technique to approximate and restore the knowledge encapsu-
+strategy for the upcoming LLM inference.                                                                       lated in the skipped layers, thus maintaining inference quality
+   Following the layer-skipping strategy, the scheduler splits                                                 and enhancing computational efﬁciency.
+the LLM inference task into smaller subtasks to utilize frag-
+mented GPU headroom. For intra-rendering headroom, the                                                         B. Resource-oriented Layer-skipping Adapting
+scheduler monitors the start and end of rendering subtasks.                                                       Given that all transformer layers share identical output
+When no rendering subtasks are active, it dispatches ﬁne-                                                      tensor dimensions, previous studies [38] on LLM interpretabil-
+grained LLM subtasks to ﬁll these short gaps. Once a render-                                                   ity indicate that each transformer layer encodes a distinct
+ing task completes, it switches to coarse-grained subtasks to                                                  knowledge representation in its output tensor. Therefore, a high
+better utilize the larger headroom available between rendering                                                 degree of similarity between the input and output tensors of
+tasks. Throughout this process, the scheduler maximizes the                                                    a transformer layer implies that minimal new information is
+use of all available rendering headroom. It is worth noting that                                               introduced at that layer, resulting in a reduced contribution of
+the LR model already consider the intra-rendering headroom.                                                    unique knowledge to the model. Consequently, we begin by
+   Note that, LEGO is designed for commercial game compa-                                                      quantifying the similarity among the transformer layers.
+nies, rather than end users. It provides a practical deployment                                                   In Figure 8, we illustrate the similarity heatmaps for
+solution: commercial companies can train their own models                                                      Llama3-8B and Mistral-7B, in which the output tensors across
+and adaptors, then package them together with the game.                                                        all transformer layers are compared. Each block represents the
+When users download the game, both the game and the LLM                                                        similarity between the output tensor Ti of transformer layer
+are deployed and ready to run locally. In addition, LEGO                                                       Li and the output tensor Tj of transformer layer Lj . For
+can be integrated into cloud gaming platforms, like Nvidia                                                     example, the block enclosed by a green square in the bottom-
+GeForce NOW [43]. In this setting, PilotFish [66] is a time-                                                   left corner corresponds to the similarity between the output
+division management mechanism for cloud gaming, which can                                                      tensor T1 of layer L1 and the output tensor T2 of layer L2 .
+be leveraged to schedule LLM inference within the available                                                    Notably, the experiment for Figure 8 uses 2400 samples from
+compute headroom.                                                                                              the WebInstruct dataset. For each sample, we use the ﬁrst 16
+                                                                                                               output tokens, consistent with our game setting.
+                                         IV. L AYER - SKIPPING A DAPTOR                                           From Figure 8, we derive three critical observations. First,
+   In this section, we ﬁrst present an empirical analysis of                                                   the diagonal lines in the heatmap reﬂect the various layer-
+the performance degradation caused by layer skipping based                                                     skipping conﬁgurations. For instance, the blocks along the
+solely on resource availability. We then introduce our resource-                                               green diagonal correspond to the Layer pairs (Lj , Li ) where
+oriented layer-skipping adaptor to mitigate the accuracy loss.                                                 j–i = 4, meaning they collectively represent all possible 4-
+                                                                                                               layer skip candidates. Secondly, both LLMs demonstrate high
+A. Performance Degradation                                                                                     inter-layer similarity in the latter layers of the network, in
+  In Figure 7, we present the inference accuracy of two                                                        contrast to the lower similarity observed in the initial layers,
+LLMs (i.e., Llama3-8B and Mistral-7B), evaluated on the                                                        thereby suggesting that omitting several consecutive layers in
+
+
+
+
+                               Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+                                                      skip 1 layer                                   Output Layer                                  Output Layer
+           The similarity between output                                     cosine
+                                                        skip 4 layers
+           tensors of layer 1 and layer 2                                   similarity                 layer 32                                      layer 32
+                                                          skip 8 layers            1.0                                                                            Tj
+                                                                                                       layer 31                                      layer 31
+                                                                                                                    Tj                   Skipped
+                                                                                   0.8                                                    layers
+                                                                                           Skipped     layer 30                                      layer 30         LLM adaptor 2
+                                                                                            layers        ŏ              LLM adaptor 1                   ŏ
+                                                                                   0.6                              Ti                                            Ti
+                                                                                                       layer 26                                      layer 23
+ LayerM
+
+
+
+
+                                            LayerM
+                                                                                                          ŏ                                              ŏ
+                                                                                                        layer 1                                       layer 1
+                                                                                   0.4
+
+                                                                                                     Embed. Layer                                  Embed. Layer
+                                                                                   0.2
+                                                                                                D VNLSIRXUOD\HUV                            E VNLSHLJKWOD\HUV
+
+
+                        LayerL                                 LayerL
+                                                                                   0.0                    Fig. 9: The LLM adaptor examples.
+                      Llama3­8B                                Mistral­7B
+                                                                                         approach yields N − M + 1 distinct layer-skipping strategies,
+Fig. 8: The similarity heatmaps for Llama3-8B and Mistral-                               each of which requires a separately trained adaptor.
+7B, comparing output tensors across all transformer layers.                                 2) Train the adaptors on the dataset: Generally, game
+                                                                                         companies build their LLMs by ﬁne-tuning a mature base
+the later layers is a feasible approach. Finally, the output of                          model, such as Llama3-8B, on their private datasets. Based on
+the last transformer layer exhibits low similarity to that of                            the resulting ﬁne-tuned model, we ﬁrst construct the inter-layer
+the penultimate layer. Considering that the ﬁnal transformer                             similarity heatmap using the same dataset. Speciﬁcally, we ﬁrst
+layer encodes crucial knowledge for interfacing with the output                          compute the cosine similarity between transformer layers for
+layer, it should not be skipped.                                                         each data item, and then produce the similarity heatmap by
+   Based on these observations, we propose a resource-oriented                           averaging these similarities across the entire dataset.
+layer-skipping adapter, implemented as an FFN layer, to                                     Next, for each speciﬁc layer-skipping strategy, we analyze
+replace a block of consecutive transformer layers. In particular,                        the similarity heatmap to identify a contiguous range of layers
+when skipping N layers, we identify the contiguous layer range                           with the highest similarity. For example, in a particular layer-
+that exhibits the highest similarity along the diagonal of the                           skipping case—i.e., skipping from the k-th layer to the k + n-
+similarity heatmap. For example, when skipping four layers                               th layer—we employ an adaptor (a feed-forward network,
+for Llama3-8B, the layer range from L25 to L29 displays the                              FFN) [59] to approximate the transformation performed by the
+highest similarity. Similarly, when skipping eight layers, the                           skipped layers (from k-th to k + n-th). The adaptor is trained
+layer range from L23 to L31 exhibits the highest similarity.                             by minimizing the Mean Squared Error (MSE) loss between
+   In Figure 9, we present two examples that illustrate the                              its output and the original output of the skipped layers, which
+adaptor. When skipping layers during inference, an additional                            is formulated as Lmse = ||fk+n − FFNk+n      k  (fk )||22 , where
+FFN layer is used to approximate the knowledge representation                            fk+n and fk are the output features of the (k + n)-th and
+originally encapsulated by the skipped transformer layers.                               k-th layers, respectively. FFNk+n
+                                                                                                                        k     denotes the corresponding
+                                                                                         adaptor network.
+C. Prepare Adaptors Ofﬂine                                                                  The above training process updates only the weights of the
+                                                                                         adaptor, which contains a relatively small number of param-
+   Preparing the adaptors ﬁrst requires identifying the possible
+                                                                                         eters, making training efﬁcient. Moreover, the process can
+layer-skipping range for a speciﬁc game, followed by training
+                                                                                         be further accelerated by reusing intermediate outputs from
+the adaptors on a designated dataset.
+                                                                                         earlier layers across different adaptors, reducing redundant
+   1) Perceive the layer-skipping range: Determining the
+                                                                                         computation. For example, in the case of BlackMyth, up to
+layer-skipping range can be divided into three steps.
+                                                                                         14 LLM adaptors are required, and the total training time is
+   Step 1: We proﬁle the execution times of rendering tasks
+                                                                                         approximately 36 hours.
+over a representative gameplay period. Based on these mea-
+surements, we compute the minimum and maximum compu-                                                 V. H EADROOM - MAXIMIZING SCHEDULER
+tational headroom (i.e., Cmin and Cmax ) for the rendering                                 In this section, we ﬁrst conduct an in-depth analysis of
+tasks. Using these values, we then calculate the minimum and                             rendering headroom. Next, we design a rendering headroom
+maximum rendering headroom (Hmin and Hmax ) available                                    prediction model to support runtime scheduling. Finally, we
+for LLM inference under different APM scenarios.                                         propose a headroom-maximizing strategy to effectively utilize
+   Step 2: We measure the overall computational time Toverall                            the dynamic and fragmented rendering headroom.
+for an LLM inference action, and proﬁle the preﬁll phase (Tpl )
+and the decode phase (Tdl ) for each transformer layer.                                  A. Headroom Analysis
+   Step 3: Using the proﬁling results, we compute the mini-                                Figure 10(a) illustrates the scheduling requirements for
+mum number of layers M that must be skipped to satisfy the                               LLM inference tasks under task co-location. As shown, exe-
+minimum rendering headroom, and the maximum number N                                     cuting an LLM inference task requires leveraging the compute
+under the maximum rendering headroom. Consequently, this                                 headroom from multiple rendering tasks within its execution
+
+
+
+
+               Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+Game:                                                         ŏ                                                       TABLE II: The prediction errors using LR model with the
+                                                                                                Intra­task headroom
+                                                                                                                      execution window as a time unit across all scenarios.
+                 LLM:                                                                           Inter­task headroom
+                                                                                     Timeline
+                                               Execution window                                                                 Scenarios    100APM     200APM    300APM
+                                          (a)Straightforwardsolution                                                         BlackMyth     0.44%      0.87%     1.31%
+                                                                                                                                  FFXVI       0.19%      0.38%     0.55%
+Game:                                                         ŏ
+                                                                                                                                  RDR2        0.27%      0.54%     0.81%
+                 LLM:
+                                               Execution window
+                                         (b)Headroom­maximizingsolution
+                                                                                     Timeline
+                                                                                                                      indicates a setup where the headroom values from 24 previous
+                                                                                                                      rendering tasks are used to predict the headroom of the next
+             Fig. 10: The scheduling solutions for the task co-location.                                              12. These conﬁgurations correspond to the window sizes of
+                                                                                                                      different APM scenarios: 36 tasks for 100 APM, 18 for 200
+                       6
+                                                                                                                      APM, and 12 for 300 APM. We do not present the results of
+PredicitonError(%)
+
+
+
+
+                               ARIMA      SVM     LR
+                       5
+                       4                                                                                              100 APM due to its poor performance.
+                       3                                                                                                 As shown in Figure 11, all three models exhibit predic-
+                       2
+                       1
+                                                                                                                      tion errors exceeding 3%, with the maximum error reaching
+                       0                                                                                              5.49%. Such accuracy is insufﬁcient for selecting an optimal
+                           I24O12   I36O12    I36O18        I54O18        I24O12   I36O12    I36O18   I54O18
+                                        BlackMyth                                      FFXVI                          layer-skipping strategy for LLM inference. Additionally, these
+                                                                                                                      models suffer from severe prediction overhead, including both
+Fig. 11: The prediction accuracy of three time-series models                                                          model construction time and inference time. LR requires 13.5
+under various conﬁgurations.                                                                                          ms for prediction using 24 inputs, whereas ARIMA takes about
+                                                                                                                      1 second and SVM exceeds 50 seconds.
+                                                                                                                         To address these issues, we ﬁnd that using the LLM infer-
+window. One straightforward method is to adopt PilotFish’s
+                                                                                                                      ence execution window as a time unit signiﬁcantly improves
+method [66] to monitor rendering task completion. Once a
+                                                                                                                      prediction accuracy. Based on this, we use an LR model,
+rendering task completes, the scheduler calculates the avail-
+                                                                                                                      which takes the overall rendering headroom from the past three
+able compute headroom based on the current timestamp and
+                                                                                                                      execution windows as input, and predicts the overall rendering
+dispatches an appropriately sized LLM inference subtask.
+                                                                                                                      headroom for the next execution window. Table II presents
+   While this method efﬁciently utilizes compute headroom
+                                                                                                                      the prediction accuracy across all scenarios. The LR model
+between rendering tasks, we observe that limited compute re-
+                                                                                                                      achieves a maximum error of just 1.3% and an average error
+sources can lead to excessive layer skipping in LLM inference
+                                                                                                                      of only 0.6%. Furthermore, its inference overhead is just 1.3
+tasks. For instance, in the 300 APM scenario across all three
+                                                                                                                      ms with three input windows, making it well-suited for real-
+games, LLM inference tasks skip over 50% of transformer
+                                                                                                                      time headroom prediction.
+layers. Even though the LLM adaptor distills knowledge from
+skipped layers, inference accuracy still drops by 70%.                                                                C. Runtime Scheduling
+   To address this issue, we further analyze GPU utilization un-                                                         It is important to note that the headroom prediction already
+der task co-location. We dive into the task trace using Nvidia’s                                                      accounts for intra-rendering headroom. After predicting the
+proﬁling tool nsight-system [5]. Experimental results reveal                                                          rendering headroom, the scheduler determines an appropriate
+that while LLM inference tasks continuously occupy the GPU,                                                           layer-skipping strategy for the next LLM inference task. It
+rendering tasks do not. As shown in Figure 10(a), signiﬁcant                                                          then splits the inference task into smaller subtasks to utilize
+GPU idle time exists within rendering tasks themselves.                                                               the fragmented GPU headroom, in a way that adapts sub-
+   Further investigation reveals that intra-rendering headroom                                                        task granularity to ﬁt both intra-rendering and inter-rendering
+arises from optimizations within the game engine. Speciﬁcally,                                                        headroom. Speciﬁcally, Figure 10(b) illustrates the scheduling
+game engines optimize rendering by batching similar objects,                                                          process employed by the scheduler.
+accelerating the rendering pipeline. As a result, a render-                                                              For the intra-rendering headroom, the scheduler employs a
+ing task consists of multiple subtasks, where some perform                                                            feedback-driven scheduling mechanism. It monitors the start
+computations (rendering subtasks) and others handle auxiliary                                                         and completion of rendering subtasks. When a rendering
+operations that do not use the GPU (auxiliary subtasks).                                                              subtask completes, the scheduler submits a ﬁne-grained LLM
+                                                                                                                      inference subtask to utilize the available GPU idle time. Once
+B. Headroom Prediction                                                                                                the inference subtask completes, the scheduler checks whether
+  Before layer-skipping strategy selection, the scheduler must                                                        the next rendering subtask has started computation. If the next
+predict the total rendering headroom within the next execution                                                        rendering subtask has started, the LLM scheduler waits. If the
+window. A naive approach is to use existing time-series models                                                        next rendering subtask has not started, the scheduler continues
+to predict the headroom of each rendering task within the                                                             dispatching inference subtasks.
+window and then compute the total available headroom.                                                                    Meanwhile, our analysis shows that the average intra-
+  Figure 11 shows the prediction accuracy of three time-series                                                        rendering headroom is 0.24 ms, while 90% of intra-rendering
+models under various conﬁgurations. For example, I24-O12                                                              headroom is shorter than 0.73 ms. The total intra-rendering
+
+
+
+
+                              Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+           TABLE III: Experimental speciﬁcations.                                               VI. I MPLEMENTATION
+                          Windows 11, CUDA driver 566.36                       We utilize llama.cpp [20] as the LLM inference framework.
+       Software
+                    CUDA SDK 12.1, Direct X 12.1, llama.cpp fc83a9e         We use Unreal Engine 4 (UE4) [18] as the game engine, with
+       Hardware     Intel(R) i9-13900KF @ 3.00 GHz, Nvidia RTX 4090         DirectX 12 [34] as the graphics library. We integrate only the
+     LLM Models        Llama3.2-8B-Instruct, Mistral-7B-Instruct-v0.3       front-end of llama.cpp into UE4 and invoke other functions
+        Games                   BlackMyth, FFXVI, RDR2
+                                                                            via a dynamic library. Since llama.cpp separates computation
+                                                                            graph creation and traversal, we modify the traversal function
+                                                                            to incorporate scheduling logic. The engine monitors rendering
+headroom per rendering task averages 1.39 ms, with a maxi-
+                                                                            task state variables and launches inference subtasks upon
+mum of 3.1 ms. Based on this time distribution, we observe
+                                                                            rendering completion, dispatching transformer layers in the
+that transformer layers could serve as an appropriate subtask
+                                                                            decoding phase, or self-attention and FFN sublayers in the
+granularity during the LLM inference decode phase, as their
+                                                                            preﬁlling phase. If no new rendering task arrives, additional
+execution time is approximately 0.4 ms. During the preﬁll
+                                                                            inference subtasks continue executing. To support this, we
+phase, attention layers and FFN layers are better suited, with
+                                                                            register a new schedulable traversal function in the dynamic
+execution times of 0.5 ms and 1.0 ms, respectively.
+                                                                            library, ensuring correct inference execution.
+   To strictly ensure that rendering tasks meet their latency
+targets, we apply the following runtime scheduling condition:                                         VII. E VALUATION
+
+   Tsubtasks ≤ Tminimal . Here, Tsubtask represents the execution           A. Experiment Setup
+time of each dispatched LLM inference subtask, and Tminimal                    1) Testbed: Table III summarizes the software and hard-
+represents the minimal inter-rendering headroom of all render-              ware conﬁgurations used in our experiments. Notably, LEGO
+ing tasks in the game. By enforcing this constraint at runtime,             does not rely on any specialized hardware features of the
+we guarantee that utilizing intra-rendering headroom does not               RTX 4090, making it easily deployable on other gaming
+lead to latency violations for rendering tasks.                             GPUs. As shown in Table III, we evaluate LEGO using three
+   Once a rendering task completes, the scheduler switches                  popular games and two popular LLM models. Throughout our
+to coarse-grained LLM subtask scheduling to utilize the                     experiments, all games are conﬁgured to run at 60 FPS with
+inter-rendering headroom. Based on the timestamps of the                    high visual settings (4K).
+completed rendering task and the start of the next one, the                    Current consumer-grade gaming GPUs do not support MIG
+scheduler can easily determine the size of LLM subtasks,                    usage. Cloud gaming platforms, like NVIDIA GeForce NOW
+which contain multiple transformer layers.                                  [42], instead rely on NVIDIA vGPU for time slicing, which
+                                                                            only allows static time-slice division. In our experiments,
+                                                                            we enhance all baselines with PilotFish, a dynamic time-
+D. Support for Sudden Spike & Variable-length prompts                       slice mechanism that enables the LLM inference task to
+                                                                            immediately utilize released GPU resources once rendering
+   We deﬁne a sudden spike as an event where the rendering
+                                                                            completes, without waiting for a preassigned slice.
+workload between two consecutive frames increases by more
+                                                                               2) Baselines:
+than 50%. Experimental results show that only 1.2% of frames
+                                                                            • SmallModel: A naive solution is to use a smaller model
+exhibit such spikes, and even within these windows, the
+prediction error remains below 1.3%. This is because, each                     from the same family to balance APM support and accuracy
+LLM execution window spans 12-36 frames, making a single-                      retention. We replace Llama3-8B [16] with Llama3-3B and
+frame spike negligible to the overall headroom prediction.                     Mistral-7B [4] with Mistral-4B. At runtime, we partition
+Moreover, multi-frame workload increases can be effectively                    the LLM inference task into multiple equally sized subtasks
+captured by our temporal prediction model.                                     based on the average rendering headroom of the game.
+                                                                               Once a rendering task completes, the LLM inference task
+   To handle severe spikes, we enhance the scheduler to
+                                                                               dispatches one subtask for execution.
+maintain strict QoS. After each token generation, the scheduler
+                                                                            • LayerSkip: We use two layer-skipping methods as base-
+updates the temporal prediction with the latest workload data.
+                                                                               lines: LITE [58] and CALM [52]. Both methods rely on a
+For instance, after generating the ﬁrst token, the remaining
+                                                                               runtime discrimination mechanism to determine layer skip-
+tokens correspond to a 16-frame execution window, which is
+                                                                               ping based on predeﬁned thresholds. Since LITE achieves
+used for re-prediction. If a QoS violation risk is detected, the
+                                                                               better inference accuracy, we use LITE for comparison in all
+scheduler dynamically adjusts the layer-skipping strategy for
+                                                                               experiments and evaluate both LITE and CALM in Section
+subsequent tokens.
+                                                                               7.3. After the layer-skipping strategy is determined, Layer-
+   To support variable-length prompts, we add a duration pre-                  Skip adopts the same scheduling approach as SmallModel.
+dictor for LLM inference task. While the duration prediction is
+widely studied in previous works [49], [68], [69], we could in-             B. Ensuring FPS and APM
+tegrate it into LEGO. Once the inference duration is predicted,               We ﬁrst demonstrate the effectiveness of LEGO by compar-
+we can determine an appropriate layer-skipping strategy for                 ing it with the two baselines across all combinations of game
+LLM inference based on the available GPU headroom.                          scenarios and LLM models.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+                                   SmallModel         LayerSkip         LEGO
+                        60
+
+              99%FPS
+                        50
+
+
+
+                        40
+                             (a)The99%FramesPerSecond(FPS)withSmallModel,LayerSkipandLEGOunderdifferentGame­LLMco­locations.
+
+                                   SmallModel         LayerSkip         LEGO
+                    300
+          99%APM
+
+
+
+
+                    200
+
+                    100
+
+                        0
+            APM:             100200300   100200300    100200300    100200300    100200300   100200300
+                             (Llama,BlackMyth)       (Mistral,BlackMyth)      (Llama,FFXVI)          (Mistral,FFXVI)         (Llama,RDR2)         (Mistral,RDR2)
+
+                             (b)The99%ActionsPerMinute(APM)withSmallModel,LayerSkipandLEGOunderdifferentGame­LLMco­locations.
+
+     Fig. 12: The 99% FPS and APM with SmallModel, LayerSkip and LEGO under different Game-LLM co-locations.
+
+   Figure 12(a) presents the 99th-percentile FPS of the games,                                  TABLE IV: The inference accuracy of LEGO, LITE and
+while Figure 12(b) shows the 99th-percentile APM of the LLM                                     CALM.
+inference tasks. As shown, SmallModel successfully handles                                          Method    Dataset        0      4        8       12      13      14    Baseline
+the 100 APM and 200 APM scenarios. This is because, in                                              LEGO      mmlu          66.8   66.7     66.4    66.3    63.9    40.9    58.2
+                                                                                                    LEGO       arc-c        76.3   75.0     74.4    73.9    52.2    27.8    73.6
+Section 1, we discussed the worst-case scenario using the                                           LEGO      squad         70.1   69.2     58.3    57.3    42.0    20.5    39.5
+minimum rendering headroom. However, since rendering tasks                                           LITE     mmlu          66.8   14.3     11.2    8.7       /       /     58.2
+                                                                                                     LITE      arc-c        76.3   66.4     60.0    41.0      /       /     73.6
+can tolerate a slightly delayed start, SmallModel is still able                                      LITE     squad         70.1   41.6     31.9    19.2      /       /     39.5
+to maintain FPS and APM targets in the 100 APM and                                                  CALM      mmlu          66.8    /       21.5      /     13.0      /     58.2
+200 APM scenarios. However, under the 300 APM scenario,                                             CALM       arc-c        76.3   31.9      /      22.4      /       /     73.6
+                                                                                                    CALM      squad         70.1   26.3      /      2.5       /       /     39.5
+SmallModel experiences a 26.2% FPS drop and a 20.5% APM
+drop, demonstrating its limitations. Additionally, Section 7.3
+further highlights the lower inference accuracy resulting from                                  in the baseline methods are trained on the same upstream
+underutilized rendering headroom.                                                               dataset, WebInstruct. After training, we evaluate the models on
+   For LayerSkip, it successfully handles the 100 APM sce-                                      three downstream datasets: MMLU, ARC-C, and SQuAD2.0.
+nario for the same reason as SmallModel. However, in the                                        MMLU and ARC-C are evaluated based on accuracy, while
+200 APM and 300 APM scenarios, it introduces a 28.6%                                            SQuAD2.0 is evaluated using the F1 score.
+APM drop while maintaining the game’s FPS. This occurs                                              Table IV presents the inference accuracy of Llama3-8B
+because rendering tasks can tolerate a slightly delayed start.                                  under different layer-skipping settings with LEGO support.
+However, since LayerSkip does not strictly enforce resource                                     We do not put the results of Mistral-7B due to the page
+usage constraints, it leads to severe latency violations for LLM                                limit, which have a similar effect. In this table, the “skip
+inference tasks.                                                                                0” column represents the original LLM accuracy, while the
+   In contrast, LEGO successfully maintains both FPS and                                        “baseline” column represents the accuracy of Llama3-3B.
+APM targets across all co-location scenarios. This is because                                   Notably, Llama3-8B achieves the same execution time as
+LEGO is an algorithm–system co-design speciﬁcally tailored                                      Llama3-3B when skipping 12 layers.
+for gaming scenarios. On the algorithm side, LEGO introduces                                        As shown in the table, LEGO consistently outperforms the
+a resource-oriented layer-skipping adaptor that enables layer-                                  baseline (Llama3-3B) when the number of skipped layers is
+skipping based solely on resource conditions. On the system                                     smaller than 12. This demonstrates that LEGO effectively
+side, LEGO implements a headroom-maximizing scheduler to                                        preserves LLM inference accuracy through knowledge dis-
+ensure that the latency targets of both tasks are met at runtime.                               tillation. In fact, in the 100 APM and 200 APM scenarios,
+                                                                                                LEGO requires skipping only 5 layers in 90% of cases. In
+C. Inference Accuracy                                                                           the 300 APM scenario, LEGO skips only 13 layers in 80%
+  In this subsection, we present the inference accuracy im-                                     of cases. Although LEGO’s inference accuracy falls below
+provements of LEGO compared to baseline methods. Speciﬁ-                                        Llama3-3B in the 300 APM scenario, Llama3-3B experiences
+cally, both LEGO’s adaptor and the corresponding modules                                        severe latency violations under this setting. In contrast, LEGO
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+                                                                                           65
+                                                                                                   SmallModel     LayerSkip   LEGO
+                                                                                           60
+
+
+
+
+                                                                                 99%FPS
+                                                                                           55
+
+                                                                                           50
+
+                                                                                           45
+
+                                                                                           40
+                                                                                                (a)The99%FPSwithSmallModel,LayerSkipandLEGOundervariable­lengthprompt.
+
+                                                                                        300
+                                                                                                    SmallModel
+                                                                                        250         LayerSkip
+                                                                                                    LEGO
+
+
+
+
+                                                                              99%APM
+                                                                                        200
+Fig. 13: The win rate heatmap under 200 APM scenario, each
+                                                                                        150
+cell denotes the win rate of column model over row model.                               100
+                                                                                           50
+
+ensures that both LLM inference and rendering tasks meet                                    0
+                                                                                                100APM   200APM      300APM   100APM   200APM   300APM   100APM   200APM   300APM
+their latency targets simultaneously.                                                                    BlackMyth                     FFXVI                       RDR2
+
+   In the lower half of Table IV, we compare the inference                                      (b)The99%APMwithSmallModel,LayerSkipandLEGOundervariable­lengthprompt.
+
+accuracy of two layer-skipping baselines. Since these methods               Fig. 14: The 99% FPS and APM with SmallModel, LayerSkip
+rely on predeﬁned conﬁdence thresholds for layer skipping, it               and LEGO under variable-length prompts.
+can be difﬁcult to adjust the thresholds to achieve a desired
+average number of skipped layers. As shown in the table, both               models compared to LEGO-12. This is likely because LEGO
+methods suffer signiﬁcant accuracy degradation due to two key               was trained with limited ﬁne-tuning data, whereas Llama3-3B
+factors. First, these layer-skipping methods use KV replication             is a mature, well-trained model.
+to ﬁll the KV cache of skipped layers, leading to accuracy                     It is important to note that all models in this experiment
+loss. Second, these methods discard the knowledge contained                 run at a ﬁxed 200 APM, so the comparison focuses solely on
+in the skipped layers, resulting in direct loss of important                inference accuracy. When applying real layer-skipping traces
+information. Based on the table, we calculate the accuracy                  from BlackMyth, FFXVI, and RDR2, LEGO achieves a 100%
+degradation introduced by various layer-skipping techniques.                win rate over the baselines due to its ability to maintain the
+The results show that LEGO reduces accuracy loss by up to                   target APM under limited resources.
+86.3% when skipping 12 layers, compared to LITE.
+                                                                            E. Effect vs Nvidia ACE
+D. Effect on Real Gaming
+                                                                               Nvidia ACE [43] is a LLM-powered AI game companion,
+   To evaluate the performance of LEGO in a real gaming                     which has drawn signiﬁcant attention. Since the highest pri-
+scenario, we adopt an open-sourced project that evaluates                   ority in gaming is to ensure the player’s visual experience,
+LLMs using Street Fighter III. In this project, LLMs control                Nvidia ACE proposes a relatively small model, INT4-based
+ﬁghters and compete against each other to determine which                   Nemotron3-4B. Experimental results show that INT4-based
+model performs better in real-time gameplay. Since the game                 Nemotron3-4B achieves win rates of 5%, 12.5%, 12.5%,
+is relatively simple, it does not need the GPU for rendering.               15%, and 15% against Llama3-8B, LEGO-4, LEGO-8, LEGO-
+   In this experiment, we evaluate the following models:                    12, and Llama3-3B, respectively. All opponents use FP16
+Llama3-8B, Llama3-3B, LEGO-4, LEGO-8, LEGO-12, and                          precision, as LEGO could utilize more GPU headroom to
+LITE-4. Here, LEGO-4 refers to Llama3-8B with 4 layers                      support FP16 execution. These results demonstrate that LEGO
+skipped using LEGO, while LITE-4 refers to Llama3-8B with                   outperforms NVIDIA ACE. Actually, in all experiments, we
+4 layers skipped using LITE. Each model pair is evaluated                   use an FP16-based Llama3-3B as a stronger baseline.
+through 40 combat rounds, and all models are conﬁgured to
+operate at 200 APM to ensure a fair comparison of inference                 F. Variable-length Prompts
+accuracy. We do not put the results of 100 APM and 300 APM                     In this experiment, the input length is uniformly sampled
+due to the page limit, which have similar effects.                          within the range [256, 1024]. Figure 14(a) presents the 99th-
+   Figure 13 shows the win rate heatmap among these LLMs.                   percentile FPS of the games, and Figure 14(b) shows the 99th-
+Each cell represents the win rate of the model in the column                percentile APM of the LLM inference tasks.
+over the model in the row. For example, the win rate of                        As shown, SmallModel successfully handles the 100 APM
+Llama3-8B over LITE-4 is 95.0%. As expected, Llama3-8B                      scenario but fails under 200 APM and 300 APM. At 200
+achieves the highest win rate against all other models due to               APM, it experiences a 3.1% FPS drop and a 2.3% APM
+its full parameter and knowledge capacity. Among the reduced                drop; at 300 APM, the drops increase to 29.3% and 25.0%,
+models, LEGO-4 consistently outperforms LEGO-8, LEGO-                       respectively. This occurs because SmallModel cannot sustain
+12, Llama3-3B, and LITE-4. Similarly, LEGO-8 surpasses                      inference workloads when the input length exceeds 768 under
+LEGO-12, Llama3-3B, and LITE-4. The win rate of LEGO-12                     high APM conditions. For LayerSkip, it successfully handles
+over Llama3-3B is 47.5%, indicating comparable performance.                 the 100 APM scenario for the same reason as SmallModel.
+While LEGO-12 and Llama3-3B exhibit similar inference                       However, under 200 APM and 300 APM, it incurs an average
+accuracy, Llama3-3B shows higher win rates against other                    30.1% APM drop while maintaining game FPS. In contrast,
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+ HeadroomUsage(%)   100
+                                                                                                                               TABLE V: The inference accuracy of LEGO under different
+                      80
+                                     SmallModel       LayerSkip   LEGO
+                                                                                                                               layer-skipping conﬁgurations.
+                      60
+                                                                                                                                     Model        Dataset   Origin     skip-3/4   skip-6/8   skip-9/12
+                      40                                                                                                             DeepSeek     mmlu      56.6       56.3       56.1       45.1
+                      20                                                                                                             DeepSeek     arc-c     55.6       55.4       53.2       44.2
+                                                                                                                                     DeepSeek     squad     26.8       25.5       23.5       13.1
+                        0
+                                 BlackMyth    FFXVI       RDR2    BlackMyth         FFXVI   RDR2   BlackMyth   FFXVI    RDR2         Mixtral      mmlu      67.8       67.8       67.3       59.9
+                                             100APM                            200APM                          300APM                Mixtral      arc-c     61.7       56.1       50.8       14.9
+                                                                                                                                     Mixtral      squad     35.3       32.9       30.4       16.3
+Fig. 15: The headroom usage with SmallModel, LayerSkip and
+LEGO under different Game-LLM co-locations.                                                                                    TABLE VI: The inference accuracy and Normalized Inference
+                                                                                                                        1.0
+                                                                                                                               Time of MoE models when adjusting topk.
+                                                                                                                        0.8
+                                                                                                                                       Model         topk   accuracy     Normalized Inference Time
+                                                                                                                                       DeepSeek      6      56.6         100.00%
+                                                                                                                        0.6            DeepSeek      4      55.1         93.94%
+                                                                          LayerM
+                       LayerM
+
+
+
+
+                                                                                                                                       DeepSeek      2      49.3         88.33%
+                                                                                                                        0.4
+                                                                                                                                       DeepSeek      1      35.1         84.47%
+                                                                                                                                       Mixtral       2      67.8         100.00%
+                                                                                                                        0.2
+                                                                                                                                       Mixtral       1      61.2         90.71%
+
+
+                                                                                                                        0.0
+                                             LayerL                                          LayerL
+                                         DeepSeek­V2­Lite                                   Mixtral­8x7B
+                                                                                                                               substantial portion of knowledge in MoE architectures resides
+Fig. 16: The similarity heatmaps of two popular MoE Models.                                                                    within experts, and removing entire transformer layers disrupts
+                                                                                                                               expert routing and representation learning.
+LEGO consistently maintains both APM and FPS across all                                                                           We further evaluate DeepSeek-V2-Lite and Mixtral-8x7B
+scenarios, demonstrating its robustness and effectiveness under                                                                by measuring inference accuracy and latency across different
+variable input conditions.                                                                                                     top-k values. As shown in Table VI, reducing top-k maintains
+                                                                                                                               reasonable accuracy for MoE models, but execution time does
+G. Rendering Headroom Usage                                                                                                    not decrease proportionally. Moreover, since top-k is typically
+   Figure 15 presents the headroom usage of SmallModel,                                                                        a small integer, it provides only a few discrete adjustment
+LayerSkip, and LEGO when co-locating Llama models with                                                                         options, corresponding to ﬁxed resource usage levels for LLM
+games under different APM scenarios. As shown in Figure 15,                                                                    inference. This limited ﬂexibility makes quantization poorly
+LEGO improves rendering headroom usage by 25.2%, 28.6%,                                                                        suited for dynamic resource conditions in gaming scenarios.
+and 18.8% compared to SmallModel in the 100 APM, 200
+APM, and 300 APM scenarios. Similarly, LEGO achieves 0%,                                                                       I. Multiple AI Agents
+14.0%, and 16.2% improvement in rendering headroom usage                                                                          When multiple agents are present (up to nine AI agents in
+over LayerSkip in the three APM scenarios.                                                                                     Dota-like games), LLM inference must be executed in batches,
+   In the 100 APM scenario, LEGO shows no improvement                                                                          which dramatically increases latency. For instance, with an
+over LayerSkip. This is because the rendering headroom                                                                         input length of 512, Llama3-8B requires about 400 ms to
+between rendering tasks alone is sufﬁcient for LLM inference.                                                                  generate the ﬁrst token at batch size = 9, while the execution
+However, in the 200 APM and 300 APM scenarios, LEGO’s                                                                          window at 200 APM is only 300 ms. Therefore, when multiple
+improved headroom usage primarily stems from its ability to                                                                    AI agents are required, smaller models such as Llama3-3B or
+utilize GPU idle time within rendering tasks, enabling more                                                                    below must be used.
+efﬁcient execution of LLM inference tasks.                                                                                        Our method fully supports Llama3-3B with adaptor-based
+                                                                                                                               layer skipping. Experimental results show that, at input length
+H. MoE Models                                                                                                                  = 512, batch size = 9, and output length = 8, LEGO maintains
+   We evaluate LEGO on two mainstream MoE models,                                                                              the target FPS and target APM under both 100 APM and
+DeepSeek-V2-Lite and Mixtral-8x7B. Figure 16 ﬁrst illustrates                                                                  200 APM scenarios. In contrast, SmallModel can only support
+the similarity heatmaps of both models. As shown, both MoE                                                                     Llama3-1B at 100 APM and fails to meet performance targets
+models exhibit higher inter-layer similarity in the later layers,                                                              at 200 APM. However, LEGO cannot support Llama3-3B at
+consistent with the dense LLMs.                                                                                                300 APM, as the LLM inference time (300 ms) exceeds the
+   Table V reports the inference accuracy of both models                                                                       execution window (200 ms).
+under various layer-skipping conﬁgurations and datasets. Since
+DeepSeek-V2-Lite has 28 layers, we test skipping 3, 6, and                                                                     J. Justifying APM as a Target
+9 layers; for Mixtral-8x7B, we skip 4, 8, and 12 layers,                                                                          For human players, a high-quality 150 APM gameplay
+consistent with the dense LLM settings. As shown, the adaptor                                                                  often outperforms a low-quality 200 APM one. However, this
+effectively preserves inference accuracy when fewer than eight                                                                 observation does not hold for LLMs. Table VII shows the
+layers are skipped, but accuracy degradation becomes more                                                                      win rate of 150APM Llama3-8B against LEGO-4, LEGO-8,
+pronounced at higher skip levels. This occurs because a                                                                        LEGO-12 and Llama3-3B under 200 APM. As shown, 150
+
+
+
+
+                                    Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+TABLE VII: The win rate of Llama3-8B (150 APM) against                                             VIII. R ELATED W ORK
+the opponent models (200 APM).
+                                                                                  a) Layer Skipping: With large language models, acceler-
+                         LEGO-4      LEGO-8      LEGO-12      Llama3-3B     ating inference by selectively skipping layers is a key research
+ Llama3-8B (150APM)      7.5%        10%         12.5%        7.5%
+                                                                            focus. CALM [52] trains a classiﬁer to assess token consis-
+                                                                            tency and adjusts computational resources dynamically. LITE
+                                                                            [58] employs conﬁdence-based early exiting for layer selec-
+APM Llama3-8B achieves a maximum win rate of 12.5%.                         tion. These methods reduce average computation but struggle
+This is because LLMs with layer skipping could also main-                   with dynamic, limited time in Gaming-LLM co-location. In
+tain high inference accuracy whereas the action quality of                  addition, several works [17], [35], [37] have proposed layer-
+human players varies widely, often approaching zero. In LLM-                skipping methods to accelerate LLM inference. However, these
+powered gaming, APM serves as a user- or developer-deﬁned                   approaches focus solely on the dynamics of token generation
+operational target, assuming that each action is effective.                 and fail to provide static and stable acceleration suitable for
+Hence, we adopt APM as the primary performance metric.                      gaming scenarios.
+                                                                               More importantly, LLM-Streamline [13] also proposes to
+K. Overhead and Discussions                                                 replace consecutive transformer layers with a lightweight net-
+                                                                            work. However, we believe that LLM-Streamline’s reasoning
+    Overhead: The overhead of our method primarily arises                   process for the design is insufﬁcient. While more than 90%
+from two aspects: ofﬂine adaptor preparation and online LR                  of consecutive transformer layers exhibit over 80% similarity,
+model training. For ofﬂine adaptor preparation, the overhead                this alone does not justify skipping them. Our experiments
+depends on the number of adaptors required for a given co-                  show that skipping discrete layers leads to greater perfor-
+location scenario. BlackMyth, for instance, requires up to 14               mance degradation than skipping consecutive ones. This is
+LLM adaptors and has a total training time of 36 hours. This                because knowledge is distributed not only within individual
+ofﬂine overhead is negligible.                                              transformer layers but also across their inter-layer connections,
+    Each adaptor (an FFN network) occupies 268.8 MB, totaling               and skipping discrete layers leads to more knowledge loss.
+3.23 GB for 12 adaptors. The intermediate-result tensor adds                      b) Game Co-location: Several studies have explored co-
+67.5 MB, but since it is required regardless of layer skipping,             locating different games [29], [30], [50], [65] and games with
+it incurs no extra memory overhead. At runtime, ﬁtting an LR                other tasks [9], [66]. GAugur [29] employs machine learning
+model with three input windows takes only 0.9 ms, making it                 to predict performance interference among co-located games.
+suitable for scheduling.                                                    PilotFish [66] integrates cloud gaming with deep learning
+    Discussion about Adaptive Rendering Workload: Adaptive                  training, utilizing idle GPU cycles between frames. However,
+rendering techniques are activated only when GPU resources                  these co-located tasks lack strict runtime requirements, making
+are insufﬁcient. Methods such as Dynamic Resolution Scaling                 it impractical to dynamically adjust them based on varying
+(DRS) and Microsoft Flight Simulator Scaling (MSFS) dy-                     computation times in our scenario.
+namically reduce rendering workloads to maintain frame rate.                      c) GPU Co-location: Currently, numerous researches
+In our experiments, all games were conﬁgured at maximum                     focus on improving GPU utilization and optimizing the perfor-
+graphics settings with DRS enabled, yet no workload adjust-                 mance of co-located applications. Several systems have been
+ment was triggered on the RTX 4090.                                         developed for handling DNN inference [15], [19], [33], [47]
+    Discussion about Quantization and Dynamic Pruning:                      and training workloads [31], [62]. TurboTransformers [19]
+LEGO is compatible with quantization techniques. Currently,                 addresses memory allocation and algorithm optimization for
+LEGO supports experiments using FP16-based Llama3-8B.                       variable-length requests. Additionally, some systems are de-
+After applying INT4 quantization, LEGO can further support                  signed to handle both real-time and best-effort tasks in a biased
+LLMs up to 30B parameters. In addition, LEGO can work with                  GPU sharing environment [12], [25], [56], [64], [67]. However,
+any static optimization method, like static quantization and                these systems generally fail to address the challenges in Game-
+sparsity methods. In contrast, LEGO cannot cooperate with                   LLM co-location scenarios where computational resources are
+dynamic acceleration methods, since such approaches intro-                  dynamic and often insufﬁcient.
+duce execution-time uncertainty and additional computational
+overhead.                                                                                             IX. C ONCLUSION
+    Discussion about Small Language Models: Although Small                     In this work, we propose LEGO, an algorithm-system co-
+Language Models (SLMs) are becoming increasingly capable,                   design that enables the efﬁcient co-location of LLM inference
+SLMs struggle to handle long-context reasoning and deep                     and game rendering tasks. By introducing a resource-oriented
+compositional tasks. As a result, while SLMs may alleviate                  layer-skipping adaptor and a headroom-maximizing scheduler,
+some of the challenges that LEGO addresses in simple tasks,                 LEGO effectively balances resource utilization while ensuring
+LEGO remains essential for more complex scenarios, which                    latency targets for both tasks. Experimental results on an
+require longer contexts, deeper reasoning, and extended com-                Nvidia RTX 4090 demonstrate signiﬁcant improvements in
+putation time under limited resources.                                      rendering headroom usage and LLM inference accuracy.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+                         ACKNOWLEDGMENTS                                          [21] Git-disl, “LLM Game Agent Papers,” https://github.com/git-disl/
+                                                                                       awesome-LLM-game-agent-papers, 2024, accessed: 2025-07-27.
+  This work is partially sponsored by the National                                [22] Google, “Google recaps how its LLMs could change in-game in-
+Key Research and Development Program of China                                          teractions,” https://the-decoder.com/google-recaps-how-its-llms-could-
+                                                                                       change-in-game-interactions/, 2024, accessed: 2025-07-27.
+(2024YFB4505703), the National Natural Science Foundation                         [23] J. Gregory, Game engine architecture. AK Peters/CRC Press, 2018.
+of China (62302302, 62232011), and Natural Science                                [24] C. Guo, J. Tang, W. Hu, J. Leng, C. Zhang, F. Yang, Y. Liu, M. Guo,
+Foundation of Shanghai Municipality (24ZR1430500). This                                and Y. Zhu, “Olive: Accelerating large language models via hardware-
+                                                                                       friendly outlier-victim pair quantization,” in Proceedings of the 50th
+work was supported by Ant Group through CCF-Ant Research                               Annual International Symposium on Computer Architecture, 2023, pp.
+Fund. Quan Chen is the corresponding author.                                           1–15.
+                                                                                  [25] M. Han, H. Zhang, R. Chen, and H. Chen, “Microsecond-scale pre-
+                              R EFERENCES                                              emption for concurrent {GPU-accelerated}{DNN} inferences,” in 16th
+                                                                                       USENIX Symposium on Operating Systems Design and Implementation
+ [1] “Actions per minute deﬁne in lark,” https://www.larksuite.com/en us/              (OSDI 22), 2022, pp. 539–558.
+     topics/gaming-glossary/actions-per-minute-apm, accessed: January 10,         [26] InZOI, “Creating Next-Gen Agents in KRAFTON’s inZOI,”
+     2025.                                                                             https://schedule.gdconf.com/session/creating-next-gen-agents-in-
+ [2] “Actions per minute deﬁne in wikipedia,” https://en.wikipedia.org/wiki/           kraftons-inzoi-presented-by-nvidia/911189?utm source=chatgpt.com,
+     Actions per minute, accessed: January 10, 2025.                                   2025, accessed: 2025-10-21.
+ [3] “Evaluate llms in real time with street ﬁghter iii,” https://github.com/     [27] I. Lambe, “The NEW Surprising Number of Steam Games that Use
+     OpenGenerativeAI/llm-colosseum, accessed: January 10, 2025.                       GenAI,” https://www.totallyhuman.io/blog/the-surprising-new-number-
+ [4] “Mistral-7b and mistral-4b,” https://arxiv.org/abs/2310.06825, accessed:          of-genai-games-on-steam, 2025, accessed: 2025-10-21.
+     January 10, 2025.                                                            [28] J. Leandro, S. Rao, M. Xu, W. Xu, N. Jojic, C. Brockett, and B. Dolan,
+ [5] “Nvidia nsight systems,” https://developer.nvidia.com/nsight-systems,             “Geneva: Generating and visualizing branching narratives using llms,”
+     accessed: January 10, 2025.                                                       in 2024 IEEE Conference on Games (CoG). IEEE, 2024, pp. 1–5.
+ [6] J. A., “How to Run Open-Source LLMs Locally with the OpenAI Con-             [29] Y. Li, C. Shan, R. Chen, X. Tang, W. Cai, S. Tang, X. Liu, G. Wang,
+     nector and Ollama in Mendix,” https://www.mendix.com/blog/how-to-                 X. Gong, and Y. Zhang, “Gaugur: Quantifying performance interfer-
+     run-open-source-llms-locally-with-the-openai-connector-and-ollama/,               ence of colocated games for improving resource utilization in cloud
+     2024, accessed: 2025-07-27.                                                       gaming,” in Proceedings of the 28th international symposium on high-
+ [7] C. Berner, G. Brockman, B. Chan, V. Cheung, P. Debiak, C. Dennison,               performance parallel and distributed computing, 2019, pp. 231–242.
+     D. Farhi, Q. Fischer, S. Hashme, C. Hesse et al., “Dota 2 with large         [30] Y. Li, C. Zhao, X. Tang, W. Cai, X. Liu, G. Wang, and X. Gong, “To-
+     scale deep reinforcement learning,” arXiv preprint arXiv:1912.06680,              wards minimizing resource usage with qos guarantee in cloud gaming,”
+     2019.                                                                             IEEE Transactions on Parallel and Distributed Systems, vol. 32, no. 2,
+ [8] B. Chen, C. Shu, E. Shareghi, N. Collier, K. Narasimhan, and                      pp. 426–440, 2020.
+     S. Yao, “Fireact: Toward language agent ﬁne-tuning,” arXiv preprint          [31] G. Lim, J. Ahn, W. Xiao, Y. Kwon, and M. Jeon, “Zico: Efﬁcient {GPU}
+     arXiv:2310.05915, 2023.                                                           memory sharing for concurrent {DNN} training,” in 2021 USENIX
+ [9] B. Chen, H. Zhao, W. Cui, Y. He, S. Zhang, Q. Chen, Z. Li, and                    Annual Technical Conference (USENIX ATC 21), 2021, pp. 161–175.
+     M. Guo, “Maximizing the utilization of gpus used by cloud gaming             [32] C. Lin, Z. Han, C. Zhang, Y. Yang, F. Yang, C. Chen, and L. Qiu,
+     through adaptive co-location with combo,” in Proceedings of the 2023              “Parrot: Efﬁcient serving of {LLM-based} applications with semantic
+     ACM Symposium on Cloud Computing, 2023, pp. 265–280.                              variable,” in 18th USENIX Symposium on Operating Systems Design
+[10] J. Chen, Y. Lin, S. Peng, S. Wu, K. Kent, H. Dai, K. Ye, and                      and Implementation (OSDI 24), 2024, pp. 929–945.
+     Y. Wang, “Understanding serverless inference in mobile-edge networks:        [33] Z. Liu, J. Leng, Z. Zhang, Q. Chen, C. Li, and M. Guo, “Veltair: towards
+     A benchmark approach,” IEEE Transactions on Cloud Computing, 2024.                high-performance multi-tenant deep learning services via adaptive com-
+[11] P. Chen, P. Bu, J. Song, Y. Gao, and B. Zheng, “Can vlms play action              pilation and scheduling,” in Proceedings of the 27th ACM International
+     role-playing games? take black myth wukong as a study case,” arXiv                Conference on Architectural Support for Programming Languages and
+     preprint arXiv:2409.12889, 2024.                                                  Operating Systems, 2022, pp. 388–401.
+[12] Q. Chen, H. Yang, J. Mars, and L. Tang, “Baymax: Qos awareness and           [34] F. Luna, Introduction to 3D game programming with DirectX 12.
+     increased utilization for non-preemptive accelerators in warehouse scale          Mercury Learning and Information, 2016.
+     computers,” ACM SIGPLAN Notices, vol. 51, no. 4, pp. 681–696, 2016.          [35] X. Luo, W. Wang, and X. Yan, “Adaptive layer-skipping in pre-trained
+[13] X. Chen, Y. Hu, J. Zhang, Y. Wang, C. Li, and H. Chen, “Streamlining              llms,” arXiv preprint arXiv:2503.23798, 2025.
+     redundant layers to compress large language models,” in The Thirteenth       [36] W. Ma, Q. Mi, Y. Zeng, X. Yan, Y. Wu, R. Lin, H. Zhang, and J. Wang,
+     International Conference on Learning Representations, 2025.                       “Large language models play starcraft ii: Benchmarks and a chain of
+[14] P. Cheng, Y. Dai, T. Hu, H. Xu, Z. Zhang, L. Han, N. Du, and X. Li,               summarization approach,” arXiv preprint arXiv:2312.11865, 2023.
+     “Self-playing adversarial language game enhances llm reasoning,” Ad-         [37] X. Men, M. Xu, Q. Zhang, B. Wang, H. Lin, Y. Lu, X. Han, and W. Chen,
+     vances in Neural Information Processing Systems, vol. 37, pp. 126 515–            “Shortgpt: Layers in large language models are more redundant than you
+     126 543, 2024.                                                                    expect,” arXiv preprint arXiv:2403.03853, 2024.
+[15] A. Dhakal, S. G. Kulkarni, and K. Ramakrishnan, “Gslice: controlled          [38] K. Meng, D. Bau, A. Andonian, and Y. Belinkov, “Locating and
+     spatial sharing of gpus for a scalable inference platform,” in Proceedings        editing factual associations in GPT,” Advances in Neural Information
+     of the 11th ACM Symposium on Cloud Computing, 2020, pp. 492–506.                  Processing Systems, vol. 35, pp. 17 359–17 372, 2022.
+[16] A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-Dahle, A. Letman,           [39] NetEase, “NetEase to add game version of ChatGPT to Justice
+     A. Mathur, A. Schelten, A. Yang, A. Fan et al., “The llama 3 herd of              Online Mobile for dialogue generation and unique reactions,”
+     models,” arXiv preprint arXiv:2407.21783, 2024.                                   https://gameworldobserver.com/2023/02/16/netease-chatgpt-justice-
+[17] M. Elhoushi, A. Shrivastava, D. Liskovich, B. Hosmer, B. Wasti, L. Lai,           online-mobile-dialogue-generation?utm source=chatgpt.com,          2025,
+     A. Mahmoud, B. Acun, S. Agarwal, A. Roman et al., “Layerskip:                     accessed: 2025-10-21.
+     Enabling early exit inference and self-speculative decoding,” arXiv          [40] A. News, “Can AI make video games more immersive?”
+     preprint arXiv:2404.16710, 2024.                                                  https://apnews.com/article/ai-artiﬁcial-intelligence-video-games-npc-
+[18] Epic Games, “Unreal engine.” [Online]. Available: https://www.                    c1327bb9130136d0a5f658f44176c5e7, 2024, accessed: 2025-07-27.
+     unrealengine.com                                                             [41] Nvidia, “RTX 4090 whitepaper,” https://images.nvidia.com/aem-dam/
+[19] J. Fang, Y. Yu, C. Zhao, and J. Zhou, “Turbotransformers: an efﬁcient             Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf, 2023, accessed:
+     gpu serving system for transformer models,” in Proceedings of the                 2025-07-27.
+     26th ACM SIGPLAN Symposium on Principles and Practice of Parallel            [42] Nvidia, “GeForce NOW,” https://www.nvidia.com/en-sg/geforce-now/,
+     Programming, 2021, pp. 389–402.                                                   2025, accessed: 2025-10-21.
+[20] ggml, “LlaMa.cpp,” https://github.com/ggml-org/llama.cpp, 2022, ac-          [43] Nvidia, “NVIDIA ACE for Games,” https://developer.nvidia.com/ace-
+     cessed: 2025-07-27.                                                               for-games, 2025, accessed: 2025-10-21.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+[44] Nvidia, “NVIDIA Announces First Digital Human Technologies On-               [66] W. Zhang, B. Chen, Z. Han, Q. Chen, P. Cheng, F. Yang, R. Shu,
+     Device Small Language Model,” https://blogs.nvidia.com/blog/digital-              Y. Yang, and M. Guo, “{PilotFish}: Harvesting free cycles of cloud
+     human-technology-mecha-break/, 2025, accessed: 2025-10-21.                        gaming with deep learning training,” in 2022 USENIX Annual Technical
+[45] Nvidia, “NVIDIA Redeﬁnes Game AI With ACE Autonomous Game                         Conference (USENIX ATC 22), 2022, pp. 217–232.
+     Characters,”      https://www.nvidia.com/en-us/geforce/news/nvidia-ace-      [67] W. Zhang, W. Cui, K. Fu, Q. Chen, D. E. Mawhirter, B. Wu, C. Li, and
+     autonomous-ai-companions-pubg-naraka-bladepoint/, 2025, accessed:                 M. Guo, “Laius: Towards latency awareness and improved utilization of
+     2025-10-21.                                                                       spatial multitasking accelerators in datacenters,” in Proceedings of the
+[46] Nvidia, “RTX 5090 whitepaper,” https://images.nvidia.com/aem-dam/                 ACM international conference on supercomputing, 2019, pp. 58–68.
+     Solutions/geforce/blackwell/nvidia-rtx-blackwell-gpu-architecture.pdf,       [68] Y. Zhong, S. Liu, J. Chen, J. Hu, Y. Zhu, X. Liu, X. Jin, and
+     2025, accessed: 2025-07-27.                                                       H. Zhang, “{DistServe}: Disaggregating preﬁll and decoding for
+[47] C. Olston, N. Fiedel, K. Gorovoy, J. Harmsen, L. Lao, F. Li, V. Ra-               goodput-optimized large language model serving,” in 18th USENIX
+     jashekhar, S. Ramesh, and J. Soyke, “Tensorﬂow-serving: Flexible, high-           Symposium on Operating Systems Design and Implementation (OSDI
+     performance ml serving,” arXiv preprint arXiv:1712.06139, 2017.                   24), 2024, pp. 193–210.
+[48] J. S. Park, J. C. O’Brien, C. J. Cai, M. R. Morris, P. Liang, and M. S.      [69] K. Zhu, Y. Gao, Y. Zhao, L. Zhao, G. Zuo, Y. Gu, D. Xie, Z. Ye,
+     Bernstein, “Generative agents: Interactive simulacra of human behavior.           K. Kamahori, C.-Y. Lin et al., “{NanoFlow}: Towards optimal large
+     arxiv,” arXiv preprint ArXiv:2304.03442, 2023.                                    language model serving throughput,” in 19th USENIX Symposium on
+[49] P. Patel, E. Choukse, C. Zhang, A. Shah, Í. Goiri, S. Maleki, and                Operating Systems Design and Implementation (OSDI 25), 2025, pp.
+     R. Bianchini, “Splitwise: Efﬁcient generative llm inference using phase           749–765.
+     splitting,” in 2024 ACM/IEEE 51st Annual International Symposium on
+     Computer Architecture (ISCA). IEEE, 2024, pp. 118–132.
+[50] Z. Qi, J. Yao, C. Zhang, M. Yu, Z. Yang, and H. Guan, “Vgris:
+     Virtualized gpu resource isolation and scheduling in cloud gaming,”
+     ACM Transactions on Architecture and Code Optimization (TACO),
+     vol. 11, no. 2, pp. 1–25, 2014.
+[51] S. Sarfaraz, “1 in 5 Steam games released in 2025 use Gen-
+     erative AI,” https://tech4gamers.com/1-in-5-steam-games-in-2025-use-
+     generative-ai/, 2025, accessed: 2025-10-21.
+[52] T. Schuster, A. Fisch, J. Gupta, M. Dehghani, D. Bahri, V. Tran, Y. Tay,
+     and D. Metzler, “Conﬁdent adaptive language modeling,” Advances in
+     Neural Information Processing Systems, vol. 35, pp. 17 456–17 472,
+     2022.
+[53] X. Shao, W. Jiang, F. Zuo, and M. Liu, “Swarmbrain: Embodied agent
+     for real-time strategy game starcraft ii via large language models,” arXiv
+     preprint arXiv:2401.17749, 2024.
+[54] C. Siebler, “Optimizing latency for Azure OpenAI Service,” https:
+     //clemenssiebler.com/posts/optimizing-latency-azure-openai/, 2023, ac-
+     cessed: 2025-07-27.
+[55] Steam, “AI Roguelite,” https://store.steampowered.com/app/1889620/
+     AI Roguelite/, 2025, accessed: 2025-10-21.
+[56] F. Strati, X. Ma, and A. Klimovic, “Orion: Interference-aware, ﬁne-
+     grained gpu sharing for ml applications,” in Proceedings of the Nine-
+     teenth European Conference on Computer Systems, 2024, pp. 1075–
+     1092.
+[57] P. Sweetser, “Large language models and video games: A preliminary
+     scoping review,” in Proceedings of the 6th ACM Conference on Conver-
+     sational User Interfaces, 2024, pp. 1–8.
+[58] N. Varshney, A. Chatterjee, M. Parmar, and C. Baral, “Accelerating llama
+     inference by enabling intermediate layer decoding via instruction tuning
+     with lite,” arXiv preprint arXiv:2310.18581, 2023.
+[59] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+     Ł. Kaiser, and I. Polosukhin, “Attention is all you need,” in Advances
+     in neural information processing systems, 2017.
+[60] T. Verge, “Nvidia’s AI NPCs are no longer chatbots — they’re your
+     new PUBG teammate,” https://www.theverge.com/2025/1/6/24337949/
+     nvidia-ace-ai-npcs-pubg-ally-teammate?utm source=chatgpt.com,
+     2025, accessed: 2025-10-21.
+[61] C. Vohera, H. Chheda, D. Chouhan, A. Desai, and V. Jain, “Game
+     engine architecture and comparative study of different game engines,”
+     in 2021 12th International Conference on Computing Communication
+     and Networking Technologies (ICCCNT). IEEE, 2021, pp. 1–6.
+[62] G. Wang, K. Wang, K. Jiang, X. Li, and I. Stoica, “Wavelet: Efﬁcient dnn
+     training with tick-tock scheduling,” Proceedings of Machine Learning
+     and Systems, vol. 3, pp. 696–710, 2021.
+[63] G. Wang, Y. Xie, Y. Jiang, A. Mandlekar, C. Xiao, Y. Zhu, L. Fan, and
+     A. Anandkumar, “Voyager: An open-ended embodied agent with large
+     language models,” arXiv preprint arXiv:2305.16291, 2023.
+[64] W. Xiao, S. Ren, Y. Li, Y. Zhang, P. Hou, Z. Li, Y. Feng, W. Lin,
+     and Y. Jia, “{AntMan}: Dynamic scaling on {GPU} clusters for deep
+     learning,” in 14th USENIX Symposium on Operating Systems Design
+     and Implementation (OSDI 20), 2020, pp. 533–548.
+[65] C. Zhang, J. Yao, Z. Qi, M. Yu, and H. Guan, “vgasa: Adaptive
+     scheduling algorithm of virtualized gpu resource in cloud gaming,” IEEE
+     Transactions on Parallel and Distributed Systems, vol. 25, no. 11, pp.
+     3036–3045, 2013.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:40:36 UTC from IEEE Xplore. Restrictions apply.
+

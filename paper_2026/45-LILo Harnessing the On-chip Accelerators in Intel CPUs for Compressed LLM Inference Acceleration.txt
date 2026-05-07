@@ -1,0 +1,1376 @@
+                                                                                                                                                                       2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+                                                                                                                                                                     LIL O: Harnessing the On-chip Accelerators in Intel CPUs for
+                                                                                                                                                                              Compressed LLM Inference Acceleration
+                                                                                                                                                                                         Hyungyo Kim1∗ , Qirong Xia1∗ , Jinghan Huang1 , Nachuan Wang1 , Younjoo Lee2 ,
+                                                                                                                                                                                             Jung Ho Ahn2 , Wajdi K Feghali3 , Ren Wang3 , and Nam Sung Kim1 ,
+                                                                                                                                                                                     1
+                                                                                                                                                                                      University of Illinois at Urbana-Champaign, 2 Seoul National University, and 3 Intel Corporation
+                                                                                                                                                                                    {hyungyo2, qirongx2, jinghan4, nachuan3, nskim}@illinois.edu, {younjoo0614, gajh}@snu.ac.kr,
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408577
+
+
+
+
+                                                                                                                                                                                                                  {wajdi.k.feghali, ren.wang}@intel.com
+
+
+
+                                                                                                                                                                        Abstract—The ever-growing sizes of large language models                  even expensive GPUs are designed with a limited memory
+                                                                                                                                                                     (LLMs) introduce significant infrastructure challenges due to                capacity to provide higher memory bandwidth, exemplifying
+                                                                                                                                                                     their immense memory capacity demands. While the de facto                    a fundamental trade-off in memory technology. For example,
+                                                                                                                                                                     approach has been to deploy multiple high-end GPUs, each with
+                                                                                                                                                                     a limited memory capacity, the prohibitive cost of such systems              Llama3-405B model [32] requires 2 DGX-H100 instances,
+                                                                                                                                                                     has become a major barrier to the widespread deployment of                   each with 8 GPUs, to simply provide enough memory capacity
+                                                                                                                                                                     frontier LLMs. As a result, CPU-based inference has become an                to store the 405B parameters in BF16 format (i.e., 754 GB),
+                                                                                                                                                                     appealing and cost-efficient alternative, since a CPU can offer              costing roughly $800K [12]. Such prohibitively expensive
+                                                                                                                                                                     an order of magnitude larger memory capacity at a fraction                   infrastructure restricts access to state-of-the-art LLMs and
+                                                                                                                                                                     of the cost while providing competitive throughput for matrix-
+                                                                                                                                                                     vector multiplication with the latest Advanced Matrix Extensions             motivates more affordable deployment alternatives.
+                                                                                                                                                                     (AMX). It not only broadens accessibility for users without multi-              In this context, CPU-based inference has emerged as a
+                                                                                                                                                                     GPU setups but also enables hyperscalers to leverage underuti-               practical, low-cost alternative—appealing not only to users or
+                                                                                                                                                                     lized CPU servers to accommodate temporarily surging inference               organizations lacking access to multi-GPU systems but also
+                                                                                                                                                                     demand. Nevertheless, even CPU’s large memory capacity has                   to hyperscalers seeking to exploit underutilized CPU servers
+                                                                                                                                                                     become insufficient to serve LLMs with hundreds of billions
+                                                                                                                                                                     of parameters. Under the memory capacity constraint, we may                  for temporarily surging inference demand [21], [46]. The
+                                                                                                                                                                     offload parameters to storage devices and fetch them on demand,              memory capacity requirement for serving recent large models,
+                                                                                                                                                                     but doing so significantly degrades inference performance due to             nonetheless, can be challenging to meet even with CPUs
+                                                                                                                                                                     the high latency and low bandwidth of storage devices.                       due to limited DRAM slots, platform constraints, power or
+                                                                                                                                                                        To address this challenge, we propose LIL O, an LLM infer-                thermal limits, or budget constraints. To enable the deployment
+                                                                                                                                                                     ence framework that leverages In-memory Analytics Accelerator
+                                                                                                                                                                     (IAA) in the latest Intel CPUs, to accelerate inference under                of large models that exceed the CPU’s memory capacity,
+                                                                                                                                                                     memory capacity constraints. By storing model parameters in a                recent frameworks, including HuggingFace Accelerate [33]
+                                                                                                                                                                     compressed format and decompressing them on demand using                     and DeepSpeed Zero-Inference [19], support offloading model
+                                                                                                                                                                     IAA, LIL O enables significantly reduced storage access during               parameters to storage devices (SSD/HDD). However, the low
+                                                                                                                                                                     inference under memory capacity constraints while preserving                 bandwidth and high latency of storage access significantly
+                                                                                                                                                                     the model accuracy and behavior. LIL O orchestrates the con-
+                                                                                                                                                                     current execution of on-chip accelerators, i.e., IAA, Advanced               degrade inference performance.
+                                                                                                                                                                     Vector Extensions (AVX), and AMX, to facilitate high-throughput                 Quantization has been the mainstream approach for reduc-
+                                                                                                                                                                     decompression alongside inference computation. Furthermore,                  ing model size. Yet, it introduces several critical drawbacks,
+                                                                                                                                                                     LIL O implements selective compression, a Mixture-of-Expert                  including potential degradation in model accuracy [43], in-
+                                                                                                                                                                     (MoE)-aware optimization that reduces the decompression over-                creased vulnerability to adversarial attacks [29], unintended
+                                                                                                                                                                     head by up to 1.9×. We demonstrate that LIL O reduces inference
+                                                                                                                                                                     latency by up to 4.9× and 4.3× for Llama3-405B and DeepSeek-                 bias and toxicity in generation [53], the re-emergence of
+                                                                                                                                                                     R1, respectively, under memory capacity constraints compared to              previously unlearned problematic behaviors [55], and over-
+                                                                                                                                                                     the baseline inference solely relying on storage-offloading without          all reductions in model trustworthiness [34]. An alternative
+                                                                                                                                                                     compression.                                                                 direction is to adopt lossless compression to reduce memory
+                                                                                                                                                                                                                                                  footprint without altering model accuracy or behavior.
+                                                                                                                                                                                             I. I NTRODUCTION                                        Prior work has leveraged the sparsity patterns in model
+                                                                                                                                                                        The remarkable success of large language models (LLMs)                    parameters to apply lossless compression algorithms for Con-
+                                                                                                                                                                     in recent years has been largely driven by scaling model size,               volutional Neural Networks (CNNs) [39], [24], [25]. For
+                                                                                                                                                                     a trend captured by the empirical scaling law [37]. Frontier                 instance, Eyeriss [24], [25] incorporates run-length coding,
+                                                                                                                                                                     models like GPT-4 [44], Llama3-405B [32], and DeepSeek-                      while Lane-Compression [39] applies algorithms such as
+                                                                                                                                                                     R1 [26] scale to hundreds of billions of parameters to deliver               LZW [51] and Deflate [28] to grouped bits to compress CNN
+                                                                                                                                                                     exceptional accuracy across a wide range of tasks. As a                      parameters. However, the efficacy of these proposals has been
+                                                                                                                                                                     result, deploying these models requires multiple GPUs, since                 demonstrated using dedicated reconfigurable hardware, and
+                                                                                                                                                                                                                                                  therefore they can be impractical for typical CPUs, which are
+                                                                                                                                                                       ∗ Hyungyo Kim and Qirong Xia contributed equally to this work              inefficient at fast bit-level operations and decompression.
+
+
+
+
+                                                                                                                                                                             Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+   To tackle the challenge in providing effective and effi-                                                          Llama3-405B                             DeepSeek-R1
+                                                                                                                512 GB System Memory                     1 TB System Memory
+cient lossless compression of model parameters for CPU-                                                                compute    decompression             storage access
+
+
+
+
+                                                                                Per-token Latency (s)
+based inference, this work exploits the latest on-chip ac-                                              1.2                                    1.2
+celerators in commodity CPUs and proposes LIL O: an
+                                                                                                        0.8                                    0.8
+LLM Inference framework supporting Lossless compression.                                                                                ×3.8
+                                                                                                                                                                                ×4.3
+Specifically, LIL O accelerates inference under memory capac-                                           0.4                                    0.4
+ity constraints by storing model parameters in a compressed
+form, significantly reducing the amount of data offloaded to                                             0                                      0
+                                                                                                                           CPU-core                               CPU-core
+                                                                                                              Accelerate              LILo           Accelerate              LILo
+the storage device. It then decompresses them on-the-fly at                                                                decomp.                                decomp.
+high throughput using CPU on-chip accelerators. This work
+makes the following three contributions.                                    Fig. 1. Per-token latency (normalized by batch size) and its breakdown
+                                                                            for HuggingFace Accelerate, compressed LLM inference using CPU cores
+Demonstrating the potential of compressed LLM inference                     for decompression, and LIL O on input/output token length of 128/256 for a
+and the limits of relying on CPU cores for decompression.                   batch size of 64.
+We first analyze the effectiveness of various compression
+algorithms on BF16 model parameters from Llama3-405B [32]
+and DeepSeek-R1 [26], both exceeding typical CPU memory                     tency. Furthermore, LIL O introduces selective compression, a
+capacity. By combining carefully selected compression algo-                 Mixture-of-Experts (MoE)-aware optimization that minimizes
+rithms with data preprocessing (i.e., byte-grouping), the size of           decompression overhead by exploiting the structural asymme-
+the model parameters of these models can be reduced as low as               try in MoE models between frequently accessed components
+67% of their original size. At such compression ratio, storing              (e.g., attention layers and shared experts) and infrequently
+model parameters in a compressed format and decompressing                   accessed ones (e.g., routed experts). Rather than compressing
+them on demand can significantly reduce storage access,                     the entire model, LIL O applies compression only to the infre-
+which, for example, can reduce inference latency by 5.0×                    quently accessed components, which, for example, constitute
+in theory for a system running Llama3-405B with 512 GB                      97% of the model’s total parameter size but can account for
+of memory capacity assuming negligible decompression over-                  as little as 54% of the active parameters during the inference
+head. However, when decompression is performed on CPU                       of DeepSeek-R1. Such selective compression reduces the
+cores, end-to-end latency is reduced only up to 1.2× compared               decompression overhead by up to 1.9×, while maintaining
+to the uncompressed baseline. This is because the benefits                  a compression ratio nearly identical to that of full-model
+from reduced storage-offloading are offset by the decom-                    compression. Combined, LIL O achieves up to 4.9× and 4.3×
+pression overhead as general-purpose CPU cores struggle to                  reductions in per-token inference latency for Llama3-405B
+perform high-speed decompression and fine-grained byte-level                and DeepSeek-R1, respectively, compared to Accelerate, the
+data manipulation required by the algorithms.                               uncompressed baseline solely relying on storage-offloading.
+Development of a high-throughput decompression solution                     Figure 1 illustrates the significantly reduced storage-offloading
+leveraging emerging CPU on-chip accelerators. From the                      overhead achieved by LIL O, while minimizing decompression
+set of evaluated algorithms, LIL O adopts byte-grouped Deflate              overhead by leveraging on-chip accelerators.
+for its strong compression ratio and high compatibility with
+Intel Advanced Vector Extensions (AVX) and In-memory                                                                            II. BACKGROUND
+Analytics Accelerator (IAA) accelerators. LIL O leverages IAA
+                                                                            A. CPU-based Inference
+to accelerate the decompression of the Deflate algorithm
+while exploiting AVX to efficiently perform the byte-level                     CPU-based inference has gained traction as a comple-
+data reconstruction that reverses the byte-grouping applied                 mentary and cost-efficient alternative to GPU-centric LLM
+during compression preprocessing. To maximize throughput                    deployment. Beyond enabling LLM serving for users with
+across both accelerators, LIL O implements a tightly integrated             limited access to multi-GPU systems, hyperscalers can also
+pipeline with lock-free inter-thread communication, a custom                leverage underutilized CPU servers to meet a temporarily
+thread pool, and an optimally chosen IAA tuning parameter,                  surging demand for LLM inference services [21], [46], al-
+i.e., chunk size. With this optimized decompression solution,               though it is not designed to replace GPU-based inference
+LIL O achieves up to 154 GB/s of decompression throughput,                  targeting stringent service level objectives (SLOs). CPU-based
+9.3× higher than the CPU-core-based decompression.                          inference has become more compelling, especially with servers
+Compressed LLM inference acceleration. With the high-                       equipped with the latest Intel CPUs that feature AMX. It
+throughput decompression solution integrated with Intel’s                   significantly enhances matrix-multiplication throughput and,
+LLM inference framework, LIL O overlaps the inference                       combined with the CPUs’ much larger memory capacity than
+compute running on Advanced Matrix Extensions (AMX)                         that of GPUs, has demonstrated up to 20 tokens/s for models as
+with decompression running on AVX and IAA by allocating                     large as OPT-175B [38]. Such performance is notable given the
+dedicated CPU cores to each task. This enables LIL O to                     community’s strong interest in low-cost solutions (e.g., single-
+minimize resource contention and execution thrashing between                GPU inference with data-offloading [49], [50]) with much
+compute and decompression, further reducing the inference la-               lower token generation rates (1–2 token/s for OPT-175B).
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+   Nonetheless, even CPUs face memory capacity challenges                                   the parameters offloaded, the latency is still 7× higher than
+as typical servers deployed by hyperscalers can be equipped                                 the baseline, underscoring the critical performance bottleneck
+with the most cost-effective, mid-capacity DIMMs (e.g., 32 GB                               introduced by storage offloading.
+or 64 GB), totaling 512 GB–1 TB of memory when all the
+                                                                                            C. Lossless Compression Algorithms
+memory channels are fully populated with such DIMMs. This
+still falls short of accommodating extremely large models                                      Popular lossless compression algorithms roughly fall into
+such as Llama3-405B or DeepSeek-R1, which require 768 GB                                    three categories: entropy coding, dictionary-based compres-
+and 1.3 TB of memory, respectively—models of broad interest                                 sion, and run-length encoding. Entropy coding, such as Huff-
+for their state-of-the-art capability. Note that a high-capacity                            man coding [35] and arithmetic coding [1], assigns shorter
+DIMM (e.g., 256 GB) incurs a superlinearly higher per-GB                                    codes to more frequent symbols. Dictionary-based methods,
+cost than a mid-capacity DIMM (e.g., 32 GB or 64 GB) [9].                                   including LZ77 [56], LZ78 [57], and LZ4 [42] replace recur-
+Besides, it requires servers with more expensive power-supply                               ring substrings with references to earlier occurrences, reducing
+and cooling solutions due to significantly higher power and                                 redundancy. Lastly, run-length encoding [48] compresses se-
+heat dissipation [47]. Alternatively, CXL memory can be used                                quences of repeated values by storing the value once alongside
+to increase the memory capacity of servers, but provides only                               its repetition count, making it particularly effective for data
+limited memory bandwidth, hurting the memory-bandwidth-                                     with long runs of identical symbols. Deflate [28] is one of
+sensitive performance of LLM inference. In such scenarios,                                  the most widely used lossless compression algorithms, which
+enabling efficient LLM inference under limited memory ca-                                   combines dictionary-based method (LZ77) and entropy coding
+pacity becomes crucial, which our work primarily focuses on.                                (Huffman coding) to effectively balance compression ratio and
+                                                                                            speed. Numerous hardware accelerators for lossless compres-
+B. Data-offloading during Inference                                                         sion implement Deflate, including Intel IAA [6], IBM Power9
+   DeepSpeed Zero-Inference [19] and HuggingFace Accel-                                     on-chip accelerator [18], and NVIDIA BlueField DPUs [22].
+erate [33] are two prominent frameworks that enable CPU-                                    D. Intel CPU On-chip Accelerators
+based inference for LLMs that exceed the CPU memory
+capacity by offloading the model parameters to storage de-                                     Figure 3 illustrates the overall architecture of Intel Xeon
+vices. DeepSpeed Zero-Inference implements a full-model-                                    Scalable Processors from the 4th generation onward and the
+offloading strategy, whereas HuggingFace Accelerate supports                                details of three accelerators, IAA, AMX, and AVX.
+both full- and partial-model-offloading to optimize the per-                                IAA is an on-chip accelerator dedicated for computationally
+formance. However, storage-offloading introduces significant                                intensive tasks, including compression/decompression specif-
+performance overhead due to the limited bandwidth of storage                                ically focusing on the Deflate algorithm, encryption, and
+devices. Figure 2 illustrates the end-to-end inference latency                              analytics. The bottom left box in Figure 3 illustrates the archi-
+of Llama3-405B under varying percentages of the parameters                                  tecture of IAA. An IAA instance consists of eight work queues
+offloaded to NVMe SSD storage, characterized using Hug-                                     and eight processing engines. IAA transfers and processes data
+gingFace Accelerate. The performance analysis was conducted                                 in the granularity of a data chunk, referred to as a job, the
+on a 6th -generation Intel Xeon Scalable Processor (codenamed                               size of which can range from 1 KB to 2 MB. Each job is
+Granite Rapids, or GNR) with 128 cores for input/output token                               represented by a job descriptor, which specifies the operation,
+lengths of 256/32. For a batch size of 1, latency increases                                 Huffman coding type, pointers to the source and destination
+by 8× even when just 10% of the parameters are offloaded                                    data chunks, and their corresponding sizes. Processing engines
+to storage, and reaches 35× when 50% of parameters are                                      then fetch descriptors from the work queue, and through
+offloaded. While increasing the batch size can amortize this                                arbiter-managed scheduling, forward them to processing pipes
+overhead by performing more compute once the parameters                                     for analytics, compression, or decompression. Latly, Query
+are fetched from the storage, the penalty remains substantial.                              Processing Library (QPL) [7] provides an interface between
+For instance, even at a large batch size of 64 with 50% of                                  user applications and accelerator hardware.
+
+                                                                                                  Intel Xeon Chiplet                                  CPU Core
+                                         B=1     B=4     B=16    B=64                              UCI         CPU Tile               Other Core                            Front End
+                      100                                                                          PCIe         CPU Core
+  Inference Latency
+
+
+
+
+                                                                                                                                      Functions
+                                                                                                                                                                 Rename/Allocate/Retirement
+                                                                                                                   ⋯
+
+
+
+
+                                                                                                   CXL                                   AVX
+     Normalized
+
+
+
+
+                                                                                                  MemCtrl       CPU Core                AMX                                 Scheduler
+                                                                                                         Data Accelerator Complex (DAC)
+                      10                                                                             QAT       DLB         IAA      DSA
+                                                                                                                                                       Standard Execution Ports    AMX Execution Units
+
+
+                                                                                                                                                                                   AMX 2D Tile Regiters
+                                                                                                        In-memory Analytics Accelerator (IAA)            General purpose
+                                                                                                              IO Fabric Interface                        Execution Units
+                       1
+                                                                                                  Work       Processing                                AVX Execution Units          AMX TMUL Engine
+                               10          20          30           40          50                Queue       Engines
+                                                                                                                                      Analytics and
+                                                                                                                                                           Vector ALU
+                                                                                                                                     Decompression
+                                                                                                                           Arbiter
+
+
+
+
+                                Percentage of Parameters Offloaded to Storage (%)                                                                          Vector Shift
+                                                                                                                 ⋯
+                                                                                                    ⋯
+
+
+
+
+                                                                                                  Work       Processing                                    Vector Mul
+                                                                                                                                      Compression          Vector FMA
+                                                                                                  Queue       Engines
+Fig. 2. Inference latency of Llama3-405B with varying proportions of model
+parameters offloaded to SSD, normalized to the case without offloading.
+Measured on Intel GNR CPUs with NVMe SSDs, using HuggingFace                                Fig. 3. Intel Xeon Scalable Processors from the 4th generation onward, with
+Accelerate for storage offloading across different batch sizes (B).                         detailed illustrations on AMX, AVX, and IAA.
+
+
+
+
+                       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+AMX is a matrix-multiplication accelerator, along with ISA                                                 BF16                    1st-Byte (UB)                    2nd-Byte (LB)
+                                                                                              0.2                        0.3                             0.01
+support, starting from the 4th -generation Xeon CPUs (SPR).
+                                                                                                                         0.2
+The scheduler dispatches AMX instructions, such as tile                                       0.1
+                                                                                                                         0.1
+                                                                                                                                                     0.005
+load/store and accelerator commands, to dedicated AMX ex-                                      0                          0                                0
+
+
+
+
+                                                                                Probability
+ecution unit (Figure 3). AMX execution unit consists of two                                     -0.2       0       0.2         0       128     256              0       128      256
+components: (1) a 2D array of register tiles and (2) Tile matrix                                           Sign                     Exponent                          Mantissa
+                                                                                               1                         0.4                             0.02
+multiply unit (TMUL) [4], which are designed to support INT8
+and BF16 formats. The tiles store sub-arrays of matrices; the                                 0.5                        0.2                             0.01
+TMUL, a 2D array of multiply-add units, operates on these                                      0                          0                                0
+tiles. TMUL’s 2D tile-based matrix execution enables higher                                            0       1               0       128         256          0        64      128
+                                                                                                                                      Value
+ops/cycle by exploiting greater parallelism than 1D compute
+engines such as AVX engines.                                                  Fig. 4. The probability distribution of BF16 parameter values, 1st /2nd byte
+AVX is a SIMD instruction set to accelerate data-parallel com-                of the parameters (Upper Byte (UB)/Lower Byte (LB)), and sign, exponent,
+putations by enabling the processing of multiple data elements                and mantissa of the parameters of BF16 Llama3-405B model.
+in parallel. AVX operates on 256-bit (AVX, AVX2) and 512-
+bit (AVX-512) wide YMM and ZMM registers, allowing si-
+                                                                              tightly around a narrow range, exponent value of the parame-
+multaneous computation on multiple integers or floating-point
+                                                                              ters result in extremely concentrated distribution, opposed to
+numbers. In modern CPU architectures, AVX instructions are
+                                                                              the relatively evenly distributed sign and mantissa values of the
+executed by vector execution units that share the standard
+                                                                              parameters as illustrated in Figure 4. The entropy of each part
+execution ports with general-purpose scalar and floating-point
+                                                                              is calculated at 1 bit, 1.83 bits, and 6.97 bits, respectively,
+units. These shared ports enable parallel execution of AVX
+                                                                              hinting that the exponent part can benefit significantly from
+instructions alongside scalar operations.
+                                                                              compression algorithms. Similarly, the distribution of the 1st -
+III. C OMPRESSED LLM I NFERENCE : T HE P OTENTIAL AND                         byte, consisting of 1 sign bit and 7 most significant bits of the
+                   L IMITATIONS                                               exponent, also shows a similar concentrated pattern with 2.83
+   To mitigate the performance overhead of storage-offloading                 bits in entropy. The 2nd -byte draws a distribution close to the
+discussed in §II-B, we propose compressed LLM inference.                      uniform distribution with 7.97 bits in entropy. In the rest of
+During compressed LLM inference, model parameters are                         the paper, we refer to the 1st -byte and 2nd -byte of BF16 as the
+stored in a losslessly compressed format and decompressed                     Upper Byte (UB) and Lower Byte (LB).
+on-the-fly during inference. By reducing the volume of model                  Compression ratio. Table I reports the compression ratio,
+parameters, compressed LLM inference can significantly re-                    defined as (compressed size)/(original size), of Llama3-405B
+duce the amount of data offloaded to storage when the model                   and DeepSeek-R1. We evaluate two compression algorithms:
+size exceeds the CPU memory capacity, resulting in acceler-                   LZ4 [42], a lightweight run-length-based algorithm similar to
+ated inference. We first analyze the compressibility of LLM                   that used in Eyeriss [24], [25], and Deflate [28], which offers
+parameters of Llama3-405B and DeepSeek-R1 across different                    more compression at the expense of slower decompression.
+compression algorithms. We then evaluate the decompression                    To exploit the entropy difference between byte positions of
+throughput of these algorithms on CPU cores. Finally, we                      LLM parameters, we adopt byte-grouping, a variant of lane-
+discuss the impact of decompression throughput on the latency                 grouping [39], where UB and LB of parameters are grouped
+reduction achievable via compressed LLM inference.                            separately and compressed independently. This isolates the
+                                                                              low-entropy exponent/sign bytes from the high-entropy man-
+A. Compressibility of BF16 Model Parameters                                   tissa bytes, avoiding entropy interleaving that would otherwise
+BF16 data format. We focus on model parameters stored                         hinder match lengths and flatten symbol distributions. While
+in BF16 format. BF16 encodes values using 1 sign bit, 8                       LZ4 without byte-grouping fails to compress the model, byte-
+exponent bits, and 7 mantissa bits, offering the same dynamic                 grouping reduces its compression ratio to 87%. Deflate, in
+range as FP32 but at half the bit-width. Due to this balance                  contrast, achieves 79% and 72% even without byte-grouping,
+between precision and efficiency, BF16 has become the default                 and improves further to 71% and 67% with byte-grouping for
+parameter format in many state-of-the-art models, as reflected                Llama3-405B and DeepSeek-R1, respectively. We also find
+in the HuggingFace text generation model catalog [2]. Al-                     that the LB group is incompressible with either LZ4 or Deflate.
+though FP8 models like DeepSeek-R1 have emerged recently,                      Insight-1: Lossless compression algorithms can reduce the
+even their parameters are losslessly converted to BF16 offline                 model parameter size by up to 33% without compromising
+for CPU deployment, as FP8 is not supported on CPUs.1                          the model accuracy and behavior.
+Probability distribution of parameters. The upper left plot in
+Figure 4 illustrates the distribution of the parameters of Llama-             B. Impact of Decompression Speed
+3-405B in the BF16 data type. As the parameter values cluster                 Decompression throughput. Table I also reports the decom-
+  1 The conversion process using DeepSeek’s official code [27] takes 30–40    pression throughput of LZ4 and Deflate, with and without
+minutes, making on-the-fly conversion during inference infeasible.            byte-grouping, measured on a 128-core Intel GNR CPU.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+                             TABLE I                                                                         LZ4      LZ4-BG     Deflate   Deflate-BG
+                                                                                                   10
+C OMPRESSION RATIO (CR, %) AND DECOMPRESSION THROUGHPUT (DT,
+
+
+
+
+                                                                              End-to-end latency
+   GB/ S ) OF BF16 LLM PARAMETERS FOR DIFFERENT COMPRESSION
+
+
+
+
+                                                                                 Normalized
+ALGORITHMS WITH AND WITHOUT PREPROCESSING . D ECOMPRESSION IS
+             PERFORMED ON A 128- CORE G RANITE R APIDS .                                            1
+
+
+
+                   Compression      Llama3-405B       DeepSeek-R1
+   Preprocessing                                                                                   0.1
+                    Algorithm        CR       DT       CR       DT                                       4          8       16        32         64     128
+                                                                                                                   Decompression Throughput (GB/s)
+                       LZ4          100.4    149.8    100.4    194.2
+       None
+                      Deflate       79.3     10.5     72.2      9.6
+                                                                            Fig. 5. Potential latency of compressed Llama3-405B inference under 512 GB
+                       LZ4           87.3     55.1     87.3     64.1        memory for various algorithms, normalized to the uncompressed baseline.
+   Byte-grouping
+                      Deflate        70.9     16.5     67.5     9.3         BG denotes byte-grouping; x-axis shows assumed decompression throughput;
+                                                                            starred bars indicate CPU-based decompression cases.
+
+
+
+For cases with byte-grouping, the reported decompression                    achieved by CPU cores given in Table I is indicated by a
+throughput includes the cost of postprocessing, where the byte-             starred bar, with values rounded to the nearest assumed level.
+grouped parameters are reassembled into the original BF16                   Only modest latency reduction of up to 1.2× are observed for
+format, a step referred to as BF16-reconstruction hereafter. The            Deflate and LZ4 with byte-grouping, while the other methods
+model parameters are concatenated and then partitioned into                 rather increase latency. This is primarily due to limited de-
+128 equal-sized chunks, each decompressed in parallel across                compression throughput, which offsets the benefits of reduced
+128 cores to maximize throughput using Python zlib [17]                     storage offloading. However, substantial latency reductions
+lz4 [11] libraries for Deflate and LZ4, respectively.                       become possible as decompression throughput increases. For
+   LZ4 without byte-grouping achieves impressively high de-                 example, using Deflate with byte-grouping achieves 5.0×
+compression throughputs of 149.8 GB/s and 194.2 GB/s for                    improvement when decompressed at 128 GB/s. These findings
+Llama3-405B and DeepSeek-R1, respectively. However, such                    underscore the importance of high-throughput decompression
+high throughputs are largely attributed to the near-zero com-               to ensure that the benefits of reduced storage access are not
+pression ratios, effectively bypassing any meaningful decom-                offset by decompression overhead.
+pression. With byte-grouping, the throughput of LZ4 drops
+to 55.1 GB/s and 64.1 GB/s for Llama3-405B and DeepSeek-                     Insight-2: While lossless compression has the potential
+R1, respectively, due to the additional overhead of BF16                     to significantly reduce inference latency under memory
+reconstruction and increased decompression workload. Deflate                 constraints, its benefits are constrained by the limited de-
+exhibits lower decompression throughput overall, ranging from                compression throughput of CPU cores.
+9.3–16.5 GB/s depending on the model and whether byte-
+grouping is applied. This is because Deflate is a more complex
+compression algorithm than LZ4, involving multiple steps such               C. Opportunities and Challenges with On-chip Accelerators
+as Huffman decoding and LZ77 back-referencing, thereby
+trading decompression speed for higher compression ratios.                     Intel’s on-chip accelerators provide opportunities for ac-
+Note that the decompression performance is data-dependent,                  celerating the decompression of Deflate with byte-grouping,
+varying across models and whether byte-grouping is applied.                 which shows the highest potential to benefit from compressed
+Compressed LLM inference latency. Figure 5 projects the                     LLM inference. IAA offers hardware-accelerated decompres-
+potential inference latency for a compressed Llama3-405B                    sion for Deflate, while AVX enables wide vectorized opera-
+model operating under a 512 GB memory constraint, normal-                   tions ideal for BF16 reconstruction. However, without careful
+ized to an uncompressed baseline. Our analysis evaluates var-               tuning of accelerator operating parameters, efficient thread
+ious compression algorithms across a range of decompression                 management, and coordinated orchestration, substantial perfor-
+throughputs, using an input/output of 256/32 tokens and a                   mance variation and resource under-utilization can occur. For
+batch size of 1. The projected latency is obtained by summing               instance, differences in thread management implementations
+the on-the-fly decompression and storage-offloading overheads               and accelerator operating parameters can cause up to 2×
+with the baseline inference latency. The decompression cost is              variation in decompression throughput (§IV-C). Moreover,
+calculated from the assumed throughput, while the storage-                  lacking proper coordination between these accelerators can
+offloading overhead is determined by the amount of data                     lead to significant idle time, yielding up to 1.9× lower
+offloaded to meet the memory capacity limit. This offloaded                 performance without fine-grained pipelining and 1.6× lower
+amount depends on the total memory footprint (compressed                    performance without overlapping decompression and inference
+parameters, KV cache, and activations).                                     computation (§V-C). Therefore, fully exploiting these acceler-
+   The corresponding latency overhead is then characterized                 ators requires careful orchestration, thread management, and
+using HuggingFace Accelerate by offloading the same amount                  operating-parameter tuning to maximize decompression and
+of data. For each algorithm, the decompression throughput                   compute efficiency, forming the motivation of our work.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+ Offline Model Compression          Compressed LLM Inference                                                 Concurrent Execution of Accelerators
+                                   Decompression         Compute          In-memory Analytics Accelerator (IAA)   Advanced Vector Extension (AVX)        Advanced Matrix Extension (AMX)
+     Flattened Parameters                               Embedding
+                                                                            Overlapped Decompression and Computation
+                                   Decoder Layer 1                                                                                     Core Separation
+                                   QKV Projection     Decoder Layer 1
+                                                                               Pipelined Inflate and BF16-reconstruction                                    Sublayer Compute
+   Byte-grouped Parameters             Attention      QKV Projection
+                                                                               Inflate (Deflate decompression)             BF-16 reconstruction
+                                    Out. Projection      Attention
+    UB-group       LB-group                                                     Stage 0
+                                    Feed Forward
+    (1st-byte)     (2nd-byte)                         Out. Projection
+                                      Network                                   Stage 1                                       +
+                                                       Feed Forward
+
+
+
+
+                                                                                                                                   ⋯
+                                                                                                ⋯
+   Compressed Parameters                                 Network
+
+
+
+
+                                          ⋯
+                                                                                Stage M-1                                     +
+
+
+
+
+                                                            ⋯
+ (Only the UB-group compressed)    Decoder Layer N                              Stage M                                       +
+                                                      Decoder Layer N
+
+
+
+                                                                        Fig. 6. Overview of LIL O.
+
+
+
+         IV. LIL O : ACCELERATING C OMPRESSED LLM                                                                       TABLE II
+       I NFERENCE WITH CPU O N - CHIP ACCELERATORS                                                I NFLATE , BF16- RECONSTRUCTION , AND THE COMBINED
+                                                                                             DECOMPRESSION THROUGHPUT (GB/ S ) OF CPU CORE BASELINE AND
+   To realize the potential of compressed LLM inference, we                                     LIL O FOR L LAMA 3-405B AND D EEP S EEK -R1 PARAMETERS .
+present LIL O, a framework that achieves high-throughput de-
+compression by leveraging Intel’s on-chip accelerators. LIL O                                                                          Llama3-405B                 DeepSeek-R1
+efficiently orchestrates pipelining and overlapping across IAA,                                       Function
+                                                                                                                                  CPU core        LIL O        CPU core        LIL O
+AVX, and AMX—the latter used for accelerating LLM compu-
+                                                                                                        Inflate                      11.27        82.54           5.11          72.79
+tation. LIL O implements a compression method that combines
+the Deflate algorithm with byte-grouping, selected for its supe-                               BF16-reconstruction                  111.36        194.04         103.68        191.34
+rior compression ratio and its high compatibility with hardware                               Decompression (Inflate
+                                                                                                                                     16.49        153.72          9.31         136.82
+accelerators’ capabilities. In the following subsections, we                                  + BF16-reconstruction)
+first present the overview of LIL O. We then describe the
+implementation of its high-throughput decompression solution,
+which leverages IAA and AVX. Finally, we describe com-                                      reconstruction for Llama3-405B parameters, the IAA decom-
+pressed LLM inference acceleration optimizations including                                  pression engines sustain an occupancy of 85% with a queue
+compute/decompression overlap and selective compression.                                    depth of 13 on average. Furthermore, decompression is over-
+A. LIL O Overview                                                                           lapped with inference computation at the sublayer granularity
+                                                                                            by dedicating separate sets of cores to each task, thereby min-
+   LIL O consists of two stages: (1) offline model parameter                                imizing resource contention and execution thrashing between
+compression, and (2) compressed LLM inference with on-the-                                  decompression and compute.
+fly decompression, as illustrated in Figure 6. In the offline
+stage, LIL O iterates through the Decoder layers and applies                                B. Hardware Acceleration
+byte-grouping to each sublayer’s parameters, separating each
+                                                                                            IAA-accelerated Inflate. Inflate is executed on IAA in three
+BF16 parameter into UB-group and LB-group. As discussed
+                                                                                            stages: 1 allocation and initialization of job descriptors, 2
+in §III-A, UB-group carries most of the compressibility,
+                                                                                            descriptor submission to initiate Inflate, and 3 deallocation
+while LB-group remains incompressible. Therefore, only
+                                                                                            and clean up of descriptors and associated metadata. As stages
+UB-group is compressed, and LB-group is stored uncom-
+                                                                                             1 and 3 incur overhead for different runs, we separate these
+pressed. During inference, the compressed model parame-
+                                                                                            two stages into a separate module and run once at start-up of
+ters are decompressed by reversing the offline compression.
+                                                                                            the inference, as the descriptors can be reused and dynamically
+Specifically, UB-group undergoes Inflate, the decompression
+                                                                                            adjusted across runs. Only stage 2 , the actual Inflate step,
+process of the Deflate algorithm, and is then combined
+                                                                                            is called by the IAA Inflate module during the inference.
+with the uncompressed LB-group for BF16-reconstruction.
+                                                                                            Descriptors are released upon completion of inference.
+We leverage IAA and AVX to accelerate Inflate and BF16-
+                                                                                               IAA Inflate performance depends primarily on the chunk
+reconstruction, respectively, and implement a decompression
+                                                                                            size that IAA operates on. For the GNR CPU used in our setup
+pipeline to maximize throughput. Table II summarizes LIL O’s
+                                                                                            (detailed in §V), a socket contains 4 IAA accelerators with 8
+decompression throughput, which is 9.3–14.8× higher than
+                                                                                            decompression engines each, totaling 32 engines. To maximize
+that of CPU cores.2 During the pipelined Inflate and BF16-
+                                                                                            the utilization of the 32 engines for parallel execution, it is
+  2 We further validated that parameters decompressed from UB-only and                      beneficial to submit 32 job descriptors simultaneously. To fully
+UB+LB compression exactly match the originals bit-for-bit, and confirmed                    utilize the hardware, chunk sizes should be small enough such
+the identical perplexity on the OpenOrca validation set between LIL O and                   that each parameter set is divided into at least 32 chunks, fully
+the uncompressed baseline. As LIL O applies lossless compression solely to
+model parameters, such validation ensures complete preservation of inference                exploiting the parallelism of the 32 engines. However, small
+accuracy.                                                                                   chunk sizes incur high CPU-IAA communication overhead,
+
+
+
+
+           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+    ① Load                                                                                                                   Stage 𝒊 − 𝟏           Stage 𝒊         Stage 𝒊 + 𝟏
+                 U1 U2 U3 U4 U5 U6 U7 U8                 L1   L2   L3   L4   L5   L6   L7   L8           32 chunks              32 chunks           32 chunks
+
+    ② Unpack                                                                                             IAA thread   data                  data                data
+                 0    U1   0    U2   0    U3   0    U4   0    L1   0    L2   0    L3   0    L4
+                                                                                                     AVX daemon thread
+                 0    U5   0    U6   0    U7   0    U8   0    L5   0    L6   0    L7   0    L8                   spawn
+                                                                                                                                 …                     …               …
+    ③ Shift
+                 U1   0    U2   0    U3   0    U4   0                                                   AVX worker threads
+
+                 U5   0    U6   0    U7   0    U8   0
+                                                                                                                             (a) Pipelining IAA and AVX
+    ④ Combine
+
+                 L1 U1     L2 U2     L3 U3     L4 U4     L5 U5     L6 U6     L7 U7     L8 U8
+
+    ⑤ Store
+
+
+        Fig. 7. AVX512-accelerated BF16-reconstruction process.
+
+
+                                                                                                                                (b) Data sharing method
+decreasing the throughput. By increasing the chunk size, the
+communication overhead can be amortized more effectively,                                        Fig. 8. (a) Timing diagram of pipelining IAA decompression and AVX BF16-
+                                                                                                 reconstruction. (b) Data sharing and inter-thread communication method.
+but may result in engine under-utilization. Therefore, chunk
+size must be carefully tuned to balance engine utilization and
+communication efficiency.                                                                        at the granularity of data chunks, we define each pipeline stage
+AVX512-accelerated BF16-reconstruction. We leverage                                              by the number of chunks processed concurrently. As discussed
+AVX512 intrinsics to accelerate BF16-reconstruction, fo-                                         in §IV-B, submitting 32 data chunks in parallel fully utilizes
+cusing on their ability to load and store wide vectors                                           IAA’s decompression engines. Therefore, each pipeline stage
+and perform byte-level data operations efficiently within                                        comprises 32 chunks, as illustrated in Figure 8a. At the ith
+and between AVX512 registers. Figure 7 illustrates the                                           pipeline stage, multiple worker threads use AVX instructions
+AVX512-accelerated BF16 reconstruction process, consist-                                         to perform BF16-reconstruction on the 32 Inflated chunks
+ing of five stages. 1 Load: first, two 64×8-bit ele-                                             produced by IAA from the previous (i−1)th stage.
+ments from each of UB-group and LB-group are loaded                                              Lock-free inter-thread communication. To eliminate lock-
+into 512-bit registers using the _mm512_loadu_si512                                              induced contention between the IAA thread and the AVX
+instruction. 2 Unpack: the lower and upper 256-bit                                               worker threads, we develop a lock-free synchronization mech-
+halves are extracted via _mm512_castsi512_si256 and                                              anism using an atomic integer, atomic_idx. The design
+_mm512_extracti64x4_epi64, then zero-extended to 16-                                             leverages the fact that AVX worker threads only need to
+bit integers using _mm512_cvtepu8_epi16. 3 Shift: the 8-                                         know which portions of the shared data array have been
+bit UBs are left-shifted with _mm512_slli_epi16 to prepare                                       inflated. As depicted in Figure 8b, IAA thread first atomically
+for bitwise merging. 4 Combine: the shifted UBs are com-                                         fetch & add the atomic_idx, signaling that all data before
+bined with the LBs using _mm512_or_si512, a bitwise OR                                           that index is ready for BF16-reconstruction. A dedicated
+operation to produce the final 16-bit BF16 values. 5 Store:                                      daemon thread continuously polls atomic_idx for updates.
+finally, the reconstructed BF16 data is written back to memory                                   Upon detecting an update of atomic_idx, the daemon thread
+in two 512-bit chunks using _mm512_storeu_si512. To ex-                                          dispatches worker threads to process the newly available data
+ploit both data- and core-level parallelism, we invoke AVX512                                    in continuous chunks. This lock-free coordination removes
+instructions across multiple threads pinned to separate CPU                                      synchronization overhead across pipeline stages, ensuring that
+cores. Thread binding via CPU affinity minimizes preemption                                      Inflate the BF16-reconstruction proceeds without blocking.
+and context switches while preserving cache locality, further                                    Optimizing thread management. A straightforward way to
+improving throughput.                                                                            implement pipelined decompression is to use OpenMP [13],
+                                                                                                 which simplifies multi-threading programming (referred to
+C. Pipelined Decompression Module                                                                as Decomp-omp). However, Decomp-omp suffers from the
+Pipeline stages. A basic implementation of decompression ex-                                     following drawbacks. First, while a daemon thread coordinates
+ecutes IAA Inflate followed by the AVX BF16-reconstruction                                       with the IAA thread and spawns AVX worker threads, it
+sequentially. However, it yields suboptimal performance due                                      primarily spins on the atomic variable without performing
+to two reasons: (1) the AVX BF16-reconstruction must wait                                        useful work. Second, OpenMP spawns worker threads for
+for the entire UB-group to be decompressed, despite earlier                                      AVX BF16-reconstruction from the daemon thread at run-
+decompressed data chunks becoming available sooner, and (2)                                      time, introducing overhead from task division among worker
+IAA job submission and synchronization is handled using only                                     threads and runtime scheduling across processors. Moreover,
+one core, leaving most of the CPU cores idle during Inflate.                                     OpenMP’s programming interface limits flexibility to tailor
+   To address the underutilization of computation resources,                                     thread management overhead for our workload.
+we pipeline IAA Inflate and AVX BF16-reconstruction to max-                                         To overcome these limitations, we develop a specialized
+imize decompression throughput. Since IAA Inflate operates                                       thread-pool design tailored to our pipeline (referred to as
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+                                         512K (tpool)   1M (tpool)   2M (tpool)                      Pipelined Decomp
+                                         512K (omp)     1M (omp)     2M (omp)                        IAA
+                                         512K (seq)     1M (seq)     2M (seq)                        AVX
+                                                                                                                                                                     𝒊 + 𝟏𝒕𝒉 Decoder
+                       160                                                                          Decompress
+   Throughput (GB/s)
+
+                                                                                                              Sublayer 1 Sublayer 2 Sublayer 3 Sublayer 4 Sublayer 5            Time
+                                                                                                  𝒊𝒕𝒉 Decoder
+                       140                                                                        Parameter
+                                                                                                   Inference            Sublayer 1 Sublayer 2 Sublayer 3 Sublayer 4 Sublayer 5
+                       120                                                                                                                                                     Time
+                                                                                                                                             𝒊𝒕𝒉 Decoder
+                       100
+                                                                                              Fig. 10. Timing diagram of overlapped decompression and inference com-
+                       80                                                                     putation in sublayer granularity.
+                                1           2           3             4           5
+                                                  Sublayer Index
+
+
+Fig. 9. Decompression Throughput (GB/s) of different implementations, with
+                                                                                              in a 2× reduction in buffer size. Second, we observe that
+varying IAA chunk sizes, on 5 different sublayers in Llama3-405B.                             decompressing all the Decoder-layer weights at once increases
+                                                                                              contention in the shared last-level cache between the compute
+                                                                                              and decompression streams, achieving smaller improvement
+Decomp-tpool). The thread pool allocates one thread for IAA                                   compared to sublayer-granularity overlapping.
+decompression and multiple worker threads for AVX BF16-
+reconstruction during initialization. These threads remain idle                               E. Selective Compression: Optimization to MoE Models
+when not in use, waking up only when a task is initiated and                                     MoE architecture has been increasingly adopted in state-
+enqueued, and returning to sleep upon completion. We use                                      of-the-art LLMs, including DeepSeek-R1 [26], Llama 4 [15],
+semaphores solely for task initiation and termination, while                                  Mixtral [36], and GPT-4 [44]. MoE architecture differs from
+all runtime coordination is handled through lock-free atomic                                  conventional dense models in a way that only a subset of
+operations, as described earlier.                                                             parameters is accessed frequently, despite representing a minor
+   Figure 9 presents the decompression throughput of dif-                                     fraction of the total model parameters. Exploiting such a
+ferent decompression implementations with varying chunk                                       characteristic, we propose selective compression to minimize
+sizes, evaluated on the model parameters from distinct sublay-                                the decompression overhead during inference.
+ers of Llama3-405B. Our thread-pool-based implementation,                                     Selective compression. MoE model parameters can be
+Decomp-tpool, achieves up to 1.1–1.2× and 1.4–1.7× higher                                     grouped into two types: shared parameters, which are used
+throughput compared to Decomp-omp and Decomp-seq, re-                                         by all inputs (such as those in dense decoder layers, shared
+spectively. Among the different chunk sizes, 1 MB case yields                                 experts, and attention modules), and routed parameters, which
+the highest throughput by effectively balancing decompression                                 are conditionally activated depending on the input token (such
+engine utilization and CPU–IAA communication overhead.                                        as routed experts). Table III shows the breakdown of activated
+                                                                                              and total parameters in DeepSeek-R1 during the decoding
+D. Compute/Decompression Overlap                                                              stage, categorized into shared and routed parameters. The
+   We integrate our decompression implementation to Intel                                     average number of unique experts is estimated by modeling the
+Extensions for PyTorch (IPEX) library, which leverages the                                    expert selection as a union of random subsets under a uniform
+latest AMX technology to accelerate LLM inference on Intel                                    distribution [20]. Although routed parameters make up more
+CPUs. During inference, decompression can be performed                                        than 97% of the model’s total parameters, they only contribute
+just-in-time before the parameters are used for computation.                                  as low as 54% of the activated parameters during decoding
+However, such sequentially interleaved execution can disrupt                                  when the batch size is 1. To take advantage of this imbalance,
+cache locality, preventing subsequent sublayers from reusing                                  LIL O selectively compresses only the routed parameters, leav-
+the outputs of earlier sublayers that reside in cache. This                                   ing shared parameters uncompressed. This strategy reduces the
+results in increased memory traffic, leading to inference slow-
+down. To mitigate this, LIL O assigns decompression and
+                                                                                                                         TABLE III
+decoder computation to separate sets of physical CPU cores:                                    B REAKDOWN OF ACTIVATED PARAMETER DURING THE DECODING STAGE
+one set dedicated to decompression, and the other to computa-                                     AND THE TOTAL PARAMETER OF D EEP S EEK -R1 INTO SHARED AND
+tion. Then, LIL O overlaps the decompression of the (i+1)th                                            ROUTED PARAMETERS ACROSS VARYING BATCH SIZES .
+
+sublayer with the computation of ith sublayer, as illustrated
+in Figure 10. This approach ensures sublayer outputs to                                                                        Parameter Size (Percentage)
+remain in core-local caches for immediate reuse. While Hyper-                                        Batch
+                                                                                                      Size            Activated Parameters                 Total Parameters
+Threading can be considered another option to implement                                                             Shared               Routed            Shared       Routed
+overlapping, the microarchitectural contention between AMX
+                                                                                                        1        32 GB (46%)          38 GB (54%)
+and AVX units often leads to performance degradation [3].
+We adopt sublayer-level overlapping instead of Decoder-layer                                            4        32 GB (18%)         143 GB (82%)          32 GB         1.2 TB
+                                                                                                                                                            (3%)         (97%)
+granularity for two reasons. First, only the uncompressed                                              16        32 GB (6%)          485 GB (94%)
+weights of the sublayers within the Decoder layer must be                                              64        32 GB (3%)          1.1 TB (97%)
+buffered, compared to buffering two decoder layers, resulting
+
+
+
+
+                         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+decompression workload by up to 1.9× since only the routed                  and the system’s assumed memory capacity. We then derive
+parameters need to be decompressed during inference while                   the corresponding storage-offloading overhead from a perfor-
+incurring a slight increase in compression ratio, from 67.5%                mance curve we characterized using HuggingFace Accelerate,
+to 68.3%, compared to compressing all parameters.                           which maps the volume of offloaded data to its resulting
+   While we choose to selectively compress all the routed                   latency overhead. We leave direct integration of offloading
+experts in this work, it can be further extended to dynamic                 support into IPEX as future engineering work. For the core
+selective compression, which profiles frequently routed (“hot”)             allocation ratio and chunk size configuration in LIL O, we
+experts at runtime and leaves them uncompressed as well.                    allocate 64, 63, and 1 cores to AMX compute, AVX BF16
+Since expert activation patterns are often skewed and input-                reconstruction, and the IAA daemon thread, respectively, and
+dependent—e.g., fewer than 6% of experts account for over                   set the IAA chunk size to 1 MB, which we verify in §V-D to
+64% of activations in Mixtral and Llama 4 [31], [45]—such                   deliver the best performance.
+a dynamic strategy can further reduce the decompression                     Evaluation points. We evaluate inference throughput using
+overhead under non-stationary workloads.                                    representative input and output token length pairs derived
+                                                                            from the OpenOrca dataset [40]. The benchmark includes
+                         V. E VALUATION                                     four task categories: content generation, creative writing,
+A. Experimental Setup                                                       summarization-light, and summarization-moderate with aver-
+System setup and methodology. We evaluate LIL O on a                        age input/output token lengths of 128/256, 512/512, 1024/128,
+server equipped with a 128-core Intel 6th -Generation Xeon                  and 1566/256, respectively. For each category, we construct
+Scalable Processor (Granite Rapids, GNR), as summarized                     an input that matches the average input length and set the
+in Table IV. The inference throughput of LIL O is com-                      generation parameters to produce the corresponding average
+pared against an uncompressed baseline for Llama3-405B and                  number of output tokens. To prevent our input example from
+DeepSeek-R1 across varying memory capacity constraints.                     inducing a fixed or biased expert routing pattern in DeepSeek-
+LIL O is implemented on top of Intel Extension for PyTorch                  R1, we override the model’s routing decisions with uniformly
+(IPEX) [5], which provides AMX-optimized inference kernels                  random expert selection for each token during inference. We
+for LLM inference on Intel CPUs. The execution path can be                  evaluate performance across the batch sizes from 1 to 64.
+configured via a runtime flag to select either LIL O or fall back           B. Performance Evaluation
+to the default IPEX inference, depending on the available host
+DDR memory capacity. However, existing storage-offloading                   Throughput improvement. Figure 11a presents the inference
+implementations, such as HuggingFace Accelerate [33] and                    throughput of Llama3-405B and DeepSeek-R1, comparing
+DeepSpeed Zero-Inference [19], are currently incompatible                   LIL O with the uncompressed baseline under 512 GB and 1 TB
+with IPEX’s optimized inference. To circumvent this incom-                  memory capacity constraints, respectively, across benchmark
+patibility, we model the storage-offloading overhead sepa-                  categories and batch sizes. For Llama3-405B, LIL O consis-
+rately to project the inference latency under various memory                tently achieves 2.0–4.9× higher throughput than the baseline.
+constraints. First, we construct reduced 1/3-scale variants                 The improvement declines with larger batch sizes and longer
+of Llama3-405B and DeepSeek-R1 that fit entirely within                     total sequence length (input+output) as the KV cache size
+our evaluation system DDR memory during inference. The                      scales with both, forcing LIL O to offload more parameters
+reduced Llama3-405B comprises the first 42 decoder layers of                to storage. For example, in summarization–moderate task, the
+the original model, while the reduced DeepSeek-R1 includes                  storage-offloaded parameters with LIL O increase from 23 GB
+one dense decoder layer followed by 19 MoE decoder layers.                  to 81 GB as batch size increases from 1 to 64, while the
+For both LIL O and the baseline, we measure inference latency               baseline increases from 243 GB to 301 GB. Therefore, the
+using the reduced models without storage offloading, then                   relative benefit of reduced storage access decreases, resulting
+scale the results by 3×. To this scaled base latency, we add a              in an overall improvement drop from 4.8× to 2.0×. In contrast,
+separately modeled storage-offloading overhead. The required                for content generation task, KV cache grows more slowly due
+storage-offload data size is calculated based on the total                  to shorter sequence, and LIL O’s storage-offload only increases
+memory footprint (parameters, KV cache, and activations)                    from 23 GB to 34 GB as batch size increases from 1 to 64,
+                                                                            decreasing the improvement modestly from 4.9× to 3.8×.
+                                                                               For DeepSeek-R1, LIL O consistently achieves 3.1–4.3×
+                             TABLE IV                                       higher throughput compared to baseline across the benchmark
+                        E VALUATION SYSTEM .                                categories and batch sizes. Across all cases, LIL O com-
+                                                                            pletely avoids storage-offloading by compressing the model
+  GNR system     Description
+                                                                            size from 1.25 TB to 854 GB and benefiting from the small KV
+                 Intel® Xeon® 6980P CPU@2.0GHz, 128 cores                   cache sizes with DeepSeek-R1’s Multi-head Latent Attention
+      CPU
+                 and 504 MB LLC per CPU
+    Memory       12 × DDR5-6400 channels, 768 GB                            (MLA). As a result, the improvement with LIL O maintains
+    Storage      Micron 7450 NVMe M.2 SSD, PCIe 4.0 ×4, 480 GB              consistently high even for benchmark categories with long
+  On-chip IAA    4 on-chip IAAs per CPU, QPL v1.7.0                         sequence lengths and large batch sizes, as it continues to
+  OS (kernel)    Ubuntu 22.04.5 LTS (Linux kernel 6.8.0-49-generic)
+                                                                            operate within DDR capacity without offloading.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+                                                        Llama3-405B, 512 GB System Memory                                                                                                          DeepSeek-R1, 1 TB System Memory
+                                                                                                                               LILo          Baseline(Uncompressed)
+                                    10                                                                                                               10
+     Throughput (tokens/s)
+
+                                     1                                                                                                                 1
+                                    0.1                                                                                                              0.1
+                                0.01                                                                                                                0.01
+
+                                                      B=16
+                                                             B=64
+
+
+
+
+                                                                                 B=16
+                                                                                        B=64
+
+
+
+
+                                                                                                           B=16
+                                                                                                                  B=64
+
+
+
+
+                                                                                                                                      B=16
+                                                                                                                                             B=64
+
+
+
+
+                                                                                                                                                                                            B=16
+                                                                                                                                                                                                   B=64
+
+
+
+
+                                                                                                                                                                                                                       B=16
+                                                                                                                                                                                                                              B=64
+
+
+
+
+                                                                                                                                                                                                                                                 B=16
+                                                                                                                                                                                                                                                        B=64
+
+
+
+
+                                                                                                                                                                                                                                                                           B=16
+                                                                                                                                                                                                                                                                                  B=64
+                                          B=1
+                                                B=4
+
+
+
+
+                                                                    B=1
+                                                                          B=4
+
+
+
+
+                                                                                               B=1
+                                                                                                     B=4
+
+
+
+
+                                                                                                                         B=1
+                                                                                                                               B=4
+
+
+
+
+                                                                                                                                                                               B=1
+                                                                                                                                                                                      B=4
+
+
+
+
+                                                                                                                                                                                                          B=1
+                                                                                                                                                                                                                B=4
+
+
+
+
+                                                                                                                                                                                                                                     B=1
+                                                                                                                                                                                                                                           B=4
+
+
+
+
+                                                                                                                                                                                                                                                               B=1
+                                                                                                                                                                                                                                                                     B=4
+                                            content gen             creative writing             summ-light                summ-mod                                              content gen              creative writing             summ-light                summ-mod
+                                                                                                                               OpenOrca Benchmark Category
+                                                                                (a) Inference throughput comparison between LIL O and baseline (uncompressed)
+
+                                                             Llama3-405B, 512 GB System Memory                                                                                                 DeepSeek-R1, 1 TB System Memory
+                                                                          LILo-compute  LILo-decompress                                         LILo-storage                          Baseline-compute   Baseline-storage
+    Latency Breakdown
+
+
+
+
+                                     1                                                                                                                  1
+        Normalized
+
+
+
+
+                                    0.5                                                                                                               0.5
+
+                                     0                                                                                                                      0
+                                           𝐵 = 1 𝐵 = 64 𝐵 = 1 𝐵 = 64 𝐵 = 1 𝐵 = 64 𝐵 = 1 𝐵 = 64                                                                                  𝐵 = 1 𝐵 = 64 𝐵 = 1 𝐵 = 64 𝐵 = 1 𝐵 = 64 𝐵 = 1 𝐵 = 64
+                                            content gen creative writing summ-light summ-mod                                                                                     content gen creative writing summ-light summ-mod
+
+                                                                                                                               OpenOrca Benchmark Category
+                                                                                                           (b) Latency breakdown of LIL O and baseline
+Fig. 11. Inference throughput and latency breakdown comparison between LIL O and the uncompressed baseline for Llama3-405B and DeepSeek-R1, under
+memory capacity constraints of 512 GB and 1 TB, respectively. Measurements are taken using representative input/output lengths from the OpenOrca dataset,
+with batch size (B) swept from 1 to 64. For the latency breakdown, LILo’s latency is normalized to the uncompressed baseline.
+
+
+                                                                          B=1              B=64                                                                                                                 LILo          Baseline (Uncompressed)
+   Throughput Improvement (×)
+
+
+
+
+                                5
+                                                                                                                                                                                10
+                                                                                                                                                       Throughput (tokens/s)
+
+
+
+
+                                4
+                                3                                                                                                                                                1
+
+                                2                                                                                                                                               0.1
+                                1
+                                                                                                                                                                               0.01
+                                0                                                                                                                                                           B=1       B=4        B=16         B=64         B=1          B=4      B=16        B=64
+                                          256           384               512              512             784             1024
+                                                                                                                                                                                                      Qwen3-235B                                        OPT-175B
+                                                  Llama-405B                    DeepSeek-R1                                                                                                                                   Batch Size (𝐵)
+                                                         System Memory Capacity (GB)
+
+                                                                                                                                                    Fig. 13. Inference throughput of LIL O and the uncompressed baseline for
+Fig. 12. Llama3-405B and DeepSeek-R1 inference throughput improvement                                                                               Qwen3-235B and OPT-175B, under 256 GB system memory capacity for
+with LIL O compared to the uncompressed baseline under varying memory                                                                               content generation and batch size (B) swept from 1 to 64.
+capacity for content generation category and batch sizes (B) of 1 and 64.
+
+
+
+Latency breakdown. Figure 11b illustrates the inference la-                                                                                         batch size 1, lower than the 158–195% overhead for Llama3-
+tency breakdown of LIL O and the baseline. For Llama3-405B,                                                                                         405B. This is due to LILo’s selective decompression, which
+storage-offloading accounts for 37–53% of the total latency in                                                                                      only decompresses the routed experts during inference.
+LIL O, while 82–96% for the baseline. Within the remaining                                                                                          Under different memory capacity constraints. Figure 12
+47–64% of LIL O’s latency, decompression contributes an                                                                                             demonstrates the throughput improvement of Llama3-405B
+overhead of 0.5–1.9× relative to compute latency. These                                                                                             and DeepSeek-R1 with LIL O compared to the baseline across
+results demonstrate that LIL O effectively mitigates the storage                                                                                    varying system memory capacity for the content generation
+bottleneck, while maintaining a relatively low decompression                                                                                        task. For Llama3-405B, the improvement peaks at 512 GB,
+overhead through its high 153.7 GB/s decompression through-                                                                                         reaching 4.9× and 3.9× for batch sizes 1 and 64, respectively.
+put. The decompression overhead decreases with larger batch                                                                                         As memory capacity decreases to 256 GB, the improvement
+sizes and benchmarks featuring longer input sequences with                                                                                          drops to 1.7× and 1.6×, respectively, due to a diminishing
+shorter output sequences (summarization-light and moderate),                                                                                        gap in the amount of model parameters offloaded by LIL O and
+as decompression latency scales only with the output length,                                                                                        the baseline. Specifically, the offloading ratio between baseline
+while compute latency scales with total length and batch size.                                                                                      and LIL O shrinks from 11.0× to 1.8× at batch size 1, and
+   For DeepSeek-R1, LIL O completely avoids storage-                                                                                                from 7.5× to 1.7× at batch size 64.
+offloading, whereas storage-offloading accounts for 80–90%                                                                                             For DeepSeek-R1, LIL O achieves peak throughput im-
+of the baseline’s total latency. The decompression overhead                                                                                         provements of 3.3× and 4.3× at 1 TB system memory
+of LIL O ranges from 69–141% relative to compute latency at                                                                                         for batch sizes 1 and 64, respectively, with decompression
+
+
+
+
+                                    Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+                                TABLE V                                                                      TABLE VI
+ A BLATION STUDY OF LIL O ’ S COMPONENTS . I NFERENCE THROUGHPUT                      S ENSITIVITY STUDY OF LIL O ’ S INFERENCE THROUGHPUT FOR
+  ( TOKENS / S ) OF L LAMA 3-405B AND D EEP S EEK -R1 MEASURED FOR                 L LAMA 3-405B ACROSS DIFFERENT CORE ALLOCATIONS AND CHUNK
+              CONTENT GENERATION AND BATCH SIZE OF 1.                             SIZES FOR CONTENT GENERATION AND BATCH SIZES (B) OF 1 AND 64.
+
+
+
+                                          Throughput (tokens/s)                                                   Core Allocation        Throughput (tokens/s)
+              Ablation Setting                                                                 Chunk Size
+                                      Llama3-405B      DeepSeek-R1                                               (AMX, AVX, IAA)         B=1            B = 64
+              All optimizations            0.13             0.81                                                      (32, 95, 1)         0.107          4.30
+               No overlapping              0.12             0.43                                        1 MB          (64, 63, 1)         0.133          6.73
+               No pipelining               0.10             0.49                                                      (96, 31, 1)         0.107          5.88
+          No selective compression           –              0.67
+          No IAA/AVX accelerators          0.02             0.13                                    512 KB                                0.125          6.49
+                                                                                                     1 MB             (64, 63, 1)         0.133          6.73
+                                                                                                     2 MB                                 0.128          6.11
+
+
+throughput reaching 95–135 GB/s. As memory capacity de-                                             3
+
+
+
+
+                                                                                  Improvement (×)
+creases to 768 GB, LIL O begins to offload a small portion                                          2
+of parameters (86–94 GB), incurring a moderate increase in
+
+
+
+
+                                                                                     Tokens/J
+                                                                                                    1
+latency. However, the uncompressed baseline experiences a                                           0
+larger rise in storage-offload latency as its offloaded data                                              B=1   B=4    B=16    B=64     B=1       B=4   B=16    B=64
+grows more substantially (by 256 GB), resulting in a similar                                                    Llama3-405B                     DeepSeek-R1
+proportional slowdown. Consequently, the relative throughput                                                                   Batch Size (𝐵)
+gain of LIL O remains similar. When capacity drops to 512 GB,
+                                                                                Fig. 14. Tokens/J improvement with LIL O over the uncompressed baseline
+LIL O offloads more data (334–342 GB), and storage offload-                     for Llama3-405B and DeepSeek-R1, under 512 GB and 1 TB memory, respec-
+ing becomes a major contributor to total latency. Meanwhile,                    tively, for content generation and batch size (B) swept from 1 to 64.
+the uncompressed baseline–already bottlenecked by storage
+bandwidth–shows smaller performance degradation, narrowing
+LILo’s throughput gain to 1.8–1.9×.                                             its model architecture, which consists of many small sublayers
+Evaluation on additional models. Figure 13 presents the                         that benefit more from preserved temporal locality enabled
+inference throughput of LIL O and the uncompressed baseline                     by overlapping (§IV-D). IAA and AVX pipelining result in
+for additional models, Qwen3-235B and OPT-175B, under a                         a throughput gain of 1.3× and 1.6× for Llama3-405B and
+256 GB system memory. For Qwen3-235B, LIL O achieves                            DeepSeek-R1, respectively, which the improvements align
+1.8–2.6× higher throughput, with consistent improvements                        closely with the throughput gains illustrated in Figure 9.
+across batch sizes. For OPT-175B, LIL O achieves 1.9–7.0×                       Selective compression delivers 1.2× throughput increase for
+higher throughput than the baseline, with gains more pro-                       DeepSeek-R1, as its dense part significantly contributes to
+nounced at smaller batch sizes and diminishing at B = 64.                       inference latency, while remaining uncompressed. Finally, no
+This is because, OPT’s standard multi-head attention leads to                   IAA and AVX acceleration results in 6.2× and 6.4× longer
+much more rapid growth in KV cache size with batch size                         latency for Llama3-405B and DeepSeek-R1, respectively.
+than other models which employ grouped query attention or                       D. Sensitivity Study
+multi-head latent attention, reducing LILo’s benefit.
+                                                                                   Table VI shows the sensitivity of LILo’s inference through-
+C. Ablation Study                                                               put to the ratio of CPU cores allocated to AMX compute
+                                                                                threads, AVX BF16 reconstruction threads, and the IAA dae-
+   Table V presents the throughput (tokens/s) of both Llama3-
+                                                                                mon thread and the IAA chunk size, measured on Llama3-
+405B and DeepSeek-R1 inference without storage-offloading
+                                                                                405B with 128/256 input/output lengths (content generation)
+under four configurations for ablation study: (1) All op-
+                                                                                and batch sizes of 1 and 64. This shows that LIL O achieves
+timizations; (2) No overlapping between computation and
+                                                                                the highest throughput when using a chunk size of 1 MB
+compression; (3) No pipelining between IAA and AVX during
+                                                                                and a core allocation of (64, 63, 1) for AMX, AVX, and
+decompression; (4) No selective compression in DeepSeek-R1;
+                                                                                IAA threads, respectively. Assigning more cores to either
+and (5) No IAA/AVX acceleration, where decompression is
+                                                                                compute or reconstruction creates pipeline imbalance between
+performed entirely on CPU cores.3 Experiments are conducted
+                                                                                decompression and computation, reducing throughput by 14–
+for content generation category and batch size of 1.
+                                                                                37%. Varying the IAA chunk size also impacts decompression
+   Overlapping decompression and computation achieves a
+                                                                                throughput, as analyzed in Figure 9, leading to a 4–10%
+1.9× throughput gain for DeepSeek-R1, while 1.1× for
+                                                                                reduction in overall inference throughput.
+Llama3-405B. The larger gain in DeepSeek-R1 is attributed to
+                                                                                E. Energy Efficiency Improvement
+  3 The  throughput is estimated by adding the decompression over-
+head—computed using the CPU-based decompression throughput reported in            Figure 14 presents the energy-efficiency improvement of
+Table II—to the baseline latency measured without compression.                  LIL O over the uncompressed baseline. The total energy is
+
+
+
+
+           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+obtained by summing two separately measured components:                       8.1k–75k tokens/$, corresponding to 27–46% of the DGX
+(1) energy for compute and decompression, derived by mul-                     system’s efficiency. This is because LIL O incurs significantly
+tiplying the average power measured using turbostat [16]                      lower hardware cost (15.6 K$) [8], [9] and power (564W),
+with the corresponding latency, and (2) energy for storage                    compared to the DGX system’s cost (1.2 M$) [12] and power
+access, obtained in the same manner. Overall, LIL O consis-                   (16.8 kW). Despite lagging behind these metrics, LIL O offers
+tently improves energy efficiency by 2.1–2.5× across different                strong practical advantages by drastically lowering deployment
+batch sizes for both models. Note that the energy-efficiency                  costs (80×) or even zero extra capital expenditure by leverag-
+improvement of LIL O is smaller than the latency or throughput                ing servers that hyperscalers have already deployed (§II-A).
+improvement since the much lower (2–3×) power during
+storage access reduces its contribution to total energy.                                              VII. R ELATED W ORK
+                          VI. D ISCUSSION                                     Model quantization. Quantization-aware training [23],
+The impact of storage prefetching. HuggingFace Accel-                         [41] and calibration-based Post-Training Quantization meth-
+erate currently lacks storage prefetching (overlapping stor-                  ods [30], [52] have been shown to effectively mitigate ac-
+age access with compute/decompression). Adding prefetching                    curacy degradation. However, recent studies highlight that
+could reduce storage-offloading overhead for both LIL O and                   beyond preserving accuracy, quantization can introduce new
+the uncompressed baseline, although the benefits differ by                    challenges, including increased vulnerability to adversarial
+scenario. For Llama3-405B under 512 GB, LIL O gains 1.6–                      attacks [29], unintended bias and toxicity in generation [53],
+2.0× throughput with prefetching, benefiting from balanced                    the re-emergence of previously unlearned problematic behav-
+compute/decompression and storage access latencies. On the                    iors [55], and overall reductions in model trustworthiness [34].
+other hand, the baseline improves only 1.04–1.2× due to                       Inference with lossless compression. Recent research has
+its heavier storage bottleneck. Conversely, for DeepSeek-R1                   explored lossless parameter compression to reduce the mem-
+under 1 TB, only the baseline benefits (1.1–1.2×) since LIL O                 ory footprint of convolutional neural networks (CNNs) while
+operates fully in memory.                                                     preserving model behavior. Eyeriss [24], [25] adopts a run-
+Extension to KV cache compression. For inference with                         length compression algorithm and designs a custom dataflow
+extremely long context windows (e.g., 1M tokens [14]), KV                     architecture to exploit sparsity, reduce energy consump-
+cache can dominate the total memory footprint, reducing                       tion and memory bandwidth during CNN inference. Lane-
+LILo’s relative benefit in memory reduction and thus its                      compression [39] groups bits at the same positions into mul-
+latency and throughput gains. For example, under a 512 GB                     tiple bit lanes and applies the optimal compression algorithm
+memory, LILo’s performance gain over the uncompressed                         for each lane. A decompressor designed on reconfigurable
+baseline for Llama3-405B decreases to 1.4× and 1.01× at                       hardware parallelizes lane-wise decoding.
+a 1M token length for batch sizes of 1 and 64, respectively.
+To address this limitation, LILo’s approach can be extended                                            VIII. C ONCLUSION
+to compress the dynamically generated KV cache using with
+                                                                                 In this work, we introduce LIL O, a framework that ac-
+IAA in runtime. We observe that the KV cache also achieves
+                                                                              celerates LLM inference under memory capacity constraints
+around 70% compression ratio, similar to model parameters.
+                                                                              by reducing the storage-offloaded data through lossless com-
+However, IAA compression throughput only achieves 13 GB/s,
+                                                                              pression and on-the-fly decompression during runtime. To
+which becomes a bottleneck. To mitigate this bottleneck, we
+                                                                              achieve high-throughput decompression, LIL O leverages Intel
+can overlap compression with computation as LIL O does,
+                                                                              CPU’s on-chip accelerators including In-Memory Analytics
+leveraging the fact that most KV cache is produced during the
+                                                                              Accelerator (IAA) and Advanced Vector Extensions (AVX)
+prefill stage, which requires long compute time, while only a
+                                                                              while coordinating their execution with inference computation
+small fraction is appended per decoding step.
+                                                                              on Advanced Matrix Extensions (AMX) to ensure efficient
+Cost/performance comparison to GPU systems. We com-
+                                                                              parallelism. Our evaluation demonstrates that LIL O reduces
+pare LILo’s hardware cost, power, throughput, and cost effi-
+                                                                              inference latency by up to 4.9× compared to uncompressed
+ciency (tokens/$) for DeepSeek-R1 inference under 1 TB sys-
+                                                                              CPU inference under memory capacity constraints, accelerat-
+tem memory against a high-end multi-GPU system composed
+                                                                              ing the deployment of LLMs within tight memory budgets.
+of three DGX-H100 servers that accommodates DeepSeek-
+R1’s memory footprint, where the GPU system performance
+                                                                                                      ACKNOWLEDGMENTS
+is estimated with LLMSimulator [10], [54]. While the DGX
+system achieves substantially higher raw throughput (55–                         This research was supported in part by grants from the
+1.4k tokens/s) than LIL O (0.7–4.5 tokens/s), the gap nar-                    IBM-Illinois Discovery Accelerator Institute (IIDAI) and the
+rows when considering the tokens-per-dollar metric.4 LIL O                    MSIT (Ministry of Science, ICT), Korea (RS-2024-00456287
+achieves 3.5k–19.2k tokens/$, compared to the DGX system’s                    and RS-2025 02214649) supervised by the IITP (Institute
+  4 The hardware cost is assumed to be amortized across the time period of
+                                                                              for Information & Communications Technology Planning &
+3 years and the power consumption is estimated with each system’s TDP.        Evaluation) and by a generous gift from Intel Corporation.
+Electricity cost of $0.17/kWh is assumed, the national average in the U.S.    Nam Sung Kim is the corresponding author.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+                               R EFERENCES                                           [23] M. Chen, W. Shao, P. Xu, J. Wang, P. Gao, K. Zhang, and P. Luo,
+                                                                                          “Efficientqat: Efficient quantization-aware training for large language
+ [1] “Source coding algorithms for fast data compression, author=Pasco,                   models,” arXiv preprint arXiv:2407.11062, 2024.
+     Richard Clark,” Ph.D. dissertation, Stanford University CA, 1976.               [24] Y.-H. Chen, T. Krishna, J. S. Emer, and V. Sze, “Eyeriss: An energy-
+ [2] “HuggingFace model list for text generation,” Accessed in 2025.                      efficient reconfigurable accelerator for deep convolutional neural net-
+     [Online]. Available: https://huggingface.co/models?pipeline tag=text-                works,” IEEE journal of solid-state circuits, vol. 52, no. 1, pp. 127–138,
+     generation                                                                           2016.
+ [3] “Intel®       64       and       IA-32       Architectures      Optimization    [25] Y.-H. Chen, T.-J. Yang, J. Emer, and V. Sze, “Eyeriss v2: A flexible
+     Reference       Manual:      Volume        1,”      Accessed     in    2025.         accelerator for emerging deep neural networks on mobile devices,” IEEE
+     [Online].             Available:            https://www.google.com/url?sa=           Journal on Emerging and Selected Topics in Circuits and Systems, vol. 9,
+     t&rct=j&q=&esrc=s&source=web&cd=&cad=rja&uact=8&ved=                                 no. 2, pp. 292–308, 2019.
+     2ahUKEwjc1ryy5N2OAxWbLtAFHUUyNOUQFnoECBcQAQ&url=                                [26] DeepSeek-AI, D. Guo, D. Yang, H. Zhang, J. Song, R. Zhang, R. Xu,
+     https%3A%2F%2Fcdrdv2-public.intel.com%2F671488%                                      Q. Zhu, S. Ma, P. Wang, X. Bi, X. Zhang, X. Yu, Y. Wu, Z. F. Wu,
+     2F248966-Software-Optimization-Manual-V1-048.pdf&usg=                                Z. Gou, Z. Shao, Z. Li, Z. Gao, A. Liu, B. Xue, B. Wang, B. Wu,
+     AOvVaw2OB6hxnkyssvqf2MIJgDFb&opi=89978449                                            B. Feng, C. Lu, C. Zhao, C. Deng, C. Zhang, C. Ruan, D. Dai,
+ [4] “Intel®       Architecture       Instruction      Set     Extensions     and         D. Chen, D. Ji, E. Li, F. Lin, F. Dai, F. Luo, G. Hao, G. Chen, G. Li,
+     Future Features,” Accessed in 2025. [Online]. Available:                             H. Zhang, H. Bao, H. Xu, H. Wang, H. Ding, H. Xin, H. Gao, H. Qu,
+     https://www.intel.com/content/www/us/en/content-details/774990/intel-                H. Li, J. Guo, J. Li, J. Wang, J. Chen, J. Yuan, J. Qiu, J. Li, J. L. Cai,
+     architecture-instruction-set-extensions-programming-reference.html                   J. Ni, J. Liang, J. Chen, K. Dong, K. Hu, K. Gao, K. Guan, K. Huang,
+ [5] “Intel® Extension for PyTorch,” Accessed in 2025. [Online]. Available:               K. Yu, L. Wang, L. Zhang, L. Zhao, L. Wang, L. Zhang, L. Xu, L. Xia,
+     https://github.com/intel/intel-extension-for-pytorch                                 M. Zhang, M. Zhang, M. Tang, M. Li, M. Wang, M. Li, N. Tian,
+ [6] “Intel®         In-Memory            Analytics         Accelerator       (In-        P. Huang, P. Zhang, Q. Wang, Q. Chen, Q. Du, R. Ge, R. Zhang,
+     tel®         IAA),”         Accessed          in        2025.       [Online].        R. Pan, R. Wang, R. J. Chen, R. L. Jin, R. Chen, S. Lu, S. Zhou,
+     Available:      https://www.intel.com/content/www/us/en/products/docs/               S. Chen, S. Ye, S. Wang, S. Yu, S. Zhou, S. Pan, S. S. Li, S. Zhou,
+     accelerator-engines/in-memory-analytics-accelerator.html                             S. Wu, S. Ye, T. Yun, T. Pei, T. Sun, T. Wang, W. Zeng, W. Zhao,
+ [7] “Intel® Query Processing Library (Intel® QPL),” Accessed in 2025.                    W. Liu, W. Liang, W. Gao, W. Yu, W. Zhang, W. L. Xiao, W. An,
+     [Online]. Available: https://github.com/intel/qpl                                    X. Liu, X. Wang, X. Chen, X. Nie, X. Cheng, X. Liu, X. Xie, X. Liu,
+ [8] “Intel® Xeon® 6980P Processor,” Accessed in 2025. [Online]. Avail-                   X. Yang, X. Li, X. Su, X. Lin, X. Q. Li, X. Jin, X. Shen, X. Chen,
+     able: https://www.intel.com/content/www/us/en/products/sku/240777/                   X. Sun, X. Wang, X. Song, X. Zhou, X. Wang, X. Shan, Y. K. Li, Y. Q.
+     intel-xeon-6980p-processor-504m-cache-2-00-ghz/specifications.html                   Wang, Y. X. Wei, Y. Zhang, Y. Xu, Y. Li, Y. Zhao, Y. Sun, Y. Wang,
+ [9] “July 2025 Server Memory Prices,” Accessed in 2025. [Online].                        Y. Yu, Y. Zhang, Y. Shi, Y. Xiong, Y. He, Y. Piao, Y. Wang, Y. Tan,
+     Available: https://memory.net/memory-prices/                                         Y. Ma, Y. Liu, Y. Guo, Y. Ou, Y. Wang, Y. Gong, Y. Zou, Y. He,
+[10] “LLMSimulator,” Accessed in 2025. [Online]. Available: https:                        Y. Xiong, Y. Luo, Y. You, Y. Liu, Y. Zhou, Y. X. Zhu, Y. Xu, Y. Huang,
+     //github.com/scale-snu/LLMSimulator                                                  Y. Li, Y. Zheng, Y. Zhu, Y. Ma, Y. Tang, Y. Zha, Y. Yan, Z. Z. Ren,
+[11] “LZ4 Bindings for Python,” Accessed in 2025. [Online]. Available:                    Z. Ren, Z. Sha, Z. Fu, Z. Xu, Z. Xie, Z. Zhang, Z. Hao, Z. Ma,
+     https://pypi.org/project/lz4/                                                        Z. Yan, Z. Wu, Z. Gu, Z. Zhu, Z. Liu, Z. Li, Z. Xie, Z. Song, Z. Pan,
+[12] “NVIDIA H100 Price Guide 2025: Detailed Costs, Comparisons                           Z. Huang, Z. Xu, Z. Zhang, and Z. Zhang, “DeepSeek-R1: Incentivizing
+     & Expert Insights,” Accessed in 2025. [Online]. Available: https:                    Reasoning Capability in LLMs via Reinforcement Learning,” 2025.
+     //docs.jarvislabs.ai/blog/h100-price/                                                [Online]. Available: https://arxiv.org/abs/2501.12948
+[13] “OpenMP,” Accessed in 2025. [Online]. Available: https:                         [27] DeepSeek-AI, A. Liu, B. Feng, B. Xue, B. Wang, B. Wu, C. Lu,
+     //www.openmp.org/                                                                    C. Zhao, C. Deng, C. Zhang, C. Ruan, D. Dai, D. Guo, D. Yang,
+[14] “Our next-generation model: Gemini 1.5,” Accessed in                                 D. Chen, D. Ji, E. Li, F. Lin, F. Dai, F. Luo, G. Hao, G. Chen, G. Li,
+     2025.       [Online].     Available:       https://blog.google/technology/ai/        H. Zhang, H. Bao, H. Xu, H. Wang, H. Zhang, H. Ding, H. Xin,
+     google-gemini-next-generation-model-february-2024/?utm source=                       H. Gao, H. Li, H. Qu, J. L. Cai, J. Liang, J. Guo, J. Ni, J. Li, J. Wang,
+     chatgpt.com#architecturel                                                            J. Chen, J. Chen, J. Yuan, J. Qiu, J. Li, J. Song, K. Dong, K. Hu,
+[15] “The Llama 4 herd: The beginning of a new era of natively                            K. Gao, K. Guan, K. Huang, K. Yu, L. Wang, L. Zhang, L. Xu, L. Xia,
+     multimodal AI innovation,” Accessed in 2025. [Online]. Available:                    L. Zhao, L. Wang, L. Zhang, M. Li, M. Wang, M. Zhang, M. Zhang,
+     https://ai.meta.com/blog/llama-4-multimodal-intelligence/                            M. Tang, M. Li, N. Tian, P. Huang, P. Wang, P. Zhang, Q. Wang,
+[16] “turbostat - Report processor frequency and idle statistics at Linux.org,”           Q. Zhu, Q. Chen, Q. Du, R. J. Chen, R. L. Jin, R. Ge, R. Zhang,
+     Accessed in 2025. [Online]. Available: https://www.linux.org/docs/                   R. Pan, R. Wang, R. Xu, R. Zhang, R. Chen, S. S. Li, S. Lu, S. Zhou,
+     man8/turbostat.html                                                                  S. Chen, S. Wu, S. Ye, S. Ye, S. Ma, S. Wang, S. Zhou, S. Yu, S. Zhou,
+[17] “zlib — Compression compatible with gzip,” Accessed in 2025.                         S. Pan, T. Wang, T. Yun, T. Pei, T. Sun, W. L. Xiao, W. Zeng, W. Zhao,
+     [Online]. Available: https://docs.python.org/3/library/zlib.html                     W. An, W. Liu, W. Liang, W. Gao, W. Yu, W. Zhang, X. Q. Li, X. Jin,
+[18] B. Abali, B. Blaner, J. Reilly, M. Klein, A. Mishra, C. B. Agricola,                 X. Wang, X. Bi, X. Liu, X. Wang, X. Shen, X. Chen, X. Zhang,
+     B. Sendir, A. Buyuktosunoglu, C. Jacobi, W. J. Starke, H. Myneni,                    X. Chen, X. Nie, X. Sun, X. Wang, X. Cheng, X. Liu, X. Xie, X. Liu,
+     and C. Wang, “Data Compression Accelerator on IBM POWER9 and                         X. Yu, X. Song, X. Shan, X. Zhou, X. Yang, X. Li, X. Su, X. Lin,
+     z15 Processors : Industrial Product,” in 2020 ACM/IEEE 47th Annual                   Y. K. Li, Y. Q. Wang, Y. X. Wei, Y. X. Zhu, Y. Zhang, Y. Xu, Y. Xu,
+     International Symposium on Computer Architecture (ISCA), 2020, pp.                   Y. Huang, Y. Li, Y. Zhao, Y. Sun, Y. Li, Y. Wang, Y. Yu, Y. Zheng,
+     1–14.                                                                                Y. Zhang, Y. Shi, Y. Xiong, Y. He, Y. Tang, Y. Piao, Y. Wang, Y. Tan,
+[19] R. Y. Aminabadi, S. Rajbhandari, A. A. Awan, C. Li, D. Li, E. Zheng,                 Y. Ma, Y. Liu, Y. Guo, Y. Wu, Y. Ou, Y. Zhu, Y. Wang, Y. Gong,
+     O. Ruwase, S. Smith, M. Zhang, J. Rasley, and Y. He, “DeepSpeed-                     Y. Zou, Y. He, Y. Zha, Y. Xiong, Y. Ma, Y. Yan, Y. Luo, Y. You,
+     Inference: Enabling Efficient Inference of Transformer Models at Un-                 Y. Liu, Y. Zhou, Z. F. Wu, Z. Z. Ren, Z. Ren, Z. Sha, Z. Fu, Z. Xu,
+     precedented Scale,” in Proceedings of the International Conference for               Z. Huang, Z. Zhang, Z. Xie, Z. Zhang, Z. Hao, Z. Gou, Z. Ma, Z. Yan,
+     High Performance Computing, Networking, Storage and Analysis (SC),                   Z. Shao, Z. Xu, Z. Wu, Z. Zhang, Z. Li, Z. Gu, Z. Zhu, Z. Liu, Z. Li,
+     2022, pp. 1–15.                                                                      Z. Xie, Z. Song, Z. Gao, and Z. Pan, “Deepseek-v3 technical report,”
+[20] M. Barot and J. A. de la Pena, “Estimating the size of a union of random             2025. [Online]. Available: https://arxiv.org/abs/2412.19437
+     subsets of fixed cardinality,” Elemente der Mathematik, vol. 56, no. 4,         [28] P. Deutsch, “DEFLATE compressed data format specification version
+     pp. 163–169, 2001.                                                                   1.3,” Tech. Rep., 1996.
+[21] A. Blogs, “Unlocking Enterprise AI: Why are CPUs the                            [29] K. Egashira, M. Vero, R. Staab, J. He, and M. Vechev, “Exploiting
+     Backbone!” 2025. [Online]. Available: https://www.amd.com/en/blogs/                  llm quantization,” Advances in Neural Information Processing Systems,
+     2025/unlocking-enterprise-ai-why-are-cpus-the-backbone.html                          vol. 37, pp. 41 709–41 732, 2025.
+[22] I. Burstein, “Nvidia data center processing unit (dpu) architecture,” in        [30] E. Frantar, S. Ashkboos, T. Hoefler, and D. Alistarh, “Gptq: Accurate
+     2021 IEEE Hot Chips 33 Symposium (HCS). IEEE, 2021, pp. 1–20.                        post-training quantization for generative pre-trained transformers,” arXiv
+                                                                                          preprint arXiv:2210.17323, 2022.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+[31] S. Go and D. Mahajan, “Moetuner: Optimized mixture of expert serving              M. Metanat, M. Rastegari, M. Bansal, N. Santhanam, N. Parks,
+     with balanced expert placement and token routing,” arXiv preprint                 N. White, N. Bawa, N. Singhal, N. Egebo, N. Usunier, N. Mehta,
+     arXiv:2502.06643, 2025.                                                           N. P. Laptev, N. Dong, N. Cheng, O. Chernoguz, O. Hart, O. Salpekar,
+[32] A. Grattafiori, A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-                 O. Kalinli, P. Kent, P. Parekh, P. Saab, P. Balaji, P. Rittner, P. Bontrager,
+     Dahle, A. Letman, A. Mathur, A. Schelten, A. Vaughan, A. Yang,                    P. Roux, P. Dollar, P. Zvyagina, P. Ratanchandani, P. Yuvraj, Q. Liang,
+     A. Fan, A. Goyal, A. Hartshorn, A. Yang, A. Mitra, A. Sravankumar,                R. Alao, R. Rodriguez, R. Ayub, R. Murthy, R. Nayani, R. Mitra,
+     A. Korenev, A. Hinsvark, A. Rao, A. Zhang, A. Rodriguez,                          R. Parthasarathy, R. Li, R. Hogan, R. Battey, R. Wang, R. Howes,
+     A. Gregerson, A. Spataru, B. Roziere, B. Biron, B. Tang, B. Chern,                R. Rinott, S. Mehta, S. Siby, S. J. Bondu, S. Datta, S. Chugh, S. Hunt,
+     C. Caucheteux, C. Nayak, C. Bi, C. Marra, C. McConnell, C. Keller,                S. Dhillon, S. Sidorov, S. Pan, S. Mahajan, S. Verma, S. Yamamoto,
+     C. Touret, C. Wu, C. Wong, C. C. Ferrer, C. Nikolaidis, D. Allonsius,             S. Ramaswamy, S. Lindsay, S. Lindsay, S. Feng, S. Lin, S. C. Zha,
+     D. Song, D. Pintz, D. Livshits, D. Wyatt, D. Esiobu, D. Choudhary,                S. Patil, S. Shankar, S. Zhang, S. Zhang, S. Wang, S. Agarwal,
+     D. Mahajan, D. Garcia-Olano, D. Perino, D. Hupkes, E. Lakomkin,                   S. Sajuyigbe, S. Chintala, S. Max, S. Chen, S. Kehoe, S. Satterfield,
+     E. AlBadawy, E. Lobanova, E. Dinan, E. M. Smith, F. Radenovic,                    S. Govindaprasad, S. Gupta, S. Deng, S. Cho, S. Virk, S. Subramanian,
+     F. Guzmán, F. Zhang, G. Synnaeve, G. Lee, G. L. Anderson, G. Thattai,            S. Choudhury, S. Goldman, T. Remez, T. Glaser, T. Best, T. Koehler,
+     G. Nail, G. Mialon, G. Pang, G. Cucurell, H. Nguyen, H. Korevaar,                 T. Robinson, T. Li, T. Zhang, T. Matthews, T. Chou, T. Shaked,
+     H. Xu, H. Touvron, I. Zarov, I. A. Ibarra, I. Kloumann, I. Misra,                 V. Vontimitta, V. Ajayi, V. Montanez, V. Mohan, V. S. Kumar,
+     I. Evtimov, J. Zhang, J. Copet, J. Lee, J. Geffert, J. Vranes, J. Park,           V. Mangla, V. Ionescu, V. Poenaru, V. T. Mihailescu, V. Ivanov, W. Li,
+     J. Mahadeokar, J. Shah, J. van der Linde, J. Billock, J. Hong,                    W. Wang, W. Jiang, W. Bouaziz, W. Constable, X. Tang, X. Wu,
+     J. Lee, J. Fu, J. Chi, J. Huang, J. Liu, J. Wang, J. Yu, J. Bitton,               X. Wang, X. Wu, X. Gao, Y. Kleinman, Y. Chen, Y. Hu, Y. Jia, Y. Qi,
+     J. Spisak, J. Park, J. Rocca, J. Johnstun, J. Saxe, J. Jia, K. V.                 Y. Li, Y. Zhang, Y. Zhang, Y. Adi, Y. Nam, Yu, Wang, Y. Zhao,
+     Alwala, K. Prasad, K. Upasani, K. Plawiak, K. Li, K. Heafield,                    Y. Hao, Y. Qian, Y. Li, Y. He, Z. Rait, Z. DeVito, Z. Rosnbrick,
+     K. Stone, K. El-Arini, K. Iyer, K. Malik, K. Chiu, K. Bhalla,                     Z. Wen, Z. Yang, Z. Zhao, and Z. Ma, “The Llama 3 Herd of Models,”
+     K. Lakhotia, L. Rantala-Yeary, L. van der Maaten, L. Chen, L. Tan,                2024. [Online]. Available: https://arxiv.org/abs/2407.21783
+     L. Jenkins, L. Martin, L. Madaan, L. Malo, L. Blecher, L. Landzaat,          [33] S. Gugger, L. Debut, T. Wolf, P. Schmid, Z. Mueller, S. Mangrulkar,
+     L. de Oliveira, M. Muzzi, M. Pasupuleti, M. Singh, M. Paluri,                     M. Sun, and B. Bossan, “Accelerate: Training and inference at
+     M. Kardas, M. Tsimpoukelli, M. Oldham, M. Rita, M. Pavlova,                       scale made simple, efficient and adaptable,” 2022. [Online]. Available:
+     M. Kambadur, M. Lewis, M. Si, M. K. Singh, M. Hassan, N. Goyal,                   https://github.com/huggingface/accelerate
+     N. Torabi, N. Bashlykov, N. Bogoychev, N. Chatterji, N. Zhang,               [34] J. Hong, J. Duan, C. Zhang, Z. Li, C. Xie, K. Lieberman, J. Diffenderfer,
+     O. Duchenne, O. Çelebi, P. Alrassy, P. Zhang, P. Li, P. Vasic,                   B. Bartoldson, A. Jaiswal, K. Xu, B. Kailkhura, D. Hendrycks, D. Song,
+     P. Weng, P. Bhargava, P. Dubal, P. Krishnan, P. S. Koura, P. Xu,                  Z. Wang, and B. Li, “Decoding Compressed Trust: Scrutinizing the
+     Q. He, Q. Dong, R. Srinivasan, R. Ganapathy, R. Calderer, R. S.                   Trustworthiness of Efficient LLMs Under Compression,” 2024. [Online].
+     Cabral, R. Stojnic, R. Raileanu, R. Maheswari, R. Girdhar, R. Patel,              Available: https://arxiv.org/abs/2403.15447
+     R. Sauvestre, R. Polidoro, R. Sumbaly, R. Taylor, R. Silva, R. Hou,          [35] D. A. Huffman, “A method for the construction of minimum-redundancy
+     R. Wang, S. Hosseini, S. Chennabasappa, S. Singh, S. Bell, S. S. Kim,             codes,” Proceedings of the IRE, vol. 40, no. 9, pp. 1098–1101, 1952.
+     S. Edunov, S. Nie, S. Narang, S. Raparthy, S. Shen, S. Wan, S. Bhosale,      [36] A. Q. Jiang, A. Sablayrolles, A. Roux, A. Mensch, B. Savary,
+     S. Zhang, S. Vandenhende, S. Batra, S. Whitman, S. Sootla, S. Collot,             C. Bamford, D. S. Chaplot, D. de las Casas, E. B. Hanna, F. Bressand,
+     S. Gururangan, S. Borodinsky, T. Herman, T. Fowler, T. Sheasha,                   G. Lengyel, G. Bour, G. Lample, L. R. Lavaud, L. Saulnier, M.-A.
+     T. Georgiou, T. Scialom, T. Speckbacher, T. Mihaylov, T. Xiao, U. Karn,           Lachaux, P. Stock, S. Subramanian, S. Yang, S. Antoniak, T. L. Scao,
+     V. Goswami, V. Gupta, V. Ramanathan, V. Kerkez, V. Gonguet, V. Do,                T. Gervet, T. Lavril, T. Wang, T. Lacroix, and W. E. Sayed, “Mixtral
+     V. Vogeti, V. Albiero, V. Petrovic, W. Chu, W. Xiong, W. Fu, W. Meers,            of experts,” 2024. [Online]. Available: https://arxiv.org/abs/2401.04088
+     X. Martinet, X. Wang, X. Wang, X. E. Tan, X. Xia, X. Xie, X. Jia,            [37] J. Kaplan, S. McCandlish, T. Henighan, T. B. Brown, B. Chess, R. Child,
+     X. Wang, Y. Goldschlag, Y. Gaur, Y. Babaei, Y. Wen, Y. Song,                      S. Gray, A. Radford, J. Wu, and D. Amodei, “Scaling Laws for Neural
+     Y. Zhang, Y. Li, Y. Mao, Z. D. Coudert, Z. Yan, Z. Chen, Z. Papakipos,            Language Models,” arXiv preprint arXiv:2001.08361, 2020.
+     A. Singh, A. Srivastava, A. Jain, A. Kelsey, A. Shajnfeld, A. Gangidi,       [38] H. Kim, N. Wang, Q. Xia, J. Huang, A. Yazdanbakhsh, and N. S.
+     A. Victoria, A. Goldstand, A. Menon, A. Sharma, A. Boesenberg,                    Kim, “LIA: A Single-GPU LLM Inference Acceleration with Cooper-
+     A. Baevski, A. Feinstein, A. Kallet, A. Sangani, A. Teo, A. Yunus,                ative AMX-Enabled CPU-GPU Computation and CXL Offloading,” in
+     A. Lupu, A. Alvarado, A. Caples, A. Gu, A. Ho, A. Poulton,                        Proceedings of the 52nd Annual International Symposium on Computer
+     A. Ryan, A. Ramchandani, A. Dong, A. Franco, A. Goyal, A. Saraf,                  Architecture, 2025, pp. 544–558.
+     A. Chowdhury, A. Gabriel, A. Bharambe, A. Eisenman, A. Yazdan,               [39] Y. Ko, A. Chadwick, D. Bates, and R. Mullins, “Lane compression: A
+     B. James, B. Maurer, B. Leonhardi, B. Huang, B. Loyd, B. D.                       lightweight lossless compression method for machine learning on em-
+     Paola, B. Paranjape, B. Liu, B. Wu, B. Ni, B. Hancock, B. Wasti,                  bedded systems,” ACM Transactions on Embedded Computing Systems
+     B. Spence, B. Stojkovic, B. Gamido, B. Montalvo, C. Parker, C. Burton,            (TECS), vol. 20, no. 2, pp. 1–26, 2021.
+     C. Mejia, C. Liu, C. Wang, C. Kim, C. Zhou, C. Hu, C.-H. Chu,                [40] W. Lian, B. Goodson, E. Pentland, A. Cook, C. Vong, and
+     C. Cai, C. Tindal, C. Feichtenhofer, C. Gao, D. Civin, D. Beaty,                  ”Teknium”, “OpenOrca: An Open Dataset of GPT Augmented
+     D. Kreymer, D. Li, D. Adkins, D. Xu, D. Testuggine, D. David,                     FLAN Reasoning Traces,” 2023. [Online]. Available: https://https:
+     D. Parikh, D. Liskovich, D. Foss, D. Wang, D. Le, D. Holland,                     //huggingface.co/datasets/Open-Orca/OpenOrca
+     E. Dowling, E. Jamil, E. Montgomery, E. Presani, E. Hahn, E. Wood,           [41] Z. Liu, B. Oguz, C. Zhao, E. Chang, P. Stock, Y. Mehdad, Y. Shi, R. Kr-
+     E.-T. Le, E. Brinkman, E. Arcaute, E. Dunbar, E. Smothers, F. Sun,                ishnamoorthi, and V. Chandra, “Llm-qat: Data-free quantization aware
+     F. Kreuk, F. Tian, F. Kokkinos, F. Ozgenel, F. Caggioni, F. Kanayet,              training for large language models,” arXiv preprint arXiv:2305.17888,
+     F. Seide, G. M. Florez, G. Schwarz, G. Badeer, G. Swee, G. Halpern,               2023.
+     G. Herman, G. Sizov, Guangyi, Zhang, G. Lakshminarayanan, H. Inan,           [42] lz4, “lz4,” accessed in 2025. [Online]. Available: https://github.com/
+     H. Shojanazeri, H. Zou, H. Wang, H. Zha, H. Habeeb, H. Rudolph,                   lz4/lz4
+     H. Suk, H. Aspegren, H. Goldman, H. Zhan, I. Damlaj, I. Molybog,             [43] K. Marchisio, S. Dash, H. Chen, D. Aumiller, A. Üstün, S. Hooker, and
+     I. Tufanov, I. Leontiadis, I.-E. Veliche, I. Gat, J. Weissman, J. Geboski,        S. Ruder, “How does quantization affect multilingual LLMs?” arXiv
+     J. Kohli, J. Lam, J. Asher, J.-B. Gaya, J. Marcus, J. Tang, J. Chan,              preprint arXiv:2407.03211, 2024.
+     J. Zhen, J. Reizenstein, J. Teboul, J. Zhong, J. Jin, J. Yang,               [44] OpenAI, J. Achiam, S. Adler, S. Agarwal, L. Ahmad, I. Akkaya,
+     J. Cummings, J. Carvill, J. Shepard, J. McPhie, J. Torres, J. Ginsburg,           F. L. Aleman, D. Almeida, J. Altenschmidt, S. Altman, S. Anadkat,
+     J. Wang, K. Wu, K. H. U, K. Saxena, K. Khandelwal, K. Zand,                       R. Avila, I. Babuschkin, S. Balaji, V. Balcom, P. Baltescu, H. Bao,
+     K. Matosich, K. Veeraraghavan, K. Michelena, K. Li, K. Jagadeesh,                 M. Bavarian, J. Belgum, I. Bello, J. Berdine, G. Bernadett-Shapiro,
+     K. Huang, K. Chawla, K. Huang, L. Chen, L. Garg, L. A, L. Silva,                  C. Berner, L. Bogdonoff, O. Boiko, M. Boyd, A.-L. Brakman,
+     L. Bell, L. Zhang, L. Guo, L. Yu, L. Moshkovich, L. Wehrstedt,                    G. Brockman, T. Brooks, M. Brundage, K. Button, T. Cai, R. Campbell,
+     M. Khabsa, M. Avalani, M. Bhatt, M. Mankus, M. Hasson, M. Lennie,                 A. Cann, B. Carey, C. Carlson, R. Carmichael, B. Chan, C. Chang,
+     M. Reso, M. Groshev, M. Naumov, M. Lathi, M. Keneally, M. Liu,                    F. Chantzis, D. Chen, S. Chen, R. Chen, J. Chen, M. Chen,
+     M. L. Seltzer, M. Valko, M. Restrepo, M. Patel, M. Vyatskov,                      B. Chess, C. Cho, C. Chu, H. W. Chung, D. Cummings, J. Currier,
+     M. Samvelyan, M. Clark, M. Macey, M. Wang, M. J. Hermoso,
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+     Y. Dai, C. Decareaux, T. Degry, N. Deutsch, D. Deville, A. Dhar,                 Symposium on Microarchitecture®, 2025, pp. 1–17.
+     D. Dohan, S. Dowling, S. Dunning, A. Ecoffet, A. Eleti, T. Eloundou,        [46] L. Press, “AI Inferencing on Intel CPU-Powered Lenovo
+     D. Farhi, L. Fedus, N. Felix, S. P. Fishman, J. Forte, I. Fulford,               Servers: Strategic CPU Selection and Implementation,” 2025. [On-
+     L. Gao, E. Georges, C. Gibson, V. Goel, T. Gogineni, G. Goh,                     line]. Available: https://lenovopress.lenovo.com/lp2204-ai-inferencing-
+     R. Gontijo-Lopes, J. Gordon, M. Grafstein, S. Gray, R. Greene,                   on-intel-cpu-powered-lenovo-servers-strategic-cpu-selection
+     J. Gross, S. S. Gu, Y. Guo, C. Hallacy, J. Han, J. Harris, Y. He,           [47] I.    M.     Research,     “Server    Memory     for   Data      Centers
+     M. Heaton, J. Heidecke, C. Hesse, A. Hickey, W. Hickey, P. Hoeschele,            Market      Growth     Analysis,    Dynamics,     Key    Players      and
+     B. Houghton, K. Hsu, S. Hu, X. Hu, J. Huizinga, S. Jain, S. Jain,                Innovations, Outlook and Forecast 2025-2032,” 2025. [On-
+     J. Jang, A. Jiang, R. Jiang, H. Jin, D. Jin, S. Jomoto, B. Jonn, H. Jun,         line]. Available: https://www.intelmarketresearch.com/server-memory-
+     T. Kaftan, Łukasz Kaiser, A. Kamali, I. Kanitscheider, N. S. Keskar,             for-data-centers-2025-2032-198-6072
+     T. Khan, L. Kilpatrick, J. W. Kim, C. Kim, Y. Kim, J. H. Kirchner,          [48] A. H. Robinson and C. Cherry, “Results of a prototype television
+     J. Kiros, M. Knight, D. Kokotajlo, Łukasz Kondraciuk, A. Kondrich,               bandwidth compression scheme,” Proceedings of the IEEE, vol. 55,
+     A. Konstantinidis, K. Kosic, G. Krueger, V. Kuo, M. Lampe, I. Lan,               no. 3, pp. 356–364, 2005.
+     T. Lee, J. Leike, J. Leung, D. Levy, C. M. Li, R. Lim, M. Lin, S. Lin,      [49] Y. Sheng, L. Zheng, B. Yuan, Z. Li, M. Ryabinin, B. Chen, P. Liang,
+     M. Litwin, T. Lopez, R. Lowe, P. Lue, A. Makanju, K. Malfacini,                  C. Ré, I. Stoica, and C. Zhang, “FlexGen: High-Throughput Generative
+     S. Manning, T. Markov, Y. Markovski, B. Martin, K. Mayer, A. Mayne,              Inference of Large Language Models with a Single GPU,” in Proceed-
+     B. McGrew, S. M. McKinney, C. McLeavey, P. McMillan, J. McNeil,                  ings of the International Conference on Machine Learning (ICML),
+     D. Medina, A. Mehta, J. Menick, L. Metz, A. Mishchenko, P. Mishkin,              2023, pp. 31 094–31 116.
+     V. Monaco, E. Morikawa, D. Mossing, T. Mu, M. Murati, O. Murk,              [50] Y. Song, Z. Mi, H. Xie, and H. Chen, “Powerinfer: Fast large language
+     D. Mély, A. Nair, R. Nakano, R. Nayak, A. Neelakantan, R. Ngo,                  model serving with a consumer-grade gpu,” in Proceedings of the ACM
+     H. Noh, L. Ouyang, C. O’Keefe, J. Pachocki, A. Paino, J. Palermo,                SIGOPS 30th Symposium on Operating Systems Principles, 2024, pp.
+     A. Pantuliano, G. Parascandolo, J. Parish, E. Parparita, A. Passos,              590–606.
+     M. Pavlov, A. Peng, A. Perelman, F. de Avila Belbute Peres, M. Petrov,      [51] T. A. Welch, “A technique for high-performance data compression,”
+     H. P. de Oliveira Pinto, Michael, Pokorny, M. Pokrass, V. H. Pong,               Computer, vol. 17, no. 06, pp. 8–19, 1984.
+     T. Powell, A. Power, B. Power, E. Proehl, R. Puri, A. Radford, J. Rae,      [52] G. Xiao, J. Lin, M. Seznec, H. Wu, J. Demouth, and S. Han,
+     A. Ramesh, C. Raymond, F. Real, K. Rimbach, C. Ross, B. Rotsted,                 “Smoothquant: Accurate and efficient post-training quantization for large
+     H. Roussez, N. Ryder, M. Saltarelli, T. Sanders, S. Santurkar, G. Sastry,        language models,” in International Conference on Machine Learning.
+     H. Schmidt, D. Schnurr, J. Schulman, D. Selsam, K. Sheppard,                     PMLR, 2023, pp. 38 087–38 099.
+     T. Sherbakov, J. Shieh, S. Shoker, P. Shyam, S. Sidor, E. Sigler,           [53] Z. Xu, A. Gupta, T. Li, O. Bentham, and V. Srikumar, “Beyond
+     M. Simens, J. Sitkin, K. Slama, I. Sohl, B. Sokolowsky, Y. Song,                 perplexity: Multi-dimensional safety evaluation of llm compression,”
+     N. Staudacher, F. P. Such, N. Summers, I. Sutskever, J. Tang, N. Tezak,          arXiv preprint arXiv:2407.04965, 2024.
+     M. B. Thompson, P. Tillet, A. Tootoonchian, E. Tseng, P. Tuggle,            [54] S. Yun, K. Kyung, J. Cho, J. Choi, J. Kim, B. Kim, S. Lee, K. Sohn, and
+     N. Turley, J. Tworek, J. F. C. Uribe, A. Vallone, A. Vijayvergiya,               J. Ahn, “Duplex: A Device for Large Language Models with Mixture
+     C. Voss, C. Wainwright, J. J. Wang, A. Wang, B. Wang, J. Ward,                   of Experts, Grouped Query Attention, and Continuous Batching,” in
+     J. Wei, C. Weinmann, A. Welihinda, P. Welinder, J. Weng, L. Weng,                MICRO, 2024.
+     M. Wiethoff, D. Willner, C. Winter, S. Wolrich, H. Wong, L. Workman,        [55] Z. Zhang, F. Wang, X. Li, Z. Wu, X. Tang, H. Liu, Q. He, W. Yin, and
+     S. Wu, J. Wu, M. Wu, K. Xiao, T. Xu, S. Yoo, K. Yu, Q. Yuan,                     S. Wang, “Catastrophic Failure of LLM Unlearning via Quantization,”
+     W. Zaremba, R. Zellers, C. Zhang, M. Zhang, S. Zhao, T. Zheng,                   arXiv preprint arXiv:2410.16454, 2024.
+     J. Zhuang, W. Zhuk, and B. Zoph, “GPT-4 Technical Report,” 2024.            [56] J. Ziv and A. Lempel, “A universal algorithm for sequential data
+     [Online]. Available: https://arxiv.org/abs/2303.08774                            compression,” IEEE Transactions on information theory, vol. 23, no. 3,
+[45] Y. Pan, Z. Xia, P.-K. Hsu, L. Hu, H. Kim, J. Sharda, M. Zhou, N. S.              pp. 337–343, 2003.
+     Kim, S. Yu, T. Rosing, and M. Kang, “Stratum: System-Hardware               [57] J. Ziv and A. Lempel, “Compression of individual sequences via
+     Co-Design with Tiered Monolithic 3D-Stackable DRAM for Efficient                 variable-rate coding,” IEEE transactions on Information Theory, vol. 24,
+     MoE Serving,” in Proceedings of the 58th IEEE/ACM International                  no. 5, pp. 530–536, 2003.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+                            A PPENDIX                                          •  Intel Extension for PyTorch (IPEX)
+A. Abstract                                                                 Note that the usage of IAA requires the installation of the
+   This artifact appendix provides a guideline for using LIL O              Intel Query Processing Library (QPL) (https://github.com/
+for compressed LLM inference acceleration and how to repro-                 intel/qpl) and idxd-config (https://github.com/intel/idxd-
+duce the three key results of this paper: 1) LIL O’s inference              config), both of which are already incorporated into the
+throughput comparison to the uncompressed baseline 2) in-                   provided docker images. To enable IAA, IOMMU also should
+ference latency breakdown of LIL O and the uncompressed                     be enabled via the following GRUB setting:
+baseline, and 3) throughput improvement with LIL O over                     GRUB_CMDLINE_LINUX="quiet iommu=pt
+the uncompressed baseline across varying memory capacity.                       intel_iommu=on sm_on no5lvl splash
+The following subsections outline the steps to access, setup                    intel_pstate=disable efi=nosoftreserve
+                                                                                nokaslr"
+the software environment, and to run experiments with LIL O
+on a CPU system with Advanced Vector Extension (AVX),
+Advanced Matrix Extension (AMX), and In-memory Analytics                    D. Installation
+(IAA) accelerators.                                                            First, download the Github repository as follows:
+B. Artifact check-list (meta-information)                                   $ git clone https://github.com/ece-fast-lab/\
+  • Model: Llama3-405B and DeepSeek-R1                                         HPCA-2026-LILo.git
+  • Run-time environment: Ubuntu 22.04.4 LTS, Linux kernel 6.8.             $ cd HPCA-2026-LILo
+  • Hardware: Intel Xeon 6980P Processor, Micron 7450 NVMe
+    M.2 SSD.                                                                The full reproduction pipeline is organized into four steps
+  • Metrics: Inference latency (seconds) and throughput (tokens/s).         under scripts/. Users should follow the steps sequentially.
+  • Output: .log files containing inference latency measurements
+  • Experiments: LLM inference with LIL O and the uncompressed              E. Experiment Flow
+    baseline to reproduce Figures 11 and 12.                                  1) Step 0: Environment Setup: To prepare the software
+  • How much disk space required (approximately)?: 720 GB
+    for the model weights and the Docker images.                            environment and system configuration, run the following com-
+  • How much time is needed to prepare workflow (approxi-                   mands:
+    mately)?: 1 hour.                                                       $ cd scripts/step_0_env_setup
+  • How much time is needed to complete experiments (approx-
+                                                                            $ bash ./get_docker.sh
+    imately)?: 20 hours.                                                    $ bash ./env_setup.sh
+  • Publicly available?: Yes.
+  • Code licenses (if publicly available)?: Apache-2.0 license.
+  • Archived: https://doi.org/10.5281/zenodo.17862931
+                                                                            These commands download all required Docker images, fix
+                                                                            the CPU frequency, and configure the IAA devices using
+C. Description                                                              idxd-config. The repository further provides instructions
+   1) How to Access.: The scripts and guidelines for the                    creating a cropped version of Llama3-405B and DeepSeek-R1
+deployment of LIL O are publicly available on GitHub                        and randomizing MoE routing for DeepSeek-R1 with a patch.
+(https://github.com/ece-fast-lab/HPCA-2026-LILo) and Zen-                      2) Step 1: Uncompressed Baseline Inference: To collect
+odo (https://doi.org/10.5281/zenodo.17862931. The repository                inference latency for the uncompressed baseline, run the
+contains step-by-step scripts under scripts/ for environ-                   following command:
+ment preparation, baseline evaluation, decompression-based                  $ cd ../step_1_baseline
+inference, and storage-offloading characterization, as well as              $ bash ./baseline.sh <docker_name>
+a separate figure generation module.
+   2) Hardware Dependencies.: A server with an Intel Xeon                   This script launches a Docker container, executes the un-
+Scalable Processor (≥ 4th generation) equipped with at least                compressed baseline inference for both Llama and DeepSeek
+one IAA is required. For best performance reproduction, four                models, and saves the latency logs under the results
+IAAs are recommended. The following BIOS settings must be                   directory. Note that you must update the mounted directory
+enabled:                                                                    (-v) in baseline.sh to point to the storage location of
+   • Hardware prefetch                                                      your model weights on the local machine; the same update is
+   • LLC prefetch                                                           also required for Steps 2 and 3.
+   • Adjacent cache prefetch                                                   3) Step 2: Inference with Decompression (LIL O): To eval-
+   3) Software Dependencies.: We provide pre-built docker                   uate inference with on-the-fly decompression using LIL O, run
+images that contain all required runtime dependencies and                   the following command:
+libraries, including:                                                       $ cd ../step_2_decomp
+   • Ubuntu 22.04 LTS                                                       $ bash ./decomp.sh <docker_name>
+   • Linux kernel 6.8.0-49-generic
+                                                                            This script runs decompression-enabled inference for both
+   • GCC 13.1.0
+                                                                            Llama and DeepSeek models and writes the resulting latency
+   • Intel Query Processing Library (QPL)
+   • Intel idxd-config for IAA configuration
+                                                                            logs to the results directory.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+   4) Step 3: Storage-Offloading Characterization: To char-                 F. Evaluation and Expected Results
+acterize the overhead of storage-offloaded inference, run the                 To reproduce the key experimental results from the paper,
+following command:                                                          the collected data is used to generate (1) Figure 11(a), which
+$ cd ../step_3_storage_offload                                              compares the inference throughput between LIL O and the
+$ bash ./storage_offload.sh <docker_name>                                   baseline, (2) Figure 11(b), which presents the latency break-
+This step evaluates storage-offloaded inference using Hug-                  down, and (3) Figure 12, which shows throughput improve-
+gingFace Accelerate by sweeping different amounts of of-                    ment under varying memory capacities. To generate all figures
+floaded data and recording the corresponding latency results.               automatically, run the following command:
+These measurements are later used to characterize the storage-              $ cd ../../fig_gen
+offloading overhead by fitting a performance model, which is                $ python3 generate_figures.py
+then combined with the latency results of both LIL O and the
+uncompressed baseline.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:27:51 UTC from IEEE Xplore. Restrictions apply.
+

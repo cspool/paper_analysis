@@ -1,0 +1,894 @@
+                                                                                                                                                                                        2026 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+
+                                                                                                                                                                      Towards Compute-Aware In-Switch Computing for
+                                                                                                                                                                       LLMs Tensor-Parallelism on Multi-GPU Systems
+                                                                                                                                                                           Chen Zhang1 , Qijun Zhang1 * † , Zhuoshan Zhou1 , Yijia Diao1 , Haibo Wang2 , Zhe Zhou2 , Zhipeng Tu2 ,
+                                                                                                                                                                                  Zhiyao Li2 , Guangyu Sun3 , Zhuoran Song1 , Zhigang Ji1 , Jingwen Leng1 * , Minyi Guo1
+                                                                                                                                                                                       Shanghai Jiao Tong University1 , Huawei Technologies Co. Ltd.2 , Peking University3
+2026 IEEE International Symposium on High Performance Computer Architecture (HPCA) | 979-8-3315-9302-5/26/$31.00 ©2026 IEEE | DOI: 10.1109/HPCA68181.2026.11408460
+
+
+
+
+                                                                                                                                                                             {chenzhang.sjtu, zs.zhou, diao yijia, songzhuoran, zhigangji}@sjtu.edu.cn, qijunzhang2000@gmail.com,
+                                                                                                                                                                        gsun@pku.edu.cn, {wanghaibo33, zhouzhe22, tuzhipeng3, lizhiyao5}@huawei.com, {leng-jw, guo-my}@cs.sjtu.edu.cn
+
+
+                                                                                                                                                                        Abstract—Tensor parallelism (TP) in large-scale LLM in-                     structurally complex dependencies, as its communication lies
+                                                                                                                                                                     ference and training introduces frequent collective operations                 on the critical path where computation cannot directly overlap,
+                                                                                                                                                                     that dominate inter-GPU communication. While in-switch com-                    making optimization inherently difficult [43]. Therefore, as
+                                                                                                                                                                     puting, exemplified by NVLink SHARP (NVLS), accelerates
+                                                                                                                                                                     collective operations by reducing redundant data transfer, its                 models grow to trillion-parameter scale, TP’s communication
+                                                                                                                                                                     communication-centric design philosophy introduces the mis-                    overhead becomes a first-order bottleneck that fundamentally
+                                                                                                                                                                     match between its communication mode and the memory seman-                     limits cluster scalability and system efficiency [19], [43].
+                                                                                                                                                                     tic requirement of LLM’s computation kernel. Such a mismatch                      To overcome this limitation, recent GPU architectures
+                                                                                                                                                                     isolates the compute and communication phases, resulting in un-                have evolved toward tighter interconnect integration. High-
+                                                                                                                                                                     derutilized resources and limited overlap in multi-GPU systems.
+                                                                                                                                                                        To address the limitation, we propose CAIS, the first Compute-              bandwidth NVLink and NVSwitch [41], [42] have become
+                                                                                                                                                                     Aware In-Switch computing framework that aligns communica-                     essential enablers for scaling up LLM systems through tensor
+                                                                                                                                                                     tion modes with computation’s memory semantics requirement.                    parallelism, providing terabyte-per-second inter-GPU connec-
+                                                                                                                                                                     CAIS consists of three integral techniques: (1) compute-aware                  tivity. However, as LLMs continue to grow, even these high-
+                                                                                                                                                                     ISA and microarchitecture extension to enable compute-aware                    speed links face severe pressure from redundant data transfers
+                                                                                                                                                                     in-switch computing. (2) merging-aware TB (Thread Block)
+                                                                                                                                                                     coordination to improve the temporal alignment for efficient                   among GPUs. To further relieve this bottleneck, NVIDIA
+                                                                                                                                                                     request merging. (3) graph-level dataflow optimizer to achieve a               introduced NVLink SHARP (NVLS) [24], [37], an in-switch
+                                                                                                                                                                     tight cross-kernel overlap. Evaluations on LLM workloads show                  computing architecture that performs collective reductions
+                                                                                                                                                                     that CAIS achieves 1.38× average end-to-end training speedup                   directly within the NVSwitch fabric. By performing reductions
+                                                                                                                                                                     over the SOTA NVLS-enabled solution, and 1.61× over T3,                        in-flight, NVLS reduces redundant GPU-to-GPU transfers and
+                                                                                                                                                                     the SOTA compute-communicate overlap solutions but do not
+                                                                                                                                                                     leverage NVLS, demonstrating its effectiveness in accelerating                 achieves 2–8× speedups for collective primitives compared
+                                                                                                                                                                     TP on multi-GPU systems.                                                       to GPU-driven implementations [24]. However, NVLS re-
+                                                                                                                                                                                                                                                    mains fundamentally communication-centric, focusing solely
+                                                                                                                                                                                               I. I NTRODUCTION                                     on accelerating collective operations without considering their
+                                                                                                                                                                                                                                                    interplay with computation kernels such as GEMM. This isola-
+                                                                                                                                                                        The rapid scaling of large language models (LLMs) has
+                                                                                                                                                                                                                                                    tion prevents smooth and tight overlap of communication and
+                                                                                                                                                                     pushed distributed training and inference systems to unprece-
+                                                                                                                                                                                                                                                    computation, often leaving GPUs idle during communication
+                                                                                                                                                                     dented scales, where clusters composed of hundreds or even
+                                                                                                                                                                                                                                                    phases. This problem is further amplified in large-scale LLM
+                                                                                                                                                                     thousands of GPUs must work together seamlessly [6], [7],
+                                                                                                                                                                                                                                                    inference and training workloads, where tensor parallelism
+                                                                                                                                                                     [33], [50]. To fully utilize such large-scale GPU clusters,
+                                                                                                                                                                                                                                                    introduces frequent collective operations that account for up
+                                                                                                                                                                     hybrid parallelism, combining data parallelism (DP), pipeline
+                                                                                                                                                                                                                                                    to 40–60% of total latency [19], [43], [52]. While recent
+                                                                                                                                                                     parallelism (PP), and tensor parallelism (TP), has become
+                                                                                                                                                                                                                                                    work has explored compute-communication overlap through
+                                                                                                                                                                     the de facto strategy for scaling. Among them, DP and PP
+                                                                                                                                                                                                                                                    software scheduling [4], [19], [52] and hardware-assisted
+                                                                                                                                                                     mainly serve to scale out across nodes by distributing data
+                                                                                                                                                                                                                                                    overlapping [43], none leverage in-switch computing, missing
+                                                                                                                                                                     batches and network layers, whereas TP is designed to scale
+                                                                                                                                                                                                                                                    the opportunity to fully exploit NVLS’s architectural potential.
+                                                                                                                                                                     up by partitioning large matrix operations across multiple
+                                                                                                                                                                                                                                                       The key obstacle lies in the mismatches between the existing
+                                                                                                                                                                     GPUs [25], [30], [35], [49]. This tensor-level partitioning
+                                                                                                                                                                                                                                                    NVLS communication primitives and the requirements of TP
+                                                                                                                                                                     enables fine-grained parallel execution but also makes TP
+                                                                                                                                                                                                                                                    compute kernels: the communication mode (i.e., push/pull
+                                                                                                                                                                     the most communication-intensive and structurally complex
+                                                                                                                                                                                                                                                    modes) of NVLS primitives fail to align with the required mem-
+                                                                                                                                                                     scheme. A recent study [30] reveals that TP contributes to over
+                                                                                                                                                                                                                                                    ory semantics (i.e., read/write) of TP kernels such as GEMM.
+                                                                                                                                                                     99% of total data traffic, while data and pipeline parallelism
+                                                                                                                                                                                                                                                    For example, an AllGather operation followed by a GEMM
+                                                                                                                                                                     together account for less than 1%. Furthermore, TP exhibits
+                                                                                                                                                                                                                                                    often requires on-demand remote reads, but NVLS implements
+                                                                                                                                                                                                                                                    AllGather as push-based stores with the multimem.st in-
+                                                                                                                                                                       * Corresponding author.
+                                                                                                                                                                       † Qijun Zhang led this project during his internship at Shanghai Jiao Tong   struction, transmitting data eagerly regardless of when the con-
+                                                                                                                                                                     University.                                                                    sumer computation is ready. Likewise, a GEMM followed by
+
+
+
+
+                                                                                                                                                                              Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+Reduce-Scatter requires distributed writes, but NVLS imple-                 experimental methodology. Section V evaluates CAIS on rep-
+ments it with a pull-based multimem.ld_reduce instruc-                      resentative LLM training and inference workloads. Section VI
+tion, which forces consumers to fetch data instead of receiving             discusses related work and Section VII concludes.
+it inline. This misalignment introduces strict global barriers
+that prevent fine-grained compute-communication overlap.                                  II. BACKGROUND AND M OTIVATION
+   This limitation motivates a shift toward compute-aware                   A. LLM and Tensor Parallelism
+in-switch computing that aligns communication modes with                       Large language models (LLMs) such as GPT-4 [2] and
+computation’s memory semantics requirement. Therefore, we                   LLaMA-3 [12] have surpassed the trillion-parameter scale,
+propose CAIS, the first Compute-Aware In-Switch computing                   driving unprecedented demands for compute and memory
+framework that aligns the two sides. With CAIS, the computa-                bandwidth. These models are dominated by dense linear
+tion kernel should directly issue load/reduction instructions for           algebra kernels, particularly general matrix multiplications
+communication following its memory semantic requirement,                    (GEMMs) and matrix-vector multiplications (GEMVs), which
+while the switch automatically performs request merging for                 exhibit quadratic or cubic growth in compute and memory
+these remote accesses.                                                      complexity as hidden dimensions or attention heads increase.
+   However, designing such a compute-aware in-switch com-                   To scale these workloads across multiple GPUs, modern
+puting has three challenges: 1 Current GPU and NVLS                         deployments employ hybrid parallelism strategies combining
+lack necessary ISA and architecture support to express and                  data parallelism (DP) [45], [47], pipeline parallelism (PP) [16],
+process compute-aware in-switch computing. 2 Even with                      [28], and tensor parallelism (TP) [25], [35], [49].
+instruction and architecture supports, independently scheduled                 Among these strategies, TP introduces the heaviest com-
+TBs across GPUs result in staggered requests, reducing merge                munication overhead, because each FFN or attention layer
+efficiency and causing switch buffer contention. 3 Isolated                 is split across GPUs and requires frequent inter-GPU collec-
+operators make it difficult to exploit the producer-consumer                tive operations, e.g., AllReduce and AllGather, to aggregate
+relationships in LLM dataflow graph (DFG), limiting resource                partial results. Unlike DP, which incurs communication only
+utilization. To address these challenges, CAIS co-designs                   during gradient synchronization, or PP, where communication
+GPU ISA, switch microarchitecture, and graph-level dataflow                 is confined to activation exchanges between stages, TP creates
+with three techniques: 1 CAIS provides compute-aware                        per-layer synchronization points that scale with model depth
+ISA and microarchitecture extension that enables compute-                   and width. Recent studies show that for multi-GPU training
+aware in-switch computing. 2 CAIS introduces a lightweight                  with TP, 40–60% of end-to-end latency arises from inter-GPU
+compiler-architecture co-design to coordinate TB execution                  data transfers [19], [43], [52]. As LLMs scale, communication
+across GPUs, maximizing merge success rate without incur-                   costs are expected to dominate overall runtime unless new
+ring high synchronization costs. 3 CAIS integrates a graph-                 architectural solutions emerge.
+level dataflow optimizer, exploiting fine-grained TB-level over-               Fig. 1(a)(b) illustrates two commonly-used TP strategies.
+lapped execution to maximize computation and communica-                     (1) Basic TP partitions the key computational modules of
+tion resource utilization. To the best of our knowledge, this is            a Transformer, such as the Q, K, and V in Attention, as
+the first work to realize fine-grained compute-communication                well as the FFN, across multiple GPUs along the hidden
+overlap within an in-switch computing paradigm.                             dimension or the head dimension. In Fig. 1(a), f is AllReduce
+   We summarize the key contributions as follows:                           (AR) in the forward pass and no operation in the backward
+   • We uncover a critical misalignment between the commu-                  pass. f is no operation in the forward pass and AllReduce
+      nication semantics of current in-switch primitives and the            in the backward pass. (2) TP with Sequence Parallelism
+      memory access requirements of LLM compute kernels,                    (SP), a more recent variant, partitions operations along the
+      resulting in underutilized resources and limited overlap.             sequence length and employs a combination of AllGather (AG)
+   • We propose CAIS, the first compute-aware in-switch                     and Reduce-Scatter (RS) operations to eliminate redundant
+      computing framework that co-designs GPU ISA, switch                   activations. In Fig. 1(b), g is Reduce-Scatter in the forward
+      microarchitecture, and operator dataflows to enable fine-             pass and AllGather in the backward pass. g is AllGather in
+      grained, kernel-integrated compute-communicate overlap.               the forward pass and Reduce-Scatter in the backward pass.
+   • We implement CAIS in a cycle-accurate simulator and                    Although AllReduce in Basic TP is mathematically equivalent
+      evaluate it on three LLM inference and training work-                 to Reduce-Scatter plus AllGather, TP with SP can partition
+      loads, achieving on average 1.38× end-to-end training                 more operations (e.g., LayerNorm) and hence reduces memory
+      speedup over NVLS-augmented baselines, and 1.61×                      consumption for activations across GPUs.
+      over T3 [43], the SOTA compute-communicate overlap
+      solutions but do not leverage NVLS.                                   B. NVLink/NVSwitch-based Multi-GPU Systems
+   The rest of this paper is organized as follows. Section II                 Modern AI systems attempt to address communication
+reviews background and motivates compute-aware in-switch                    bottlenecks by coupling dozens or hundreds of GPUs via
+computing. Section III presents the CAIS design, including                  high-radix NVLink/NVSwitch networks [41], [42]. NVLink
+ISA extensions, micro-architecture design, and the supporting               has evolved from its first generation [9], delivering 160 GB/s
+compiler and runtime mechanisms. Section IV describes our                   GPU-to-GPU bandwidth on Pascal, to the fifth generation [41]
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+Fig. 1: Motivation for Compute-Aware In-Switch Computing in Tensor Parallelism. (a–b) Tensor Parallelism (TP) in LLM. (c–f)
+Collective Communication and Computation Kernel Relationship. (g–i) Comparison of Existing NVLS Primitives, Compute-
+aware TP Requirements and Our Proposal. (j-k) Comparison of Computation Details between Existing NVLS and Our Proposal.
+
+
+in Blackwell, which provides 1.8 TB/s GPU-to-GPU band-                      the distributed system. In recent years, NVIDIA’s NVLink
+width and powers large-scale systems such as NVL72 (72                      SHARP [24], [37] (NVLS) brought in-switch computing into
+GPUs) [41], [42]. While these fabrics offer scalable collec-                inter-chip network to address these efficiency and scalability
+tive operations, their performance remains bounded by link                  bottlenecks of multi-GPU systems. NVLS offloads collective
+bandwidth. To quantify this limitation, we execute LLaMA-                   operations (e.g., AllReduce and Reduce-Scatter) to NVSwitch,
+7B on our simulated NVIDIA H100 SuperPOD interconnected                     performing reductions “in-flight” and reducing data move-
+via a 900 GB/s NVLink/NVSwitch fabric, varying the number                   ment [24], [37]. NVLS has been supported in modern GPU
+of participating GPUs (see Section IV). As shown in Fig. 2,                 architecture. With NVIDIA’s Hopper GPUs, in-switch opera-
+communication time quickly overtakes computation time once                  tions such as multicast and reduction can be issued via PTX-
+the system scales beyond 4–8 GPUs; In particular, under                     level multimem instructions, including multimem.st,
+an 8-GPU configuration, the average communication time is                   multimem.ld_reduce, and multimem.red, enabling
+about 1.6× longer than computation across the model. This                   collective operations to be performed inside NVSwitch fabrics.
+problem will worsen with future 1T+ parameter models, whose                 These instructions can, in principle, be embedded in computa-
+communication volume grows super-linearly due to deeper                     tion kernels such as GEMM to trigger multi-GPU collectives
+layers and larger token batches. These observations underscore              directly, and have become a cornerstone capability in modern
+the urgent need for architectural approaches that reduce or hide            systems. The study [24] on NVLS has demonstrated 2×–8×
+communication, rather than merely speeding up links.                        speedups for collective operations compared to GPU-driven
+                                                                            communication, thanks to its hardware-accelerated multicast
+  In-switch computing has attracted much attention in the                   and reduction integrated with NVSwitch.
+computer network community. Many works [5], [8], [10],
+[11], [13]–[15], [21], [26], [29], [31], [32], [48], [51], [53],
+[54] have been proposed to accelerate the AllReduce in
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+Fig. 2: Computation-Communication Time When Scaling Up.
+
+
+C. Limits of Current In-Switch Computing
+   Despite these advances, current in-switch computing re-
+mains fundamentally communication-centric: it is solely de-
+signed to accelerate collective operations but remains agnostic
+to the computation kernels such as GEMM that produce or
+consume these data streams. For example, AllGather operator
+collects data chunks from all participating GPUs and redis-
+tributes the complete concatenated result back to every GPU.
+NVLS currently implements this via the multimem.st in-
+struction, where each GPU proactively “pushes” its data to all                          Fig. 3: The System Architecture of CAIS.
+other GPUs as soon as it becomes available. In the context of
+pure collective communication acceleration for the AllGather
+operator, push mode provides clear advantages over pull mode.               the current NVLS design and the requirements of com-
+By allowing each GPU to proactively transmit its data to peers              putation kernels. Specifically, AllGather + GEMM (AG-
+as soon as it is ready, push mode forms a continuous, one-way               GEMM) requires memory reads, but NVLS only provides
+data stream that avoids the roundtrip latency to remote mem-                multimem.st in push mode. GEMM + Reduce-Scatter
+ory inherent in pull-based communication. This also ensures                 (GEMM-RS) requires memory writes, but NVLS provides
+higher bandwidth utilization, as the data pipeline remains fully            only multimem.ld_reduce in pull mode. Similarly, Basic
+saturated without idle periods caused by prolonged traffics.                TP with AllReduce + GEMM (AR-GEMM) and GEMM +
+Other collective operations follow a similar design paradigm.               AllReduce (GEMM-AR) requires both memory reads and
+Fig. 1(g)’s table lists all the NVLS PTX primitives and their               writes, while NVLS currently offers only multimem.red
+corresponding communication modes.                                          in push mode.
+   However, this communication-centric design limits the op-
+portunities for overlapping computation and communica-                      D. Design Philosophy and Challenges
+tion. For instance, during the forward pass of LLMs, All-                      As previously analyzed, a fundamental mismatch exists
+Gather operation is often immediately followed by a GEMM                    between the communication modes supported by current in-
+operator, such as in attention and FFN. As illustrated in                   switch computing systems and the memory access semantics
+Fig. 1(e), the GEMM’s computation requires memory reads                     required by LLM computational kernels, resulting in isolated
+from both local and remote devices. Yet, multimem.st, the                   computation and communication. This limitation motivates a
+in-switch computing instruction used for AllGather, operates                shift toward compute-aware in-switch computing. Our philoso-
+in push-mode. This mismatch between architectural support                   phy is: computation kernel should directly issue load/reduction
+and workload requirements forces computation and its as-                    instructions for communication following its memory semantic
+sociated communication to be executed on different GPUs.                    requirement, while the switch automatically performs request
+It introduces global barriers to preserve producer-consumer                 merging for these remote accesses.
+dependencies. As a result, computation and communication are                   This approach enables semantic alignment between com-
+isolated into separate phases, leaving SMs idle while waiting               munication mode and computational intent, unlocking more
+for synchronization. Fig. 1(j) visualizes this process in detail.           native and tighter communication-computation overlap. As
+Profiling on LLaMA-7B with TP shows that GPU utilization                    illustrated in Fig. 1(k), taking AG-GEMM as an example, fol-
+can drop below 60%, even when NVLS is enabled.                              lowing its memory semantic requirement, computation kernel
+   To summarize the scope of this mismatch, Fig. 1(c)–(f)                   directly reads remote data via load operations in pull mode.
+illustrate the memory access patterns of the four computation-              Because both the computation and its remote data access are
+communication combinations in TP across multiple GPUs,                      performed by the same TB, only TB-level local barriers are
+while Fig. 1(g)–(h) summarize the mismatches between                        needed to enforce dependencies between communication and
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+computation, allowing computation and communication across
+different SMs to overlap naturally.
+   The system architecture of CAIS is illustrated in Fig. 3.
+When a GEMM kernel issues reduction or load instructions
+(for GEMM-RS and AG-GEMM operations, respectively) to
+access remote data, the switch dynamically merges these                                 Fig. 4: Extension of the PTX Instructions.
+requests to reduce communication overhead: (1) Reduction
+requests: When multiple reduction requests target the same
+data, the switch aggregates them by computing the sum and                                             III. CAIS D ESIGN
+transmitting only the final result to the destination GPU, thus
+                                                                               Following the above design philosophy, we introduce CAIS,
+reducing the downstream traffic from switch to GPU. (2) Load
+                                                                            a compute-aware in-switch computing framework to over-
+requests: When multiple load requests reference the same data,
+                                                                            come the limitation of existing communication-centric in-
+the switch fetches the data only once from the target GPU and
+                                                                            switch computing. The framework consists of three primary
+replicates it to the requesting GPUs, reducing the upstream
+                                                                            components: 1) Compute-Aware ISA and Microarchitecture
+traffic from GPU to switch.
+                                                                            Extensions. This is the core design of CAIS, which funda-
+   However, designing such a compute-aware in-switch com-
+                                                                            mentally eliminates the global computation–communication
+puting has three architectural challenges:
+                                                                            barrier by aligning communication modes with the semantic
+   (1) Lack of ISA and Microarchitecture Support. Without
+                                                                            requirements of computation.
+GPU ISA and switch microarchitecture support, commercial
+                                                                               Building upon the architectural foundation that removes
+GPU cannot perform compute-aware in-switch computing. To
+                                                                            the global barrier, CAIS further integrates two optimizations:
+address this limitation, we propose PTX-level instruction ex-
+                                                                            2) Multi-GPU TB Coordination that aligns cross-GPU TB
+tensions for compute-aware in-switch computing and provide
+                                                                            execution using compiler-guided grouping and lightweight
+microarchitectural support for request merging by integrating
+                                                                            in-switch synchronization to maximize temporal locality for
+a hardware merge unit into the data path at the switch port.
+                                                                            request merging. 3) Graph-Level Dataflow Optimizer that ex-
+These two supports enable the functionality of the compute-
+                                                                            ploits fine-grained dependency to fuse communication-heavy
+aware in-switch computing.
+                                                                            operator sequences, e.g., GEMM-RS + LN + AG-GEMM, into
+   (2) Lack of Temporal Coordination. Even with semantic
+                                                                            a single execution pipeline, improving bandwidth utilization
+alignment, temporal misalignment across GPUs [18] remains
+                                                                            and end-to-end performance.
+a critical bottleneck. Thread blocks (TBs) on different GPUs
+are scheduled independently, resulting in staggered memory
+                                                                            A. Compute-Aware ISA and Microarchitecture Extensions
+requests to the same remote addresses. This misalignment
+prevents the switch from merging requests effectively, as                      To support compute-aware in-switch computing, CAIS in-
+early-arriving requests must wait for delayed ones, leading                 troduces a co-designed ISA extension and switch microarchi-
+to buffer contention and eviction. Our simulation shows that                tecture that enable dynamic request merging for both load
+the delay between the earliest and latest requests to the same              and reduction operations across GPUs. This design transforms
+address averages 35 µs. We address this by introducing a                    the switch from a passive relay into an active compute-
+compiler-hardware co-design strategy. The compiler statically               aware merging agent, significantly reducing redundant inter-
+groups TBs with shared data dependencies, while the GPU                     chip traffic and improving execution efficiency for tensor-
+runtime enforces lightweight TB-group synchronization, align-               parallel (TP) workloads.
+ing access timing and improving merge success rates. Our                       1) ISA Extention for Mergeable Memory Access: We extend
+experiments demonstrate that these optimizations reduce the                 NVIDIA’s PTX instruction set with two new instructions:
+delay to 3 µs, achieving about 10× improvement.                             ld.cais and red.cais, as shown in Fig. 4. These instruc-
+   (3) Limited Cross-Kernel Fusion. Prior in-switch comput-                 tions encode a 1-bit CAIS flag in memory access requests,
+ing approaches have struggled to achieve deep cross-kernel                  signaling the switch that the request is eligible for in-switch
+fusion due to the aforementioned misalignment, which forces                 merging. This lightweight annotation allows the system to se-
+collective kernels operate as isolated phases, making it dif-               lectively apply merging to communication-intensive operations
+ficult to exploit the producer-consumer relationships in the                such as AllGather loads or ReduceScatter reductions, without
+LLM dataflow graph (DFG). By resolving it, CAIS enables                     modifying existing computation semantics.
+deeper DFG-level optimizations, allowing TB-level producer-                    2) Switch Micro-architecture for Request Merging: To sup-
+consumer relationships to be established. As soon as one TB of              port CAIS instructions, we enhance NVSwitch datapath with a
+an operator completes, dependent TBs of subsequent (and even                dedicated merge unit (Fig. 5), mainly consisting of two tables:
+further downstream) operators can launch immediately, which                 1) CAM Lookup Table matches incoming requests based on
+greatly improve the computation-communication efficiency.                   memory address and type (load or reduction). On a match, re-
+Moreover, we find that this approach also allows CAIS to                    quest is merged into an existing session; otherwise, a new entry
+fuse operators with complementary communication patterns,                   is created. 2) Merging Table maintains partial results for each
+maximizing overall bandwidth utilization.                                   session, including cached data for loads or accumulated sums
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+                                                                                      Fig. 6: In-switch Micro-Functions Workflow.
+
+
+                                                                            updated to Load-Ready, and the data is cached in the
+                                                                            Content Array. The switch also generates responses for
+                                                                            requests stored in Content Array before caching the arriv-
+                                                                            ing data. After that, the switch can serve subsequent requests
+                                                                            to the same address directly from this cached data without
+                                                                            reissuing memory transactions to the target GPU. 4 If a
+                                                                            later request arrives and hits an active session, the merge unit
+                                                                            either appends the request metadata in Content Array for
+                                                                            deferred response, if the data is still pending, or otherwise
+        Fig. 5: Switch Micro-architecture for CAIS.                         immediately generates a response with the cached data in
+                                                                            Content Array. 5 The completes and its table entries are
+                                                                            released once the Count equals the number of participating
+for reductions. Each entry tracks session state (Load-Wait,                 GPUs minus one, excluding the GPU that holds the local copy.
+Load-Ready, or Reduction) and a counter of merged requests.                    Micro-Function 2: Reduction Request Merging. Reduc-
+   These tables operate in tandem to perform on-the-fly aggre-              tion request merging eliminates redundant reduction requests.
+gation of identical accesses across GPUs. When the last con-                Similar to load request merging, for red.cais, multiple
+tributing request arrives, the merged data is either forwarded              contributions to the same address are accumulated directly
+to requesters (loads) or written to memory (reductions).                    within the switch. Once all expected requests are received, the
+   3) In-Switch Micro-Functions for Load and Reduction:                     sum is written to the destination memory, avoiding duplicate
+With the ISA and switch microarchitecture extensions, CAIS                  transmissions. The white blocks in Figure 6 indicate datapaths
+perform request merging with two micro-functions that handle                reused from NVLS.
+load and reduction requests inside the NVSwitch. These                         Through this combination of load and reduction micro-
+micro-functions extend the existing NVLS pipeline by per-                   functions, the switch can dynamically merge multiple remote
+forming dynamic request detection, caching, and response                    accesses, turning multiple data transmissions into a single
+generation in-flight, thereby reducing redundant traffic and                consolidated operation.
+avoiding unnecessary synchronization. Fig. 6 illustrates the                   4) Eviction Mechanism: If a new entry must be allocated
+flow of the two micro-functions.                                            but the tables are full, an LRU-based eviction policy is
+   Micro-Function 1: Load Request Merging. Load re-                         triggered. 1) If the selected entry is for reduction merging,
+quest merging eliminates redundant load responses. When                     it is directly evicted, and the partial result is sent to the home
+a ld.cais request arrives at the switch, the merge unit                     GPU of its address. 2) If the selected entry is for load merging,
+first performs an associative search within the CAM Lookup                  entries in the Load-Ready state can be safely evicted,
+Table to 1 check for an existing merge entry targeting the                  whereas those in the Load-Wait state are deferred until the
+same memory address and request type. 2 If no match is                      response data arrives. In this case, the arriving pending request
+found, a new entry is allocated in both the CAM Lookup                      bypasses the merge unit without triggering further eviction,
+Table and the Merging Table. The request is forwarded to the                avoiding thrashing or deadlock.
+destination GPU through the standard routing path, while the                   To handle the remaining requests for the evicted entry,
+new entry in the Merging Table is initialized with “Status                  a timeout-based forward-progress mechanism is employed,
+= Load-Wait, Count = 1”, and the associated request                         similar to that in existing NVLS [24]. Each merge entry is
+metadata is stored in the Content Array. 3 When the                         equipped with a timer to track the elapsed time since its last
+response data from the target GPU returns, the status is                    access. If this timer exceeds a predefined threshold, the entry is
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+                                                                            Fig. 8: Compiler and Architecture Support for TB Coordi-
+                                                                            nation. The compiler creates TB Groups according to data
+       Fig. 7: Merging-aware TB-Group Coordination.
+                                                                            dependency, and the architecture uses a synchronizer to align
+                                                                            request timing across GPUs.
+
+automatically evicted, ensuring that no request remains stalled.
+                                                                               1) Compiler-Guided TB Grouping: TB-Group Based Co-
+   5) Deterministic Routing for Merging Convergence: To                     ordination. To ensure temporal locality, CAIS organizes
+ensure all mergeable requests targeting the same address                    mergeable TBs into logical TB-groups. As is shown in
+converge at the same switch, CAIS adopts a deterministic                    Fig. 7(b), each TB-group contains all TBs across GPUs that
+routing algorithm similar to that used in existing NVSwitch                 access the same data region using CAIS-tagged instructions
+systems [24]. A lightweight hash function on the request                    (e.g., ld.cais, red.cais). A switch-side merge tracker
+address (or a subset of its bits) maps each request to a fixed              monitors request arrival patterns for each group and address.
+path, guaranteeing that matching requests are processed by                  Only when requests from all participating GPUs are observed
+the same merge unit. Since LLM workloads exhibit regular                    for a given address does the switch perform merging. On
+and predictable access patterns, a simple deterministic routing             the GPU side, each SM uses lightweight hardware counters
+scheme is sufficient to prevent deadlocks and ensure high link              to track TB-group progress. Once a TB issues a mergeable
+utilization without complex path selection.                                 request, it waits until a local readiness condition is met, either
+                                                                            via a credit mechanism or through switch, issued acknowledg-
+B. Cross-GPU TB Coordination                                                ment, ensuring alignment with peer TBs on other GPUs.
+                                                                               Compiler Support. CAIS leverages compiler assistance
+   While compute-aware ISA and switch microarchitecture                     to identify TBs that are likely to issue mergeable mem-
+provide the foundation for in-switch request merging, their                 ory requests and groups them accordingly. As illustrated in
+effectiveness critically depends on the temporal alignment of               Fig. 8(a), during the CUDA-to-PTX compilation stage, we
+memory requests across GPUs. In the absence of coordination,                perform static index analysis on the address expressions of
+mergeable load or reduction requests from different GPUs                    memory access instructions. The analysis detects whether
+may arrive at the switch at different times, resulting in missed            the expression contains the GPU ID. If not, the index is
+merging opportunities or buffer pressure due to delayed aggre-              GPU-invariant, indicating that the instruction will access the
+gation. This temporal misalignment is rooted in the fact that               same memory location when other factors in the expression,
+TBs are independently scheduled by the GPU runtime, leading                 such as blockIdx, are identical. Consequently, TBs across
+to execution drift across devices. Even for the same operator,              different GPUs but with the same blockIdx are expected to
+TBs on different GPUs may issue their memory requests at                    access identical data. The compiler then groups such TBs into
+slightly different times. For in-switch merging to be effective,            logical TB Groups. During JIT compilation, memory access
+however, these requests must arrive closely in time, within the             instructions associated with these groups are replaced by their
+lifetime of the Merge Table entry. Otherwise, early-arriving                CAIS variants (e.g., ld.cais, red.cais). Additionally, the
+requests may be evicted or bypassed before others arrive,                   compiler attaches TB Group metadata to the kernel launch
+negating the benefits of merging. To address this, CAIS intro-              configuration, which is used by the runtime and switch to
+duces a lightweight coordination mechanism at the granularity               guide synchronization and merging behavior.
+of thread blocks, the fundamental parallel execution unit in                   2) TB Group-Aware Synchronization Mechanisms: To en-
+modern GPU workloads. This coordination enforces tempo-                     sure temporal alignment, CAIS introduces two synchroniza-
+ral locality among semantically equivalent memory requests                  tion mechanisms, as shown in Fig. 7(d): (1) Pre-launch
+across GPUs, allowing in-switch merging logic to operate with               synchronization. Before a TB is dispatched by the GPU’s
+minimal buffering and maximal aggregation efficiency.                       scheduler, it registers its Group ID with the local synchronizer.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+This synchronizer then issues a synchronization request to
+the switch. The TB remains in a pending state until the
+switch confirms that all GPUs in the group have registered
+corresponding TBs. Once the switch detects readiness across
+all participating GPUs, it responds with release signals to
+each GPU’s synchronizer, triggering concurrent TB dispatch.
+This mechanism ensures aligned launches across devices
+and prevents early-issued requests from bypassing potential
+merge opportunities. (2) Pre-access synchronization. Even
+with synchronized launches, compute divergence may cause
+TBs to reach memory accesses at different times. When
+a warp encounters its first *.cais instruction, it sends a
+synchronization request tagged with the Group ID. Execution
+proceeds only after all TBs in the group reach the same
+point. Meanwhile, the warp scheduler can issue independent
+instructions to hide synchronization latency.
+   The synchronization overhead is minimal because it is im-
+plemented through the exchange of lightweight empty packets
+between GPUs and the switch. For each TB, only two empty
+packets are transmitted between each GPU and the switch.
+The total latency corresponds merely to the round-trip time
+between the GPU and the switch, approximately 0.5 µs in
+our experimental setup, which is negligible compared with the
+TB execution time. Furthermore, the synchronization scope is
+strictly confined within each TB group and does not interfere
+with resource sharing across different TB groups.
+                                                                             Fig. 9: Graph-Level Dataflow Optimization. Fine-grained TB-
+   TB-Aware Request Throttling. To avoid stalls from out-
+                                                                             level data dependency enables early launch of consumer TBs
+liers, CAIS introduces a TB-aware request throttling strategy.
+                                                                             before producer kernels complete.
+When a GPU detects that it is ahead of its peer TBs in a
+mergeable group, it temporarily throttles further requests to al-
+low others to catch up. This feedback is driven by the switch’s
+per-address tracking state and exposed to GPUs via a small
+control interface. Importantly, this throttling is applied only to
+mergeable TBs, preserving execution parallelism elsewhere.
+   3) Architecture Support for TB Group Synchronization.:
+The coordination mechanism is supported by synchronizers
+on GPUs and a Group Sync Table on the switch, as shown
+in Fig. 8(b). (1)On the GPU side, each device incorporates
+a synchronizer module that interfaces with the TB and warp
+schedulers. The synchronizer maintains a small table tracking
+active TB Groups and handles both pre-launch and pre-                                   Fig. 10: Illustration of Asymmetric Traffic.
+access synchronizations by sending TB-group synchronization
+request to the switch and waiting for a release signal. (2)On
+the switch side, a lightweight Group Sync Table maintains                    grained TB-level dependency, it introduces Asymmetric Ker-
+counters for each active TB Group. When synchronization                      nel Overlapping to balance complementary traffic between
+requests from all GPUs are received for a given Group ID,                    two directions of the inter-chip link, which can significantly
+the switch broadcasts a release signal, allowing execution to                improve the overall performance.
+proceed. This coordination ensures that mergeable requests                      1) Fine-Grained TB Dependency and Deep Kernel Fusion:
+from different GPUs arrive within a narrow time window,                      In contrast to coarse-grained kernel-level dependency that
+significantly increasing the success rate of request merging.                require the full completion of a producer kernel before the con-
+                                                                             sumer kernel can start, fine-grained TB-level dependency [1]
+C. Graph-Level Dataflow Optimizer                                            allows a TB in the consumer kernel ready to be launched
+   CAIS also integrates a graph-level dataflow optimizer to                  as soon as its input data available, without waiting for the
+improve the system resource utilization. Graph-level dataflow                entire producer kernel to finish. This capability enables fused
+optimizer supports fine-grained TB-level dependency to un-                   execution of multiple dependent kernels.
+lock tighter kernel fusion opportunities. Built upon the fine-                  Fig. 9(a) illustrates this concept with a portion of a trans-
+
+
+
+
+        Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+                                                                                               Hidden    FFN Hidden     Attention   Sequence     Batch
+former layer, where GEMM-1 computes matrix A, followed by                          Name
+                                                                                                Size        Size         Heads       Length      Size
+a layer normalization (LN) stage producing matrix B, which                     Mega-GPT-4B      2048        8192           24         1024        16
+is then consumed by GEMM-2. In CAIS, TBs in GEMM-                              Mega-GPT-8B      3072        12288          32         1024        12
+1 collaboratively produce tiles of matrix A; each TB in LN                      LLaMA-7B        4096        11264          32         3072        3
+
+operates on a row of A to generate matrix B; GEMM-2 TBs                               TABLE I: LLM Settings Used in Evaluation.
+consume tiles of B to compute the final output matrix. Com-
+pared to the coarse-grained execution in Fig.9(c), since each
+TB’s input dependencies are localized, execution of GEMM-2                  concurrent execution across GPUs connected through a switch-
+can begin as soon as the corresponding TBs in GEMM-1 and                    based interconnect.
+LN complete, unlocking a larger schedule optimization space.                   We further modify both Accel-Sim and BookSim2 with
+As shown in Fig.9(d), this fine-grained chaining enables deep               custom extensions to support the multimem instructions of
+kernel fusion and earlier launch of downstream TBs.                         NVLS. Specifically, following NVIDIA’s NVLS design [24],
+   2) Asymmetric Kernel Overlapping: While in-switch merg-                  we augment the “router” in BookSim2 to support in-switch
+ing reduces overall communication volume, it introduces                     multicast and reduction operations, and extend Accel-Sim to
+asymmetric bandwidth usage. Operations like GEMM-RS rely                    handle the translation from multimem addresses to virtual
+on switch-to-GPU reduction traffic, whereas AG-GEMM gen-                    addresses at the Hub. The quantitative validation of our NVLS
+erates GPU-to-switch load traffic, as is illustrated in Fig. 10.            simulation is detailed in Section V-E. For fair comparison, we
+For Fig. 10(a) the reduction operation, operands are read from              also augment T3 [43] with NVLS support by adopting the
+three GPUs and the result is written back to the destination                DMA-based NVLS design proposed by NVIDIA [24].
+GPU. This causes the data traffic from GPUs to the switch                      The NVLink and NVSwitch are modeled using real device
+to be three times higher than that from the switch to the                   parameters. NVLink is configured with a 16B flit size, a
+GPUs, creating a bottleneck dominated by the GPU-to-switch                  single-flit header, and bidirectional data transfer. NVSwitch
+path. We refer to this phenomenon as asymmetric traffic. For                employs round-robin arbitration with a 40 KB per-port Merge
+Fig. 10(b) the load operation, the situation is exactly the                 Table (320 entries) and supports routing to forward requests
+opposite: the switch-to-GPU traffic is three times higher than              to their target GPUs. Each input port provides eight 256-depth
+the GPU-to-switch traffic.                                                  virtual channels. We implement intra-SM request coalescing,
+   CAIS exploit the complementary nature of these two traffic               aggregating multiple 32B sector requests into packets of up
+patterns to further optimize kernel fusion and improve overall              to 128B to emulate NVLink’s burst transfer behavior. Link
+bandwidth utilization. Using TB-level dependency analysis,                  latency between GPUs and switches (from GPU to switch or
+CAIS identifies opportunities to pipeline kernels with com-                 from switch to GPU) is configured to 250 ns, resulting in a
+plementary traffic patterns. For example, when GEMM-RS                      round-trip latency of approximately 1 µs.
+and AG-GEMM are ready to execute, SMs are partitioned
+                                                                            B. Benchmark
+into two groups, each executing one kernel concurrently.
+This interleaved execution, illustrated in Fig. 9(e), balances                 We evaluate CAIS using three representative LLMs, sum-
+bidirectional link usage: as GEMM-RS emits upstream traffic,                marized in Table I. Both training and inference phases are
+AG-GEMM consumes downstream data.                                           evaluated, with inference focusing on the communication-
+   Traffic Control. When kernels with asymmetric communi-                   heavy prefill stage. The GEMM kernels are implemented using
+cation patterns execute concurrently, contention on the G2S                 CUTLASS [38]. Due to simulator memory constraints and
+link can still arise, particularly when both load and reduction             the long simulation time, simulating full-scale state-of-the-art
+requests compete for bandwidth. CAIS introduces separate                    models is infeasible. To address this limitation, we employ
+virtual channels for load and reduction traffic and uses round-             scaled-down LLM variants with key matrix dimensions, in-
+robin arbitration to avoid head-of-line blocking.                           cluding hidden size and FFN hidden size, reduced by 50%
+   Together, deep kernel fusion and asymmetric overlapping                  compared to state-of-the-art large LLMs. This scaling reduces
+maximize the bandwidth utilization and compute resources,                   the computation-to-communication ratio by 50%. To maintain
+delivering significant end-to-end performance improvements.                 proportionality, we correspondingly reduce the number of SMs
+                                                                            by 50%. We validate this scaled-down setup in Section V-E.
+            IV. E XPERIMENTAL M ETHODOLOGY
+                                                                            C. Baseline
+A. Hardware Configuration                                                     CAIS is evaluated against 9 baselines in four categories,
+  We simulate an 8-GPU system interconnected via four                       including 6 existing works and 3 NVLS-enhanced baselines.
+NVSwitch units, replicating the topology of the NVIDIA                         • Tensor Parallelism with NVLS includes 1) Basic TP (TP-
+DGX-H100 [39]. To enable accurate modeling, we extend                            NVLS) [49] that partitions model layers across GPUs and
+Accel-Sim [23] with Hopper-specific architectural features and                   applies AllReduce to merge intermediate results, and 2)
+configure the GPU parameters based on the NVIDIA H100                            TP with Sequence Parallelism (SP-NVLS) [25] that
+specifications [36]. For multi-GPU communication, we inte-                       enhances TP by splitting AllReduce into ReduceScat-
+grate Accel-Sim with a customized BookSim2 [20], enabling                        ter and AllGather phases, with layer normalization and
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+                                Fig. 11: End-to-End Model Speedup Across Training and Inference.
+
+
+
+
+                                                 Fig. 12: Sub-layer Performance Speedup.
+
+
+    dropout/Add operations interleaved to reduce memory                     7.80× speedup over these nine baselines, with geometric
+    footprint. NVLS accelerates these collectives.                          means of 1.38×, 1.89×, 1.98×, 1.90×, 1.61×, 1.25×, 1.21×,
+  • Overlap Solutions includes 3) CoCoNet [19] and 4)                       1.45×, and 7.60×, respectively. For training, CAIS achieves
+    FuseLib [44], both of which enable GEMM-AllReduce                       up to 1.44×, 1.96×, 2.03×, 1.96×, 1.65×, 1.30×, 1.25×,
+    overlapping through software scheduling techniques, and                 1.49×, and 7.75× speedup over these baselines with geometric
+    5) T3 [43] that introduces hardware-assisted fine-grained               means of 1.37×, 1.89×, 1.96×, 1.89×, 1.60×, 1.23×, 1.20×,
+    overlapping between GEMM and ReduceScatter. We                          1.45×, and 7.59×, respectively. These results highlight the
+    extend T3 to also support AG-GEMM overlap in our                        significant performance advantages obtained by our proposed
+    evaluation. These solutions do not leverage NVLS.                       compute-aware in-switch computing, as well as leveraging
+  • Overlap Solutions with NVLS includes 6) CoCoNet-                        architectural and scheduling co-design optimization to improve
+    NVLS, 7) FuseLib-NVLS, and 8) T3-NVLS, which                            the temporal alignment and enhance bandwidth utilization.
+    are enhanced variants of overlap solutions by integrating                  2) Sub-Layer Performance: Figure 12 reports the perfor-
+    NVLS support. As introduced in Sec. IV-A, CoCoNet-                      mance of four communication-intensive sub-layers across the
+    NVLS and FuseLib-NVLS utilize extended multimem in-                     model execution flow: [L1] Output projection → LayerNorm
+    structions, T3-NVLS adopts a DMA-based NVLS design.                     → First FFN layer (forward); [L2] Second FFN layer → Lay-
+  • Locality-aware TB schedule places TBs across GPUs/dies                  erNorm → Input projection (forward); [L3] First FFN layer
+    for reducing remote access, where we adopt the SOTA,                    → LayerNorm → Output projection (backward); [L4] Input
+    9) LADM [22]. LADM cannot utilize NVLS because of                       projection → LayerNorm → Second FFN layer (backward).
+    its communication-centric design.
+                                                                               These sub-layers involve GEMM-RS + LN + AG-GEMM,
+                 V. E XPERIMENTAL R ESULTS                                  making them ideal candidates for graph-level optimization
+                                                                            in CAIS. CAIS consistently outperforms all baselines across
+A. End-to-End and Sub-Layer Speedup                                         these sub-layers, with up to 1.53×, 2.05×, 2.11×, 2.04×,
+   1) End-to-End Model Speedup: Figure 11 shows the end-                    1.67×, 1.36×, 1.31×, 1.51×, and 8.08× speedup over TP-
+to-end speedup of CAIS over nine baseline methods: TP-                      NVLS, SP-NVLS, CoCoNet, FuseLib, T3, CoCoNet-NVLS,
+NVLS, SP-NVLS, CoCoNet, FuseLib, T3, CoCoNet-NVLS,                          FuseLib-NVLS, T3-NVLS, and LADM, and corresponding
+FuseLib-NVLS, T3-NVLS, and LADM. We also include                            geometric means of 1.39×, 1.91×, 1.99×, 1.91×, 1.64×,
+a stripped-down version, CAIS-Base, which disables the                      1.24×, 1.20×, 1.47×, and 7.90× speedup.
+proposed merging-aware TB coordination and graph-level                        3) Discussions and Analysis: The improvements over TP-
+dataflow optimizer. For inference, CAIS achieves up to 1.43×,               NVLS and SP-NVLS mainly stem from CAIS’s native fine-
+1.95×, 1.99×, 1.92×, 1.65×, 1.28×, 1.24×, 1.49×, and                        grained computation-communication overlap derived from the
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+compute-aware in-switch computing. Unlike communication-
+centric in-switch computing, where the global barrier isolates
+computation and communication phases, compute-aware in-
+switch computing only requires the TB-level local barrier,
+enabling native fine-grained overlapping between computa-
+tion and communication across different TBs. Besides the
+computation-communication isolation, SP-NVLS also suffers
+from the low bandwidth utilization incurred from asymmetric
+communication patterns when accelerating Reduce-Scatter and
+AllGather with in-switch computing.
+                                                                            Fig. 13: (a) Required Merge Table Size with and without
+   CoCoNet-NVLS, FuseLib-NVLS, and T3-NVLS represent                        Merging-Aware TB Coordination. CAIS reduces the minimal
+the NVLS-enhanced performance of CoCoNet, FuseLib, and                      table size needed to merge all eligible requests by 87%. (b)
+T3. Compared to CoCoNet-NVLS and FuseLib-NVLS, CAIS                         Ablation studies for TB coordination.
+supports flexible overlapping that also overlaps the commu-
+nication with the following GEMM. CAIS also eliminates
+the need for code modification when implementing kernel
+fusion and mitigates resource contention between compute
+and communication kernels in CoCoNet-NVLS. Although
+FuseLib-NVLS executes within a single fused kernel, thereby
+eliminating kernel-launch overhead and mitigating resource
+contention, CAIS achieves higher efficiency by enabling more
+flexible and fine-grained overlap between computation and
+communication. Compared to T3-NVLS, a hardware-based
+overlapping solution, CAIS demonstrates notable gains. T3-
+NVLS still suffers from coarse-grained dependency among                     Fig. 14: Performance Sensitivity to Merge Table Size. CAIS
+ReduceScatter, LN, and AllGather stages, which prevents                     maintains high performance with small table sizes, while the
+fine-grained optimization opportunities therefore still cannot              uncoordinated version degrades rapidly.
+tackle the asymmetric communication pattern. In contrast,
+CAIS’s fine-grained TB-level scheduling and asymmetric ker-
+nel overlapping unlock additional concurrency and balance                   across GPUs. Figure 13 reports the minimal Merge Table
+inter-GPU bandwidth across two directions. Finally, LADM,                   size required to merge all mergeable requests for each sub-
+though a state-of-the-art locality-aware TB scheduling method               layer. Without coordination (CAIS-w/o-Coord), the minimal
+for general GPU kernels, focuses on intra-GPU locality rather               required table size can reach up to 250 KB per port. With
+than inter-GPU communication, and does not leverage NVLS-                   coordination enabled, the minimal required table size drops
+based acceleration, limiting its applicability to communication-            below 40 KB across all ports, which is an 87% reduction
+intensive TP workloads.                                                     in minimal required table size. This result suggests that our
+   Comparing CAIS with CAIS-Base reveals the impact of                      coordination strategy can achieve a more effective use of
+our merging-aware TB coordination and graph-level dataflow                  limited switch resources. Figure 13(a) also demonstrates that
+optimizer. The maximum and geomean speedups of 1.49× and                    the minimal required table sizes of CAIS are insensitive to the
+1.45× on end-to-end models 1.46× and 1.43× on end-to-end                    model sizes and configurations, and are consistently below 40
+models inference and 1.46× and 1.42× on training, and 1.51×                 KB under different model sizes and configurations.
+and 1.47× on sub-layers, respectively. These results confirm                   Figure 13(b) further evaluates the effectiveness of each
+that merely breaking the global barrier through compute-aware               optimization. We measure the improvement using the average
+ISA and microarchitectural extensions is insufficient; fully re-            waiting time, defined as the delay between the earliest and
+alizing the performance potential requires further optimization             latest requests targeting the same address. This metric directly
+within the unlocked scheduling space, leveraging temporal                   reflects the temporal locality optimized by TB coordination.
+locality and graph-level dataflow integration.                              The results show that each optimization step progressively
+                                                                            enhances temporal locality, reducing the waiting time from
+B. Detailed Performance Analysis                                            35 µs to less than 3 µs.
+   This section investigates the effectiveness of key architec-                Figure 14 complements this analysis by showing how coor-
+tural techniques within CAIS, including merging-aware TB                    dination affects performance under varying Merge Table sizes
+coordination and graph-level dataflow optimizer.                            for the LLaMA-7B model. Merging-aware TB coordination
+   1) Impact of Merging-Aware TB Coordination: The                          maintains high performance even when the switch buffer is
+merging-aware TB coordination mechanism significantly re-                   small, while the uncoordinated version degrades rapidly. These
+duces the waiting time for request merging at the switch                    comparisons emphasize the importance of merging-aware TB
+by improving the temporal alignment of memory requests                      coordination for compute-aware in-switch computing.
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+                                                                            dataflow optimization and traffic control.
+                                                                              Together, these analyses demonstrate that the graph-level
+                                                                            dataflow optimizer is essential to unlocking the full potential
+                                                                            of compute-aware in-switch computing.
+                                                                            C. Scalability Analysis
+                                                                               1) Performance Scalability: To demonstrate the perfor-
+                                                                            mance scalability of CAIS, we evaluate CAIS and CoCoNet-
+                                                                            NVLS across different numbers of GPUs based on the
+   Fig. 15: Average Bandwidth Utilization per Sub-layer.                    LLaMA-7B model. We also scale the model’s hidden dimen-
+                                                                            sion proportionally to the number of GPUs to avoid under-
+                                                                            utilization of computation resources. Figure 17 shows the
+                                                                            performance scalability of CAIS and CoCoNet-NVLS, where
+                                                                            we measure per-GPU computation throughput normalized to
+                                                                            8-GPU CAIS. It shows that the per-GPU throughput decreases
+                                                                            slightly when increasing the number of GPUs. Even with 32
+                                                                            GPUs, the performance drop is still within 5% compared with
+                                                                            8 GPUs. Both CAIS and CoCoNet-NVLS can consistently
+                                                                            have superior performance, regardless of the number of GPUs.
+                                                                               2) Hardware Cost Scalability: CAIS hardware exhibit ex-
+                                                                            cellent scalability as the number of GPUs increases, owing to
+                                                                            a constant and low upper bound on the total required merging
+                                                                            table size at the system level. This table size corresponds to
+                                                                            the amount of data associated with all outstanding remote
+                                                                            requests in the system. CAIS leverages merge-aware coordi-
+                                                                            nation to synchronize potentially mergeable requests before
+                                                                            they are issued to the switch. This ensures that all GPUs
+                                                                            issue outstanding requests for the same set of data, enabling
+Fig. 16: Bandwidth Utilization over Time for (a) CAIS-Base,                 deterministic merging at the switch. As a result, the total
+(b) CAIS-Partial, and (c) CAIS.                                             required merging table size is bounded by the outstanding
+                                                                            remote requests from a single GPU, rather than scaling with
+                                                                            the number of GPUs. In addition, CAIS’s request throttling
+   2) Impact of Graph-Level Dataflow Optimizer: Our pro-                    mechanism further limits the number of outstanding remote
+posed graph-level dataflow optimizer allows concurrent exe-                 requests per GPU, reducing the actual memory footprint. In
+cution of dependent kernels with complementary asymmetric                   our evaluated 8-GPU system, the system-wide upper bound
+communication patterns. This optimization improves overall                  is 1280 KB, corresponding to just 40 KB per switch port.
+bandwidth utilization by balancing traffic across GPU-to-                   Importantly, this bound remains unchanged even as the number
+switch and switch-to-GPU links.                                             of GPUs increases. Therefore, as the system scales, the relative
+   Figure 15 illustrates this effect by comparing the average               hardware overhead decreases, since the size of the base switch
+bandwidth utilization, which is the average across all links                circuitry grows with GPU count while the enhanced logic
+and two directions for each link, for all sub-layers of three               remains constant. This bounded memory overhead ensures
+configurations: (a) CAIS-Base, (b) CAIS with graph-level                    the scalability and practicality of CAIS’s hardware extensions
+dataflow optimizer but without traffic control (CAIS-Partial),              across large-scale multi-GPU deployments.
+and (c) full CAIS. Bandwidth utilization improves from 62.4%                D. Hardware Overhead
+(CAIS-Base) to 84.7% (CAIS-Partial) and 90.2% (CAIS). The                      We evaluate our hardware overhead under TSMC’s 12nm
+gain from CAIS-Base to CAIS-Partial comes from asymmetric                   process technology. Our hardware modification for the switch
+kernel overlapping that tackles the imbalance data movement                 occupies about 0.50mm2 , which is less than 1% of NVIDIA’s
+in both link directions, while the final jump to CAIS reflects              NVSwitch die [17], [24]. On the GPU side, the added logic for
+the benefit of traffic control.                                             TB-group-based synchronization consumes only 0.019mm2
+   To further analyze the sustained behavior of these improve-              per die, less than 0.01% of the H100 GPU area. These
+ments, Figure 16 presents the bandwidth utilization over time               results confirm that our proposed architectural support is cost-
+for the L2 sub-layer of LLaMA-7B. CAIS maintains near-                      effective and hardware-feasible.
+peak utilization (∼100%) during steady-state operation, while
+the partial configuration (CAIS-Partial) suffers dips due to                E. Methodology Validation
+contention. The base configuration shows the lowest and most                  This section validates our experimental methodology from
+fluctuating utilization. This demonstrates the importance of                two aspects: 1) fidelity of a scaled-down configuration for both
+
+
+
+
+       Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+                                                                                                          VII. C ONCLUSION
+
+                                                                                   We present CAIS, a compute-aware in-switch computing
+                                                                                framework that provides aligned communication mode with
+                                                                                LLM computation kernels. CAIS advances NVLS from a
+                                                                                communication-centric primitive accelerator to a compute-
+                                                                                integrated, semantics-aligned in-switch computing framework,
+                                                                                enabling fine-grained overlap that improves end-to-end LLM
+                                                                                system efficiency. CAIS introduces the compute-aware ISA
+                                                                                and microarchitecture extension to enable compute-aware in-
+Fig. 17: Scalability with In- Fig. 18: Validation of Our                        switch computing, and integrates merge-aware TB coordina-
+creasing GPU Count            Simulated NVLS.
+                                                                                tion and graph-level dataflow optimizer to unlock the full po-
+              Hidden    FFN Hidden     Attention           CAIS Speedup
+                                                                                tential of compute-aware in-switch computing. Our evaluation
+   Setup                                           # SM                         on representative LLMs shows that CAIS delivers significant
+               Size        Size         Heads              Over TP-NVLS
+   Full        8192        22528          64       132          1.43            performance gains over the SOTA solutions.
+   Half        4096        11264          32       66           1.40
+
+TABLE II: Experimental Validation of Scaling-down Setup.                                          VIII. ACKNOWLEDGMENT
+
+                                                                                   We sincerely thank the anonymous HPCA’26 reviewers for
+LLM size and GPU resources, and 2) accuracy of our NVLS-                        their valuable suggestions that improved the paper. This work
+enabled simulator with support for multimem instructions.                       is supported by the Shanghai QiYuan Innovation Foundation
+   For scaled-down setup, we compare two systems: a full-                       and Natural Science Foundation of Shanghai (NSFS) grant
+scale GPU executing a full-sized LLM that is feasible on                        25ZR1402275, National Natural Science Foundation of China
+Accel-Sim, and a half-scale system with 50% fewer SMs                           (NSFC) grant (62502305 and 62222210), National Key R&D
+running the same model with matrix dimensions halved. As                        Program of China under Grant 2022YFB4501400.
+reported in Table II, the half-scale configuration faithfully
+reproduces full-scale speedup ordering and magnitudes, pre-                                                  R EFERENCES
+serving system-level behavior and key insights derived.
+   To validate NVLS support in simulation, we measure All-                       [1] A. Abdolrashidi, H. A. Esfeden, A. Jahanshahi, K. Singh, N. Abu-
+                                                                                     Ghazaleh, and D. Wong, “Blockmaestro: Enabling programmer-
+Reduce performance using NCCL [40] on both real hardware                             transparent task-based execution in gpu systems,” in 2021 ACM/IEEE
+and our simulator across message sizes from 1 GB to 16 GB                            48th Annual International Symposium on Computer Architecture (ISCA).
+(1, 2, 4, 8, 16 GB). As shown in Fig. 18, simulated results                          IEEE, 2021, pp. 333–346.
+                                                                                 [2] J. Achiam, S. Adler, S. Agarwal, L. Ahmad, I. Akkaya, F. L. Aleman,
+closely match the real-system measurements, yielding high                            D. Almeida, J. Altenschmidt, S. Altman, S. Anadkat et al., “Gpt-4
+fidelity with an average error of only 3.87%.                                        technical report,” arXiv preprint arXiv:2303.08774, 2023.
+                                                                                 [3] A. Arunkumar, E. Bolotin, B. Cho, U. Milic, E. Ebrahimi, O. Villa,
+                         VI. R ELATED W ORK                                          A. Jaleel, C.-J. Wu, and D. Nellans, “Mcm-gpu: Multi-chip-module
+                                                                                     gpus for continued performance scalability,” ACM SIGARCH Computer
+   To mitigate the communication bottleneck, prior works                             Architecture News, vol. 45, no. 2, pp. 320–332, 2017.
+have proposed various optimizations. These can be broadly                        [4] C. Chen, X. Li, Q. Zhu, J. Duan, P. Sun, X. Zhang, and C. Yang, “Cen-
+                                                                                     tauri: Enabling efficient scheduling for communication-computation
+categorized into two types: 1) communication-computation                             overlap in large model training via communication partitioning,” in
+overlapping [4], [19], [43], [44], [52] and 2) memory efficiency                     Proceedings of the 29th ACM International Conference on Architectural
+improvement [25], [27]. CoCoNet [19] pioneered the idea                              Support for Programming Languages and Operating Systems, Volume 3,
+                                                                                     2024, pp. 178–191.
+of overlapping computation and AllReduce in TP through                           [5] D. De Sensi, S. Di Girolamo, S. Ashkboos, S. Li, and T. Hoefler, “Flare:
+software pipelining, while [44] further reduces kernel-launch                        Flexible in-network allreduce,” in Proceedings of the International
+overhead using a similar software-based approach. T3 [43]                            Conference for High Performance Computing, Networking, Storage and
+                                                                                     Analysis, 2021, pp. 1–16.
+proposes hardware primitives to enable fine-grained kernel                       [6] A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weissenborn, X. Zhai,
+overlap. Centauri [4] proposes overlapping in hybrid paral-                          T. Unterthiner, M. Dehghani, M. Minderer, G. Heigold, S. Gelly et al.,
+lelism. However, directly applying these techniques to NVLS                          “An image is worth 16x16 words: Transformers for image recognition
+                                                                                     at scale,” arXiv preprint arXiv:2010.11929, 2020.
+still fails to achieve effective overlap, since NVLS follows                     [7] A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-Dahle, A. Letman,
+a communication-centric philosophy that lacks awareness of                           A. Mathur, A. Schelten, A. Yang, A. Fan et al., “The llama 3 herd of
+computation semantics, a limitation that CAIS explicitly re-                         models,” arXiv e-prints, pp. arXiv–2407, 2024.
+                                                                                 [8] J. Fei, C.-Y. Ho, A. N. Sahu, M. Canini, and A. Sapio, “Efficient sparse
+solves. Although ACE [46] adopts an in-network computing                             collective communication and its application to accelerate distributed
+approach, it primarily reduces DRAM data accesses. Some                              deep learning,” in Proceedings of the 2021 ACM SIGCOMM 2021
+prior studies have also explored locality-aware TB schedul-                          Conference, 2021, pp. 676–691.
+ing [3], [22], [34], but they primarily reduce remote memory                     [9] D. Foley and J. Danskin, “Ultra-performance pascal gpu and nvlink
+                                                                                     interconnect,” IEEE Micro, vol. 37, no. 2, pp. 7–17, 2017.
+access volume across GPUs. CAIS aims to enhance the                             [10] N. Gebara, “In-network aggregation for shared machine learning clus-
+temporal locality for better request merging.                                        ters,” Proceedings of Machine Learning and Systems (MLSys), 2021.
+
+
+
+
+           Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+[11] R. L. Graham, D. Bureddy, P. Lui, H. Rosenstock, G. Shainer, G. Bloch,               Conference for High Performance Computing, Networking, Storage and
+     D. Goldenerg, M. Dubman, S. Kotchubievsky, V. Koushnir et al., “Scal-                Analysis, 2021, pp. 1–14.
+     able hierarchical aggregation protocol (sharp): A hardware architecture         [29] Y. Li, I.-J. Liu, Y. Yuan, D. Chen, A. Schwing, and J. Huang, “Accel-
+     for efficient data reduction,” in 2016 First International Workshop on               erating distributed reinforcement learning with in-switch computing,”
+     Communication Optimizations in HPC (COMHPC). IEEE, 2016, pp.                         in Proceedings of the 46th International Symposium on Computer
+     1–10.                                                                                Architecture, 2019, pp. 279–291.
+[12] A. Grattafiori, A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-Dahle,         [30] H. Liao, “Ub-mesh: An new interconnection technology for large ai
+     A. Letman, A. Mathur, A. Schelten, A. Vaughan et al., “The llama 3                   supernode,” in 2025 IEEE Hot Chips 37 Symposium (HCS). IEEE
+     herd of models,” arXiv preprint arXiv:2407.21783, 2024.                              Computer Society, 2025, pp. 1–13.
+[13] P. Haghi, W. Krska, C. Tan, T. Geng, P. H. Chen, C. Greenwood,                  [31] M. Liu, L. Luo, J. Nelson, L. Ceze, A. Krishnamurthy, and K. Atreya,
+     A. Guo, T. Hines, C. Wu, A. Li et al., “Flash: Fpga-accelerated smart                “Incbricks: Toward in-network computation with an in-network cache,”
+     switches with gcn case study,” in Proceedings of the 37th International              in Proceedings of the Twenty-Second International Conference on Archi-
+     Conference on Supercomputing, 2023, pp. 450–462.                                     tectural Support for Programming Languages and Operating Systems,
+[14] P. Haghi, C. Tan, A. Guo, C. Wu, D. Liu, A. Li, A. Skjellum,                         2017, pp. 795–809.
+     T. Geng, and M. Herbordt, “Smartfuse: Reconfigurable smart switches             [32] S. Liu, Q. Wang, J. Zhang, W. Wu, Q. Lin, Y. Liu, M. Xu, M. Canini,
+     to accelerate fused collectives in hpc applications,” in Proceedings of              R. C. Cheung, and J. He, “In-network aggregation with transport
+     the 38th ACM International Conference on Supercomputing, 2024, pp.                   transparency for distributed training,” in Proceedings of the 28th ACM
+     413–425.                                                                             International Conference on Architectural Support for Programming
+[15] Y. He, W. Wu, Y. Le, M. Liu, and C. Lao, “A generic service to                       Languages and Operating Systems, Volume 3, 2023, pp. 376–391.
+     provide in-network aggregation for key-value streams,” in Proceedings           [33] Z. Liu, Y. Lin, Y. Cao, H. Hu, Y. Wei, Z. Zhang, S. Lin, and
+     of the 28th ACM International Conference on Architectural Support for                B. Guo, “Swin transformer: Hierarchical vision transformer using shifted
+     Programming Languages and Operating Systems, Volume 2, 2023, pp.                     windows,” in Proceedings of the IEEE/CVF international conference on
+     33–47.                                                                               computer vision, 2021, pp. 10 012–10 022.
+[16] Y. Huang, Y. Cheng, A. Bapna, O. Firat, D. Chen, M. Chen, H. Lee,               [34] U. Milic, O. Villa, E. Bolotin, A. Arunkumar, E. Ebrahimi, A. Jaleel,
+     J. Ngiam, Q. V. Le, Y. Wu et al., “Gpipe: Efficient training of giant neu-           A. Ramirez, and D. Nellans, “Beyond the socket: Numa-aware gpus,”
+     ral networks using pipeline parallelism,” Advances in neural information             in Proceedings of the 50th Annual IEEE/ACM International Symposium
+     processing systems, vol. 32, 2019.                                                   on Microarchitecture, 2017, pp. 123–135.
+[17] A. Ishii, D. Foley, E. Anderson, B. Dally, G. Dearth, L. Dennison,              [35] D. Narayanan, M. Shoeybi, J. Casper, P. LeGresley, M. Patwary,
+     M. Hummel, and J. Schafer, “Nvswitch and dgx-2,” in Hot Chips, 2018.                 V. Korthikanti, D. Vainbrand, P. Kashinkunti, J. Bernauer, B. Catanzaro
+[18] R. Jain, B. Tran, K. Chen, M. D. Sinclair, and S. Venkataraman, “Pal: A              et al., “Efficient large-scale language model training on gpu clusters
+     variability-aware policy for scheduling ml workloads in gpu clusters,”               using megatron-lm,” in Proceedings of the International Conference for
+     in SC24: International Conference for High Performance Computing,                    High Performance Computing, Networking, Storage and Analysis, 2021,
+     Networking, Storage and Analysis. IEEE, 2024, pp. 1–18.                              pp. 1–15.
+[19] A. Jangda, J. Huang, G. Liu, A. H. N. Sabet, S. Maleki, Y. Miao,                [36] NVIDIA, “Nvidia h100 tensor core gpu.” https://www.nvidia.com/en-
+     M. Musuvathi, T. Mytkowicz, and O. Saarikivi, “Breaking the com-                     us/data-center/h100, 2022.
+     putation and communication abstraction barrier in distributed machine           [37] NVIDIA,             “Upgrading          multi-gpu         interconnectiv-
+     learning workloads,” in Proceedings of the 27th ACM International                    ity      with        the     third-generation      nvidia      nvswitch.”
+     Conference on Architectural Support for Programming Languages and                    https://developer.nvidia.com/blog/upgrading-multi-gpu-
+     Operating Systems, 2022, pp. 402–416.                                                interconnectivity-with-the-third-generation-nvidia-nvswitch/?ncid=so-
+[20] N. Jiang, D. U. Becker, G. Michelogiannakis, J. Balfour, B. Towles, D. E.            nvsh-708451, 2022.
+     Shaw, J. Kim, and W. J. Dally, “A detailed and flexible cycle-accurate          [38] NVIDIA, “Cuda templates for linear algebra subroutines.”
+     network-on-chip simulator,” in 2013 IEEE international symposium on                  https://github.com/NVIDIA/cutlass, 2024.
+     performance analysis of systems and software (ISPASS). IEEE, 2013,              [39] NVIDIA, “Introduction to nvidia dgx h100/h200 systems.”
+     pp. 86–96.                                                                           https://docs.nvidia.com/dgx/dgxh100-user-guide/introduction-to-
+[21] X. Jin, X. Li, H. Zhang, R. Soulé, J. Lee, N. Foster, C. Kim, and I. Stoica,        dgxh100.html, 2024.
+     “Netcache: Balancing key-value stores with fast in-network caching,” in         [40] NVIDIA, “Nvidia collective communication library (nccl)
+     Proceedings of the 26th Symposium on Operating Systems Principles,                   documentation.”           https://docs.nvidia.com/deeplearning/nccl/user-
+     2017, pp. 121–136.                                                                   guide/docs/index.html, 2024.
+[22] M. Khairy, V. Nikiforov, D. Nellans, and T. G. Rogers, “Locality-               [41] NVIDIA, “Nvidia gb200 nvl72.” https://www.nvidia.com/en-us/data-
+     centric data and threadblock management for massive gpus,” in 2020                   center/gb200-nvl72/, 2024.
+     53rd Annual IEEE/ACM International Symposium on Microarchitecture               [42] NVIDIA, “Cuda: New features and beyond.” https://www.nvidia.com/en-
+     (MICRO). IEEE, 2020, pp. 1022–1036.                                                  us/on-demand/session/gtc25-s72383/, 2025.
+[23] M. Khairy, Z. Shen, T. M. Aamodt, and T. G. Rogers, “Accel-sim:                 [43] S. Pati, S. Aga, M. Islam, N. Jayasena, and M. D. Sinclair, “T3:
+     An extensible simulation framework for validated gpu modeling,” in                   Transparent tracking & triggering for fine-grained overlap of compute &
+     2020 ACM/IEEE 47th Annual International Symposium on Computer                        collectives,” in Proceedings of the 29th ACM International Conference
+     Architecture (ISCA). IEEE, 2020, pp. 473–486.                                        on Architectural Support for Programming Languages and Operating
+[24] B. Klenk, N. Jiang, G. Thorson, and L. Dennison, “An in-network                      Systems, Volume 2, 2024, pp. 1146–1164.
+     architecture for accelerating shared-memory multiprocessor collectives,”        [44] K. Punniyamurthy, K. Hamidouche, and B. M. Beckmann, “Optimiz-
+     in 2020 ACM/IEEE 47th Annual International Symposium on Computer                     ing distributed ml communication with fused computation-collective
+     Architecture (ISCA). IEEE, 2020, pp. 996–1009.                                       operations,” in SC24: International Conference for High Performance
+[25] V. A. Korthikanti, J. Casper, S. Lym, L. McAfee, M. Andersch,                        Computing, Networking, Storage and Analysis. IEEE, 2024, pp. 1–17.
+     M. Shoeybi, and B. Catanzaro, “Reducing activation recomputation                [45] S. Rajbhandari, J. Rasley, O. Ruwase, and Y. He, “Zero: Memory
+     in large transformer models,” Proceedings of Machine Learning and                    optimizations toward training trillion parameter models,” in SC20:
+     Systems, vol. 5, pp. 341–353, 2023.                                                  International Conference for High Performance Computing, Networking,
+[26] C. Lao, Y. Le, K. Mahajan, Y. Chen, W. Wu, A. Akella, and M. Swift,                  Storage and Analysis. IEEE, 2020, pp. 1–16.
+     “{ATP}: In-network aggregation for multi-tenant learning,” in 18th              [46] S. Rashidi, M. Denton, S. Sridharan, S. Srinivasan, A. Suresh, J. Nie, and
+     USENIX Symposium on Networked Systems Design and Implementation                      T. Krishna, “Enabling compute-communication overlap in distributed
+     (NSDI 21), 2021, pp. 741–761.                                                        deep learning training platforms,” in 2021 ACM/IEEE 48th Annual
+[27] S. Li, F. Xue, C. Baranwal, Y. Li, and Y. You, “Sequence paral-                      International Symposium on Computer Architecture (ISCA).            IEEE,
+     lelism: Long sequence training from system perspective,” arXiv preprint              2021, pp. 540–553.
+     arXiv:2105.13120, 2021.                                                         [47] J. Rasley, S. Rajbhandari, O. Ruwase, and Y. He, “Deepspeed: System
+[28] S. Li and T. Hoefler, “Chimera: efficiently training large-scale neural net-         optimizations enable training deep learning models with over 100 billion
+     works with bidirectional pipelines,” in Proceedings of the International             parameters,” in Proceedings of the 26th ACM SIGKDD international
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+     conference on knowledge discovery & data mining, 2020, pp. 3505–
+     3506.
+[48] A. Sapio, M. Canini, C.-Y. Ho, J. Nelson, P. Kalnis, C. Kim, A. Krish-
+     namurthy, M. Moshref, D. Ports, and P. Richtárik, “Scaling distributed
+     machine learning with {In-Network} aggregation,” in 18th USENIX
+     Symposium on Networked Systems Design and Implementation (NSDI
+     21), 2021, pp. 785–808.
+[49] M. Shoeybi, M. Patwary, R. Puri, P. LeGresley, J. Casper, and B. Catan-
+     zaro, “Megatron-lm: Training multi-billion parameter language models
+     using model parallelism,” arXiv preprint arXiv:1909.08053, 2019.
+[50] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+     Ł. Kaiser, and I. Polosukhin, “Attention is all you need,” Advances in
+     neural information processing systems, vol. 30, 2017.
+[51] R. Wang, D. Dong, F. Lei, J. Ma, K. Wu, and K. Lu, “Roar: A router
+     microarchitecture for in-network allreduce,” in Proceedings of the 37th
+     International Conference on Supercomputing, 2023, pp. 423–436.
+[52] S. Wang, J. Wei, A. Sabne, A. Davis, B. Ilbeyi, B. Hechtman, D. Chen,
+     K. S. Murthy, M. Maggioni, Q. Zhang et al., “Overlap communication
+     with dependent computation via decomposition in large deep learning
+     models,” in Proceedings of the 28th ACM International Conference
+     on Architectural Support for Programming Languages and Operating
+     Systems, Volume 1, 2022, pp. 93–106.
+[53] M. Yang, A. Baban, V. Kugel, J. Libby, S. Mackie, S. S. R. Kananda, C.-
+     H. Wu, and M. Ghobadi, “Using trio: juniper networks’ programmable
+     chipset-for emerging in-network applications,” in Proceedings of the
+     ACM SIGCOMM 2022 Conference, 2022, pp. 633–648.
+[54] Y. Yuan, O. Alama, J. Fei, J. Nelson, D. R. Ports, A. Sapio, M. Canini,
+     and N. S. Kim, “Unlocking the power of inline {Floating-Point}
+     operations on programmable switches,” in 19th USENIX Symposium on
+     Networked Systems Design and Implementation (NSDI 22), 2022, pp.
+     683–700.
+
+
+
+
+         Authorized licensed use limited to: BEIHANG UNIVERSITY. Downloaded on May 04,2026 at 04:38:45 UTC from IEEE Xplore. Restrictions apply.
+
