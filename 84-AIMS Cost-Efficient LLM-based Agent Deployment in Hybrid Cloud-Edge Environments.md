@@ -1,0 +1,30 @@
+论文标题：AIMS: Cost-Efficient LLM-based Agent Deployment in Hybrid Cloud-Edge Environments
+
+
+面向agent级联调用请求的云LLM-端SLM的调度优化。
+
+开源仓库确认：
+    - 状态：未找到明确开源仓库
+    - 链接：N/A
+    - 说明：论文正文和参考文献中未看到 AIMS 官方 GitHub、Zenodo、artifact appendix 或可复现实验包链接。外部按论文题名、DOI 10.1145/3767295.3803622、"Adaptive Iteration-level Model Selector" 和 GitHub 关键词检索，也未发现作者发布的官方代码仓库；目前只能确认论文 DOI 页面和作者/索引信息，不能确认代码开源。
+
+1、论文工作：
+    - 论文要解决的核心问题：LLM-based AI agent 通常在云端调用 frontier LLM，每个用户请求会被 agent 拆成一串相互依赖的 subtasks / iterations，频繁 API 调用带来高运营成本。已有 hybrid LLM routing 方法可以把简单请求或子任务交给本地 SLM，但它们通常把每个 request 或 subtask 独立判定，忽略 agent 子任务链的依赖关系：一旦某个子任务由 SLM 生成了与 LLM 不同的中间状态，后续子任务可能被改写，最终准确率会级联下降。
+    - 论文的主要贡献：论文提出 Adaptive Iteration-level Model Selector（AIMS），一个面向云边混合 agent 部署的轻量 scheduler。AIMS 通过离线 profiling 学习 SLM 和 LLM 在 request / subtask 层面的输出相似性、S-L distance、未来 convergence point 和 subtask decomposition；在线阶段按 request-level fast path、subtask similarity、S-L similarity、convergence detection、subtask decomposition 的顺序决策，尽量把 agent 执行迁移到本地 SLM，同时维持接近 cloud-only LLM 的最终准确率。
+    - 论文所处背景：该工作位于 LLM serving cost optimization、edge / cloud hybrid inference、model routing 和 AI agent runtime scheduling 的交叉点。它不是优化单个 transformer kernel，也不是 server-side batching / KV cache / speculative decoding 系统；它关注 client / application side 的 agent workflow placement：边缘设备运行 1B-4B 级 SLM，云端通过 API 访问 GPT-5 / Claude Sonnet 4 这类大模型，在准确率、云端 token 成本和本地计算之间做动态取舍。
+
+2、相对 Baseline 解决的问题与设计方法：
+    - Baseline 的具体问题：HybridLLM 使用 classifier 在 SLM 和 LLM 之间路由，但论文实验中把 HybridLLM 直接用于 agent subtasks 时，它独立处理每个 subtask，不知道当前决策会改变后续 subtask 序列；相对 Oracle，HybridLLM 在 Qwen3+GPT-5 和 Gemma3+Claude Sonnet 4 上分别有 33.80% 和 35.70% 的 assignment error，且平均准确率和 SLM usage 都明显低于 Oracle。Minions 也以 subtask 为单位做 confidence-based escalation，本质上仍是局部决策，不能显式处理 subtask position、未来 convergence 和复杂任务拆解。All-SLM 成本低但准确率差，All-LLM 准确率高但云端成本最高。
+    - 论文的设计方法：AIMS 使用“离线 profiling + 在线层级路由”。离线阶段对历史请求构造 SLM / LLM 处理形成的 subtask binary tree，收集完整 request 输出相似度、每个 subtask 的下一步输出、S-L distance 和可拆解 sub-subtasks；然后训练 User Request Classifier（URC）、SLM / LLM Subtask Predictor（SP_SLM / SP_LLM）、Distance Predictor（DP）和 Subtask Decomposer（SD）。在线阶段先用 URC 判断整条 request 是否可由 SLM 完成；否则逐个 subtask 经过 SSE、SLE、CD、SD：若预测 SLM / LLM 下一子任务相似则用 SLM；若未来 SLM 子任务可追上当前 LLM 子任务则继续用 SLM；若检测到更远的 convergence point，则把到 convergence point 前的 subtasks 交给 SLM；若仍不安全，则把复杂 subtask 拆成更简单 sub-subtasks，只有所有 sub-subtasks 都适合 SLM 时才整体交给 SLM，否则回退 LLM。
+    - 方法如何对冲 Baseline 缺陷：AIMS 把 routing 从“单点分类”变成“dependency-aware 的 iteration-level scheduling”。URC 避免对简单 request 做多余细粒度判断；SSE 捕捉当前 subtask 是否可安全本地化；SLE 和 CD 明确建模 SLM 与 LLM 子任务序列可能在未来重新对齐的现象，减少不必要的 cloud fallback；SD 利用 SLM 更擅长粒度较小步骤的特点，把复杂 subtask 改写为本地 SLM 更容易完成的序列。position-aware threshold 让早期子任务容忍度更高、后期子任务更保守，对冲论文观察到的 late-stage switching 对最终准确率影响更大的问题。
+    - 关键 trade-off：AIMS 接受了较高的离线 profiling 和模型对绑定成本，换取在线云端调用减少。每个 SLM-LLM pair 需要收集 traces 并 fine-tune estimator；如果模型、任务分布或 agent prompt 变化明显，可能需要 continual fine-tuning。当前 cost model 主要计算 LLM API token 成本，把本地 SLM 运行视为免费，未显式建模电量、设备排队、网络波动、SLA 或多租户资源竞争。在线 scheduler 还会引入 estimator 推理开销，并且 subtask decomposition 若预测不准，可能增加 agent 步数或导致错误的本地执行路径。
+
+3、论文实现：
+    - Baseline 如何实现：实验使用 AutoGen 搭建 agent stack。All-SLM 全部请求由本地 SLM 处理，All-LLM 全部请求由云端 LLM 处理，Random 随机分配 subtasks，Oracle 枚举每个 request 的所有 subtask assignment，在满足 90% All-LLM accuracy threshold 的前提下最大化 SLM usage。HybridLLM 被实现为 subtask-level classifier routing；Minions 被实现为本地小模型先尝试 subtask，再根据生成 token 平均 log-probability 的 uncertainty escalation 到云端 LLM。
+    - 新设计如何实现：AIMS 的 estimator stack 中，URC 和 DP 使用 ModernBERT 作为 base model，SP_SLM、SP_LLM 和 SD 使用 Qwen3-0.6B，均通过 LoRA fine-tuning。离线 profiling 以历史 traces 为输入，对每个 request 递归运行 SLM / LLM 形成 subtask tree，深度上限示例为 15 subtasks，并额外记录整条 request 在 All-SLM / All-LLM 下的最终相似度。在线 inference 时，AIMS 以 request 或当前 subtask 文本、subtask sequence ID、预测下一 subtask、预测 S-L distance 和相似度阈值作为输入信号，按 Algorithm 1 的 URC -> SSE -> SLE -> CD -> SD 顺序进行模型选择。
+    - 实验 / 实现平台：本地边缘端主要是 RTX 5090 GPU，SLM 通过 llama.cpp 运行，占用约 4-6GB VRAM；论文还在 iPhone 15 上评估硬件吞吐差异。模型组合包括 Qwen3-4B + GPT-5 和 Gemma3-4B + Claude Sonnet 4。AIMS 使用 GPT-5+Qwen3-4B 在 WorFBench 和 GSM8K 上生成 1000 条 subtask traces 进行 fine-tuning，训练所有 estimators 在云端 Nvidia A100 上约 2 小时，一次性 estimator stack 约需 2GB VRAM。测试 benchmark 包括 HotpotQA、GSM8K、DROP、HumanEval、WebShop、MATH、WebArena、WorFBench 和 ToolBench。
+    - 关键实验设置与指标：指标包括最终 task accuracy / F1 / pass@1 / BERTScore、5 分钟内 completion rate、SLM usage、end-to-end latency、scheduler / network overhead、normalized remote cost 和 estimator accuracy / latency share。论文报告 AIMS 相比 HybridLLM 最高带来 27.5% relative accuracy improvement，SLM usage 最高 relative increase 31.4%；平均可把 83.4% subtasks offload 到本地 SLM，同时达到与 All-LLM 类似的平均准确率。Qwen3-4B+GPT-5 下，AIMS 相比 All-LLM 的云端成本为 0.17x，平均成本低于 HybridLLM 的 0.29x 和 Minions 的 0.20x；平均 latency 为 13.33s，介于 All-SLM 11.14s 和 All-LLM 15.82s 之间，接近 HybridLLM 12.98s 与 Minions 14.21s。ablation 显示完整 AIMS accuracy / SLM usage 为 77.62% / 83.58%，移除 SD、CD、SLE 或 URC 都会降低 SLM usage 或准确率。
+
+4、pipeline/kernel解析：
+    - 新pipeline/kernel是什么：论文没有提出新的 GPU kernel、attention operator 或底层 serving engine；其新 pipeline 是 AIMS online decision-making workflow，也可以理解为一个 agent subtask routing pipeline。它包含 request-level fast path，以及 subtask-level 的 SSE、SLE、CD、SD 四级 slow path / recovery path，目标是在不破坏最终 agent trajectory accuracy 的情况下最大化本地 SLM 执行比例。
+    - 新pipeline/kernel的执行流例子：以一个 HotpotQA 多跳问题为例，请求进入 AIMS 后，URC 先预测整条问题用 Qwen3-4B 本地执行是否会与 GPT-5 输出相似；若相似，整条 request 直接走 SLM。若不相似，agent 生成第一个 subtask，AIMS 调用 SP_SLM 和 SP_LLM 分别预测本地 SLM 与云端 LLM 执行该 subtask 后的下一步输出，并用 SBERT / BERTScore 类相似度比较。若相似度超过随 subtask position 调整的阈值，当前 subtask 用 SLM；若不相似，DP 预测当前 LLM subtask 需要多少个额外 SLM subtasks 才能对齐，即 S-L distance，SLE 再判断该未来 SLM subtask 是否可与当前 LLM subtask 匹配。若仍不匹配，CD 继续向未来若干步滚动预测 SLM / LLM subtask pair，找到最后一个 convergence point 后，把当前到 convergence point 的 subtasks 交给 SLM。若没有 convergence，SD 将当前复杂 subtask 拆成若干 sub-subtasks，并逐个用 SP_SLM / SP_LLM 验证；只有全部 sub-subtasks 都预测适合 SLM，AIMS 才让 SLM 按拆解序列执行，否则当前 subtask 回退云端 LLM。该流程对每个新生成 subtask 重复，直到 agent 得到最终答案。

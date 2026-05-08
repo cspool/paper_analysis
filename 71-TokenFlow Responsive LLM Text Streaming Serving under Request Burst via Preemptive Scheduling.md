@@ -1,0 +1,33 @@
+论文标题：TokenFlow: Responsive LLM Text Streaming Serving under Request Burst via Preemptive Scheduling
+
+交互式Streaming指标的Serving系统优化。
+
+
+开源仓库确认：
+    - 状态：未找到明确开源仓库
+    - 链接：N/A
+    - 说明：本地 PDF、arXiv 页面（https://arxiv.org/abs/2510.02758）和公开检索结果均未给出 TokenFlow 官方 GitHub、artifact 或代码发布入口。arXiv 页面确认该论文题名、作者、2025-10-03 提交版本，并标注 Accepted by EuroSys 2026；本地 PDF 给出 EuroSys 2026 ACM DOI：https://doi.org/10.1145/3767295.3769328。当前只能确认论文原型是在 SGLang 上实现、约 3000 行 Python 代码，无法确认源码是否公开。
+
+1、论文工作：
+    - 论文要解决的核心问题：TokenFlow 面向实时 LLM text streaming 场景中的 request burst。传统 serving 系统在请求突发时通常继续按 FCFS 或 prefill-first 方式服务，导致早到请求持续占用 GPU 生成大量超过用户阅读或听取速度的 token，而后到请求长时间排队、TTFT 激增。论文指出用户实际 token 消费速率通常低于 LLM 生成速率，过快生成的 token 只会堆在输出 buffer 中；如果系统能利用这段 buffer 余量临时抢占请求，就可以在不造成用户可见卡顿的情况下提升请求处理并行度。
+    - 论文的主要贡献：TokenFlow 提出一个面向 text streaming 的 LLM serving 系统，把调度目标从最大化 raw token throughput 改为最大化 effective throughput 和响应性。它引入 Streaming QoS metric、buffer-aware request scheduler，以及 hierarchical KV cache manager。调度器根据每个请求的实时 buffer token 数、用户 token 消费速率和 I/O 状态决定 admission、preemption、resumption；内存管理器用 write-through KV cache、synchronous chunked writing 和 load-evict overlap 降低抢占恢复开销。
+    - 论文所处背景：该工作属于 LLM serving、request scheduling、KV cache management 和实时交互式推理系统方向。背景中关键矛盾是 prefill 阶段需要大量并行计算来降低首 token 延迟，decode 阶段又需要稳定持续地产生 token 以避免流式输出卡顿。现有系统通常按吞吐优化，无法显式建模“用户只按固定速率消费 token”这一 text streaming 特性，因此在 burst 负载下同时出现 GPU 资源错配、排队延迟、KV cache 显存压力和抢占 I/O 开销。
+
+2、相对 Baseline 解决的问题与设计方法：
+    - Baseline 的具体问题：SGLang 和 vLLM 类系统主要使用 FCFS 或 prefill-prioritized 调度，并提前分配 KV cache，适合提升总体吞吐，但在突发交互负载下会形成 head-of-line blocking。论文的 H200 micro-benchmark 显示，SGLang 在 burst load 上升时 TTFT 可超过用户可接受阈值，而正在运行的请求仍以约 30 tokens/s 的速度生成，明显高于许多阅读场景需求。Andes 引入 QoE-aware scheduling 和 Token Pacer 以改善感知延迟，但论文认为 Andes 的抢占会带来频繁 context switch，且缺少与 KV cache 管理的协同，导致吞吐和资源利用受损。
+    - 瓶颈来源：瓶颈不是单纯计算不足，而是 scheduling、GPU memory、PCIe/CPU-GPU KV cache I/O 和用户消费速率之间不匹配。非抢占式调度让 GPU 在部分请求上生成“过早且无效”的 token；直接抢占又会把 KV cache 搬移变成显存和 I/O 瓶颈。随着更多请求交替在 GPU 上运行，KV cache 容量会超过 GPU 显存，系统从 compute-bound 转向 memory/I/O-bound。
+    - 论文的设计方法：TokenFlow 用两步调度解决请求选择问题。第一步是 determine working set，根据 GPU 显存、请求 KV footprint、等待队列长度、I/O 队列长度和 buffer 安全条件决定可过量承诺的请求集合。第二步是 buffer balancing，在 working set 内按 buffer size、weighted token generation quantity、required output rate 和内存约束做 greedy selection，再用局部交换优化优先级。请求 buffer 越低、用户消费速率越高，越容易获得运行优先级；buffer 较高的请求可以被暂时抢占，继续由客户端 buffer 平滑输出。
+    - 方法如何对冲 Baseline 缺陷：相对 SGLang 的 rigid FCFS，TokenFlow 把“请求是否继续占用 GPU”变成随 buffer 实时变化的在线决策，让 GPU 优先服务即将缺 token 或尚未获得首 token 的请求。相对 Andes 的单纯 QoE 调度，TokenFlow 让 scheduler 和 KV cache manager 双向协作：scheduler 在决策时考虑 I/O overhead 和 recompute/load 代价，memory manager 在后台提前同步可能被抢占请求的 KV cache，使真正发生 preemption 时不必完整同步所有 cache。
+    - 关键 trade-off：TokenFlow 用更复杂的运行时状态维护、周期性 rescheduling 和 CPU-GPU KV cache 传输，换取更低 TTFT 与更高 effective throughput。reschedule interval 越短，buffer 感知更及时，但调度开销更高；buffer conservativeness 越低，抢占越激进，响应更快但更可能带来 stutter 风险；write-through KV cache 会持续占用 PCIe 带宽，但可以显著降低真正抢占时的上下文切换延迟。
+
+3、论文实现：
+    - Baseline 如何实现：实验 baseline 包括 SGLang conservative scheduling、SGLang with chunked prefill，以及 Andes。论文说明 Andes baseline 是在 SGLang 中用 recompute-based preemption 方式实现，用于对比 QoE-aware text streaming scheduler。SGLang baseline 主要代表保守的 FCFS/prefill 优先动态批处理路径，SGLang chunked 代表加入 chunked prefill 后的改进版本。
+    - 新设计如何实现：TokenFlow 基于 SGLang 实现，替换默认 scheduler，并加入 Request Tracker、Request Offload Manager 和 Hierarchical KV Cache Manager。论文称系统包含 priority-based scheduler 和 hierarchical KV cache manager，约 3000 行 Python 代码。KV cache manager 使用并行 CUDA streams 和 Python multithreading，分别维护 compute、load、evict stream；通过动态 chunk sizing、batched transfer 和 CUDA events 协调非阻塞执行，使 KV cache 在 host 与 device 之间持续同步，并支持请求动态 preemption/resumption。
+    - 实验 / 实现平台：实验 GPU 包括 NVIDIA RTX 4090、A6000、H200，并在 micro experiment 中报告 Huawei Ascend 910B 支持。模型包括 Llama3-8B、Qwen2-7B、Qwen2.5-32B。数据集与负载包括 ShareGPT、BurstGPT、真实生产 LLM service traces，以及合成的 burst 和 Poisson request distributions。受控实验在 H200 和 RTX 4090 上进行，H200 设置 mem-frac=0.3；输入输出长度按短序列和长序列正态分布配置，H200 输出长度相对 RTX 4090 配置放大 2 倍。
+    - 关键实验设置与指标：论文使用 TTFT、raw throughput、effective throughput 评估。effective throughput 根据 text streaming 体验对 token 加权：buffer 小于总输出长度 10% 的 token 全计，10% 到 20% 之间线性衰减，超过 20% 的 token 不计入有效吞吐。端到端真实 trace 实验中，TokenFlow 平均降低 mean TTFT 52.6%，在 A6000 和 H200 上分别提升 effective throughput 45.1% 和 37.1%。burst 场景下，P99 TTFT 最多降低 80.2%，mean TTFT 最多降低 48.4%，effective throughput 最多提升 52.9%。Poisson 场景下，effective throughput 最多提升 82.5%，TTFT 最多降低 53.7%。消融实验显示，去掉 offload、write-through 或 evict-load overlap 都会明显增加完成时间，其中 w/o offload 从 66.00s 恶化到 127.28s，说明分层内存管理是性能收益的核心来源。
+
+4、pipeline/kernel 解析：
+    - 新 pipeline/kernel 是什么：论文没有提出新的 GPU kernel，而是提出一个新的 serving pipeline，核心可以概括为“buffer-aware preemptive scheduling + proactive hierarchical KV cache pipeline”。这个 pipeline 由 Request Tracker、Buffer-aware Scheduler、Request Offload Manager、LLM Executor、Hierarchical KV Cache Manager 组成。其关键执行流不是修改 attention kernel，而是在请求生命周期层面把 token buffer、调度决策和 KV cache 搬移合成一个可抢占、可恢复的 streaming runtime。
+    - 新 pipeline/kernel 的执行流例子：假设请求 R1 和 R2 先到达，用户消费速率分别为 20 tokens/s 和 30 tokens/s，GPU 当前只能同时服务两个请求。LLM Executor 为 R1/R2 生成 token 并写入客户端 buffer，Request Tracker 持续记录 buffer token 数、生成时间戳、消耗速率和资源占用。随后 R3 到达时，如果 R1/R2 的 buffer 还不足以覆盖 evict、load、schedule 的切换时间，scheduler 不立即抢占，避免用户端 buffer 被读空。当 R1 因消费速率较低积累了足够 buffer 后，scheduler 判断 R1 可安全 preempt，Request Offload Manager 将 R1 从 running set 移出，KV Cache Manager 依赖后台 write-through 已经同步的大部分 KV cache，将剩余 chunk 快速 evict 到 CPU memory，同时把 R3 的状态加载到 GPU，Executor 开始为 R3 生成首 token，从而降低 R3 的 TTFT。
+    - KV cache 数据流：TokenFlow 把 GPU memory 视为 CPU memory 上大容量 KV cache 的高速 cache。普通 write-back 策略只在真正抢占时写回 KV cache，容易形成长 I/O stall；TokenFlow 改用 write-through，在每次 decode iteration 后把新生成的 KV chunk 放入 write buffer，并在下一轮计算前估计 compute duration，选择大小合适的 chunk 用 write stream 同步到 host。发生 request resume 时，load stream 将需要恢复请求的 KV chunk 从 CPU 加载回 GPU；同时，preempted request 已同步的 chunk 可以直接释放，未同步的剩余 chunk 与 load 操作重叠传输，这就是 load-evict overlap。
+    - 与 Baseline pipeline 的关键差异：Baseline serving pipeline 通常是“请求排队、prefill、decode 到结束”，只有在显存压力下被动 evict KV cache。TokenFlow pipeline 则允许请求在 decode 中间被多次 pause/resume，并把用户侧 buffer 作为安全阈值：只要 buffer 足以覆盖切换延迟，就可以把 GPU 资源转给更紧急请求；当 buffer 接近耗尽，再恢复该请求继续生成。这样把原本因 burst 导致的队列等待，转化为受控的 KV cache 搬移和短周期调度问题。

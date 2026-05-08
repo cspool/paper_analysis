@@ -1,0 +1,48 @@
+论文标题：V-Rex: Real-Time Streaming Video LLM Acceleration via Dynamic KV Cache Retrieval
+
+KV Cache在VLM Stream场景的GPU kernel优化。
+
+原文来源：
+    - 状态：已找到本地 PDF，并用 HPCA 2026 官方页面与 arXiv 页面交叉确认
+    - 本地文件：paper_2026/55-V-Rex Real-Time Streaming Video LLM Acceleration via Dynamic KV Cache Retrieval.pdf
+    - 官方页面：https://2026.hpca-conf.org/details/hpca-2026-main-conference/55/V-Rex-Real-Time-Streaming-Video-LLM-Acceleration-via-Dynamic-KV-Cache-Retrieval
+    - arXiv：https://arxiv.org/abs/2512.12284
+    - 版本说明：本地 PDF 为 HPCA 2026 论文版；外部公开索引可确认 arXiv ID 为 2512.12284，论文条目与 HPCA 2026 官方页面标题、作者和摘要一致。
+
+开源仓库确认：
+    - 状态：未找到明确官方开源仓库
+    - 链接：N/A
+    - 说明：论文 PDF、arXiv 页面和 HPCA 2026 官方条目未给出项目主页或代码仓库；外部检索只找到论文页面、二级论文索引和 awesome-list 条目，其中 awesome-list 将 V-Rex 的代码链接标为 N/A。因此目前只能确认论文公开，不能确认官方实现公开。
+
+1、论文工作：
+    - 论文要解决的核心问题：streaming video LLM 在实时视频输入下需要反复执行 iterative prefill；每个新视频帧经过 vision tower 和 projector 后进入 LLM，并在每层 self-attention 中访问历史 KV cache，同时产生新的 KV cache。随着视频时长增加，KV cache 线性增长，但 prefill 的访问与计算压力持续放大，导致边缘 GPU 显存很快不足，CPU / storage offload 又带来 PCIe 数据搬运和不规则检索开销。
+    - 论文指出的真实瓶颈：瓶颈不是单纯的 LLM 算力，而是 prefill-heavy streaming workload 中的 KV cache 预测、选择和搬运。论文用 VideoLLM-Online + Llama-3 8B 说明，在 10 FPS、batch 4 下 KV cache 会在数分钟内超过边缘 GPU 容量；在 80K cache sequence length 时，prefill 占端到端延迟 83%，而其中 74% 来自 KV cache retrieval。以 40K KV cache sequence length 分析 InfiniGen 时，KV retrieval 虽只占 23% 的操作量，却占 85% 总延迟，其中 KV prediction 约 40%、KV cache fetch 约 39%。
+    - 论文的主要贡献：提出 V-Rex，一个面向 streaming video LLM 的软硬件协同加速方案。软件层提出 ReSV，一个 training-free 动态 KV cache retrieval 算法，通过 hash-bit key clustering 利用视频帧间时空相似性，并用 WiCSum thresholding 按 layer/head 动态选择 token；硬件层提出 DRE（Dynamic KV Cache Retrieval Engine），包含 KVPU 和 KVMU，用位级聚类、early-exit thresholding 和分层 KV cache 管理降低检索计算与数据搬运开销。
+    - 论文所处背景：目标场景是实时视频字幕、问答、对话代理、AR 等 streaming multimodal 应用，尤其是边缘设备部署。与 offline video LLM 不同，streaming video LLM 无法等待整段视频批处理，只能随着帧到达逐帧处理，并且后续 query 可能依赖早期视频上下文，所以不能简单丢弃历史上下文。
+
+2、相对 Baseline 解决的问题与设计方法：
+    - Baseline 的具体问题：第一类 Baseline 是 pruning、compression、quantization、merging 等破坏性或压缩性 KV cache 方法，它们能降低显存压力，但可能永久丢失当前 query 不重要、未来 query 却必要的信息，破坏多轮 streaming video QA 的上下文连续性。第二类 Baseline 是 FlexGen、InfiniGen、InfiniGenP、ReKV 等 KV cache retrieval 方法，它们把完整 KV cache offload 到 CPU memory 或 storage，再选择相关 token 取回 GPU；但这些方法多数为 text generation 或 GPU-friendly top-k 场景设计，迁移到 streaming video prefill 时会暴露两类问题：KV prediction 计算不规则且随序列变长而增长，CPU-GPU / storage-GPU fetch 受 PCIe 4-32 GB/s 带宽限制，远低于 GPU memory 1-2 TB/s 带宽。
+    - 固定 top-k 的缺陷：InfiniGen / ReKV 类方法倾向固定 top-k，因为它适合 GPU 的规则并行。但 streaming video 中不同 layer 和 head 的 token importance 分布差异很大，固定 k 会在不重要的层/head中过取 token，浪费带宽和能耗；也可能在关键层/head下取不足，造成精度下降。论文强调这是一种算法需求和硬件便利之间的错配。
+    - 论文的设计方法：ReSV 将 retrieval 拆成 KV retrieval 和 execution 两个阶段。在 KV retrieval 阶段，QKV generation 后立即做 KV prediction，并为下一层 decoder 预取选中的 KV token；在 execution 阶段，只对选中的 cluster 做 light attention。ReSV 先用 hash-bit key clustering 把相邻帧中相似 key token 聚类，再用 WiCSum thresholding 在每个 layer/head 上动态决定需要取回多少 cluster/token。
+    - Hash-bit key clustering 如何对冲 Baseline：视频相邻帧 token 具有高度时空相似性。ReSV 不直接用高维 cosine similarity 做聚类，而是用随机 hyperplane 将 key 降维并二值化成 hash-bit，再用 XOR + popcount 计算 Hamming distance。论文报告 hash-bit Hamming distance 与 cosine similarity 的相关性约 0.8，足以支撑近似聚类。这样避免对完整 key cache 做昂贵相似度计算，同时保留原始 token value 供后续 attention 使用，区别于直接合并/替换 token 的方法。
+    - WiCSum thresholding 如何对冲 Baseline：WiCSum 先计算 Query x KeyCluster^T 得到 Scorecluster，再把每个 cluster 的 score 按 token count 加权求和，按阈值比例 Thr-wics 动态决定累积到多少 cluster 即可停止。它不是固定选择 k 个 token，而是在每个 row、layer、head 上根据 score 分布自适应选择 token 数量，从而避免固定 top-k 的过取和欠取。
+    - 硬件设计如何对冲 Baseline：DRE 把 ReSV 中 GPU 不擅长的条件分支、bit-level clustering、early-exit sorting、不规则 KV fetch 从主 LLM engine 中拆出。KVPU 负责 HCU 与 WTU 的计算加速；KVMU 负责分层 KV cache 管理和 cluster-wise memory mapping，把同一 cluster 的 token 放到连续地址，提高 PCIe fetch 有效带宽并让取回过程与 LLM 计算重叠。
+    - 关键 trade-off：ReSV 接受近似聚类和阈值选择带来的小幅精度损失，以换取显著降低 retrieval ratio、fetch 带宽和不规则计算开销。DRE 增加专用硬件和 on-chip metadata（HC table 等），但论文给出的开销较小：DRE 约占芯片总 power 2.4%、area 2.0%；HC table 平均只占完整 KV cache 的 1.67%。方法依赖视频相邻帧相似性和阈值超参数，若 workload 的时空冗余较低，收益可能下降。
+
+3、论文实现：
+    - Baseline 如何实现：性能对比包含 AGX Orin 和 A100 上的 FlexGen、InfiniGen、InfiniGenP、ReKV。FlexGen 作为 offloading baseline，在 A100 上把 KV cache offload 到 CPU memory，在 AGX Orin 上 offload 到 storage。InfiniGen 只在 generation 阶段检索 token；InfiniGenP 将检索扩展到 prefill；ReKV 做 frame-level selection。所有检索 Baseline 都在前一 attention layer 中做 KV prediction，以便提前 prefetch KV cache，并尝试把 fetch 延迟与计算重叠。
+    - 新设计算法如何实现：ReSV 的 hash-bit generation 在新 frame 到达时执行，对当前 frame 的 key matrix 做 random hyperplane projection，生成 Nhp 维 hash-bit；HCU 使用 Hamming distance threshold Thhd 将当前 token 与已有 Keycluster 聚类，并维护 HC table，表中包含 cluster index、token index、Keycluster、Keycluster hash-bit 和 token count。WiCSum 使用 Scorecluster 和 token count 做加权累计，按 Thr-wics 阈值选择 cluster，再通过 HC table 映射回原始 token index。
+    - 新设计硬件如何实现：V-Rex accelerator 由 LXE（LLM Execution Engine）和 DRE 构成。LXE 处理主要 LLM 计算，以及 ReSV 中适合矩阵/向量计算的 hash-bit generation 和 Query x KeyCluster^T；LXE 基于 LPU 风格架构，包含 DPE 和 VPE，BF16 精度。DRE 包含 KVPU 与 KVMU：KVPU 内的 HCU 使用 current hash-bit memory、key cache hash-bit memory 和并行 XOR accumulators 做 Hamming distance clustering；WTU 包含 score memory、token count memory、upper/lower bucket sorter、multiplier、adder tree、bucket range updater，用 early-exit sorting 低延迟完成 WiCSum thresholding。KVMU 管理 recent KV、offloaded KV 和 retrieved KV，并按 hash cluster 重排 KV cache 地址。
+    - 实验 / 实现平台：论文开发 custom cycle-level simulator，DRAM 使用 DRAMSim3，SSD 使用 MQSim，CPU/GPU 数据搬运带宽用 NVIDIA A100 和 Jetson AGX Orin 的实测/建模参数。V-Rex 单核用 RTL 实现，并用 Synopsys Design Compiler 在 14nm 工艺综合，0.8 V、800 MHz；DRAM 行为建模包含 HBM2e / DDR4，LPDDR5 能耗来自 vendor report，PCIe power 按 3 W/lane，SSD power 基于 Kioxia BG6，GPU power 通过 NVIDIA-SMI 和 tegrastats 测量。
+    - 硬件配置：edge 场景使用 V-Rex8，8 cores，约 53.3 TFLOPS BF16，LPDDR5 204.8 GB/s、PCIe 3.0 x4 4 GB/s，KV cache offload 到 M.2 NVMe SSD；server 场景使用 V-Rex48，48 cores，约 319.5 TFLOPS BF16，HBM2e 1935 GB/s、PCIe 4.0 x16 32 GB/s，KV cache offload 到 DDR4 CPU memory。对照平台为 Jetson AGX Orin（FP16 54 TFLOPS、32 GB、约 40 W）和 A100（FP16 312 TFLOPS、80 GB、约 300 W）。
+    - 模型与 benchmark：所有实验使用 Llama-3 8B 作为 LLM backbone，SigLIP-ViT-L-384 作为 vision encoder；主要 benchmark 是 COIN，准确率分析使用 COIN 的五类任务（Step、Next、Task、Proc.、Proc.+）。KV cache sequence length sweep 为 1K、5K、10K、20K、40K；latency 指标包括 frame processing 的 per-frame latency 和 text generation 的 TPOT。
+    - 关键实验设置与指标：现有方法的 fixed top-k selection ratio 被调到与 baseline accuracy 匹配；ReSV 使用经验调参保持准确率，论文给出 Nhp=32、Thr-wics=0.3、Thhd=7。主要指标包括 latency、FPS、energy efficiency、end-to-end latency breakdown、retrieval ratio、Top-1 accuracy、area/power breakdown、bandwidth overlap、roofline throughput。
+    - 主要结果：在 edge batch 1 下，V-Rex8 在 1K/5K/10K/20K/40K cache 上 per-frame latency 为 121/123/198/200/254 ms，对应 3.9-8.3 FPS，并在长序列和大 batch 下仍达到 real-time threshold（论文按 >=2 FPS 标注）。相对 AGX+FlexGen，edge 上整体报告 1.9-19.7x speedup 和 3.1-18.5x energy efficiency improvement；server 上相对 A100 报告 2.6-19.7x speedup 和 5.9-70.6x energy efficiency improvement。ReSV 相对 VideoLLM-Online 平均 accuracy 仅下降 0.8%，frame processing retrieval ratio 平均 32.7%，text generation retrieval ratio 平均 2.5%；相比 ReKV，平均少检索约 3.0x token。消融显示 AGX+ReSV 可降低总体 latency 2.8x，但 GPU 上 KV prediction 仍占 48% 总延迟；加入 KVPU 后达 6.0x speedup 和 9.2x energy reduction，完整 V-Rex8 All 达 8.1x speedup 和 10.2x energy saving。
+
+4、pipeline/kernel 解析：
+    - 新 pipeline/kernel 是什么：论文没有提出传统意义上的单个 GPU kernel，而是提出 streaming video LLM 的 Dynamic KV Cache Retrieval pipeline，由 ReSV 算法路径和 DRE 硬件路径共同实现。核心路径是“新帧到达 -> QKV/hash-bit 生成 -> hash-bit key clustering -> Query x KeyCluster^T -> WiCSum thresholding -> selected token index 聚合 -> KVMU 预取 KV -> light attention 执行”。
+    - pipeline 的执行流例子：假设第 t 个视频帧到达，vision tower 和 MLP projector 先产生视觉 token embedding，LXE 在第 0 层 decoder 做 QKV generation，并对当前 frame 的 key 做 RoPE 后生成 hash-bit。HCU 从 HC table 读取已有 Keycluster hash-bit，与当前 key hash-bit 做 XOR + popcount；若 Hamming distance 小于 Thhd，就把该 token 归入已有 cluster，否则创建/更新 cluster，并写回 cluster id、token id、token count、Keycluster 等 metadata。
+    - 下一层预取如何发生：在 layer L 的 QKV generation 后，LXE 计算当前 query 与 KeyCluster 的 Scorecluster。WTU 对每个 query row 读取 score 和 token count，先预计算 weighted sum 与阈值，再从高分 bucket 开始排序和累计；一旦累计 weighted score 超过 T_hwics，就 early exit，输出 selected cluster bitmask。WTU 汇总所有 row 的 selected cluster，通过 HC table 映射出原始 token indices。
+    - KV cache 如何流动：KVMU 根据 selected token indices 从 CPU memory 或 storage 中预取对应 KV entries。为了提高带宽利用率，它把同一 hash cluster 的 token 在 offloaded KV cache 中安排为连续地址，因此一次 fetch 可以搬运 cluster 内多个 token。recent KV 保留在 V-Rex memory，旧 KV 超过容量后 offload；被选中的旧 KV 被取回到 V-Rex memory，和 recent KV 一起提供给 attention。
+    - Attention 如何执行：在 execution stage，LLM 不对完整历史 KV cache 做 attention，而是对 WiCSum 选出的 cluster/token 做 light attention。与此同时，下一层所需的 KV prediction 和 fetch 可与当前层 attention/FFN 重叠。论文的 bandwidth 分析显示 KV prediction 可短时达到约 600 GB/s，但持续时间短，可隐藏在 attention 中；KV retrieval 主要受 PCIe 限制，只消耗约 1% DRAM bandwidth，因此可与 attention 和 FFN 并发。
+    - 与普通 GPU pipeline 的差异：普通 GPU 上固定 top-k 检索看似规则，但 streaming prefill 中 query token 多、layer/head 分布差异大，KV prediction 和 fetch 难以隐藏；V-Rex 将不规则、条件式、bit-level、early-exit 的部分交给 DRE，把主计算路径保持在 LXE 的矩阵/向量计算上。它的核心不是只加快 attention kernel，而是把 prefill 前后的 KV selection + KV movement 变成可流水化、可预取、可低功耗执行的系统路径。

@@ -1,0 +1,1422 @@
+                                                                                                                                  PDF Download
+                                                                                                                                  3725843.3756113.pdf
+                                                                                                                                  05 April 2026
+                                                                                                                                  Total Citations: 1
+                                                                                                                                  Total Downloads: 4887
+    .
+    .
+        Latest updates: hps://dl.acm.org/doi/10.1145/3725843.3756113
+
+
+
+
+                                                                                                                                  .
+                                                                                                                                  .
+                                                                                                                        Published: 17 October 2025
+        .
+        .
+                                                                                                                        .
+    RESEARCH-ARTICLE
+
+
+
+
+                                                                                                                        .
+                                                                                                                        Citation in BibTeX format
+    Amove: Accelerating LLMs through Mitigating Outliers and Salient
+
+
+
+
+                                                                                                                        .
+                                                                                                                        .
+                                                                                                                        MICRO 2025: 58th IEEE/ACM
+    Points via Fine-Grained Grouped Vectorized Data Type                                                                International Symposium on
+                                                                                                                        Microarchitecture
+    XILONG XIE, Beihang University, Beijing, China                                                                      October 18 - 22, 2025
+                                                                                                                        Seoul, Korea
+    .
+    LIANG WANG, Beihang University, Beijing, China
+
+
+
+
+                                                                                                                        .
+                                                                                                                        .
+                                                                                                                        Conference Sponsors:
+    .
+    LIMIN XIAO, Beihang University, Beijing, China                                                                      SIGMICRO
+    .
+    MENG HAN, Tsinghua University, Beijing, China
+    .
+    LEI LIU, Beihang University, Beijing, China
+    .
+    XIANGRONG XU, Beihang University, Beijing, China
+    .
+    View all
+    .
+    .
+    Open Access Support provided by:
+    .
+    Beihang University
+    .
+    Tsinghua University
+    .
+                                                       MICRO '25: Proceedings of the 58th IEEE/ACM International Symposium on Microarchitecture (October 2025)
+                                                                                                                        hps://doi.org/10.1145/3725843.3756113
+                                                                                                                                           ISBN: 9798400715730
+.
+    Amove: Accelerating LLMs through Mitigating Outliers and
+   Salient Points via Fine-Grained Grouped Vectorized Data Type
+                        Xilong Xie                                                   Liang Wang∗                                            Limin Xiao∗
+                  Beihang University                                              Beihang University                                     Beihang University
+                     Beijing, China                                                 Beijing, China                                         Beijing, China
+                 xxl1399@buaa.edu.cn                                            lwang20@buaa.edu.cn                                     xiaolm@buaa.edu.cn
+
+                        Meng Han                                                           Lei Liu                                        Xiangrong Xu
+              Tsinghua University                                               Beihang University                                      Beihang University
+                 Beijing, China                                                    Beijing, China                                         Beijing, China
+           mhan@mail.tsinghua.edu.cn                                          Liulei2010@buaa.edu.cn                                   xxr0930@buaa.edu.cn
+
+                    Jinquan Wang                                                       Zhen Song                                           Xiaojian Liao
+                Beihang University                                               Beihang University                                     Beihang University
+                  Beijing, China                                                   Beijing, China                                          Beijing, China
+            derekjqwang@buaa.edu.cn                                            songzhen@buaa.edu.cn                                     liaoxj@buaa.edu.cn
+
+Abstract                                                                                              CCS Concepts
+The quantization of Large Language Models (LLMs) poses signifi-                                       • Computing methodologies → Neural networks; • Computer
+cant challenges due to the heterogeneous nature of feature point                                      systems organization → Data flow architectures.
+distributions in low-bit quantization scenarios, including salient
+points, normal outliers, and massive outliers. These challenges                                       Keywords
+are particularly pronounced in supporting both weight-only and                                        Large Language Models, Quantization, Fine-Grained Grouped Vec-
+weight-activation quantization modes, as existing methods often                                       torized Data Type
+focus on a single mode and fail to address the diverse feature char-
+acteristics holistically, resulting in suboptimal model accuracy and                                  ACM Reference Format:
+hardware efficiency trade-offs.                                                                       Xilong Xie, Liang Wang, Limin Xiao, Meng Han, Lei Liu, Xiangrong Xu, Jin-
+                                                                                                      quan Wang, Zhen Song, and Xiaojian Liao. 2025. Amove: Accelerating LLMs
+   To tackle these limitations, we introduce Amove, a novel co-
+                                                                                                      through Mitigating Outliers and Salient Points via Fine-Grained Grouped
+design framework that synergistically integrates data type and
+                                                                                                      Vectorized Data Type. In 58th IEEE/ACM International Symposium on Mi-
+hardware architecture design for efficient LLM quantization. Our                                      croarchitecture (MICRO ’25), October 18–22, 2025, Seoul, Republic of Korea.
+approach is threefold: First, we conduct a comprehensive analysis                                     ACM, New York, NY, USA, 15 pages. https://doi.org/10.1145/3725843.3756113
+of quantization granularity and propose a residual approximation
+mechanism that balances model accuracy and memory overhead
+under fine-grained quantization. Second, we design a flexible fine-                                   1    Introduction
+grained grouped vectorized data type, enabling seamless support for                                   Large Language Models (LLMs) [6, 73, 85] have demonstrated ex-
+both weight-activation and low-bit weight-only quantization modes                                     ceptional performance on many natural language processing tasks
+within a unified framework. Third, we implement the hardware                                          by leveraging massive parameters to enhance comprehension, gen-
+architecture of Amove on both GPU tensor core and systolic array-                                     eration, and reasoning [16, 58, 75]. However, deploying LLMs with
+based architectures. The Amove-enhanced tensor core achieves                                          billions of parameters presents challenges in resource-constrained
+an average speedup of 2.13× and a 1.70× reduction in energy con-                                      edge devices, especially in terms of memory usage and inference
+sumption over the state-of-the-art OliVe design. Furthermore, an                                      speed [21]. For instance, Llama4 Behemoth [72], the recent open-
+Amove-based accelerator achieves up to 2.67× speedup and 1.68×                                        source model with 288 billion parameters, demands 576 GB of stor-
+energy reduction over the state-of-the-art accelerator.                                               age in FP16, requiring at least 8 A100 GPUs [59] (80 GB each) for
+                                                                                                      inference. Even with 8 A100 GPUs, a single forward pass can take
+∗ Co-corresponding authors.
+                                                                                                      several seconds, making real-time inference infeasible for latency-
+                                                                                                      sensitive applications [11, 79]. To this end, quantization [17, 20, 39,
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed                 43, 47, 67, 77] is suggested as one of the most hardware-friendly
+for profit or commercial advantage and that copies bear this notice and the full citation             ways to reduce memory consumption by converting floating-point
+on the first page. Copyrights for components of this work owned by others than the                    parameters into low-bit representations and to accelerate LLM in-
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission         ference via efficient matrix multiplication on practical hardware
+and/or a fee. Request permissions from permissions@acm.org.                                           implementations, such as GPU tensor core [59, 86] and systolic
+MICRO ’25, Seoul, Republic of Korea                                                                   array-based accelerators [8, 33]. Depending on the components
+© 2025 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 979-8-4007-1573-0/25/10                                                                      being quantized, quantization falls into two modes: weight-only
+https://doi.org/10.1145/3725843.3756113                                                               quantization [20, 47, 67], which aggressively compresses model
+
+
+
+
+                                                                                                854
+MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea                                                                                                                                                                               Xilong Xie et al.
+
+
+                                                Before Quantization                 After Group-wise Quantization(group size=4)
+                                                                                                                                            FP16 Matrix(64 Values)        Group Size=64(Dequant)                      Group Size=4(Dequant)
+                                                    Llama2-7B Model                              Llama2-7B Model
+Absolute Weight/Activation Value
+
+
+
+
+                                   Normal Weight Outliers   Weight Salient Points   Reduce Weight Quantization Error                        16.1 81      1.1 17.1              0      80     0        0                   11.6 81       0    11.6
+
+                                                                                                                                            -27.8 280 0.2 -1.8              -40 280          0        0                   -40 280       0     0
+
+                                                                                                                                             8    -3.9 -3.6 -7.2               0      0      0        0                    8    -3.4 -3.4 -6.8
+
+                                                  Normal Activation Outliers                                                                     Normal Value or          The entire matrix shares                    4 values in a row share a
+                                                                                      Smoothing Activation Outliers into                          Salient Points            a single scale factor                         single scale factor
+                                     Massive Activation Outliers                              Scaling Factors
+                                                                                                                                                 Normal Outlier           Memory overhead of the                      Memory overhead of the
+                                                     Channel ID                                                                                                              scale factor : Low                          scale factor : High
+                                                                                                      Channel ID
+                                                        (a)                                               (b)                                    Massive Outlier              Accuracy : Low                              Accuracy : High
+
+Figure 1: (a) Distribution of feature points of weights and activa-                                                                                                Cluster 1
+tions in Llama2-7B on the WikiText2 [55] dataset for quantization                                                                                                                                16                  16    80     0     16
+analysis. (b) Distribution of feature points after fine-grained group-                                                                            16.1 81     1.1 17.1         11.6              40                 -40 280       0      0
+
+
+
+
+                                                                                                                                                                                                          Dequant
+wise quantization (group size = 4).                                                                                                                                            40
+                                                                                                                                                 -27.8 280 0.2 -1.8                              4                   8     -4     -4    -8
+                                       Low-Bit Weight-Only Quantization                 Weight-Activation Quantization
+                                                                                                                                                   8     -3.9 -3.6 -7.2        1.1
+                                                                                                                                                                                            Encodings=[-2,0,-3]
+                                                                                                                                                                                           cluster1: 16 = 40 - 2 * 12   Amove
+                                                                                                                                                    40             12                      cluster2: 40 = 40 - 0 * 12 Quantization
+Perplexity
+
+
+
+
+                                                                                                                                                                                           cluster3: 4 = 40 - 3 * 12 Framework
+                                                                                                                                            The entire matrix shares a base scale factor and a
+                                                                                                                                                residual, 4 values has a 2 bits encoding                            Memory overhead of the
+                                                                                                                                                   Base Scale Factor       True Scale Factor                          scale factor : Low
+                                                                                                                                                                                                                      Accuracy : High
+                                     FP16 Baseline(5.47)              Loss < 0.1%
+                                                                                                                                                   Residual         Approximate Scale Factor
+                                                                                     FP16 Baseline(5.47)           Loss < 0.1%
+
+                                                    Group Size                                       Group Size                         Figure 3: Comparison between the Amove quantization framework
+Figure 2: Perplexity of Llama2-7B on Wikitext2 [55] under differ-                                                                       and group-wise quantization methods.
+ent quantization granularity levels. Lower perplexity means better
+model accuracy. As the group size decreases, the accuracy of both low-
+bit weight-only quantization methods (e.g., INT-sym [29], GPTQ[20],                                                                     factors while reducing the overall error in weight-only quantization.
+OmniQuant [67], and BiLLM [27]) and weight-activation quantiza-                                                                         Moreover, Figure 2 shows that decreasing the group size improves
+tion progressively improves.                                                                                                            the accuracy of low-bit weight-only and weight–activation quanti-
+                                                                                                                                        zation, even reducing the model error to 0.1% when the group size
+weights to extremely low bit-widths (e.g., W3A16, W2A16), and                                                                           is 4. However, as the group size decreases, the memory overhead of
+weight–activation quantization [46, 54, 77], which reduces the pre-                                                                     scale factors increases dramatically [26]. For example, reducing the
+cision of both weights and activations (e.g., W8A8, W4A4).                                                                              group size from 128 to 4 results in a 32× increase in the memory
+   Nevertheless, the primary barrier to supporting both low-bit                                                                         overhead of scale factors. A straightforward approach is to quantize
+weight-only and weight–activation quantization lies in their differ-                                                                    the scale factors, as done in VS-Quant [13]. Nevertheless, compress-
+ent feature points, making it challenging to handle both outliers                                                                       ing these scale factors to low-bit precision (e.g., 4 bits) can lead
+and salient points [27, 47] efficiently within a specific framework                                                                     to over 50% accuracy degradation, and the 2-order dequantization
+[22, 77]. Figure 1(a) shows the distribution of salient points and                                                                      operation introduces considerable computational overhead [42].
+outliers in Llama2-7B [72]. Outliers, observed in both weights and                                                                          Based on the above observations, we propose Amove, a novel
+activations, are typically high-magnitude values that are classified                                                                    data type and architecture co-design framework. Figure 3
+into two categories: normal outliers and massive outliers [46]. Al-                                                                     shows the difference between the proposed Amove framework and
+though both normal and massive outliers deviate from the typical                                                                        group-wise quantization methods. In Amove, each coarse-grained
+value range, massive outliers exhibit exceptionally larger values                                                                       group is partitioned into multiple fine-grained clusters, and the
+than normal outliers. Salient points refer to weight values that                                                                        scale factor for each cluster is derived from a base scale factor,
+are amplified during matrix multiplication due to activation out-                                                                       residual, and corresponding encoding, thereby avoiding storing
+liers. BitMoD [7] and Anda [19] enhance the efficiency of low-bit                                                                       per-cluster scale factors. For example, the true scale factor of the
+weight-only quantization through data type design informed by                                                                           first cluster in Figure 3 is 11.6. Using the base scale of the coarse-
+model weight analysis. Methods such as GOBO [80], Mokey [81],                                                                           grained group (40) and subtracting a residual of 12 multiplied by
+ANT [23], OliVe [22], SPARK [49], LNS-LLM [24], and M-ANT [26]                                                                          the encoding value 2, the approximate scale factor for this cluster
+address activation outliers, thereby facilitating accurate and practi-                                                                  can be computed as 16. Through flexibly configuring the encoding
+cal weight–activation quantization. Yet, these methods struggle to                                                                      bit-width, group size, and cluster size, this mechanism achieves a
+jointly handle salient points and outliers, limiting their ability to                                                                   favorable trade-off between model accuracy and memory overhead.
+support both low-bit weight-only and weight–activation quantiza-                                                                            To implement Amove, a fine-grained grouped vectorized data type
+tion modes with respect to model accuracy and hardware efficiency.                                                                      is employed for the residual approximation mechanism. This data
+   A key factor underlying this limitation is the quantization gran-                                                                    type is similar to the Microscaling (MX) [65] data format proposed
+ularity, which governs how well outliers and salient points can be                                                                      by Microsoft and NVIDIA, which has already been adopted in
+preserved [26, 65]. As shown in Figure 1(b), fine-grained group-                                                                        NVIDIA’s latest-generation GPUs [56]. However, compared to MX,
+wise quantization [13] can smooth activation outliers into the scale                                                                    Amove offers more flexible scalability and supports fine-grained
+
+
+
+
+                                                                                                                                  855
+                                                                                                  MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea
+
+
+                                                                                   Per-Tensor Quant                         Per-Tensor Quant
+quantization with lower memory overhead. Due to its hardware-
+friendly and scalable data type, Amove can be seamlessly extended                                                                Per-Channel Quant
+to both tensor core and systolic array, while incurring less than                    Per-Token Quant
+2% area overhead. Amove leverages data type and architecture co-
+design that enables accurate 4-bit weight–activation quantization                        X                    *            Groups
+                                                                                                                                   W
+for self-attention and linear layers, achieving enhanced inference                           Groups
+efficiency for quantized LLMs compared to existing state-of-the-art             Per-Group Quant                      Per-Group Quant
+quantization architectures [22, 23, 40].
+   The main contributions of this paper are summarized below:               Figure 4: Definition of per-tensor, per-token, per-channel, per-
+                                                                            group quantization[77]. Δ is the scale factor introduced by different
+      • We analyze the challenges of fine-grained quantization and
+                                                                            quantization granularity levels.
+        adopt a novel residual approximation mechanism to trade
+        off model accuracy and memory overhead.
+      • We design a flexible customized fine-grained grouped vec-           group. Although both group-wise and cluster-wise quantization
+        torized data type based on the residual approximation mech-         improve model accuracy through increased granularity, the larger
+        anism, which supports both weight–activation and low-bit            number of scale factors introduces additional memory overhead,
+        weight-only quantization modes, further improving the ac-           which can become a bottleneck in low-bit settings.
+        curacy of quantized LLMs.                                              Building on this insight, recent studies [7, 14, 19, 24, 26, 65, 78]
+      • We demonstrate that the proposed data type can be easily            on LLM quantization have increasingly focused on the impact of
+        integrated into existing scalar data types and quantization         quantization granularity on model performance, showing that re-
+        algorithms, delivering higher model accuracy.                       ducing granularity can often yield better results than simply in-
+      • We implement the Amove architecture on both GPU tensor              creasing bit-width [14]. Nevertheless, most existing methods still
+        core and systolic array, and evaluate its performance across        adopt coarse-grained grouping, primarily due to the reduced mem-
+        multiple LLMs. Amove achieves an average of 2.13× speedup           ory overhead for scale factors. However, this design choice limits
+        and 1.70× energy reduction compared to the state-of-the-art         the ability to fully exploit the accuracy benefits of finer-grained
+        tensor core design OliVe [22]. Compared to the state-of-            quantization. As a result, effectively balancing quantization gran-
+        the-art accelerator Tender [40], Amove achieves up to 2.67×         ularity and memory overhead has emerged as a key challenge in
+        speedup and 1.68× energy reduction.                                 improving the overall performance of quantized LLMs.
+
+2     Background                                                            2.2     Data Type for Quantization
+In this section, we introduce quantization granularity in Section           Flexible data types play a key role in bridging the gap between quan-
+2.1 and data type in Section 2.2. These two key techniques serve as         tization algorithms and hardware efficiency [7, 24, 26, 31, 41, 49, 76].
+the foundation for the design of our proposed framework.                    Properly designed data types align with the precision and dynamic
+                                                                            range requirements of quantization while leveraging hardware’s
+2.1     Quantization Granularity for LLM                                    computational and memory characteristics [51, 52]. Existing quan-
+Quantization [45, 54, 61] maps high-precision values into discrete          tization data types [7, 22, 23, 26, 41, 65] can be broadly categorized
+levels, with symmetric integer quantization [29] offering better            into scalar and vector types. Scalar data types, such as ANT [23],
+hardware support and efficiency [77]. Specifically, the symmetric           M-ANT [26], and BitMoD [7], effectively capture diverse data dis-
+integer quantization process can be expressed as:                           tributions observed at the tensor or channel level. A representative
+                                                                            vector data type is the MX data format [65]. Specifically, MX packs
+               𝑚𝑎𝑥 (|X 𝑓 |)          X𝑓
+                                       
+           Δ=               ; X𝑞 =        ; X̂ = X𝑞 · Δ        (1)          𝑘 data values into a block that shares a single exponent, normalizing
+                2𝑏 −1 − 1            Δ                                      each element in the block using this shared scale. Each element is
+where 𝑏 is the bit width, Δ is the scale factor, X 𝑓 is the original        then represented using either a floating-point number (e.g., MX-
+floating-point tensor, ⌊·⌉ is the rounding function, X𝑞 is the quan-        FP4) or an integer (e.g., MX-INT8) [14]. Moreover, vectorized data
+                                                                            types naturally align with group-wise quantization and remain com-
+tized integer value, and X̂ is the floating-point tensor obtained after
+                                                                            patible with scalar formats. Therefore, the novel data type proposed
+dequantization. As shown in Figure 4, quantization has different
+                                                                            in this work adopts a vectorized design to support both low-bit
+granularity levels, which significantly impact the accuracy of quan-
+                                                                            weight-only and weight–activation quantization modes.
+tized LLMs [7]. Per-tensor quantization assigns a single scale factor
+to the entire matrix, while per-token and per-channel quantization
+improve flexibility by assigning separate scale factors to individual       3     Motivation
+tokens and channels, respectively. A more widely adopted tech-              In this section, through the analysis of fine-grained quantization and
+nique is group-wise quantization [13], where the input tensor is            an extensive exploration of existing implementations, we have three
+divided into fixed-size groups (e.g., 128 or 64 elements per group),        key observations that motivate the design of the Amove framework.
+each sharing a common scale factor. To further reduce quantiza-                Observation I: Fine-grained quantization improves accu-
+tion error, cluster-wise quantization [78] refines this strategy by         racy but introduces substantial memory overhead. Fine-grained
+subdividing each group into smaller clusters (e.g., 4 or 8 elements         quantization localizes the impact of outliers and salient points to
+per cluster), allowing for finer-grained representation within each         smaller regions, thereby improving the performance of quantized
+
+
+
+
+                                                                      856
+MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea                                                                                                                Xilong Xie et al.
+
+
+
+
+                                                                                                               Frequency
+Kurtosis
+
+
+
+
+                                                           Loss
+                            Weight-Activcation                               Weight-only
+                                                                                                                                  Narrow Concentration Region
+                            Quantization(W4A4)                           Quantization(W3A16)
+
+
+
+
+                        Group Size                                       Group Size                                                                   Value
+                              (a)                                            (b)                                                                          (c)
+
+Figure 5: (a) Kurtosis [41] at different quantization granularity levels on Wikitext2 [55] under weight-activation quantization(W4A4) (b)
+Dequantization error at different quantization granularity levels on Wikitext2 under low-bits weight-only quantization(W3A16). (c) Light-tailed
+distribution of scale factors under fine-grained group-wise quantization.
+
+LLMs [26]. For weight–activation quantization, fine-grained group-           Table 1: Comparison of Amove with other quantization data
+wise quantization enables outlier smoothing into the scale factors.          types.
+As these scale factors are applied during dequantization by multi-
+plying with the quantized integers, they expand the dynamic range             Quantization
+                                                                              Framework
+                                                                                                  Data
+                                                                                                  Type
+                                                                                                                   Quantization
+                                                                                                                   Granularity
+                                                                                                                                       Precision
+                                                                                                                                       Bitwidth
+                                                                                                                                                     Model
+                                                                                                                                                    Accuracy
+                                                                                                                                                                   Quantization Mode
+                                                                                                                                                                 Low-bit W-only.  W-A
+of the recovered values effectively, thereby providing a better rep-           GOBO [80]         Scalar         Token/Channel              16         High               ✗             ✓
+                                                                                                                                                                         ✗             ✓
+resentation of outliers, especially massive outliers. As illustrated           Mokey [81]
+                                                                                ANT [23]
+                                                                                                 Scalar
+                                                                                                 Scalar
+                                                                                                                Token/Channel
+                                                                                                                Token/Channel
+                                                                                                                                          4&8
+                                                                                                                                          4&8
+                                                                                                                                                     Medium
+                                                                                                                                                     Medium              ✗             ✓
+in Figure 5(a), the decreasing kurtosis [41, 44] with smaller group             OliVe [22]       Scalar         Token/Channel             4&8         High               ✗             ✓
+                                                                               M-ANT [26]        Scalar        Group-wise(g=64)           4&8         High               ✗             ✓
+sizes reflects successful outlier suppression. In low-bit weight-only          BitMoD [7]        Scalar        Group-wise(g=128)        3/4 & 16      High               ✓             ✗
+                                                                                Anda [19]        Scalar        Group-wise(g=32)          4 & 16       High               ✓             ✗
+quantization, fine-grained quantization schemes mitigate the effects             MX [65]       Vectorized      Group-wise(g=32)           4&4         Low                ✓             ✓
+of irregularly distributed salient points and outliers by improving           Amove(Ours)      Vectorized    Group-wise(g=4/8/16)        4&4          High               ✓             ✓
+                                                                              *Low-bit W-only represents low-bit weight-only quantization and W-A represents weight-activation quantization.
+local precision. This leads to reduced reconstruction error, as shown
+in Figure 5(b), where we measure the quantization loss using the
+L1 norm between original and dequantized weights:
+                                                                           tendency of the group. Each cluster’s specific scale factor can then
+                             ∑︁          W𝑖                                  be approximated by a small residual offset from the base scale factor.
+                     𝑙𝑜𝑠𝑠 =      |W𝑖 −        · Δ|                 (2)
+                              𝑖
+                                         Δ                                   Owing to the light-tailed nature of the scale factor distribution, the
+                                                                             residuals are generally small. This allows them to be compactly en-
+where W𝑖 denotes the original FP16 weights, Δ is the scale factor,           coded with a few bits, reducing memory overhead while preserving
+⌊·⌉ is the rounding function. While effective in preserving accuracy,        fine-grained scale factor modeling, as detailed in Section 4.1.
+fine-grained quantization requires storing a large number of per-               Observation II: Existing quantization data types struggle
+group scale factors, resulting in substantial memory overhead.               to efficiently handle the distinct feature points arising in low-
+   Motivation I: Residual approximation mechanism leverag-                   bit weight-only and weight–activation quantization modes.
+ing light-tailed scale factor distributions. Under fine-grained              An effective data type plays a critical role in bridging quantiza-
+group-wise quantization, we observe that the distribution of scale           tion algorithms with efficient hardware execution while supporting
+factors exhibits light-tailed characteristics [32], as illustrated in        both weight-only and weight–activation quantization modes. How-
+Figure 5(c), which is derived from the weight scale factors of the           ever, as shown in Table 1, recent scalar data types typically focus
+Llama2-7B model. Moreover, we further observe that this light-               on one specific quantization mode. For example, mixed-precision
+tailed characteristic holds across most LLMs, reinforcing its validity       data types such as ANT [23] and OliVe [22] primarily target outlier
+as a general assumption. For the few models that do not strictly             handling in activations, with limited support for preserving salient
+exhibit this property, we can effectively approximate the less ideal         weights. In contrast, BitMoD [7] and Anda [19] focus on weight
+light-tailed distributions by adjusting the grouping granularity of          quantization, lacking mechanisms to protect the widespread out-
+the shared base scale factor and its residuals, thereby maintaining          liers in activations. While the MX [65] data format supports both
+low quantization error. A detailed error analysis is provided in             quantization modes via shared scale factor and exponent represen-
+Section 6.4. Notably, a similar trend is observed in VS-Quant [13],          tations, it incurs notable accuracy degradation.
+where the use of per-vector scale factors results in a concentrated             Motivation II: A unified data type that flexibly supports
+distribution, reducing the need for excessive bit-widths to represent        both weight-only and weight–activation quantization modes.
+rare extreme values. In the light-tailed distribution, most values           To bridge this gap, we propose a novel vectorized data type based
+cluster around the mean, and extreme values are relatively rare,             on a residual approximation mechanism. By decoupling shared
+indicating limited variation within coarse-grained groups. This mo-          scale representation from localized variations, the proposed for-
+tivates the residual approximation mechanism: instead of storing a           mat offers the flexibility needed to support both weight-only and
+separate scale factor for each fine-grained cluster, we introduce a          weight–activation quantization modes. In addition, it efficiently cap-
+shared parameter as the base scale factor to represent the central           tures local scale variations with minimal metadata and effectively
+
+
+
+
+                                                                     857
+                                                                                                                                                                               MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea
+
+
+
+                                                                  S1
+                                                                 S1
+     Cluster1                                                   S1                                                S6 S4 S2S1 S5          S3         S6 S4 S2S1 S5        S3                     S1                 S3                  2*R
+                                                                  S2                                                                     0
+     Cluster2                                                    S2                                                                                                      R                      S2                 S3                  2*R
+                                                                S2                                                    S3 = S3-0*R                          S5 = S3-1*R
+                                                                  S3
+                                                                 S3
+     Cluster3                                                   S3
+                                                                  S4
+                                                                 S4
+                                                                                                                                                                                                S3
+                                                                                                                                                                                                         ≈         S3
+                                                                                                                                                                                                                              +         0
+
+     Cluster4                                                   S4                                                                                                                              S4                 S3                  3*R
+                                                                  S5                                              S6 S4 S2S1 S5         S3          S6 S4 S2S1 S5         S3
+                                                                 S5                                                                    2R                                3R                     S5                 S3                  1*R
+     Cluster5                                                   S5
+                                                                  S6                                                 S2 = S3-2*R                       S4 = S3-3*R
+     Cluster6                                                    S6                                                  S1 = S3-2*R                       S6 = S3-3*R                              S6                 S3                  3*R
+                                                                S6
+                   Coarse-grained Group           Cluster Scale Factors                                   S3 is the base scale factor Encodings=[-3,-2,-1,0] Cluster scale factors ≈ Base scale factor + offset
+                                                                                                                                 (a)
+                                                                                                                      FP16 Matrix                 INT4 Matrix                 FP16 Matrix         Group size = 16
+       Scale             Residual    Encodings                  Elements
+                                                                                                                                                                  1    5    0    1                                                Cluster size = 4
+                                                                                                                        16.1 8181 1.1 1.1 17.1
+                                                                                                                                            17.1                                                        16 80 80 00 16  16
+    Fine-Grained Grouped Vectorized Data Type              Element 1
+                                                                                                                       16.1
+                                                                                                                     16.1    81 1.1      17.1                 11 55 00 11                            16
+                                                                                                                                                                                                       16
+                                                                                                                                                                                                            80   0    16
+
+
+
+                                                                          Cluster1 Cluster2 Cluster K/C
+                                                                                                                                                                                                                                    NormalValue or
+                                    Encoding                                                                                                                     -1    7    0    0                      -40 280 00 000
+                                                                                                                                                                                                             280    0
+                                                          ...
+
+
+                                                            C Elements                                                  -27.8280
+                                                                                                                              280 0.2 0.2 -1.8
+                                                                                                                                            -1.8
+                                                                                                                                                              -1-1 77 00 00
+                                                                                                                      -27.8                                                                           -40 280                        Salient Point
+                                                           Element C                                                 -27.8  280 0.2      -1.8                                                        -40
+     Shared Base Scale( )
+                                                                                                                        32.3   79     2.3   -16                   2    5    0    -1                     32 80 80 00 -16-16           Normal Outlier
+                                                         Element C+1
+                                                                                                                                                              22 55 00 -1-1
+                                                                                                                       32.3 7979 2.32.3 -16-16                                                         32
+                                                                                                                     32.3                                                             Dequant        32     80   0 -16
+                                                                                                                                                   Quant
+                                                                                                          Group
+                                    Encoding               C Elements                                                                                                                                                               Massive Outlier
+                                                         ...
+
+
+
+
+                S bits                                                                                                   88 -3.9
+                                                                                                                              -3.9 -3.6
+                                                                                                                                     -3.6 -7.2
+                                                                                                                                            -7.2                2 2 -1-1 -1-1 -2-2                     8 8 -4-4 -4-4 -8-8
+                                                         Element 2C                                                    8 -3.9 -3.6 -7.2                       2     -1   -1   -2                      8     -4   -4   -8
+                                                          ...
+
+
+
+
+      Shared Residual(R)        K/C Encodings
+                                              ...
+
+
+
+
+                                                         Element K-C
+                                    Encoding
+                                                          ...
+
+
+
+
+                                                           C Elements
+              R bits                                                                                                         =280/7=40               R=[     *4-(81+280+79+8)/7]/4/2=12         Encodings=[-2,0,-2,-3]        Scales=[16,40,16,4]
+                                                          Element K
+                                  E bits                                                                             Calculate Shared Scale                  Calculate Residual                 Calculate Enocdings          Calculate Cluster Scale
+    Total Bits = S + R + E * (K/C) + P * K bits          P bits
+                                                                                                                                1                                   2                                     3                                4
+                                      (b)                                                                                                                                                 (c)
+
+Figure 6: (a) Illustration of the proposed residual approximation mechanism, which models the distribution of cluster-wise scale factors
+using a shared group-wise base scale, a set of residuals, and compact per-cluster encodings. (b) Overview of the proposed fine-grained grouped
+vectorized data type. (c) A working example of the Amove quantization framework.
+
+mitigates the influence of salient points and outliers. A detailed                                                                            elaborates on the applicability of Amove data type to both low-bit
+discussion is provided in Section 4.3.                                                                                                        weight-only and weight-activation quantization modes.
+   Observation III: Mixed-precision quantization introduces
+hardware inefficiencies. By quantizing both weights and acti-                                                                                 4.1      Residual Approximation Mechanism
+vations to low bit widths, the memory footprint and bandwidth                                                                                 Overview. The residual approximation mechanism offers a novel
+requirements are significantly reduced, enabling more efficient exe-                                                                          approach to mitigate the memory overhead associated with fine-
+cution of compute-intensive operations. To mitigate the accuracy                                                                              grained group-wise quantization. This design is rooted in the ob-
+degradation caused by low-bit activation quantization, the state-                                                                             servation that, under fine-grained group-wise quantization, the
+of-the-art architectures such as ANT [23], OliVe [22], and M-ANT                                                                              distribution of scale factors tends to be light-tailed. This statistical
+[26] adopt mixed-precision computation (e.g., 4-bit weights and                                                                               characteristic creates an ideal condition for residual-based model-
+8-bit activations), as shown in Table 1. However, this 4/8-bit mixed                                                                          ing: when most values lie near the mean, the difference between
+computation scheme introduces additional hardware complexity                                                                                  the actual value and a shared reference (i.e., the base scale) is small
+and limits the reusability and throughput of compute units.                                                                                   and compressible. Hence, rather than storing every scale factor
+   Motivation III: Uniform low-bit quantization via data type                                                                                 explicitly, we encode only their deviations from a base value using
+and architecture co-design. To overcome the inefficiencies intro-                                                                             low-bit representations, significantly reducing memory overhead.
+duced by mixed-precision execution, Amove adopts a co-design of                                                                               Figure 6(a) visually depicts the workflow of this mechanism, which
+data type and hardware architecture, enabling both weights and                                                                                is central to the Amove quantization framework. First, a coarse-
+activations in attention and linear layers to be uniformly quan-                                                                              grained group is divided into multiple fine-grained clusters, each
+tized to 4 bits with negligible accuracy degradation. This design                                                                             assigned its own scale factor. In particular, the largest among them
+supports low-bit matrix multiplication, significantly reducing hard-                                                                          is selected as the base scale factor, which typically also serves as
+ware complexity and enhancing energy efficiency. The effectiveness                                                                            the scale factor for the entire coarse-grained group. Residuals are
+of this design is validated in both GPU tensor core and accelerator                                                                           then computed based on deviations from this base scale. Finally, a
+architectures, demonstrating broad applicability and substantial                                                                              lightweight encoding scheme is employed to work together with
+performance benefits. We detail these architectural advantages in                                                                             the shared residual and the base scale factor to reconstruct the scale
+Section 5.1 and Section 5.2.                                                                                                                  factor for each cluster. The flexibility of the mechanism, driven by
+                                                                                                                                              configurable parameters such as group size, cluster size, and encod-
+                                                                                                                                              ing bit-width, allows it to adapt to different quantization granularity
+4      Amove Quantization Framework                                                                                                           levels, achieving a delicate trade-off between improving model ac-
+In this section, we introduce the Amove quantization framework.                                                                               curacy and reducing the memory overhead.
+Section 4.1 introduces the residual approximation mechanism de-
+signed to achieve a balance between model accuracy and memory                                                                                 4.2      Data Type Adaptation
+overhead. Section 4.3 describes the proposed fine-grained grouped                                                                             Residual Approximation Algorithm. In the Amove quantization
+vectorized data type designed for LLM quantization. Section 4.2                                                                               framework, the shared residual plays a critical role in determining
+
+
+
+
+                                                                                                                                  858
+MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea                                                                                                                   Xilong Xie et al.
+
+
+ Algorithm 1: Residual Approximation Algorithm                                                                    4.3     Fine-Grained Grouped Vectorized Data Type
+     Input: A coarse-grained group matrix 𝐺; Encoding bit-width 𝐸;                                                Overview. Built upon the residual approximation mechanism, the
+            Quantization bit-width 𝑏; Cluster size 𝐶                                                              proposed Amove data type can be viewed as an extension of the
+     Output: Residual 𝑅                                                                                           MX data format, offering enhanced support for fine-grained quan-
+ 1   // Step 1: Partition into Clusters                                                                           tization. In contrast to the MX data format, which uses only a
+ 2   Divide 𝐺 into 𝐾 clusters { C1 , C2 , . . . , C𝐾 }, 𝐾 = |𝐺 |/𝐶;                                               shared scale for a group, the proposed format additionally intro-
+                                                                                                                  duces shared residuals and encodings. Figure 6(b) shows its overall
+ 3 // Step 2: Compute Cluster-wise Scales
+                                                                                                                  structure, which comprises a shared base scale, a shared residual, a
+ 4 for 𝑖 ← 1 to 𝐶 do
+                 (𝑖 )                                                                                             set of encodings, and a group of elements. Within this format, the
+ 5      // Let X 𝑓 denote the data within cluster C𝑖
+                                                                                                                  residual and the base scale factor are shared across the entire group,
+ 6       Compute scale factor for cluster C𝑖 as:                                                                  while each cluster is associated with a distinct encoding. Moreover,
+                              (𝑖 )
+                      max(|X 𝑓 |)
+ 7          Δ𝑖 =                     ;                                                                            this data type provides high flexibility and extensibility, as each
+                        2𝑏 −1 −1                                                                                  group can adopt any scalar data type, such as INT4, FP4, or emerg-
+ 8   // Step 3: Select Base Scale                                                                                 ing data types like M-ANT [26], which can further improve the
+ 9   Set base scale Δbase = max{Δ1 , . . . , Δ𝐶 };                                                                accuracy of quantized LLMs across different data types, as further
+10 // Step 4: Compute Residual                                                                                    discussed in Section 6.5.
+11 if 𝐺 is activation data then                                                                                       Quantization Process. The fine-grained grouped vectorized
+12      Compute residual as:                                                                                      data type introduces negligible computational overhead, making
+                                                                                                                  the quantization process relatively simple and performed according
+           𝑅 = 𝐶1·𝐸 𝐶 𝑖=1 |Δ𝑖 − Δbase |;
+                    Í
+13
+14 else                                                                                                           to the following equation:
+                                                                                                                                                                
+15      // 𝐺 is weight data                                                                                                                                 𝑋𝑐𝑖
+                                                                                                                        𝑆𝑐𝑖 = 𝑆𝑠ℎ𝑎𝑟𝑒𝑑 − 𝑅 · 𝐸𝑐𝑖 ; 𝑋𝑞𝑐𝑖 =           ; 𝑋ˆ𝑐𝑖 = 𝑋𝑞𝑐𝑖 · 𝑆𝑐𝑖 (3)
+           𝑅 = 𝐶1·𝐸 𝐶         − Δbase |;
+                    Í
+16                    𝑖=1 |Δ
+                          m 𝑖                                                                                                                               𝑆𝑐 𝑖
+                  Δ −Δ
+                j
+           𝑒𝑖 = 𝑖 𝑅 base , where 𝑒𝑖 ∈ −2𝐸 −1 − 1, 0 ;
+                                                  
+17                                                                                                                where 𝑆𝑐𝑖 denotes the scale factor of the 𝑖-th cluster, and 𝑆𝑠ℎ𝑎𝑟𝑒𝑑
+18       Define search range 𝑅 ∈ [𝑀, 𝑁 ] with search step 𝑄;                                                      is the shared base scale factor, also used as the group quantization
+19       Construct candidate set:                                                                                 scale and computed via Equation 1. 𝑅 is the residual from the ap-
+20         R = {𝑅 | 𝑅 = 𝑀 + 𝑘 · 𝑄, 𝑘 ∈ Z, 𝑀 ≤ 𝑅 ≤ 𝑁 };                                                            proximation algorithm and 𝐸𝑐𝑖 is the encoding for cluster 𝑖. 𝑋𝑞𝑐𝑖
+21       Compute optimal residual:                                                                                and 𝑋𝑐𝑖 denote the quantized and original FP16 values of the 𝑖-th
+22
+                           Í
+           𝑅 = arg min𝑅 ∈R 𝐶                             2
+                             𝑖=1 (Δ𝑖 − (Δbase − 𝑒𝑖 · 𝑅) ) ;
+                                                                                                                  cluster, respectively; ⌊·⌉ is the rounding function, and 𝑋ˆ𝑐𝑖 is the
+23   return 𝑅;                                                                                                    dequantized result. The compute flow of the proposed data type
+                                                                                                                  aligns with the MX format [65].
+                                                                                                                      Enabling Low-bit Weight-only and Weight–activation Quan-
+                                                                                                                  tization. In weight–activation quantization, both weights and ac-
+        Table 2: Comparison of scale factor memory overhead.                                                      tivations are converted into the fine-grained grouped vectorized
+       Method
+                           Scale/Residual         Encoding    Group   Cluster        Scale Factor                 data type, whereas in low-bit weight-only quantization, only the
+                             Bit-Width            Bit-Width    Size    Size           Avg. Bits
+                                                                                                                  weights are processed in this format. Specifically, quantization is
+     Group-Wise             𝑆 = 16(𝐹 𝑃16)            –           4      –                16/4 = 4
+     MX Format               𝑆 = 8(𝐹 𝑃8)             –           4      –                 8/4 = 2                 applied to weights along the channel dimension and activations
+  Amove-Aggressive     𝑆 = 8(𝐹 𝑃8), 𝑅 = 8(𝐹 𝑃8)      2         128      16      (8 + 8)/128 + 2/16 = 0.25
+ Amove-Conservative    𝑆 = 8(𝐹 𝑃8), 𝑅 = 8(𝐹 𝑃8)      2          32       4         (8 + 8)/32 + 2/4 = 1           across the token dimension. We consider two configurations.
+                                                                                                                        • Amove-Aggressive employs FP8 (E4M3) to represent both
+                                                                                                                          the shared base scale factor and residual. For linear layers,
+the offset between cluster scale factors and the base scale factor.                                                       it uses a group size of 128 and cluster size of 16 with 2-bit
+To minimize the loss between them, we propose a residual approx-                                                          encoding, resulting in an average memory overhead of 0.25
+imation algorithm, as detailed in Algorithm 1. Once fine-grained                                                          bits per value. For attention layers, a smaller group size of
+grouping is performed and the corresponding scale factors are                                                             32 and a cluster size of 4 are used; with the same encoding,
+computed, the base scale is selected to serve as a reference for                                                          the overhead increases to 1 bit per value.
+residual calculation. The residual computation strategy differs for                                                     • Amove-Conservative uses FP8 (E4M3) for both the shared
+activations and weights due to their distinct properties. Weights                                                         base scale factor and residual, with 32 values per group and
+are static and available before deployment, enabling offline quan-                                                        4 values per cluster for both weights and activations. This
+tization. A localized search within predefined bounds is used to                                                          configuration is applied to both linear and attention layers.
+minimize quantization error based on mean squared error (MSE)                                                             With 2-bit encoding per cluster, it incurs an average memory
+[10]. In contrast, activations are input-dependent, so we support                                                         overhead of 1 bit per value.
+both offline calibration and online quantization. The offline mode
+applies the same optimization as for weights, while the online mode                                               The two configurations of the proposed data type adopt different
+addresses potential distribution shifts between calibration and infer-                                            strategies for linear and attention layers, as existing studies [3,
+ence. Specifically, activation residuals are computed as the average                                              26, 28] have shown that attention layers pose greater challenges
+deviation between cluster-wise and base scale factors, significantly                                              for quantization compared to linear layers. The 𝑄𝐾 ⊤ operation
+reducing online overhead.                                                                                         often produces intermediate results with large dynamic ranges and
+
+
+
+
+                                                                                                            859
+                                                                                                                                                                                     MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea
+
+
+                        Streaming Multiprocessor(SM)                                                                                                                                                                                         input                                          PE
+                                                                                                                                                                                                Activation Buffer
+
+
+
+
+                                                                                                                                         Quantizer
+                                                                                                                                                                                                                                weight
+  Warp Scheduler      SIMD Dispatch Unit Operand Collector             Shared Memory                                                                                                                                                         *                               forward
+
+    LD/ST Unit                  Tensor Core                FP64            FP32           INT                                                                                       Amove Data Format Dispatcher                                                                   weight
+
+                                                                                                                                                                                                                                              +                  forward
+                                                                                                                                                                                                                                                                       input
+
+                      Register File                                Scale Factor Decoders                                                                                            PE      PE                   PE        PE                ACC                          to GIPU
+
+
+
+
+                                                                                                                                                     Amove Data Format Dispatcher
+    C               Amove Data Format              C
+
+
+
+
+                                                             Res
+                                                                                                                                                                                         GIPU                       GIPU
+                                                                                                                                                                                                       ...
+
+
+
+
+                                                                                                                                                                                                                                                                                            Group-data Immediate Process Unit (GIPU)
+                                                                    *
+
+
+                                                                                          +
+                                                                                                                                                                                                                                      Enc                  Off
+
+
+
+
+                                                                                                                                                                                                                                                                     Scale Factor Decoder
+                                                                                                        Off-Chip DRAM
+             Amove Data Format Dispatcher
+
+
+
+
+                                                             Enc
+                                                                               Base
+                                                                                                                                                                                    PE      PE                   PE        PE                 *
+
+
+
+
+                                                                                                                         Weight Buffer
+                                                                                            ×8
+  Matrix A Buffer    Matrix B Buffer     Matrix A Buffer
+
+
+
+
+                                                                                                                                                                                                                    ...
+
+
+
+                                                                                                                                                                                                                                    Share
+                                                                                                                                                                                           ...
+                                                            FP16    INT4    INT4   INT4   INT4                                                                                                  16×16 PE Tile
+                                                                                                                                                                                                                                             +
+                       Scale Factor                            ACC                                                                                                                  PE      PE                 PE          PE
+  DP DP DP DP                          DP DP DP DP
+ INT4 Thread Group      Decoders       INT4 Thread Group                                                                                                                             GIPU                           GIPU
+                                                                                      DP Unit
+                                                                                                                                                                                                      ...
+
+
+
+
+                                                                                                                                                                                                                                                                 Dequantization
+                                                                                                                                                                                                                                                       WScale
+                                                                                                                                                                                                                                     Value
+                                                                                                                                                                                                                                              AScale
+                     Dequantization                                          Dequantization                                                                                         PE      PE                 PE          PE
+                                                             WScale                                                                                                                                                                                    *
+                                                                                                                        Global
+                                                                           *
+                                                             AScale                                                                                                                                                                           *
+                                                                                                                         Ctrl
+
+                                                                                   *
+                       Write Back                             Value                        ×16
+                                                                                                                                                                                                 Output Buffer
+
+Figure 7: Illustration of GPU tensor core architecture extended to
+support the Amove quantization framework.                                                              Figure 8: Illustration of systolic array architecture extended to
+                                                                                                       support the Amove quantization framework.
+
+
+more outliers, while attention outputs involve multiple weighted
+aggregations where quantization errors can accumulate and amplify.                                     5                Amove Architecture
+Thus, more precise encoding is needed for attention layers.
+                                                                                                       In this section, we provide a detailed description of how Amove
+   Working Example. Figure 6(c) presents a working example of
+                                                                                                       can be efficiently integrated into GPU tensor core and accelerator
+the Amove quantization framework with a group size of 16 and a
+                                                                                                       architectures with only minimal hardware modifications.
+cluster size of 4. The process consists of four steps in total. First,
+the shared scale factor is computed using Equation 1. Then, the
+shared residual is derived based on the residual approximation                                         5.1                 GPU Tensor Core
+algorithm. Next, each cluster’s encoding is subsequently calculated                                    Microarchitecture Overview. With the growing adoption of group-
+using Equation 3, forming the fine-grained grouped vectorized data                                     wise quantization schemes, NVIDIA’s Blackwell [71] architecture
+type. Finally, the scale factor for each cluster is recovered and used                                 GPUs have incorporated native support for the MX data format [56].
+in the dequantization process to obtain the output matrix.                                             However, the current design offers limited flexibility in supporting
+   Memory Alignment Design. Both Amove-Aggressive and                                                  fine-grained quantization and scale factor handling. In this work, we
+Amove-Conservative maintain byte-aligned memory access. For                                            present an architectural enhancement of the tensor core to enable
+example, when both weights and activations are quantized to 3 bits                                     precise 4-bit weight–activation quantization while achieving high
+and stored separately, each group in Amove-Conservative consists                                       computational efficiency through a set of hardware optimizations.
+of 32 elements. The scale factors are represented using an 8-bit                                       As shown in Figure 7, we adopt the NVIDIA Ampere tensor core
+base scale and an 8-bit residual, and the quantized weights occupy                                     architecture (e.g., A100) [59, 64, 84] as our baseline and illustrate
+32 × 3 = 96 bits. The group is further divided into 4 clusters, each                                   the modified architecture integrated with the Amove framework.
+assigned a 2-bit encoding, totaling (32/4) × 2 = 16 bits. As a result,                                    Execution Pipeline with Residual-Based Scale Factor De-
+the total memory overhead per group is 8 + 8 + 96 + 16 = 128 bits.                                     coding. The proposed Amove tensor core architecture employs a
+The same configuration applies to activations. This demonstrates                                       structured five-stage pipeline optimized for low-bit matrix computa-
+that the proposed format supports byte-aligned memory access                                           tion, integrating the scale factor decoder directly into the execution
+regardless of the quantization bit-width.                                                              path. (1) Preload: Input data encoded in the Amove data format
+   Scale Factor Memory Overhead Analysis. Assuming a group                                             undergoes structured unpacking and is loaded into the register file.
+size of 𝐾 and using FP16 for the scale factor, the average additional                                  This stage decomposes the compact representation into base scale,
+memory overhead is 16/𝐾 bits per value. The MX data format em-                                         residual offset, encoding index, and quantized values, organizing
+ploys FP8 for the scale factor, reducing the overhead to 8/𝐾 bits per                                  them for parallel access by subsequent compute and decoding units.
+value. For the proposed fine-grained grouped vectorized data type,                                     (2) Dispatch: The quantized data is selectively routed to special-
+assuming a group size of 𝐾, a cluster size of 𝐶, bit-widths of 𝑅 and 𝑆                                 ized hardware modules according to the structure of the Amove data
+for the shared residual and base scale factor respectively, and 𝐵 bits                                 type. The base scale, residual, and encodings are sent to scale factor
+for the encoding of each cluster, the average additional memory                                        decoders, while the quantized integer elements are dispatched to
+overhead is given by (𝑅 +𝑆)/𝐾 +𝐵/𝐶. As shown in Table 2, when the                                      the DP units to perform matrix multiplications. (3) Computation:
+group size is set to 4, Amove-Conservative reduces the scale factor                                    Matrix multiplications are executed within the DP units, where
+memory overhead by 4× and 2× compared to group-wise quan-                                              each thread group performs parallel multiply-accumulate (MAC)
+tization and MX formats, respectively, while Amove-Aggressive                                          operations on quantized values. Simultaneously, the scale factor
+achieves reductions of 16× and 8×, respectively.                                                       decoders reconstruct per-cluster scale factors. (4) Dequantization:
+
+
+
+
+                                                                                                 860
+MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea                                                                                         Xilong Xie et al.
+
+
+The outputs of the matrix computation are combined with the de-                      Table 3: Customized Smma Instruction Format
+coded scale factors to produce the final outputs. (5) Write-back:            Field         Description
+The final computed outputs are transferred to off-chip memory.               Instruction   Smma.{𝑀}{𝑁 }{𝐾}.{𝐴𝑑𝑡 𝑦𝑝𝑒 }{𝑊𝑑𝑡 𝑦𝑝𝑒 }{𝑆 𝑓𝑑𝑡 𝑦𝑝𝑒 }{𝐴𝑐𝑐𝑑𝑡 𝑦𝑝𝑒 }{𝑂𝑑𝑡 𝑦𝑝𝑒 }
+                                                                             𝑀, 𝑁 , 𝐾      Matrix dimensions
+                                                                             𝐴𝑑𝑡 𝑦𝑝𝑒       Activation matrix data type
+5.2     Systolic Array                                                       𝑊𝑑𝑡 𝑦𝑝𝑒       Weight matrix data type
+Microarchitecture Overview. Figure 8 illustrates the enhanced                𝑆 𝑓𝑑𝑡 𝑦𝑝𝑒     Scale factor data type
+                                                                             𝐴𝑐𝑐𝑑𝑡 𝑦𝑝𝑒     Accumulation data type
+systolic array architecture [8, 33, 34] adopted in Amove, which ex-
+                                                                             𝑂𝑑𝑡 𝑦𝑝𝑒       Output matrix data type
+tends conventional designs to support Amove data types. To enable
+this, both the weight and activation buffers are redesigned to store
+the proposed data format and provide sufficient access bandwidth to
+the compute units. The dispatcher orchestrates the data movement
+by routing different components of the Amove data type to the ap-
+propriate computational paths. Specifically, the shared base scales,        higher-throughput data paths while maintaining computational
+residuals, and encodings are distributed to dedicated Group-data            precision. Furthermore, the local dequantization unit is suitable for
+Immediate Processing Units (GIPU), while the quantized integer              fused operations (e.g., LayerNorm and activation functions) [7], en-
+elements are sent to the PEs for matrix multiplication. The comput-         abling necessary numerical transformations without writing back
+ing unit consists of a 16 × 16 systolic array of tiles, where each tile     full-precision intermediate results.
+contains four PEs arranged in an output-stationary dataflow [68].
+   GIPU Design. Each PE tile integrates a GIPU composed of a
+scale factor decoder and a dequantization unit, which operate fol-
+                                                                            5.5      Lightweight Architectural Extension
+lowing the residual approximation mechanism. Notably, each GIPU             The Amove tensor core and systolic array adopt a minimal set of
+is shared across four PEs and supports vectorized dequantization            lightweight hardware extensions. In particular, a dedicated scale
+at a group size of 4, which corresponds to the quantization granu-          factor decoder and dequantization unit are integrated into the ar-
+larity adopted in the Amove data format. The scale factor decoder           chitecture to support the custom data format, while preserving the
+avoids a LUT-based approach, resulting in lower area overhead. To           original 4-bit multipliers in the datapath. To maintain numerical
+minimize pipeline stalls, the GIPU operates in a decoupled manner           fidelity during accumulation, only the accumulation registers are
+from the main compute datapath, enabling concurrent dequantiza-             upgraded to FP16, providing enhanced dynamic range and precision
+tion and matrix multiplication. Once dequantized, the results are           after dequantization. This design avoids large-scale restructuring of
+accumulated using FP16 precision to preserve numerical stability.           the compute pipeline and ensures maximal reuse of existing compu-
+                                                                            tation units, achieving compatibility with fine-grained quantization
+5.3     Overlapped Decoding and Computation                                 at negligible area overhead, as detailed in Section 6.3.
+To mitigate the latency overhead associated with scale factor decod-
+ing in fine-grained quantization, the Amove tensor core and systolic        5.6      Instruction and Programming Model
+array adopt a parallel decoding strategy that overlaps scale fac-           To enable programming with Amove, we introduce a customized
+tor recovery with matrix multiplication. Specifically, during the           Smma instruction set as an architectural extension to the standard
+computation stage, 4-bit quantized values are processed for MAC             MMA interface on GPUs [12, 69].
+operations, while dedicated decoders simultaneously decode the               Smma.{𝑀}{𝑁 }{𝐾}.{𝐴𝑑𝑡 𝑦𝑝𝑒 }{𝑊𝑑𝑡 𝑦𝑝𝑒 }{𝑆 𝑓𝑑𝑡 𝑦𝑝𝑒 }{𝐴𝑐𝑐𝑑𝑡 𝑦𝑝𝑒 }{𝑂𝑑𝑡 𝑦𝑝𝑒 }
+scale factors from compact representations of base scales, residuals,       Table 3 summarizes the meaning of each instruction field. 𝑀, 𝑁 ,
+and encoding bits. This design hides decoding latency within the            and 𝐾 specify the matrix dimensions. 𝐴𝑑𝑡 𝑦𝑝𝑒 denotes the data type
+compute phase, avoiding pipeline stalls. The regularity of the Amove        of the activation matrix, while 𝑊𝑑𝑡 𝑦𝑝𝑒 represents the weight for-
+data type and predictable operand access patterns further enable            mat. 𝑆 𝑓𝑑𝑡 𝑦𝑝𝑒 indicates the format of the scale factors. 𝐴𝑐𝑐𝑑𝑡 𝑦𝑝𝑒
+efficient streaming of scale factors in sync with MAC execution.            and 𝑂𝑑𝑡 𝑦𝑝𝑒 refer to the data types for accumulation and output,
+                                                                            respectively. The computation follows the form 𝑂 dtype [𝑀, 𝑁 ] =
+5.4     Tightly Coupled Per-Group Dequantization                            D (𝐴dtype [𝑀, 𝐾] ×𝑊dtype [𝐾, 𝑁 ], 𝑆 𝑓dtype ) + 𝐴𝑐𝑐 dtype [𝑀, 𝑁 ], where
+We introduce a tightly coupled per-group dequantization unit into           D (·) denotes the residual-based dequantization function. For the
+the tensor core and the systolic array, eliminating the impact of           compiler, the introduction of the Amove data type and Smma in-
+conventional global dequantization stages [48]. In traditional group-       struction requires awareness of the underlying data layout and
+wise or channel-wise quantization schemes, partial sums must be             instruction semantics. The compiler is responsible for managing
+decoded into floating-point format and transferred to subsequent            quantized operands and scale factors in the Amove format, and for
+processing modules after each MAC operation, thereby disrupt-               exposing appropriate APIs to the upper layers. The scale factor type
+ing dataflow continuity. In contrast, our design enables local scale        𝑆 𝑓𝑑𝑡 𝑦𝑝𝑒 encodes both precision and format, enabling fine-grained
+factor decoding within each PE tile or thread group, followed by            control and quantization-aware optimizations during code genera-
+immediate dequantization of MAC outputs that are directly con-              tion. For the programmer, these complexities are abstracted away.
+verted to floating-point representation for subsequent accumulation.        Model definitions remain unchanged, and matrix operations are
+This tightly coupled pathway removes pipeline stages and buffers            issued through high-level APIs that are automatically lowered to
+required by conventional dequantization approaches, achieving               Smma instructions with data transformations.
+
+
+
+
+                                                                      861
+                                                                                                     MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea
+
+
+
+            Seq = 1K               Seq = 8K             Seq = 64K
+                                                                               3-bit or 2-bit precision, while activations remain in FP16. Under this
+                                                                               setting, Amove-Aggressive introduces a scale factor overhead of
+                                                                               0.25 bits per value, whereas Amove-Conservative incurs an over-
+                                                                               head of 1 bit per value. Residual offsets are determined through
+                                                                               a search-based method (Section 4.1) over the range [−1, 1] with a
+                                                                               granularity of 0.01.
+                                                                                  Beyond co-design efforts, we demonstrate that Amove can be
+        A6000    RTX 4090      A6000    RTX 4090     A6000    RTX 4090         seamlessly integrated into existing software-only quantization opti-
+     Figure 9: Evaluation of end-to-end simulator accuracy.                    mizations and scalar data types to further reduce memory footprint
+                                                                               or improve model performance. We combine Amove with three
+                                                                               quantization methods and one scalar data type as follows:
+6 Evaluation
+                                                                                   • GPTQ [20] introduces a new one-shot weight quantization
+6.1 Experimental Methodology                                                         method based on approximate second-order information.
+LLM Benchmarks. To evaluate the accuracy of our Amove quanti-                      • AWQ [47] uses activation-aware strategies to selectively
+zation framework, we implement it in PyTorch [63] and test it on                     preserve weights influenced by high activation values.
+three widely used open-source LLMs: the Llama [72], OPT [83], and                  • OmniQuant [67] mitigates the impact of outliers by adap-
+Vicuna [9] families. All pretrained LLMs used in our experiments                     tively tuning the clipping threshold on a per-block basis.
+can be accessed via Hugging Face [30]. To assess the performance of                • M-ANT [26] proposes a mathematically adaptive numeric
+the quantized models, we employ three types of evaluation bench-                     type that supports diverse data distributions and enables
+marks. For generative tasks, we use the Wikitext2 [55] and C4 [18]                   heterogeneous computability for group-wise quantization.
+datasets, measuring performance with perplexity, where lower per-
+                                                                                  Hardware Baselines. For a fair comparison, we consider model
+plexity means better model accuracy. For discriminative tasks, we
+                                                                               accuracy with different precision architectures. The INT8 tensor
+use the Winogrande [66] and Piqa [2] datasets, evaluating perfor-
+                                                                               core and INT8 systolic array are used as baseline architectures,
+mance based on accuracy, where higher accuracy indicates better
+                                                                               while Amove-Aggressive and Amove-Conservative operate un-
+model accuracy. Moreover, the MMLU [25] benchmark is employed
+                                                                               der 4-bit precision. As shown in Table 4, Amove-Conservative
+to assess the zero-shot accuracy of the quantized LLMs.
+                                                                               achieves accuracy comparable to W8A8 at 4-bit precision, with an
+   Quantization Baselines. We compare the Amove quantization
+                                                                               average perplexity deviation of less than 0.5%. ANT is a mixed-
+framework with several existing quantization frameworks under
+                                                                               precision architecture with adaptive data types, which OliVe ex-
+both low-bit weight-only and weight–activation quantization modes,
+                                                                               tends by incorporating support for outlier–victim pairs. Tender
+including the following frameworks:
+                                                                               handles outliers by applying a shared scale factor across each chunk.
+    • ANT [23] packages multiple data types and selects among                  We follow the configurations reported in the original papers, us-
+      them to quantize tensors at channel/token granularity.                   ing 4/8-bit precision for ANT and OliVe, and 4-bit precision for
+    • OliVe [22] repurposes nearby normal values to encode and                 Tender. As shown in Tables 4, 5, and 6, these settings result in signifi-
+      retain outliers via an outlier-victim pairing strategy.                  cantly lower model accuracy than the 4-bit Amove-Aggressive and
+    • Tender [40] partitions activation channels into chunks and               Amove-Conservative. For GPU tensor cores, we evaluate Amove in
+      reorganizes them into groups such that adjacent groups share             comparison with baseline designs including INT8 tensor core, ANT,
+      scale factors derivable by a simple 1-bit shift.                         and OliVe. For accelerators, we compare Amove against the INT8
+    • INT-Sym [29] employs symmetric integer quantization, where               systolic array, ANT, OliVe, and Tender. Additionally, we evaluate
+      each group of 64 values shares an FP16 scale factor, intro-              LLM performance under varying sequence lengths (1K, 8K, and
+      ducing a memory overhead of 0.25 bits per element.                       64K) with a batch size of 1 to ensure a comprehensive analysis.
+    • MX [65] assigns an 8-bit metadata value as a shared exponent             For the 1K setting, the input length is set to 256 tokens and the
+      to each quantization group.                                              generation length to 768 tokens. For longer sequences (e.g., 8K and
+   We consider quantization for linear and attention layers. Among             64K), we maintain a 1:3 ratio between input and generation tokens.
+the baselines, ANT, OliVe, and Tender adopt channel/token-wise                    Hardware Implementation. As the hardware modifications in
+quantization, whereas INT-Sym and MX apply group-wise quan-                    Amove primarily target the computational pipeline, we implement
+tization with an associated scale factor overhead of 0.25 bits per             the design at the RTL level using Verilog HDL. The implemen-
+value. In contrast, our Amove framework supports two configura-                tation encompasses the PE array, weight/input/output buffers of
+tions, Amove-Aggressive and Amove-Conservative, described in                   the accelerator, as well as the thread groups, scale factor decoders,
+Section 4.2. For weight–activation quantization, both weights and              and dequantization modules within the tensor core. We use Synop-
+activations are quantized to 4 bits. ANT, OliVe, Tender, INT-Sym,              sys Design Compiler [38] to synthesize the design under a 45nm
+and MX apply quantization only to linear layers, whereas Amove                 technology [60] and report area and power results.
+supports quantization for both linear and attention layers. Specifi-              Additionally, to enable end-to-end simulation, we adopt two
+cally, Amove-Aggressive incurs 0.25 bits per value for linear layers           specialized simulators tailored for systolic array and tensor core
+and 1 bit for attention layers, whereas Amove-Conservative adopts              architectures, respectively. For GPU evaluation, we avoid using
+a uniform 1-bit scale factor overhead. For low-bit weight-only quan-           Accel-Sim [35] due to its prohibitively long simulation time for
+tization, only linear layers are quantized, with weights quantized to          LLM workloads—for instance, simulating a 10-second task on an
+
+
+
+
+                                                                         862
+MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea                                                                                                                                                           Xilong Xie et al.
+
+
+Table 4: Perplexity (↓) results of quantized LLMs on Wikitext2 and C4 datasets under low-bit weight-only and weight–activation quantization
+modes. W denotes weights, A denotes activations, and S represents the scale factor.
+                                    Model / Generative Tasks (PPL)                                                   OPT-6.7B           OPT-13B         Vicuna-7B-1.5    Vicuna-13B-1.5             Llama-7B         Llama2-7B
+     Scheme                     Method               Linear (W/A/S Bits)         Attention (W/A/S Bits)            Wiki      C4       Wiki       C4     Wiki     C4      Wiki        C4        Wiki        C4       Wiki      C4
+                                FP16                        16/16/0                      16/16/0                   10.86    11.74     10.13     11.19    6.78    8.55     5.95       7.78       5.68      7.08      5.47      6.97
+       Base
+                          INT8-SmoothQuant                   8/8/0                        8/8/0                    10.93    11.91     10.40     11.49    6.93    8.61     6.07       7.85       6.07      7.65      5.52      7.03
+                                ANT                          4/4/0                       16/16/0                   6E+3     4E+4      9E+3      4E+4    60.89    67.24   527.03     537.68     61.29      76.31    124.11    107.20
+                                OliVe                        4/4/0                       16/16/0                   39.17    59.26     65.44     69.97   97.22   144.92   93.12      139.41     32.10      66.72     43.99    84.78
+                               Tender                        4/4/0                       16/16/0                   13.58    13.72     16.79     16.38   71.66    67.86   64.83       64.11     23.86      45.21     36.47    66.13
+ Weight-Activation            INT-Sym                       4/4/0.25                     16/16/0                   12.00    13.86     10.95     12.15    7.92     9.73    6.68        9.19      6.69       7.90      6.60     8.24
+                               MX-FP4                       4/4/0.25                     16/16/0                   28.46    30.50     13.66     13.72    8.33    10.43    7.31       9.65       6.76      7.95       6.75     8.30
+                          Amove-Aggressive                  4/4/0.25                      4/4/1                    11.34    12.46     10.73     12.06   7.39     8.91     6.41       7.84      6.28       7.55      6.11      8.23
+                         Amove-Conservative                  4/4/1                        4/4/1                    11.00    12.02     10.38     11.51   7.01     8.59     6.10       7.81      5.98       7.51      5.73      7.01
+                                ANT                         3/16/0                       16/16/0                    5E+3    4E+4       4E+3     3E+4    4E+3    1E+5     28.75      32.18      396.08    542.60     2E+4     3E+4
+                              INT-Sym                      3/16/0.25                     16/16/0                   153.83   2E+4      204.13    1E+4    9.93    13.09    7.25       9.28        8.88     12.03      7.93     10.90
+                               MX-FP3                      3/16/0.25                     16/16/0                   249.30   2E+4      344.52    2E+4    11.21   15.43     8.54      10.99       9.47      12.67     8.86     12.00
+                          Amove-Aggressive                 3/16/0.25                     16/16/0                   18.21    24.36     23.37     23.87   8.14    10.13    6.78       8.44        7.12      8.76      6.73     8.50
+   Weight-Only           Amove-Conservative                 3/16/1                       16/16/0                   11.74    12.48     11.07     11.66   7.29    8.96     6.24       7.95        6.27      7.61      6.01     7.44
+   Quantization                 ANT                         2/16/0                       16/16/0                   2E+5     3E+6      8E+6      7E+7    1E+6    1E+6     3E+5       3E+5       2E+6       3E+6      1E+6     1E+6
+                              INT-Sym                      2/16/0.25                     16/16/0                   2E+4     3E+5      8E+5      4E+7    1E+5    8E+6     5E+4       1E+4       6E+4       5E+5      9E+6     8E+6
+                               MX-FP2                      2/16/0.25                     16/16/0                   8E+3     7E+4      5E+4      1E+6    1E+4    1E+4     1E+5       5E+4       2E+4       2E+4      9E+7     3E+4
+                          Amove-Aggressive                 2/16/0.25                     16/16/0                   1E+4     8E+3      4E+4      1E+5    1E+3    2E+4     8E+3       8E+3       1E+4       6E+3      5E+4     5E+4
+                         Amove-Conservative                 2/16/1                       16/16/0                   4E+3     3E+3      1E+3      9E+2    18.14   20.40    10.80      13.09      16.20      18.69     13.34    16.18
+                 *ANT [23], OliVe [22], and Tender [40] adopt channel/token-level granularity; INT-Sym [29] uses a group size of 64; the MX data format uses a group size of 32 following [65].
+
+
+
+Table 5: Accuracy results (↑) of quantized LLMs on WinoGrande                                                               Table 6: Zero-shot results (↑) on the MMLU benchmark under 4-bit
+and Piqa datasets under low-bit weight-only and weight–activation                                                           weight–activation quantization.
+quantization modes.
+                                                                                                                                                                                            MMLU (0-shot)
+                                                                                                                                     Model                 Method                                                           Avg.
+         Model / Discriminative Tasks (Accuracy)                  OPT-13B        Vicuna-7B-1.5     Llama2-7B                                                                     STEM       Hums Social Others
+    Scheme                 Method         L. Bits    Att. Bits   Wino    Piqa    Wino    Piqa    Wino      Piqa
+                                                                                                                                                             FP16                43.70      50.48      62.69      62.74     54.54
+                            FP16          16/16/0     16/16/0    65.19   75.90   67.64   77.09     69.06   79.11                                             ANT                 23.92      23.95      23.40      24.49     23.94
+      Base
+                      INT8-SmoothQuant     8/8/0       8/8/0     62.35   72.63   63.69   75.08     62.43   75.41
+                                                                                                                                                             OliVe               31.43      28.66      27.44      26.58     28.53
+                            ANT            4/4/0      16/16/0    49.25   52.45   53.51   65.51   49.17     58.49              Vicuna-13B-1.5
+                                                                                                                                                           INT-Sym               40.36      46.38      56.58      56.23     49.89
+                            OliVe          4/4/0      16/16/0    52.87   57.12   53.98   67.80   51.17     59.76                  W4A4
+Weight-Activation         INT-Sym         4/4/0.25    16/16/0    63.17   74.70   61.64   75.03   63.61     77.09
+                                                                                                                                                            MX-FP4               38.37      44.80      55.09      54.04     48.02
+  Quantization             MX-FP4         4/4/0.25    16/16/0    62.35   72.63   63.69   75.08   62.43     75.41                                       Amove-Aggressive          40.92      47.67      59.86      58.64     51.77
+                      Amove-Aggressive    4/4/0.25     4/4/1     63.93   75.24   64.25   75.73   63.75     77.28                                      Amove-Conservative         43.37      48.99      62.33      61.01     53.93
+                     Amove-Conservative    4/4/1       4/4/1     65.04   75.68   67.25   76.39   65.04     77.80
+                                                                                                                                                             FP16                34.10      39.34      47.71      45.99     41.79
+                            ANT            3/3/0      16/16/0    48.07   54.13   50.99   53.48   48.54     50.60
+                          INT-Sym         3/3/0.25    16/16/0    51.54   63.60   61.48   73.34   63.46     75.52
+                                                                                                                                                             ANT                 24.95      24.63      24.67      24.31     24.64
+                           MX-FP3         3/3/0.25    16/16/0    52.49   63.28   63.30   72.09   61.88     73.67                                             OliVe               25.78      25.34      25.54      24.98     25.41
+                                                                                                                                    Llama2-7B
+                      Amove-Aggressive    3/3/0.25    16/16/0    61.72   71.55   64.48   75.03   66.54     76.01                                           INT-Sym               30.95      28.71      35.29      33.59     32.14
+  Weight-Only        Amove-Conservative    3/3/1      16/16/0    65.13   75.08   67.17   76.58   67.01     77.68
+                                                                                                                                      W4A4
+                                                                                                                                                            MX-FP4               28.13      30.50      32.63      34.48     31.44
+  Quantization              ANT            2/2/0      16/16/0    51.14   51.52   48.62   52.17   49.33     53.81                                       Amove-Aggressive          32.64      32.90      41.05      38.46     36.26
+                          INT-Sym         2/2/0.25    16/16/0    50.04   52.83   51.07   52.34   49.96     53.21                                      Amove-Conservative         33.33      36.32      43.55      41.46     38.67
+                           MX-FP2         2/2/0.25    16/16/0    50.51   52.99   50.83   52.72   50.12     51.47
+                      Amove-Aggressive    2/2/0.25    16/16/0    51.22   53.18   50.93   54.79   51.42     53.86
+                     Amove-Conservative    2/2/1      16/16/0    56.99   58.71   54.30   65.29   54.85     66.00
+                                                                                                                             [74]. All accelerator designs are assessed under an equal compute
+A100 GPU can take up to 579 days and produce over 79TB of trace                                                              area constraint, each configured with a 256 KB activation buffer
+data [57]. Therefore, we extend [62] TimeLoop to model tensor                                                                and a 256 KB weight buffer, with both buffers modeled via CACTI.
+core behavior inspired by TB-STC [50] and LUT-Tensor Core [57]
+and extract cycle-level architectural insights such as thread groups,                                                        6.2        Accuracy Results
+memory access, and data reuse. At the same time, we account for                                                             PPL Evaluation on Generative Tasks. Perplexity (PPL) [4] is a
+the data transformation overhead introduced by the Amove data                                                               standard metric for generative language models, where lower values
+type to provide a more accurate estimation of performance im-                                                               indicate better next-token prediction and thus higher generative
+pacts. We use the Ramulator [37] and DRAMPower [5] to get the                                                               quality. We compare the impact of different methods on generative
+cycle-level evaluation and energy results of DRAM. We use CACTI                                                             tasks under both low-bit weight-only and weight–activation quan-
+[70] to obtain the area overhead of the on-chip buffer. Model accu-                                                         tization, as shown in Table 4. For weight–activation quantization,
+racy is assessed through end-to-end PyTorch-based inference using                                                           Amove supports full 4-bit quantization for both linear and attention
+quantized LLMs. As shown in Figure 9, our simulator achieves a                                                              layers, while ANT, OliVe, and Tender only quantize linear lay-
+mean absolute percentage error of 4.59% compared to real GPU                                                                ers. Benefiting from fine-grained quantization, Amove-Aggressive
+performance across various configurations on both A6000 and RTX                                                             and Amove-Conservative achieve lower PPL. For low-bit weight-
+4090 platforms. For accelerator evaluation, we modify the simulator                                                         only quantization, the Amove quantization framework still deliv-
+architecture proposed in BitMoD [7] to support our design. The                                                              ers strong performance. Notably, when weights are reduced to 2
+original BitMoD only supports weight quantization, and we ex-                                                               bits, baseline methods exhibit substantial degradation, whereas
+tend it to support the weight–activation quantization mode. DRAM                                                            Amove-Conservative maintains usable accuracy, highlighting its
+power is evaluated using the DDR4 model provided by DRAMSim3                                                                robustness in ultra-low-bit settings.
+
+
+
+
+                                                                                                                   863
+                                                                                                                                                   MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea
+
+
+
+
+                                        SeqLen=1K                                                          SeqLen=8K                                                             SeqLen=64K
+
+
+
+
+         OPT-6.7B    OPT-13B   Vicuna    Vicuna    Llama   Llama2    GeoMean   OPT-6.7B OPT-13B   Vicuna     Vicuna    Llama    Llama2                   OPT-6.7B OPT-13B      Vicuna    Vicuna     Llama        Llama2
+                                                                                                                                          GeoMean                                                                          GeoMean
+                               7B-1.5    13B-1.5    7B      7B                                    7B-1.5    13B-1.5      7B       7B                                           7B-1.5    13B-1.5     7B           7B
+
+
+                                                                    Figure 10: Speedup on GPU tensor core architecture.
+
+
+                                         SeqLen=1K                                                         SeqLen=8K                                                            SeqLen=64K
+
+
+
+
+          OPT-6.7B   OPT-13B   Vicuna     Vicuna   Llama   Llama2    GeoMean   OPT-6.7B OPT-13B   Vicuna    Vicuna    Llama    Llama2    GeoMean        OPT-6.7B   OPT-13B   Vicuna      Vicuna    Llama        Llama2    GeoMean
+                               7B-1.5    13B-1.5    7B      7B                                    7B-1.5    13B-1.5    7B       7B                                           7B-1.5      13B-1.5    7B           7B
+
+
+                                                                 Figure 11: Speedup of different hardware accelerators.
+
+
+   Accuracy Evaluation on Discriminative Tasks. Table 5 shows
+the performance of quantized models on discriminative tasks. In                                                                             OPT-6.7B                                               Llama-2-7B
+                                                                                                                                  1K               8K              64K                  1K               8K               64K
+the weight–activation quantization and low-bit weight-only quanti-
+zation, Amove achieves higher accuracy. Amove-Conservative ex-
+hibits an average of less than 2% accuracy degradation under 4-bit
+weight–activation quantization and 3-bit weight-only quantization.
+Under 2-bit weight-only quantization, some accuracy degradation
+is observed, but it remains smaller than that of other methods.
+   Accuracy Evaluation on Zero-Shot Tasks. Table 6 presents
+the zero-shot performance on the MMLU benchmark under 4-bit                                                                                                              (a)
+                                                                                                                                            OPT-6.7B                                               Llama-2-7B
+weight–activation quantization. Amove-Conservative achieves av-
+                                                                                                                                  1K               8K              64K                  1K                 8K               64K
+erage accuracy of 53.93% on Vicuna-1.5-13B and 38.67% on Llama2-
+7B, maintaining performance within 3% of FP16. Amove-Aggressive
+also delivers strong results, reaching 51.77% and 36.26% respectively,
+outperforming all baselines.
+
+
+6.3    GPU and Accelerator Performance
+GPU Performance and Energy. Figure 10 presents the speedup                                                                                                               (b)
+comparisons of Amove and other quantization methods on GPU
+tensor core, showing that Amove achieves the best overall perfor-                                             Figure 12: (a) Energy consumption breakdown of GPU tensor core
+                                                                                                              architecture. (b) Energy consumption breakdown of different hard-
+mance. On average, Amove-Conservative achieves 4.21×, 2.19×,
+                                                                                                              ware accelerators.
+and 1.69× speedups over INT8, ANT, and OliVe, respectively, while
+Amove-Aggressive achieves even higher speedups of 5.23×, 2.72×,                                               only linear layers, Amove quantizes both linear and attention layers,
+and 2.13×. Moreover, the performance gains of Amove become more                                               resulting in significantly higher acceleration under long-context
+pronounced with increasing input sequence lengths, attributed                                                 scenarios. Figure 12(a) presents the normalized energy breakdown
+to the growing dominance of attention computation in the over-                                                across different GPU tensor core architectures, decomposed into
+all runtime for longer inputs. Unlike other methods that quantize                                             off-chip memory access, on-chip buffer access, and computation.
+
+
+
+
+                                                                                                   864
+MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea                                                                                               Xilong Xie et al.
+
+
+
+
+                                                                                                              OPT-6.7B               Llama2-7B                 Bloom-3B
+                                                                                                            Kurtosis≈2.77           Kurtosis≈2.60             Kurtosis≈3.31
+
+
+
+
+                     Thread Group                                      PE
+
+Figure 13: Normalized area and power of Amove and baseline INT4                              Figure 14: Amove weight scale factor fitting error across multiple
+thread group and PE.                                                                         LLMs under different residual group sizes, based on the light-tailed
+                                                                                             distribution assumption.
+Table 7: Area comparison of Amove and baseline INT4 tensor core
+and INT4 systolic array at 500 MHz.
+                                                             Area (𝑚𝑚 2 )
+      Architecture             Setup
+                                               Buffer       Core Total Over Baseline
+    Int4 Tensor Core      64 thread groups                  0.269   2.585      –
+  Amove Tensor Core       64 thread groups                  0.311   2.627   1.62%
+                                             256KB, 2.316
+   Int4 Systolic Array       32 × 32 PEs                    0.163   2.479      –
+ Amove Systolic Array        32 × 32 PEs                    0.191   2.507   1.13 %
+
+
+
+
+On average, Amove-Conservative reduces energy consumption by                                 Figure 15: Layer-wise scale factor fitting error of Amove on Wikitext2
+                                                                                             in OPT-6.7B, resulting from the light-tailed distribution assumption
+2.33×, 1.71×, and 1.33× compared to INT8, ANT, and OliVe, respec-
+                                                                                             under different residual group sizes.
+tively. Amove-Aggressive achieves energy reduction up to 3.03×,
+2.22×, and 1.70×. Among the three components, off-chip memory
+access dominates total energy consumption, and it grows with                                 greater than 3 due to the presence of more outliers [77]. However,
+sequence length due to more frequent DRAM accesses.                                          we observe that as the residual group size decreases, our residual
+   Accelerator Performance and Energy. Figure 11 compares                                    approximation mechanism remains effective in modeling distri-
+the performance of Amove against various quantization approaches                             butions that deviate from the ideal light-tailed assumption. This
+on the accelerator. Amove consistently achieves the best overall per-                        demonstrates that Amove is robust to variations across model fami-
+formance across all baselines. On average, Amove-Conservative                                lies and quantization scenarios, maintaining approximation quality
+delivers speedups of 6.01×, 4.51×, 3.14×, and 2.27× over INT8, ANT,                          under both favorable and less favorable statistical conditions.
+OliVe, and Tender, respectively, while Amove-Aggressive achieves                                Scale Factor Analysis on Different Layers. Figure 15 presents
+greater speedups of 6.95×, 5.22×, 3.63×, and 2.67×. In terms of en-                          the layer-wise fitting error of the residual approximation mecha-
+ergy efficiency, Amove-Conservative reduces energy consumption                               nism on the OPT-6.7B model using the Wikitext2 dataset under
+by 2.27×, 1.91×, 1.45×, and 1.18× compared to the same baselines.                            different residual group sizes. It can be observed that the errors
+Amove-Aggressive achieves energy reductions of 3.23×, 2.71×,                                 in the early and late layers are slightly higher than those in the
+2.07×, and 1.68× over INT8, ANT, OliVe, and Tender, respectively.                            middle layers, primarily due to the larger numerical fluctuations
+   Area and Power. As shown in Table 7, both the baseline INT4                               in the early and late layers of the model. However, as the residual
+tensor core and the Amove tensor core are configured with 64 thread                          group size decreases, the overall fitting error gradually reduces. This
+groups, while both the baseline and Amove INT4 systolic array adopt                          demonstrates that by flexibly adjusting the residual group granu-
+a 32×32 PE configuration. To enable fine-grained quantization, the                           larity, the fitting error can be effectively controlled across different
+Amove tensor core introduces only a 1.62% area overhead, and the                             layers, enabling more precise quantization approximation. More-
+Amove systolic array incurs merely a 1.13% overhead. In addition,                            over, the results suggest that Amove can adapt to heterogeneous
+as shown in Figure 13, we compare the area and power overhead of                             layer characteristics, ensuring consistent approximation quality
+Amove’s thread groups and PEs under different precision settings,                            and preserving accuracy across the full depth of the model.
+using the INT8 configuration as the baseline. Compared to INT4
+thread groups, Amove incurs an 11.7% increase in area and a 12.9%                            6.5    Integration with Amove
+increase in power. For the PE, Amove exhibits a 16.2% increase in area                       Since Amove introduces a novel vectorized data type tailored for
+and a 17.1% increase in power relative to the INT4 configuration.                            quantization granularity, it can be integrated into existing advanced
+                                                                                             quantization algorithms. Moreover, it can interoperate with ex-
+6.4      Sensitivity Analysis                                                                isting advanced scalar formats, leading to enhanced accuracy in
+   Scale Factor Analysis on Different Models. Figure 14 shows                                quantized LLMs. We validate the compatibility and effectiveness
+the distribution of weight scale factors when different models are                           of Amove by integrating it into three representative quantization
+quantized to 4 bits. We compute the kurtosis [1, 41] for each model,                         algorithms—GPTQ [20], AWQ [47], and OmniQuant [67]—and the
+where a kurtosis value below 3 indicates a tendency toward a light-                          emerging scalar data type M-ANT [26]. To facilitate integration,
+tailed distribution [15]. For models such as Llama2-7B and OPT-6.7B,                         Amove is designed as a modular data representation layer that can
+the distributions are more light-tailed, allowing the Amove data type                        be seamlessly inserted into existing quantization pipelines without
+to achieve accurate approximation by sharing a residual and base                             altering their core logic. For example, in GPTQ, AWQ, and Omni-
+scale across 128 values. In contrast, Bloom-3B exhibits a kurtosis                           Quant, the scalar-based weight representation is replaced with the
+
+
+
+
+                                                                                       865
+                                                                                                                              MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea
+
+
+Table 8: Comparison of Wikitext2 and C4 perplexity results for                                           AWQ [47], and FineQ [78] primarily focus on weight compression,
+various software quantization methods and their Amove-integrated                                         while approaches like SmoothQuant [77] and DuQuant [46] support
+counterparts under the same bit-width.
+                                                                                                         quantization of both weights and activations. In addition, vector
+         Model(PPL)              OPT-1.3B      OPT-6.7B     Llama-7B     Llama3-8B
+      Method        Avg. Bits   Wiki   C4     Wiki   C4     Wiki C4     Wiki    C4
+                                                                                      Mean △ PPL         quantization techniques [45, 53] have also been explored to bet-
+       FP16            16       14.62 14.72   10.86 11.74   5.68 7.08   6.14   8.88        0             ter capture correlations across dimensions and further enhance
+    GPTQ(g=64)        3.25      18.96 15.89   11.29 12.19   6.43 8.04   7.72 12.82       1.70
+    AWQ(g=64)         3.25      16.79 17.30   11.54 12.94   6.55 8.25   8.73 12.80       1.90            compression efficiency. However, these approaches often rely on
+  Omniquant(g=64)
+   GPTQ + Amove
+                      3.25
+                      3.25
+                                15.99 16.56
+                                18.32 15.81
+                                              11.48 12.65
+                                              11.20 12.17
+                                                            6.30 7.83
+                                                            6.31 7.94
+                                                                        10.17 13.17
+                                                                        7.63 12.33
+                                                                                         1.80
+                                                                                         1.50
+                                                                                                         complex techniques, which may limit the hardware efficiency. In
+   AWQ + Amove        3.25      16.53 16.75   11.36 12.69   6.57 7.92   8.61 12.04       1.59            contrast, Amove serves as an orthogonal optimization framework
+ Omniquant + Amove    3.25      15.89 16.34   11.44 12.56   6.16 7.77   8.64 11.62       1.34
+                                                                                                         that emphasizes lightweight design and strong hardware compati-
+                                                                                                         bility. It not only integrates seamlessly with existing quantization
+Table 9: Wikitext2 and C4 perplexity comparison between M-ANT                                            algorithms but also enhances their effectiveness, thereby improving
+and Amove-integrated counterparts at equal bit widths.                                                   both inference accuracy and efficiency in practical deployment.
+       Model(PPL)                  OPT-6.7B          OPT-13B       Llama-7B
+                                                                                  Mean △ PPL
+                                                                                                            Quantization Data Type and Architecture Co-Design. Sev-
+    Method      Avg. Bits         Wiki   C4        Wiki    C4      Wiki C4
+                                                                                                         eral data type and architecture co-design efforts have been proposed
+     FP16          16             10.86 11.74      10.13 11.20     5.68 7.08             0
+  M-ANT(g=64)     4.25            11.29 12.33      10.62 12.01     6.09 7.63           0.55              to better exploit the performance benefits of quantization. ANT
+ M-ANT + Amove    4.25            11.14 12.26      10.45 11.90     6.06 7.52           0.44              [23] adaptively selects different data types for quantizing weights.
+                                                                                                         OliVe [22] introduces Outlier and Victim Pair encoding to reduce
+                                                                                                         quantization error. Figna [31] leverages hierarchical numeric for-
+Amove vectorized format, accompanied by corresponding adjust-                                            mats for adaptive precision. Spark [49] introduces interval-based
+ments to packing and unpacking procedures. The entire integration                                        data types for reducing quantization error. M-ANT [26] proposes a
+is implemented in PyTorch using vectorized operations, avoiding                                          mathematically adaptive numeric type that accommodates group-
+the need for custom CUDA kernels or hardware-specific modifi-                                            wise quantization. BitMoD [7] introduces fine-grained data type
+cations. This software-only approach ensures broad compatibility                                         adaptation by using different numerical types to quantize groups
+with mainstream toolchains and facilitates reproducibility across                                        of weights (e.g., 128 elements). Anda [19] employs an adaptive data
+different quantization frameworks. Moreover, it lowers the barrier                                       format with group-shared exponent bits and dynamic mantissa bit
+for adoption, as developers can directly integrate Amove into exist-                                     allocation. Collectively, these works demonstrate a trend toward
+ing codebases with minimal changes, while still benefiting from                                          designing specialized data types that tightly couple algorithmic rep-
+improved accuracy and efficiency.                                                                        resentation with hardware pathways, highlighting the importance
+    Orthogonal to Quantization Algorithms. The original ver-                                             of data type innovation for pushing quantization further. However,
+sions of GPTQ, AWQ, and OmniQuant support both symmetric                                                 most of these designs are tailored for either low-bit weight-only or
+and asymmetric quantization modes [7]. For a fair comparison, we                                         weight–activation quantization. In contrast, Amove is orthogonal
+configure all three methods to use symmetric quantization, where                                         to these designs and can be integrated with them to support both
+weights are quantized to 3 bits and activations are kept in FP16                                         low-bit weight-only and weight–activation quantization modes.
+precision. When applying group-wise quantization, all methods
+adopt a consistent group size of 64 and use FP16 to represent the
+scale factors, resulting in an average bit-width of 3.25 bits. The
+                                                                                                         8   Conclusion
+integration requires only replacing their scalar weight format with                                      We present Amove, a data type and architecture co-design frame-
+the Amove representation, keeping the overall memory footprint                                           work for efficient low-bit quantization of LLMs. We introduce a
+unchanged. Table 8 reports the results after integration. The exper-                                     residual approximation mechanism to reduce the memory overhead
+iments show that incorporating Amove consistently improves the                                           of fine-grained quantization, enabling accurate low-bit weight-only
+accuracy of the quantized models under the same average bit-width,                                       and weight–activation quantization in a unified design. A fine-
+achieving approximately a 25% reduction in perplexity on average.                                        grained grouped vectorized data type is proposed to preserve salient
+    Orthogonal to Quantization Scalar Data Type. M-ANT intro-                                            points and outliers. Amove enables fully low-bit matrix multiplica-
+duces a scalar data type for LLM quantization. For a fair comparison,                                    tion and high-performance inference, achieving up to 2.13× speedup
+we standardize all experimental settings. Since M-ANT primarily                                          and 1.70× energy reduction on GPUs, and up to 2.67× speedup and
+targets weight–activation quantization, we apply Amove in the same                                       1.68× energy reduction on accelerators across multiple LLMs.
+setting, quantizing both weights and activations to 4 bits. This align-
+ment allows us to directly assess the impact of data type design                                         Acknowledgments
+while controlling for memory overhead. As shown in Table 9, Amove                                        We appreciate the valuable feedback and constructive suggestions
+integrates seamlessly with M-ANT and reduces perplexity by over                                          provided by the anonymous reviewers of MICRO 2025. This work
+20% under the same memory overhead.                                                                      was supported in part by the National Key R&D Program of China
+                                                                                                         under Grant No. 2023YFB4503100; in part by the National Natural
+7     Related Work                                                                                       Science Foundation of China under Grants 62272026 and 62104014;
+LLM Quanzation Algorithms. Numerous studies [20, 27, 36, 39,                                             in part by the Fundamental Research Funds for the Central Univer-
+47, 61, 77, 82] have proposed various quantization algorithms aimed                                      sities, China under Grant No. YWF-23-Q-1015; in part by State Key
+at compressing LLMs to extremely low bit-widths for improved                                             Laboratory of Complex & Critical Software Environment under
+inference performance. Among them, methods such as GPTQ [20],                                            Grant No. CCSE-2024ZX-10.
+
+
+
+
+                                                                                                   866
+MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea                                                                                                          Xilong Xie et al.
+
+
+References                                                                                        low-bit deep neural network quantization. In 2022 55th IEEE/ACM International
+ [1] Mohammad Sadegh Akhondzadeh, Aleksandar Bojchevski, Evangelos Eleftheriou,                   Symposium on Microarchitecture (MICRO). IEEE, 1414–1433.
+     and Martino Dazzi. 2025. KurTail: Kurtosis-based LLM Quantization. arXiv                [24] Pouya Haghi, Chunshu Wu, Zahra Azad, Yanfei Li, Andrew Gui, Yuchen Hao,
+     preprint arXiv:2503.01483 (2025).                                                            Ang Li, and Tony Tong Geng. 2024. Bridging the Gap Between LLMs and LNS
+ [2] Yonatan Bisk, Rowan Zellers, Jianfeng Gao, Yejin Choi, et al. 2020. Piqa: Reasoning          with Dynamic Data Format and Architecture Codesign. In 2024 57th IEEE/ACM
+     about physical commonsense in natural language. In Proceedings of the AAAI                   International Symposium on Microarchitecture (MICRO). IEEE, 1617–1631.
+     conference on artificial intelligence, Vol. 34. 7432–7439.                              [25] Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn
+ [3] Yelysei Bondarenko, Markus Nagel, and Tijmen Blankevoort. 2023. Quantizable                  Song, and Jacob Steinhardt. 2020. Measuring massive multitask language under-
+     transformers: Removing outliers by helping attention heads do nothing. Advances              standing. arXiv preprint arXiv:2009.03300 (2020).
+     in Neural Information Processing Systems 36 (2023), 75067–75096.                        [26] Weiming Hu, Haoyan Zhang, Cong Guo, Yu Feng, Renyang Guan, Zhendong
+ [4] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan,                       Hua, Zihan Liu, Yue Guan, Minyi Guo, and Jingwen Leng. 2025. M-ANT: Efficient
+     Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda                   Low-bit Group Quantization for LLMs via Mathematically Adaptive Numerical
+     Askell, et al. 2020. Language models are few-shot learners. Advances in neural               Type. arXiv preprint arXiv:2502.18755 (2025).
+     information processing systems 33 (2020), 1877–1901.                                    [27] Wei Huang, Yangdong Liu, Haotong Qin, Ying Li, Shiming Zhang, Xianglong Liu,
+ [5] Karthik Chandrasekar, Christian Weis, Yonghui Li, Benny Akesson, Norbert                     Michele Magno, and Xiaojuan Qi. 2024. Billm: Pushing the limit of post-training
+     Wehn, and Kees Goossens. 2012. DRAMPower: Open-source DRAM power &                           quantization for llms. arXiv preprint arXiv:2402.04291 (2024).
+     energy estimation tool. URL: http://www. drampower. info 22 (2012).                     [28] Xijie Huang, Zhiqiang Shen, Pingcheng Dong, and Kwang-Ting Cheng. 2023.
+ [6] Yupeng Chang, Xu Wang, Jindong Wang, Yuan Wu, Linyi Yang, Kaijie Zhu, Hao                    Quantization Variation: A New Perspective on Training Transformers with Low-
+     Chen, Xiaoyuan Yi, Cunxiang Wang, Yidong Wang, et al. 2024. A survey on                      Bit Precision. arXiv preprint arXiv:2307.00331 (2023).
+     evaluation of large language models. ACM transactions on intelligent systems and        [29] Benoit Jacob, Skirmantas Kligys, Bo Chen, Menglong Zhu, Matthew Tang, Andrew
+     technology 15, 3 (2024), 1–45.                                                               Howard, Hartwig Adam, and Dmitry Kalenichenko. 2018. Quantization and
+ [7] Yuzong Chen, Ahmed F AbouElhamayed, Xilai Dai, Yang Wang, Marta Andronic,                    training of neural networks for efficient integer-arithmetic-only inference. In
+     George A Constantinides, and Mohamed S Abdelfattah. 2024. BitMoD: Bit-serial                 Proceedings of the IEEE conference on computer vision and pattern recognition.
+     Mixture-of-Datatype LLM Acceleration. arXiv preprint arXiv:2411.11745 (2024).                2704–2713.
+ [8] Yu-Hsin Chen, Tushar Krishna, Joel S Emer, and Vivienne Sze. 2016. Eyeriss:             [30] Shashank Mohan Jain. 2022. Hugging face. In Introduction to transformers for
+     An energy-efficient reconfigurable accelerator for deep convolutional neural                 NLP: With the hugging face library and models to solve problems. Springer, 51–67.
+     networks. IEEE journal of solid-state circuits 52, 1 (2016), 127–138.                   [31] Jaeyong Jang, Yulhwa Kim, Juheun Lee, and Jae-Joon Kim. 2024. Figna: Integer
+ [9] Wei-Lin Chiang, Zhuohan Li, Ziqing Lin, Ying Sheng, Zhanghao Wu, Hao Zhang,                  unit-based accelerator design for fp-int gemm preserving numerical accuracy. In
+     Lianmin Zheng, Siyuan Zhuang, Yonghao Zhuang, Joseph E Gonzalez, et al. 2023.                2024 IEEE International Symposium on High-Performance Computer Architecture
+     Vicuna: An open-source chatbot impressing gpt-4 with 90%* chatgpt quality. See               (HPCA). IEEE, 760–773.
+     https://vicuna. lmsys. org (accessed 14 April 2023) 2, 3 (2023), 6.                     [32] Chunxu Ji and Amber L Puha. 2025. Heavy traffic scaling limits for shortest
+[10] Davide Chicco, Matthijs J Warrens, and Giuseppe Jurman. 2021. The coefficient                remaining processing time queues with light tailed processing time distributions.
+     of determination R-squared is more informative than SMAPE, MAE, MAPE, MSE                    Queueing Systems 109, 1 (2025), 1–58.
+     and RMSE in regression analysis evaluation. Peerj computer science 7 (2021),            [33] Norman P Jouppi, Cliff Young, Nishant Patil, David Patterson, Gaurav Agrawal,
+     e623.                                                                                        Raminder Bajwa, Sarah Bates, Suresh Bhatia, Nan Boden, Al Borchers, et al. 2017.
+[11] Aakanksha Chowdhery, Sharan Narang, Jacob Devlin, Maarten Bosma, Gaurav                      In-datacenter performance analysis of a tensor processing unit. In Proceedings of
+     Mishra, Adam Roberts, Paul Barham, Hyung Won Chung, Charles Sutton, Se-                      the 44th annual international symposium on computer architecture. 1–12.
+     bastian Gehrmann, et al. 2023. Palm: Scaling language modeling with pathways.           [34] Dongyun Kam, Myeongji Yun, Sunwoo Yoo, Seungwoo Hong, Zhengya Zhang,
+     Journal of Machine Learning Research 24, 240 (2023), 1–113.                                  and Youngjoo Lee. 2024. Panacea: Novel DNN Accelerator using Accuracy-
+[12] Cu Cui. 2024. Acceleration of tensor-product operations with tensor cores. ACM               Preserving Asymmetric Quantization and Energy-Saving Bit-Slice Sparsity. arXiv
+     Transactions on Parallel Computing 11, 4 (2024), 1–24.                                       preprint arXiv:2412.10059 (2024).
+[13] Steve Dai, Rangha Venkatesan, Mark Ren, Brian Zimmer, William Dally, and                [35] Mahmoud Khairy, Zhesheng Shen, Tor M Aamodt, and Timothy G Rogers. 2020.
+     Brucek Khailany. 2021. Vs-quant: Per-vector scaled quantization for accurate                 Accel-sim: An extensible simulation framework for validated gpu modeling. In
+     low-precision neural network inference. Proceedings of Machine Learning and                  2020 ACM/IEEE 47th Annual International Symposium on Computer Architecture
+     Systems 3 (2021), 873–884.                                                                   (ISCA). IEEE, 473–486.
+[14] Bita Darvish Rouhani, Ritchie Zhao, Venmugil Elango, Rasoul Shafipour, Mathew           [36] Minsu Kim, Seongmin Hong, RyeoWook Ko, Soongyu Choi, Hunjong Lee, Junsoo
+     Hall, Maral Mesmakhosroshahi, Ankit More, Levi Melnick, Maximilian Golub,                    Kim, Joo-Young Kim, and Jongse Park. 2025. Oaken: Fast and Efficient LLM
+     Girish Varatkar, et al. 2023. With shared microexponents, a little shifting goes a           Serving with Online-Offline Hybrid KV Cache Quantization. In Proceedings of
+     long way. In Proceedings of the 50th Annual International Symposium on Computer              the 52nd Annual International Symposium on Computer Architecture. 482–497.
+     Architecture. 1–13.                                                                     [37] Yoongu Kim, Weikun Yang, and Onur Mutlu. 2015. Ramulator: A fast and exten-
+[15] Lawrence T DeCarlo. 1997. On the meaning and use of kurtosis. Psychological                  sible DRAM simulator. IEEE Computer architecture letters 15, 1 (2015), 45–49.
+     methods 2, 3 (1997), 292.                                                               [38] Pran Kurup and Taher Abbasi. 1997. Logic synthesis using Synopsys®. Springer
+[16] Yihe Deng, Pan Lu, Fan Yin, Ziniu Hu, Sheng Shen, Quanquan Gu, James Y Zou,                  Science & Business Media.
+     Kai-Wei Chang, and Wei Wang. 2024. Enhancing large vision language models               [39] Changhun Lee, Jungyu Jin, Taesu Kim, Hyungjun Kim, and Eunhyeok Park. 2024.
+     with self-training on image comprehension. Advances in Neural Information                    Owq: Outlier-aware weight quantization for efficient fine-tuning and inference
+     Processing Systems 37 (2024), 131369–131397.                                                 of large language models. In Proceedings of the AAAI Conference on Artificial
+[17] Tim Dettmers, Mike Lewis, Younes Belkada, and Luke Zettlemoyer. 2022. LLM.                   Intelligence, Vol. 38. 13355–13364.
+     int8 (): 8-bit Matrix Multiplication for Transformers at Scale. CoRR abs/2208.07339     [40] Jungi Lee, Wonbeom Lee, and Jaewoong Sim. 2024. Tender: Accelerating Large
+     (2022).                                                                                      Language Models via Tensor Decomposition and Runtime Requantization. arXiv
+[18] Jesse Dodge, Maarten Sap, Ana Marasović, William Agnew, Gabriel Ilharco, Dirk                preprint arXiv:2406.12930 (2024).
+     Groeneveld, Margaret Mitchell, and Matt Gardner. 2021. Documenting large                [41] Janghwan Lee, Jiwoong Park, Jinseok Kim, Yongjik Kim, Jungju Oh, Jinwook
+     webtext corpora: A case study on the colossal clean crawled corpus. arXiv preprint           Oh, and Jungwook Choi. 2024. AMXFP4: Taming Activation Outliers with
+     arXiv:2104.08758 (2021).                                                                     Asymmetric Microscaling Floating-Point for 4-bit LLM Inference. arXiv preprint
+[19] Chao Fang, Man Shi, Robin Geens, Arne Symons, Zhongfeng Wang, and Marian                     arXiv:2411.09909 (2024).
+     Verhelst. 2024. Anda: Unlocking Efficient LLM Inference with a Variable-Length          [42] Jinhao Li, Jiaming Xu, Shiyao Li, Shan Huang, Jun Liu, Yaoxiu Lian, and Guohao
+     Grouped Activation Data Format. arXiv preprint arXiv:2411.15982 (2024).                      Dai. 2023. Fast and Efficient 2-bit LLM Inference on GPU: 2/4/16-bit in a Weight
+[20] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh. 2022. Gptq:                Matrix with Asynchronous Dequantization. arXiv preprint arXiv:2311.16442
+     Accurate post-training quantization for generative pre-trained transformers.                 (2023).
+     arXiv preprint arXiv:2210.17323 (2022).                                                 [43] Shiyao Li, Xuefei Ning, Ke Hong, Tengxuan Liu, Luning Wang, Xiuhong Li,
+[21] Amir Gholami, Zhewei Yao, Sehoon Kim, Coleman Hooper, Michael W Mahoney,                     Kai Zhong, Guohao Dai, Huazhong Yang, and Yu Wang. 2023. Llm-mq: Mixed-
+     and Kurt Keutzer. 2024. AI and memory wall. IEEE Micro (2024).                               precision quantization for efficient llm deployment. In The Efficient Natural
+[22] Cong Guo, Jiaming Tang, Weiming Hu, Jingwen Leng, Chen Zhang, Fan Yang,                      Language and Speech Processing Workshop with NeurIPS, Vol. 9.
+     Yunxin Liu, Minyi Guo, and Yuhao Zhu. 2023. Olive: Accelerating large language          [44] Shiyao Li, Xuefei Ning, Luning Wang, Tengxuan Liu, Xiangsheng Shi, Shengen
+     models via hardware-friendly outlier-victim pair quantization. In Proceedings of             Yan, Guohao Dai, Huazhong Yang, and Yu Wang. 2024. Evaluating quantized
+     the 50th Annual International Symposium on Computer Architecture. 1–15.                      large language models. arXiv preprint arXiv:2402.18158 (2024).
+[23] Cong Guo, Chen Zhang, Jingwen Leng, Zihan Liu, Fan Yang, Yunxin Liu, Minyi              [45] Shuaiting Li, Chengxuan Wang, Juncan Deng, Zeyu Wang, Zewen Ye, Zongsheng
+     Guo, and Yuhao Zhu. 2022. Ant: Exploiting adaptive numerical data type for                   Wang, Haibin Shen, and Kejie Huang. 2025. Mvq: Towards efficient dnn com-
+                                                                                                  pression and acceleration with masked vector quantization. In Proceedings of
+
+
+
+
+                                                                                       867
+                                                                                                                     MICRO ’25, October 18–22, 2025, Seoul, Republic of Korea
+
+
+     the 30th ACM International Conference on Architectural Support for Programming        [68] Jaehyeong Sim, Somin Lee, and Lee-Sup Kim. 2019. An energy-efficient deep
+     Languages and Operating Systems, Volume 1. 731–745.                                        convolutional neural network inference processor with enhanced output station-
+[46] Haokun Lin, Haobo Xu, Yichen Wu, Jingzhi Cui, Yingtao Zhang, Linzhan Mou,                  ary dataflow in 65-nm CMOS. IEEE Transactions on Very Large Scale Integration
+     Linqi Song, Zhenan Sun, and Ying Wei. 2024. Duquant: Distributing outliers                 (VLSI) Systems 28, 1 (2019), 87–100.
+     via dual transformation makes stronger quantized llms. Advances in Neural             [69] Wei Sun, Ang Li, Tong Geng, Sander Stuijk, and Henk Corporaal. 2022. Dissecting
+     Information Processing Systems 37 (2024), 87766–87800.                                     tensor cores via microbenchmarks: Latency, throughput and numeric behaviors.
+[47] Ji Lin, Jiaming Tang, Haotian Tang, Shang Yang, Wei-Ming Chen, Wei-Chen                    IEEE Transactions on Parallel and Distributed Systems 34, 1 (2022), 246–261.
+     Wang, Guangxuan Xiao, Xingyu Dang, Chuang Gan, and Song Han. 2024. AWQ:               [70] Shyamkumar Thoziyoor, Naveen Muralimanohar, Jung Ho Ahn, and Norman P
+     Activation-aware Weight Quantization for On-Device LLM Compression and                     Jouppi. 2008. CACTI 5.1. Technical Report. Technical Report HPL-2008-20, HP
+     Acceleration. Proceedings of Machine Learning and Systems 6 (2024), 87–100.                Labs.
+[48] Aixin Liu, Bei Feng, Bing Xue, Bingxuan Wang, Bochao Wu, Chengda Lu, Cheng-           [71] Ajay Tirumala and Raymond Wong. 2024. Nvidia blackwell platform: Advancing
+     gang Zhao, Chengqi Deng, Chenyu Zhang, Chong Ruan, et al. 2024. Deepseek-v3                generative ai and accelerated computing. In 2024 IEEE Hot Chips 36 Symposium
+     technical report. arXiv preprint arXiv:2412.19437 (2024).                                  (HCS). IEEE Computer Society, 1–33.
+[49] Fangxin Liu, Ning Yang, Haomin Li, Zongwu Wang, Zhuoran Song, Songwen                 [72] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne
+     Pei, and Li Jiang. 2024. Spark: Scalable and precision-aware acceleration of               Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric Hambro, Faisal
+     neural networks via efficient encoding. In 2024 IEEE International Symposium on            Azhar, et al. 2023. Llama: Open and efficient foundation language models. arXiv
+     High-Performance Computer Architecture (HPCA). IEEE, 1029–1042.                            preprint arXiv:2302.13971 (2023).
+[50] Jun Liu, Shulin Zeng, Junbo Zhao, Li Ding, Zeyu Wang, Jinhao Li, Zhenhua              [73] A Vaswani. 2017. Attention is all you need. Advances in Neural Information
+     Zhu, Xuefei Ning, Chen Zhang, Yu Wang, and Guohao Dai. 2025. TB-STC:                       Processing Systems (2017).
+     Transposable Block-wise N:M Structured Sparse Tensor Core. In 2025 IEEE Inter-        [74] David Wang, Brinda Ganesh, Nuengwong Tuaycharoen, Kathleen Baynes, Aamer
+     national Symposium on High Performance Computer Architecture (HPCA). 949–962.              Jaleel, and Bruce Jacob. 2005. Dramsim: a memory system simulator. ACM
+     https://doi.org/10.1109/HPCA61900.2025.00075                                               SIGARCH Computer Architecture News 33, 4 (2005), 100–107.
+[51] Lei Liu, Yong Li, Chen Ding, Hao Yang, and Chengyong Wu. 2015. Rethink-               [75] Shirley Wu, Shiyu Zhao, Qian Huang, Kexin Huang, Michihiro Yasunaga, Kaidi
+     ing memory management in modern operating system: Horizontal, vertical or                  Cao, Vassilis Ioannidis, Karthik Subbian, Jure Leskovec, and James Y Zou. 2024.
+     random? IEEE Trans. Comput. 65, 6 (2015), 1921–1935.                                       Avatar: Optimizing llm agents for tool usage via contrastive reasoning. Advances
+[52] Lei Liu, Shengjie Yang, Lu Peng, and Xinyu Li. 2019. Hierarchical hybrid memory            in Neural Information Processing Systems 37 (2024), 25981–26010.
+     management in OS for tiered memory systems. IEEE Transactions on Parallel and         [76] Haojun Xia, Zhen Zheng, Xiaoxia Wu, Shiyang Chen, Zhewei Yao, Stephen
+     Distributed Systems 30, 10 (2019), 2223–2236.                                              Youn, Arash Bakhtiari, Michael Wyatt, Donglin Zhuang, Zhongzhu Zhou, et al.
+[53] Zihan Liu, Xinhao Luo, Junxian Guo, Wentao Ni, Yangjie Zhou, Yue Guan, Cong                2024. Fp6-llm: Efficiently serving large language models through fp6-centric
+     Guo, Weihao Cui, Yu Feng, Minyi Guo, et al. 2025. VQ-LLM: High-performance                 algorithm-system co-design. arXiv preprint arXiv:2401.14112 (2024).
+     Code Generation for Vector Quantization Augmented LLM Inference. In 2025              [77] Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and Song
+     IEEE International Symposium on High Performance Computer Architecture (HPCA).             Han. 2023. Smoothquant: Accurate and efficient post-training quantization for
+     IEEE, 1496–1509.                                                                           large language models. In International Conference on Machine Learning. PMLR,
+[54] Yuexiao Ma, Huixia Li, Xiawu Zheng, Feng Ling, Xuefeng Xiao, Rui Wang, Shilei              38087–38099.
+     Wen, Fei Chao, and Rongrong Ji. 2024. Affinequant: Affine transformation quan-        [78] Xilong Xie, Liang Wang, Limin Xiao, Meng Han, Lin Sun, Shuai Zheng, and
+     tization for large language models. arXiv preprint arXiv:2403.12544 (2024).                Xiangrong Xu. 2025. Fineq: Software-hardware co-design for low-bit fine-grained
+[55] Stephen Merity, Caiming Xiong, James Bradbury, and Richard Socher. 2016.                   mixed-precision quantization of llms. In 2025 Design, Automation & Test in Europe
+     Pointer sentinel mixture models. arXiv preprint arXiv:1609.07843 (2016).                   Conference (DATE). IEEE, 1–7.
+[56] Asit Mishra, Dusan Stosic, and Simon Layton. 2025. Recipes for Pre-training           [79] Zhihang Yuan, Yuzhang Shang, Yang Zhou, Zhen Dong, Zhe Zhou, Chenhao
+     LLMs with MXFP8. arXiv preprint arXiv:2506.08027 (2025).                                   Xue, Bingzhe Wu, Zhikai Li, Qingyi Gu, Yong Jae Lee, et al. 2024. Llm inference
+[57] Zhiwen Mo, Lei Wang, Jianyu Wei, Zhichen Zeng, Shijie Cao, Lingxiao Ma,                    unveiled: Survey and roofline model insights. arXiv preprint arXiv:2402.16363
+     Naifeng Jing, Ting Cao, Jilong Xue, Fan Yang, et al. 2024. Lut tensor core:                (2024).
+     Lookup table enables efficient low-bit llm inference acceleration. arXiv preprint     [80] Ali Hadi Zadeh, Isak Edo, Omar Mohamed Awad, and Andreas Moshovos. 2020.
+     arXiv:2408.06003 (2024).                                                                   Gobo: Quantizing attention-based nlp models for low latency and energy ef-
+[58] Jaehyun Nam, Kyuyoung Kim, Seunghyuk Oh, Jihoon Tack, Jaehyung Kim, and                    ficient inference. In 2020 53rd Annual IEEE/ACM International Symposium on
+     Jinwoo Shin. 2024. Optimized feature generation for tabular data via llms with             Microarchitecture (MICRO). IEEE, 811–824.
+     decision tree reasoning. Advances in Neural Information Processing Systems 37         [81] Ali Hadi Zadeh, Mostafa Mahmoud, Ameer Abdelhadi, and Andreas Moshovos.
+     (2024), 92352–92380.                                                                       2022. Mokey: Enabling narrow fixed-point inference for out-of-the-box floating-
+[59] NVIDIA NVIDIA. 2020. NVIDIA A100 tensor core GPU architecture. Volume 1.0:                 point transformer models. In Proceedings of the 49th Annual International Sympo-
+     Whitepaper, Part 1, 2020 (2020), 82.                                                       sium on Computer Architecture. 888–901.
+[60] Carlos HM Oliveira, Matheus T Moreira, Ricardo A Guazzelli, and Ney LV                [82] Chao Zeng, Songwei Liu, Yusheng Xie, Hong Liu, Xiaojian Wang, Miao Wei,
+     Calazans. 2016. ASCEnD-FreePDK45: An open source standard cell library                     Shu Yang, Fangmin Chen, and Xing Mei. 2025. Abq-llm: Arbitrary-bit quantized
+     for asynchronous design. In 2016 IEEE International Conference on Electronics,             inference acceleration for large language models. In Proceedings of the AAAI
+     Circuits and Systems (ICECS). IEEE, 652–655.                                               Conference on Artificial Intelligence, Vol. 39. 22299–22307.
+[61] Jiayi Pan, Chengcan Wang, Kaifu Zheng, Yangguang Li, Zhenyu Wang, and Bin             [83] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen, Shuohui
+     Feng. 2023. Smoothquant+: Accurate and efficient 4-bit post-training weightquan-           Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Victoria Lin, et al. 2022. Opt:
+     tization for llm. arXiv preprint arXiv:2312.03788 (2023).                                  Open pre-trained transformer language models. arXiv preprint arXiv:2205.01068
+[62] Angshuman Parashar, Priyanka Raina, Yakun Sophia Shao, Yu-Hsin Chen,                       (2022).
+     Victor A Ying, Anurag Mukkara, Rangharajan Venkatesan, Brucek Khailany,               [84] Haisha Zhao, San Li, Jiaheng Wang, Chunbao Zhou, Jue Wang, Zhikuang Xin,
+     Stephen W Keckler, and Joel Emer. 2019. Timeloop: A systematic approach to                 Shunde Li, Zhiqiang Liang, Zhijie Pan, Fang Liu, et al. 2025. Acc-SpMM: Acceler-
+     dnn accelerator evaluation. In 2019 IEEE international symposium on performance            ating General-purpose Sparse Matrix-Matrix Multiplication with GPU Tensor
+     analysis of systems and software (ISPASS). IEEE, 304–315.                                  Cores. In Proceedings of the 30th ACM SIGPLAN Annual Symposium on Principles
+[63] A Paszke. 2019. Pytorch: An imperative style, high-performance deep learning               and Practice of Parallel Programming. 326–338.
+     library. arXiv preprint arXiv:1912.01703 (2019).                                      [85] Wayne Xin Zhao, Kun Zhou, Junyi Li, Tianyi Tang, Xiaolei Wang, Yupeng Hou,
+[64] Ram Rangan, Naman Turakhia, and Alexandre Joly. 2020. Countering load-to-use               Yingqian Min, Beichen Zhang, Junjie Zhang, Zican Dong, et al. 2023. A survey
+     stalls in the NVIDIA turing GPU. IEEE Micro 40, 6 (2020), 59–66.                           of large language models. arXiv preprint arXiv:2303.18223 1, 2 (2023).
+[65] Bita Darvish Rouhani, Ritchie Zhao, Ankit More, Mathew Hall, Alireza Kho-             [86] Maohua Zhu, Tao Zhang, Zhenyu Gu, and Yuan Xie. 2019. Sparse tensor core:
+     damoradi, Summer Deng, Dhruv Choudhary, Marius Cornea, Eric Dellinger,                     Algorithm and hardware co-design for vector-wise sparse neural networks on
+     Kristof Denolf, et al. 2023. Microscaling data formats for deep learning. arXiv            modern gpus. In Proceedings of the 52nd Annual IEEE/ACM International Sympo-
+     preprint arXiv:2310.10537 (2023).                                                          sium on Microarchitecture. 359–371.
+[66] Keisuke Sakaguchi, Ronan Le Bras, Chandra Bhagavatula, and Yejin Choi. 2021.
+     Winogrande: An adversarial winograd schema challenge at scale. Commun. ACM
+     64, 9 (2021), 99–106.
+[67] Wenqi Shao, Mengzhao Chen, Zhaoyang Zhang, Peng Xu, Lirui Zhao, Zhiqian
+     Li, Kaipeng Zhang, Peng Gao, Yu Qiao, and Ping Luo. 2023. Omniquant: Omni-
+     directionally calibrated quantization for large language models. arXiv preprint
+     arXiv:2308.13137 (2023).
+
+
+
+
+                                                                                     868
+
