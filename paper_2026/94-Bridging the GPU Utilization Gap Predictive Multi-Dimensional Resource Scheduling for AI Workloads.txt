@@ -1,0 +1,1840 @@
+          Bridging the GPU Utilization Gap: Predictive
+         Multi-Dimensional Resource Scheduling for AI
+                         Workloads
+                    Yilei Lu                                    Dongbiao He∗                                        Teng Ma
+       lu-yl20@mails.tsinghua.edu.cn                           hdb@seu.edu.cn                              sima.mt@alibaba-inc.com
+       Tsinghua University and Baihai                        Southeast University                               Alibaba Group
+               Beijing, China                                   Nanjing, China                                  Beijing, China
+
+                    Zhe Liu                                      Letian Ruan                                      Jinlei Jiang
+                  lz@baihai.ai                          1291903308rlt@sjtu.edu.cn                            jjlei@tsinghua.edu.cn
+                     Baihai                            Shanghai Jiao Tong University                          Tsinghua University
+                 Beijing, China                              Shanghai, China                                      Beijing, China
+
+                                                                Yongwei Wu
+                                                           wuyw@tsinghua.edu.cn
+                                                            Tsinghua University
+                                                               Beijing, China
+
+Abstract                                                                        time by 33–48%, lowers P99 JCT by 37%, and improves through-
+Modern AI data centers face a critical paradox: while ma-                       put by up to 46.6% under bursty loads. GPU utilization re-
+chine learning workloads dominate infrastructure demands,                       mains above 92%, while medium-load scenarios yield up-
+actual GPU utilization remains consistently low. Existing                       mei to 25% resource savings, highlighting the practicality of
+schedulers fail to coordinate heterogeneous resources effec-                    Wind for production-scale AI clusters.
+tively, lack predictive capabilities for dynamic workloads,                     CCS Concepts: • Software and its engineering → Sched-
+and cannot balance isolation requirements with sharing opti-                    uling; • Computing methodologies → Machine learn-
+mization in multi-tenant clusters. This paper presents Wind,                    ing.
+a novel resource scheduler that bridges the GPU utilization
+gap through predictive scheduling and geometric resource                        Keywords: GPU resource scheduling, AI workloads , Predic-
+coordination. Wind introduces three key innovations: (1)                        tive modeling , Hilbert curve
+a resource prediction framework that leverages historical                       ACM Reference Format:
+execution patterns to forecast task requirements and com-                       Yilei Lu, Dongbiao He, Teng Ma, Zhe Liu, Letian Ruan, Jinlei Jiang,
+pletion times with high accuracy;(2) a unified scheduling                       and Yongwei Wu. 2026. Bridging the GPU Utilization Gap: Predic-
+architecture supporting isolation, sharing, preemption, and                     tive Multi-Dimensional Resource Scheduling for AI Workloads. In
+prioritization policies that eliminate resource fragmentation                   21st European Conference on Computer Systems (EUROSYS ’26), April
+                                                                                27–30, 2026, Edinburgh, Scotland Uk. ACM, New York, NY, USA,
+while maintaining performance guarantees; and (3) a Hilbert
+                                                                                17 pages. https://doi.org/10.1145/3767295.3803579
+curve-based multi-dimensional scheduling algorithm that
+maps CPU-memory-GPU resource space to preserve spatial                          1    Introduction
+locality while achieving linear computational complexity.
+   Our evaluation on a 139-node cluster demonstrates that                       In recent years, artificial intelligence and machine learn-
+Wind consistently outperforms K8s Default, DRF, and Syn-                        ing workloads have emerged as core components of mod-
+ergy across diverse workloads. It reduces average response                      ern data centers [11, 41, 48, 50]. According to McKinsey’s
+                                                                                analysis, approximately 70% of data center infrastructure
+∗ Corresponding author (hdb@seu.edu.cn).
+                                                                                requirements are dedicated to machine learning training and
+                                                                                inference tasks [34]. Data center clusters are managed in
+                                                                                a multi-tenant fashion, providing services to diverse user
+This work is licensed under a Creative Commons Attribution 4.0 Interna-         groups based on their specific requirements while incorpo-
+tional License.
+                                                                                rating resource regulation and access control mechanisms.
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+                                                                                However, empirical studies [63] reveal that GPU utilization
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2212-7/2026/04.                                             for individual tasks remains suboptimal, with overall GPU
+https://doi.org/10.1145/3767295.3803579                                         resource utilization averaging below 50% [15]. This para-
+                                                                                dox between surging resource demands and low utilization
+
+
+
+
+                                                                          383
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                   Yilei Lu, et al.
+
+                                                                             Table 1. Different types of machines in the GPU cluster.
+rates exposes fundamental limitations in traditional resource
+scheduling systems: simplistic static allocation strategies                  Systems CPUs        Mem(GB)       GPUs           GPU type     Nodes
+(e.g., Kubernetes’ static bin-packing algorithms [45]) fail to                       128         1024          8              A800         68
+effectively accommodate the dynamic, heterogeneous, and                              40          256           2              T4           12
+multi-tenant isolation requirements inherent in machine                      IDP     96          1024          4              V100         24
+learning workloads [3]. These data centers encompass sub-                            64          256           8              In-house     31
+                                                                                     192         2048          8              H800         4
+stantial heterogeneous computing resources that host nu-
+merous AI workloads, which require efficient schedulers to                  Table 2. Distribution of task types and runtime statistics.
+coordinate resource allocation and workload distribution.
+Such schedulers [49, 63] are essential to ensure efficient AI                Task Type           Count        %        Avg       Min         Max
+task execution [30, 37], optimal hardware resource utiliza-                                                           (min)     (min)       (min)
+tion [32, 65], and achievement of other scheduling objec-                    Short tasks1          809      77%          23        17            30
+tives [51, 59].                                                              Medium tasks2         125      12%         135        35           276
+   Existing scheduling systems confront three fundamental                    Long Services3        113      11%         413       362           728
+challenges in resource orchestration:(1) Inadequate multi-                   Total                1047      100%        –          –            –
+dimensional resource coordination, which results in a                        1 Scripts and small batch processes (runtime ≤30 min)
+failure to achieve synergistic allocation across heterogeneous               2 Training tasks (runtime 30 min to 6 hours)
+resource types including CPU, memory, and GPU compo-                         3 Continuous services (runtime ≥6 hours)
+nents. Contemporary schedulers, exemplified by Kubernetes’
+default scheduler, treat computational resources as orthog-
+onal dimensions, neglecting the intrinsic dependencies be-                  comparing GPU sharing versus isolation, we derive key in-
+tween GPU memory bandwidth and compute throughput                           sights for designing dynamic schedulers in AI environments.
+characteristics, resulting in suboptimal resource placement                    2) We propose a history-based task parameter predic-
+decisions [42]. (2) Limited predictive modeling capabili-                   tion method that accurately predicts task processing time
+ties arise in conventional scheduling algorithms when con-                  and resource requirements. This method matches similar
+fronted with dynamic workload patterns, preventing an accu-                 tasks from a historical task database, then uses logistic re-
+rate estimation of task resource requirements and execution                 gression models to learn the mapping relationship between
+characteristics based on historical profiling data [2, 24, 57, 58].         task attributes and execution parameters, providing crucial
+Traditional resource management frameworks rely predomi-                    insights for scheduling decisions.
+nantly on user-specified resource declarations, whereas ac-                    3) We present a fine-grained scheduling mechanism
+tual demands of machine learning workloads exhibit signifi-                 that addresses multi-priority AI workload scheduling through
+cant variability due to evolving data distributions and model               dynamic resource quotas and preemption-aware policies. It
+architectural changes. Production-scale analyses reveal that                provides elastic resource boundaries for burstable tasks and
+a substantial proportion of deep learning training workloads                GPU time-slicing with proactive release, enabling precise
+demonstrate considerable deviation between the declared                     allocation and efficient multi-task sharing.
+and actual resource consumption patterns [40, 44, 47]. (3)                     4) We develop a Hilbert-mapping-based scheduler
+The fundamental tension between resource isolation                          for multi-dimensional resources. By projecting compact
+and sharing optimization: existing systems lack sophisti-                   3–4D task and node descriptors onto a 1D Hilbert curve,
+cated mechanisms to balance resource exclusivity guaran-                    the model enables unified similarity measurement and ef-
+tees with utilization efficiency in multi-tenant environments.              ficient matching. The design incorporates priority-aware
+Strict isolation [21] approaches provide deterministic per-                 Hilbert spaces with tiered distance thresholds and a three-
+formance guarantees but introduce resource fragmentation                    stage scheduling pipeline, ensuring responsiveness for high-
+overhead, while permissive sharing strategies [29] enable a                 priority tasks while maintaining overall resource utilization.
+higher utilization density at the cost of performance interfer-                Our 139-node cluster evaluation shows that Wind consis-
+ence. Cloud infrastructure studies [54, 56] indicate that infer-            tently outperforms Kubernetes’ default scheduler, DRF, and
+ence workloads that execute on shared GPU resources may                     Synergy across heterogeneous workloads. It reduces average
+experience significant tail latency degradation compared to                 response time by up to 44.4%, improves system throughput
+dedicated resource allocation scenarios.                                    by 46.6%, and lowers burst-task latency by 47.9%. For training,
+   To address these challenges, this paper proposes a resource              Wind achieves the highest throughput (1.42 min/job) and
+scheduling system named Wind. The core contributions en-                    GPU utilization (91.2%), while for inference it cuts P99 JCT
+compass the following four aspects:                                         by 37% over Synergy. Moreover, it sustains >92% GPU uti-
+   1) We analyze the diversity of AI workloads, revealing                   lization and yields up to 25% resource savings under medium
+high burstiness and heterogeneity in their demands across                   loads, demonstrating its ability to balance diverse priorities
+compute, storage, and network resources. By quantitatively                  with strong service quality guarantees.
+
+
+
+
+                                                                      384
+Bridging the GPU Utilization Gap                                                                                                      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+
+
+                                                                                                                                                                                               Utilization (%) / Queue Length
+2    Background                                                                                       120                                 GPU Utilization               Storage/IO BW                                                                                GPU Utilization
+
+
+
+
+                                                                           Resource Utilization (%)
+                                                                                                                                                                                                                                100
+                                                                                                                                          CPU Utilization               Network Throughput                                                                           Request Queue Length
+                                                                                                      100                                                                                                                                                            GPU Saturation
+This paper focuses on the task scheduling problem of deep                                              80
+                                                                                                                Env      Model     VRAM                                 Recovery
+                                                                                                                                                                                                                                 80
+
+                                                                                                                                                                                                                                 60
+neural network (DNN) models (including CNN [4], Trans-                                                          Init    Download   Load       Training                  Overhead
+
+
+
+
+                                                                                                                                                              Preempt
+                                                                                                       60
+                                                                                                                                                                                                                                 40
+                                                                                                       40
+former [19], and Transformer-based generative models [55])                                             20                                                                                                                        20
+
+
+on heterogeneous GPU clusters. To begin, we present a brief                                             0
+                                                                                                            0          20     40      60        80          100          120        140
+                                                                                                                                                                                                                                  0
+                                                                                                                                                                                                                                      0      10     20     30       40      50        60
+                                                                                                                                          Time (s)                                                                                                       Time (s)
+overview of IDP (Intelligent Development Platform) devel-                                                   (a) Loading Phases & Preemption Recovery                                                                                      (b) Real-time Inference Burst Pattern
+
+oped by Baihai Technology, highlighting its core software                                             100                                                                                                                       100
+
+
+
+
+                                                                         Resource Utilization (%)
+
+
+
+
+                                                                                                                                                                                               Resource Utilization (%)
+                                                                                                                                                                                                                                                                           CPU Utilization
+                                                                                                                                                                                                                                                                           GPU Utilization
+                                                                                                       80                                                                                                                        80
+and hardware components that form the foundational in-                                                                                                                                                                                                                     I/O Operations
+
+
+                                                                                                       60                                                                  CPU Utilization                                       60
+
+frastructure for conducting and executing the framework of                                             40
+                                                                                                                                                                           GPU Utilization
+                                                                                                                                                                           Memory Usage
+                                                                                                                                                                                                                                 40
+
+Wind. Following this, we uncover the key characteristics of                                            20                                                                                                                        20
+
+
+AI workloads and the significant challenges that arise in the                                           0
+                                                                                                            0          10    20      30       40         50         60         70         80
+                                                                                                                                                                                                                                  0
+                                                                                                                                                                                                                                      0      20     40     60       80     100        120
+                                                                                                                                          Time (s)                                                                                                       Time (s)
+context of task scheduling. As a result, it is imperative for us                                                       (c) Data Preprocessing Workload                                                                                    (d) Development/Debugging Pattern
+
+to develop a novel and efficient scheduling framework that
+can effectively address these challenges.                                                                   Figure 1. Task burstiness and resource contention.
+
+2.1 The Overview of Baihai IDP                                           architecture. Based on our empirical data collection and anal-
+Hardware Architecture: Table 1 provides a detailed com-                  ysis, we observe the following distinctive patterns in task
+parison of different machine types within a GPU cluster,                 distribution:
+showcasing their capabilities in terms of CPUs, memory                   (1)Long-Tail Distribution of Tasks: Table 2 reveals pro-
+(GB), number and type of GPUs, and the number of nodes.                  nounced asymmetry in task distribution patterns. Short-
+There are a total of 139 nodes, including 68 A800 nodes and 4            duration tasks constitute an overwhelming majority (77%) of
+H800 nodes. The diversity and scale of these configurations              all tasks, with a mean execution time of merely 23 minutes,
+highlight Wind’s capacity to support extensive research and              representing typical "rapid experimentation" workloads. In
+application in large-scale GPU scheduling systems. The var-              contrast, medium-duration tasks, while comprising only 12%
+ied setups allow for testing different scenarios, optimizing             of tasks, demonstrate substantially longer average execu-
+performance, and adjusting to the specific demands of ad-                tion times (135 minutes) with considerable runtime variance
+vanced computational tasks.                                              (35-276 minutes). Most notably, long-running service tasks,
+Software Architecture: Wind presents a comprehensive                     despite representing just 11% of the total task count, exhibit
+four-tier architecture designed to address the complex chal-             extraordinarily extended average runtimes of 413 minutes,
+lenges of heterogeneous GPU cluster management and AI                    with maximum continuous execution reaching 728 minutes
+workload orchestration. The platform integrates an AI Plat-              (approximately 12 hours). (2)Resource Utilization Asym-
+form layer featuring IDP Studio for streamlined MLOps work-              metry: Although short-duration tasks numerically domi-
+flows, IDP LM for zero-code operations, and IDP MaaS for                 nate the workload, their cumulative resource consumption
+seamless model marketplace access. Built upon versatile                  remains relatively limited. Conversely, the small fraction of
+AI Algorithm Frameworks that support TensorFlow [39],                    long-running service tasks potentially monopolizes a dispro-
+PyTorch [26], Ray [36], and XGBoost [9], the system pro-                 portionate share of system resources. Our analysis suggests
+vides critical flexibility for diverse computational workloads.          that, measured by average runtime, the 11% of long-running
+The Wind platform implements task scheduling to opti-                    service tasks may consume over 50% of system resource
+mize AI workload performance through dynamic resource                    time. (3)High Variance in Task Duration: The empirical
+adaptation, while providing compute resource management                  data demonstrates substantial variance in execution times
+that orchestrates heterogeneous GPU, TPU, and CPU re-                    across different task categories. Notably, even within individ-
+sources with multi-tenant isolation, continuous monitor-                 ual categories, task durations exhibit considerable internal
+ing, and maintenance capabilities. This unified architecture             variance. Medium-duration tasks exemplify this phenome-
+effectively bridges the gap between complex resource het-                non, with the ratio between minimum and maximum run-
+erogeneity and the demanding requirements of modern AI                   times approaching 1:8 (35 minutes versus 276 minutes). This
+workloads, establishing a foundation for efficient, scalable,            high-variance characteristic substantially complicates resource
+and reliable AI infrastructure deployment.                               pre-allocation strategies and task scheduling algorithms.
+2.2 Workload Diversity Characteristics                                   2.3 Task Burstiness and Resource Contention
+The workloads within AI environments exhibit significant                 Task Burstiness. AI workloads exhibit pronounced tempo-
+heterogeneity, presenting unique challenges for AI system                ral locality and highly non-linear resource demand patterns
+                                                                         that defy conventional capacity planning assumptions. As
+
+
+
+
+                                                                   385
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                                                                                                                          Yilei Lu, et al.
+
+                                                                                                                                                              1326                                                                                       +21.6%
+                                    Baseline                                                                                                                                                                    Shared Env Loss
+                                                                                                                                                                                                       20                                       +18.2%
+                                    Shared Environment                                                                                                                                                          Isolated Env Gain
+                      1200          Isolated Environment 1087                                                                                                                                                        +13.2% +13.0%
+                                                                                                                                       1105                                                                                        +12.1%
+                                                                                                                                                                                                            +11.3%
+                                                                                                                                                                     1040
+
+
+
+
+                                                                                                                                                                             Performance Change (%)
+                                                                                                                                                       1032
+                                                                                                                                                                                                       10
+Execution Time (ms)
+
+
+
+
+                      1000                                             944
+                                                           900                                                                   891          904
+
+
+                       800                                                              725                     719                                                                                     0
+                                         711
+                                                631                                           631                     632
+                                   600                                            600                     600
+                       600
+                                                                                                                                                                                                      −10
+
+                       400
+                                                                                                                                                                                                      −20   -18.5%
+                                                                                                                                                                                                                                       -19.8%
+                       200                                                                                                                                                                                           -20.8%   -20.8%
+                                                                                                                                                                                                                                                -24.0%
+
+                         0                                                                                                                                                                            −30                                                -28.5%
+                                                                                     PU e
+
+
+
+
+                                                                                                                                                                                                     PU ve
+                                       PU e
+
+
+
+
+                                                               PU e
+
+
+
+
+                                                                                                            PU s
+
+
+
+
+                                                                                                                                   de ks
+
+
+
+
+                                                                                                                                                                                   nt pu GP ive
+
+
+
+                                                                                                                                                                                                     PUive
+
+
+
+
+                                                                                                                                                                                                     PU s
+
+
+
+                                                                                                                                                                                                    de ks
+                                                                                                                                                           as ed
+
+
+
+
+                                                                                                                                                                                                    as ed
+                                                                                                           G ad
+
+
+
+
+                                                                                                                                                                                                   G ad
+                                                                                    G iv
+                                      G iv
+
+
+
+
+                                                              G iv
+
+
+
+
+                                                                                                                                no tas
+
+
+
+
+                                                                                                                                                                                                 no tas
+                                         )
+
+
+
+
+                                                                 )
+
+
+
+
+                                                                                       )
+
+
+
+
+                                                                                                               )
+
+
+
+
+                                                                                                                                     s)
+
+
+
+
+                                                                                                                                                                                                       )
+
+
+
+                                                                                                                                                                                                       )
+
+
+
+                                                                                                                                                                                                        )
+
+
+
+                                                                                                                                                                                                        )
+
+
+
+                                                                                                                                                                                                      s)
+                                                                                                                                                             ks
+
+
+
+
+                                                                                                                                                                                                      ks
+                                                                                                                                                                                                        i
+                                                                                                                                                        l t ut
+
+
+
+
+                                                                                                                                                                                                 l t ut
+                                                                                   e ns
+
+
+
+
+                                                                                                                                                                                                e ns
+                                     e ns
+
+
+
+
+                                                             e ns
+
+
+
+
+                                                                                                                                                                                                e ns
+
+
+
+                                                                                                                                                                                                e ns
+                                                                                                                                                                                                      U
+                                                                                                          e lo
+
+
+
+
+                                                                                                                                                                                                e lo
+                                                                                                                                                      al rib
+
+
+
+
+                                                                                                                                                                                               al rib
+                                                                                 gl te
+
+
+
+
+                                                                                                                                                                                              gl te
+                                   gl te
+
+
+
+
+                                                           gl te
+
+
+
+
+                                                                                                                                                                                              gl te
+
+
+
+                                                                                                                                                                                              gl te
+                                                                                                        gl k
+
+
+
+
+                                                                                                                                                                                              gl k
+                                                                                                                                   t
+
+
+
+
+                                                                                                                                                                                                    t
+                                                                                                                                                                                                   G
+
+
+
+                                                                                                                                                                                                   G
+                                                                                                      in or
+
+
+
+
+                                                                                                                                                                                           in or
+                                                                                                                              PU n
+
+
+
+
+                                                                                                                                                                                            PU an
+                                                                               in n
+
+
+
+
+                                                                                                                                                                                           in n
+                                 in in
+
+
+
+
+                                                         in in
+
+
+
+
+                                                                                                                                                                                           in in
+
+
+
+                                                                                                                                                                                           in in
+                                                                                                                                                  sm ist
+
+
+
+
+                                                                                                                                                                                           sm ist
+                                                                                                                            -G na
+                                                                             (s -i
+
+
+
+
+                                                                                                                                                                                         (s -i
+                                                                                                    (s w
+
+
+
+
+                                                                                                                                                                                         (s w
+                               (s -
+
+
+
+
+                                                       (s -
+
+
+
+
+                                                                                                                                                                                         (s -
+
+
+
+                                                                                                                                                                                         (s -
+
+
+
+
+                                                                                                                                                                                        i-G n
+                                                                            s ry
+
+
+
+
+                                                                                                                                                                                     s ry
+                              s te
+
+
+
+
+                                                      s te
+
+
+
+
+                                                                                                                                                                                     s te
+
+
+
+                                                                                                                                                                                     s te
+                                                                                                                                                + d
+
+
+
+
+                                                                                                                                                                                       + d
+                                                                                                                          ti e
+
+
+
+
+                                                                                                                                                                                              e
+                                                                                                      ed
+
+
+
+
+                                                                                                                                                                                           ed
+                                                                                                                        ul ti-t
+
+
+
+
+                                                                                                                                                                                    ul ti-t
+                                                                                                                                                    e
+
+
+
+
+                                                                                                                                                                                            e
+                            nt pu
+
+
+
+
+                                                    nt pu
+
+
+
+
+                                                                                                                                                                                   nt pu
+                                                                          nt mo
+
+
+
+
+                                                                                                                                                                                   nt o
+                                                                                                                                              ng al
+
+
+
+
+                                                                                                                                                                                   ng l
+                                                                                                                                                                                         m
+                                                                                               ix
+
+
+
+
+                                                                                                                                                                                        ix
+
+
+
+
+                                                                                                                                                                                         a
+                         na m
+
+
+
+
+                                                 na m
+
+
+
+
+                                                                                                                                                                               na m
+
+
+
+                                                                                                                                                                               na m
+                                                                                                                      (m ul
+
+
+
+
+                                                                                                                                                                                (m ul
+                                                                                                                                            ni c
+
+
+
+
+                                                                                                                                                                                ni c
+                                                                        na e
+
+
+
+
+                                                                                                                                                                               na e
+                                                                                              M
+
+
+
+
+                                                                                                                                                                                     M
+
+
+
+
+                                                                                                                                                                                      t
+                                                                                                                                          ai -s
+
+
+
+
+                                                                                                                                                                              ai -s
+                                                                      te 2 m
+
+
+
+
+                                                                                                                                                                             te 2 m
+                       te co
+
+
+
+
+                                               te co
+
+
+
+
+                                                                                                                                                                             te co
+
+
+
+                                                                                                                                                                             te co
+                                                                                                                        M
+
+
+
+
+                                                                                                                                                                                   M
+                                                                                                                                        tr rge
+
+
+
+
+                                                                                                                                                                            tr rge
+                          2
+
+
+
+
+                                                  3
+
+
+
+
+                                                                                                                                                                                 2
+
+
+
+                                                                                                                                                                                 3
+                                                                                                                                         La
+
+
+
+
+                                                                                                                                                                             La
+                                                Figure 2. Performance analysis of GPU resource sharing in various multi-tenant scenarios.
+
+illustrated in Figure 1(a), training workflows exhibit fine-                                                                                   temporal overlap between high I/O demands during model
+grained phase transitions. Initial loading stages including en-                                                                                loading phases and massive distributed communication re-
+vironment setup, model download, and VRAM loading con-                                                                                         quirements during training execution exacerbates contention
+sume peak network and storage bandwidth. While GPU uti-                                                                                        intensity across network and storage subsystems.
+lization 1 stabilizes above 95% during active training, preemp-
+tion events trigger substantial recovery overheads. These                                                                                      2.4 GPU Resource Sharing vs Isolation
+overheads manifest as prolonged I/O spikes and execution                                                                                       GPU resource sharing [46, 60, 66] has emerged as a preva-
+delays required for state restoration. Figure 1(b) reveals the                                                                                 lent strategy to enhance computational resource utilization
+pulsatile nature of real-time inference workloads, where                                                                                       efficiency. However, this sharing paradigm introduces some
+GPU utilization can spike from a 30% idle state to full satu-                                                                                  performance challenges and resource contention issues in
+ration within seconds. Such high-frequency, high-amplitude                                                                                     multi-tenant environments. While prior research has inves-
+resource demand oscillations render conventional history-                                                                                      tigated GPU virtualization techniques and resource isolation
+based prediction algorithms ineffective, exposing a critical                                                                                   mechanisms, there remains a notable absence of systematic
+gap in existing resource forecasting methodologies. The de-                                                                                    analysis regarding the impact of GPU sharing across diverse
+velopment and debugging patterns shown in Figure 1(d),                                                                                         workload characteristics and varying tenant scales.
+while exhibiting relatively modest overall resource consump-                                                                                      Our preliminary experiments reveal substantial perfor-
+tion, introduce unpredictable intermittent burst behaviors                                                                                     mance degradation resulting from GPU resource sharing in
+that further complicate task scheduling approaches.                                                                                            multi-tenant scenarios (shown in Figure 2). In single-GPU
+Resource Contention. The heterogeneous nature of AI task                                                                                       configurations, even with merely two compute-intensive
+types creates structural disparities in compute, storage, and                                                                                  tenants coexisting, we observed an 18.50% performance de-
+network resource preferences, culminating in multi-layered                                                                                     terioration; this degradation intensifies to 20.80% when the
+resource competition scenarios. Figure 1(c) demonstrates                                                                                       number of tenants increases to three. Memory-intensive
+that data preprocessing and similar CPU-intensive opera-                                                                                       workloads similarly experience considerable resource con-
+tions monopolize 90% of available CPU capacity while main-                                                                                     tention, manifested as a 20.80% performance reduction. In
+taining minimal GPU requirements (2-8%), ostensibly com-                                                                                       mixed workload scenarios, which more accurately reflect
+plementing the resource profiles of GPU-intensive training                                                                                     production environments, performance decreased by 19.80%.
+and inference tasks. However, in practice, multi-tenant envi-                                                                                     The situation becomes increasingly critical in more com-
+ronments transform this apparent resource complementarity                                                                                      plex multi-GPU environments. Multi-tenant workloads ex-
+into fierce contention due to suboptimal scheduling policies.                                                                                  ecuting across multiple GPU nodes suffer a 24.00% perfor-
+The situation becomes particularly acute when inference                                                                                        mance penalty, while the co-location of large-scale distributed
+tasks encounter sudden request surges—scheduling laten-                                                                                        training with smaller tasks results in performance degrada-
+cies trigger request queue buildup, precipitating cascading                                                                                    tion reaching 28.50%. These findings indicate that resource
+performance degradation and resource waste. Moreover, the                                                                                      contention issues exhibit non-linear growth patterns as sys-
+1 GPU utilization (%) is measured via NVIDIA DCGM, primarily using                                                                             tem complexity and tenant heterogeneity increase. Signifi-
+DCGM_FI_PROF_SM_ACTIVE (SM active time) or DCGM_FI_DEV_GPU_UTIL,                                                                               cantly, our experiments demonstrate that these performance
+with VRAM usage from DCGM_FI_DEV_FB_USED.                                                                                                      issues can be substantially mitigated through appropriate
+
+
+
+                                                                                                                                       386
+Bridging the GPU Utilization Gap                                                                  EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+resource isolation mechanisms. Across various scenarios, iso-                            Table 3. Taxonomy of task attributes in Wind.
+lation techniques enabled performance improvements rang-
+ing from 11.30% to 21.60%, with particularly pronounced                              Category            Specific Attributes
+benefits observed in complex multi-GPU and heterogeneous                             Semantic            Model Architecture (e.g., LLM, ViT),
+workload environments. In practice, we enforce strict host                                               Framework Type, Model Size, Dataset
+                                                                                                         Type/Scale
+memory isolation via Kubernetes cgroups and guide VRAM
+                                                                                     Structural          GPU Vendor/Model/Count, VRAM Ca-
+quotas and limits using the aforementioned predictions, pre-
+                                                                                                         pacity, Priority Class, Est. Duration, Pre-
+venting long-running jobs from inefficiently monopolizing or                                             emptibility
+over-reserving GPU memory and further reducing on-node                               Phase Markers       Model Loading, Tokenization, Quan-
+contention.                                                                                              tization, LoRA Fine-tuning, Train-
+   While resource isolation mechanisms effectively mitigate                                              ing/Inference, Model Merging
+performance contention issues in multi-tenant environments,
+their implementation introduces a series of adverse effects,                          Wind is a unified prediction-aware scheduling framework
+primarily manifested as reduced resource utilization and ex-                       designed to improve resource utilization and scheduling ef-
+acerbated fragmentation problems. Our experimental data                            ficiency in large-scale, multi-tenant AI computing environ-
+reveals that under shared mode, resource fragmentation re-                         ments. Figure 3 illustrates the architecture of Wind, which
+mains relatively low, with fragmentation rates maintained                          consists of four major functional components: Task Un-
+within the 15%-35%. However, when strict resource isolation                        derstanding and Prediction, Resource Quota Management,
+policies are enabled, fragmentation issues significantly de-                       Preemption-Aware GPU Sharing, and Resource Scheduling
+teriorate, with fragmentation rates escalating to 35%-50%,                         with Hilbert Mapping [6, 25, 61]. Together, these components
+representing an average increase of approximately 67%.                             support critical scheduling policies such as isolation, sharing,
+   This fragmentation intensification primarily stems from                         preemption, and prioritization.
+isolation mechanisms’ pre-allocation and static partition-                            1) Task Attribute Extraction and Prediction Module
+ing of resources, preventing flexible resource sharing and                         (Details in §4): This module serves as the predictive layer, ex-
+dynamic adjustment among tenants. Even when certain ten-                           tracting semantic and structural attributes (shown in Table3)
+ants’ actual resource demands fall below their allocated quo-                      from incoming tasks and using machine learning models,
+tas, other tenants cannot access these idle resources, conse-                      trained on historical execution traces, to predict resource
+quently resulting in resource wastage. In Baihai IDP, single-                      requirements and expected processing times. By transform-
+GPU scenarios currently rely on sequential task switching                          ing reactive scheduling into proactive resource planning, it
+and CRIU-based preemption. However, the recovery over-                             enables the system to make informed allocation decisions
+head increases approximately linearly with the VRAM foot-                          prior to task execution.
+print, making preemption costly for high-memory jobs. Con-                            This module underpins prioritization by producing accu-
+sequently, runtime memory pressure must still be handled                           rate estimates of task completion times and resource con-
+at the application level, underscoring the need for more dy-                       sumption, which downstream scheduling algorithms lever-
+namic resource orchestration and finer-grained VRAM reuse                          age to rank and schedule tasks effectively. Moreover, it en-
+and reclamation.                                                                   ables isolation by providing these precise resource predic-
+                                                                                   tions to the Resource Quota Management module, which
+3     Design of Wind                                                               then validates them against team-specific quotas to enforce
+                                                                                   resource boundaries.
+              （1）Task Attribute               （1）Prediction                           2) Resource Quota Management (Details in §5.1): This
+                Extraction                       Model                             module enforces hierarchical resource governance by man-
+Submitted tasks
+                      Attributes similarity                                        aging team-level resource allocations through strict policies,
+                                                        Task Requirement           while also providing controlled mechanisms for resource flex-
+            History tasks                                Prediction Result
+                                                                                   ibility. It continuously monitors resource utilization, tracks
+                                                                                   allocation patterns, and enforces policy constraints across
+             （4）Resource Scheduling with Hilbert Mapping
+                                                                                   organizational boundaries.
+                                                                                      As the primary enforcement mechanism for isolation, it
+                                                                                   guarantees that each team operates within specified resource
+    （2）Resource Quota             （3）Preemption-Aware                              boundaries. Simultaneously, it facilitates sharing by sup-
+      Management                     GPU Sharing
+                                                         Resource Zone
+                                                                                   porting resource pooling and borrowing protocols. When a
+                                                                                   team’s quota is insufficient for an incoming task, this module
+                                                                                   can trigger two actions: attempt to borrow resources from
+                                                                                   other teams, or interface with an external cluster autoscaler
+          Figure 3. The overall architecture of Wind.
+                                                                                   to request new nodes if the policy allows.
+
+
+
+                                                                             387
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                                                                                         Yilei Lu, et al.
+
+
+   3) Preemption-Aware GPU Sharing (Details in §5.2):                                                Table 4. Multi-tenant characteristics across the cluster.
+This module addresses the tension between resource uti-
+lization and responsiveness by implementing cooperative                                      GPUs               Tenants                Users             Shared                                      Preempt           Tasks
+preemption mechanisms. It maintains real-time monitor-                                       (Size)               (#)                   (#)              (Wkly)                                       (Wkly)          (Wkly)
+ing of borrowed resources and orchestrates their reclama-                                    160                       5                98                                          20                  22             2,917
+tion when the resource-owning team submits higher-priority                                   400                      12                51                                           3                  55              493
+workloads.                                                                                   1024                      3               1054                                         16                 214             8,206
+   It directly realizes the preemption principle via dynamic,
+policy-driven rebalancing algorithms capable of rapidly re-                                                   (a) Processing Time              RF                                            (b) CPU Usage            RF
+
+
+
+
+                                                                          Relative Processing Time
+
+
+
+
+                                                                                                                                                         Relative Processing Time
+                                                                                                                                                    XGB                                                                         XGB
+claiming GPU resources based on priority signals, urgency,                                           10   1
+                                                                                                                                                                                    10   1
+
+
+and team policies. This ensures that critical workloads can
+                                                                                                                                          MLP                                                                  MLP
+access the required resources predictably, even under high
+contention conditions.
+                                                                                                                                          Better                                                                       Better
+   4) Resource Scheduling with Hilbert Mapping (De-                                                                               RR                                                                    RR
+                                                                                                     100                         LR                                                 100                LR
+tails in §6): This module orchestrates the final placement                                              65       70        75    80       85        90                                 65       70     75    80       85        90
+                                                                                                                           Accuracy (%)                                                                Accuracy (%)
+of tasks by employing spatial locality-aware GPU allocation
+strategies based on Hilbert space-filling curves [28, 43]. It in-                                             (c) Memory Usage RF                                                            (d) GPU Usage        RF
+
+
+
+
+                                                                          Relative Processing Time
+
+
+
+
+                                                                                                                                                         Relative Processing Time
+tegrates predicted resource needs and real-time cluster state                                        10   1
+                                                                                                                                           XGB
+                                                                                                                                                                                    10   1
+                                                                                                                                                                                                                           XGB
+
+
+information to optimize hardware utilization and reduce
+                                                                                                                                MLP                                                                            MLP
+communication overhead.
+   The Hilbert mapping scheduler embodies prioritization
+                                                                                                                                          Better                                                                       Better
+by dispatching tasks according to their priority scores while                                                         RR                                                                               RR
+                                                                                                     100        LR                                                                  100               LR
+considering resource fit and hardware locality. Specifically, it                                        65       70        75    80       85        90                                 65       70     75    80       85        90
+                                                                                                                           Accuracy (%)                                                                Accuracy (%)
+maps tasks with high predicted inter-communication needs
+to GPUs that are physically proximate (e.g., on the same
+node or connected by a high-speed interconnect), thereby                  Figure 4. The results of resource prediction using LR, RR,
+minimizing communication latency and improving the per-                   MLP, RF, and XGBoost.
+formance of distributed training workloads. This approach
+ensures higher-priority workloads are allocated resources                 while the 400-GPU cluster exhibits frequent preemptions
+efficiently in both temporal and spatial dimensions.                      (55/week) for training experiments. The 1,024-GPU cluster
+                                                                          represents extreme diversity, ranging from large-scale 48-
+4    Resource Allocation Prediction                                       GPU training jobs (avg. 52 hours) to massive small-scale
+4.1 Historical Task Data Collection                                       bursty tasks (avg. 1.7 GPUs) with high preemption rates.
+                                                                          During task execution, the system automatically records
+To establish a reliable task resource prediction model, we con-
+                                                                          resource utilization metrics at 1-second sampling intervals
+ducted systematic data collection of historical task execution.
+                                                                          over a 6-month period. Task metadata includes task type,
+The data is sourced from a production IDP (Intelligent De-
+                                                                          framework, and batch size. The dataset contains three dis-
+velopment Platform) serving 1,000+ concurrent users across
+                                                                          tinct task categories: short tasks (80%, avg. 23 min), medium
+139 physical nodes. The final dataset encompasses 2,500 task
+                                                                          tasks (10%, avg. 135 min), and long services (10%, avg. 413
+samples across diverse workload types, totaling over 8,000
+                                                                          min).
+compute hours.
+                                                                             Dataset Construction. We preprocessed the collected
+   Task Selection. We selected tasks from production envi-
+                                                                          raw execution data to generate a standardized dataset for
+ronments spanning multiple application domains, including
+                                                                          model training. Task attributes were encoded as numerical
+deep learning training, inference, and data preprocessing. To
+                                                                          feature vectors, while resource utilization metrics were nor-
+reflect realistic multi-tenant dynamics, the trace specifically
+                                                                          malized to the 0-1 range. The final dataset contains 2,500
+captures co-located task interference patterns and the com-
+                                                                          task records, with each record comprising a 15-dimensional
+munication overhead of NVLink/InfiniBand for multi-GPU
+                                                                          feature vector and a 4-dimensional target vector (execution
+workloads. The tasks utilize frameworks like TensorFlow
+                                                                          time, CPU, memory, and GPU utilization).
+and PyTorch, with execution times ranging from 30 seconds
+to 3,600 seconds.                                                         4.2 Prediction Methods of Wind
+   Data Collection. We conducted data collection on the
+                                                                          Wind uses supervised learning on historical task attributes
+cluster described in Table 1. As quantified in Table 4, our
+                                                                          and resource consumption to predict future requirements.
+dataset captures diverse multi-tenant patterns: the 160-GPU
+                                                                          We prioritize lightweight algorithms to meet real-time sched-
+cluster is dominated by long-running inference (avg. 4 GPUs),
+                                                                          uling demands while maintaining acceptable accuracy, but
+
+
+
+                                                                    388
+Bridging the GPU Utilization Gap                                                      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+also consider more complex models when their accuracy                    attributes, the system applies a "safety margin" by reverting
+gains justify the overhead.                                              to the user-requested resource values as the upper bound
+   We evaluate five machine learning algorithms: Linear Re-              for scheduling.Crucially, the impact of such mispredictions
+gression (LR [52]), Ridge Regression (RR [33]), Multi-Layer              is mitigated by two architectural features: 1) Hilbert Map-
+Perceptron (MLP [27]), Random Forest (RF [5]), and XG-                   ping Resilience: Since Hilbert curves optimize for spatial lo-
+Boost [9], across four prediction targets: processing time,              cality (placing related tasks on proximate nodes), a slight
+CPU usage, memory usage, and GPU usage. Each algorithm                   error in execution time estimation primarily affects the tem-
+represents different complexity-accuracy trade-offs: LR/RR               poral packing efficiency rather than physical interconnect
+provide fast linear modeling, MLP captures moderate non-                 contention. 2) K8s Enforcement: Wind acts as a high-level
+linearity, while RF/XGBoost handle complex patterns at a                 orchestrator that modifies the task’s resource specifications.
+higher computational cost. Models are trained dynamically                Kubernetes then strictly enforces these modified limits at
+on the 1,000 most recent similar tasks.                                  the container level, ensuring that even under-predicted tasks
+   Algorithm Selection. Figure 4 shows the accuracy-latency              do not cause resource starvation for co-located neighbors.
+trade-off for each algorithm across prediction targets. We de-
+fine prediction accuracy as the percentage of predictions with           5   Fine-grained Resource Management
+relative error below 20%. The results reveal target-dependent            Fine-grained resource management enhances resource effi-
+optimal choices: linear models (LR/RR) achieve ∼80% accu-                ciency and handles multi-priority tasks by enabling resource
+racy for processing time and CPU usage with minimal la-                  preemption and isolation mechanisms. Wind aims to lever-
+tency (sub-0.1 ms), while complex models like XGBoost reach              age idle resources during off-peak times and gracefully de-
+the highest accuracies (up to 91.2% for processing time and              grade in the face of increased system pressure, avoiding
+90.7% for CPU usage). Although XGBoost is roughly 12.6×                  over-occupation of system resources and thus improving
+slower than LR, its absolute inference time remains on the               overall resource scheduling efficiency.
+order of 1–2 ms, which is well within the acceptable range
+for online scheduling.                                                   5.1 Dynamic Resource Quota Management
+   Based on these trade-offs, Wind adopts XGBoost as the                 The soft preemption mechanism achieves flexible resource
+primary prediction model, leveraging its consistently supe-              orchestration through dynamic management of heteroge-
+rior accuracy across all four targets (processing time, CPU,             neous resource quotas, encompassing CPU, memory, and
+memory, GPU). To further optimize latency-sensitive scenar-              GPU resources. For Burstable Pods, the system enables the
+ios, lightweight models such as LR/RR or MLP are employed                configuration of variable resource bounds to adapt resource
+as fallbacks—e.g., for rapid estimation in ultra-tight schedul-          consumption according to real-time system load conditions.
+ing loops or on resource-constrained devices. This strategy              Specifically, each Burstable Pod is provisioned with ad-
+ensures high prediction fidelity (above 87% across all metrics           justable CPU, memory, and GPU quotas that define both
+with XGBoost) while preserving sub-millisecond responsive-               baseline requirements and peak allocation limits. When re-
+ness when necessary, making it well-suited for real-time                 questing resources, the Pod declares the minimum resource
+scheduling in dynamic environments.                                      guarantee (e.g., 2 CPUs, 4Gi memory, and 1 GPU) alongside
+                                                                         the maximum resource ceiling (e.g., 8 CPUs, 16Gi memory,
+4.3 Prediction Model Maintenance and Robustness                          and 4 GPUs). This elastic resource model ensures that Pods
+To ensure the long-term fidelity of resource forecasts in dy-            can exploit surplus resources during low-contention peri-
+namic cluster environments, Wind implements a systematic                 ods while gracefully degrading resource usage under high
+model maintenance and error-handling pipeline.                           system load, thereby preventing resource starvation and
+   Model Retraining and Feature Importance. The sys-                     maintaining system stability.
+tem adopts a "daily-ingestion, weekly-update" strategy. While               The resource management orchestration leverages Ku-
+production data is accumulated in real-time to capture po-               bernetes’ kubelet as the primary enforcement agent for
+tential shifts in workload patterns, we perform full model               multi-resource coordination. For CPU resources, the system
+retraining on a weekly basis. This cadence is justified by our           employs dynamic cpu.shares adjustment to modulate the
+observation that in typical multi-tenant AI clusters, the ten-           CPU time allocation for Burstable Pods. Under high node
+ant base and their core model architectures (e.g., recurring             utilization, the scheduler reduces CPU shares (e.g., from 1024
+LLM pre-training or fine-tuning pipelines) remain relatively             to 512) to prioritize critical workloads while maintaining
+stable over several months.                                              fairness guarantees. Memory management operates through
+   Handling Prediction Errors and Safety Margins. De-                    continuous monitoring of memory.pressure metrics, where
+spite a baseline accuracy of 87%, mispredictions are inevitable.         the system progressively decreases memory.high thresholds
+Wind handles these via a conservative resource fallback                  for Burstable Pods when memory contention exceeds pre-
+mechanism. When the prediction model reports high vari-                  defined bounds, triggering controlled memory reclamation
+ance (low confidence) or encounters out-of-distribution task
+
+
+
+                                                                   389
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                Yilei Lu, et al.
+
+                                                                                   ����
+to prevent out-of-memory conditions. For GPU resources,                     Tasks ℎ�
+the system utilizes device-plugin interfaces to implement                                                         Distance d
+                                                                         Multi-dimensional
+fractional GPU sharing and dynamic GPU memory allocation.                Hilbert mapping
+
+The scheduler monitors GPU utilization metrics and mem-                                                         Nodes within the
+ory fragmentation patterns to redistribute GPU resources                     Nodes ℎ����
+                                                                                    �                           distance
+among competing Pods, ensuring optimal GPU memory lo-
+cality and minimizing inter-device communication overhead            Figure 5. Hilbert mapping in Wind: Tasks and nodes are
+in multi-GPU scenarios.                                              ordered using multi-dimensional Hilbert mapping, where
+                                                                     nodes within the Hilbert distance threshold of a given task
+5.2 Preemption-Aware GPU Sharing                                     are prioritized for task placement.
+For dynamic adjustment of GPU resources, the system in-
+troduces a preemption-aware GPU sharing mechanism to                 Pods. For high-priority tasks marked as ‘Guaranteed‘, the
+further enhance GPU resource utilization. By extending the           system allocates a fixed real-time execution window by con-
+device plugin, the system allows Pods to declare their GPU           figuring the cpu.rt_runtime_us parameter and combines
+time slice requirements, enabling the system to set preemp-          it with the SCHED_FIFO real-time scheduling policy. This
+tion policies for GPU resources and define the duration of           ensures that such Pods have scheduling priority over low-
+each time slice. For example, a Pod can declare its need for         priority processes running under regular scheduling policies,
+preemptible GPU resources and specify that it will occupy            such as CFS (Completely Fair Scheduler [38]). However, as
+200 milliseconds of GPU time per second. This allows for             Kubernetes does not enable real-time scheduling by default,
+more refined GPU resource allocation, particularly in multi-         the system requires pre-configuration of the nodes and run-
+task scenarios where multiple tasks share a single GPU, thus         time extension to explicitly enable real-time privileges for
+avoiding resource wastage.                                           these Pods.
+   In terms of preemption strategy, the system provides both            For memory isolation, the system uses the memory.high
+active relinquishment and passive preemption. To achieve             parameter to set memory usage limits for non-critical tasks
+millisecond-level passive preemption, we modify the CUDA             (e.g., BestEffort Pods). When the node enters a memory
+scheduler within the NVIDIA open-source kernel driver.               pressure state, the system gradually compresses or termi-
+This implementation enables a hardware-level pause-resume            nates non-critical tasks to avoid excessive memory consump-
+mechanism: when a high-priority task arrives, the driver             tion, ensuring that critical tasks maintain available memory.
+triggers a context switch that saves current register states            2) GPU Exclusive Allocation
+and execution metadata directly into the GPU’s High Band-               In GPU resource isolation, the system employs both spa-
+width Memory (HBM), rather than offloading to host mem-              tial and temporal isolation mechanisms to support exclusive
+ory. By minimizing host-to-device synchronization, the sys-          access and preemption capabilities for high-priority tasks.
+tem reduces the total context switch latency to approxi-             Our spatial isolation follows a two-tier approach: we per-
+mately 5-10 ms. The active relinquishment strategy com-              form static rebalancing during off-peak windows based on
+plements this by requiring tasks to periodically check their         7-day usage patterns to reduce overhead, while utilizing
+remaining time slice and proactively save model checkpoints          HAMI for dynamic sharing to enable flexible allocation with-
+before the time slice is exhausted. In contrast, the passive         out disruptive hardware resets. For temporal isolation, the
+preemption strategy leverages the kernel-level scheduler to          system customizes the NVIDIA driver to introduce a Pre-
+suspend kernels or sends a SIGTERM signal to the task via            emptive Time-Slicing mechanism. This mechanism en-
+the device plugin when the task does not release GPU re-             ables time-slice scheduling for the CUDA kernel, and when
+sources in time. After a specified grace period (defined by          a task exceeds its allocated time slice, the kernel scheduler
+terminationGracePeriodSeconds), the task is forcibly ter-            forcibly interrupts the current GPU execution, making room
+minated to ensure that higher-priority tasks have sufficient         for higher-priority tasks. This mechanism overcomes the
+access to the GPU resources.                                         limitations of traditional GPU scheduling, where tasks can-
+                                                                     not be preempted, thus significantly improving preemption
+5.3 Isolation Guarantee for Exclusive Resources                      response time and task-switching granularity.
+In Wind, the resource preemption mechanism serves as the
+fundamental basis for ensuring service quality for AI tasks          6     Hilbert-based Multi-dimensional
+with different priorities. It primarily encompasses strong                 Resource Scheduling Algorithm
+isolation and fine-grained scheduling for CPU, memory, and
+                                                                     To address the challenge of matching multi-attribute tasks
+GPU resources.
+                                                                     with heterogeneous cluster resources, we designed and im-
+   1) CPU/Memory Isolation
+                                                                     plemented a novel scheduling system. Its core is a scheduling
+   The system employs the cgroups v2 mechanism in the
+                                                                     algorithm that leverages Hilbert space-filling curves to map
+Linux kernel to isolate and control different QoS levels for
+                                                                     high-dimensional resource vectors onto a one-dimensional
+
+
+
+                                                               390
+Bridging the GPU Utilization Gap                                                            EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+space. This mapping transforms the complex multi-dimensional                 scheduling, we employ a mapping function 𝐻 : R𝑑 →
+best-fit problem into an efficient one-dimensional proximity                 N (𝑑 = 3 or 4 depending on configuration) that projects
+search, enabling fine-grained, priority-aware task placement.                task and node vectors into a one-dimensional Hilbert value.
+                                                                             To enforce priority, the system maintains 𝑃 distinct map-
+6.1 The framework                                                                         𝑃
+                                                                             pings 𝐻 (𝑝 ) 𝑝=1 , where higher-priority mappings weigh QoS
+The scheduling framework is composed of three key compo-                     attributes more strongly than load. The Hilbert value for a
+nents that work in concert: a centralized Scheduler Core, a                  task 𝑗𝑘 with priority 𝑞𝑘 is ℎ𝑘𝑡𝑎𝑠𝑘 = 𝐻 (𝑞𝑘 ) ( 𝑗𝑘 ), computed by
+per-node Node Agent, and a shared State Manager.                             the Scheduler Core upon task arrival. A node’s Hilbert value,
+   Scheduler Core: This is the central decision-making en-                   ℎ𝑛𝑜𝑑𝑒 , is updated dynamically by its Node Agent.
+                                                                              𝑖
+tity. It is designed to be stateless to ensure scalability and                  The effectiveness of the Hilbert-based mapping stems from
+fault tolerance. It continuously monitors the task queues                    the locality-preserving properties inherent in Space-Filling
+and node states stored in the State Manager and executes a                   Curves[43]. By projecting multi-dimensional resource vec-
+three-phase scheduling pipeline (§6.3) to make placement                     tors into a one-dimensional continuum while maintaining
+and preemption decisions.                                                    spatial proximity, the Hilbert curve naturally clusters similar
+   Node Agent:A daemon process running on each worker                        resource footprints. In this framework, the input vector 𝑟𝑘
+node. Its responsibilities are twofold: (1) monitoring local                 can be derived either from dynamic usage predictions or, in
+resource utilization (CPU, memory, GPU), running task sta-                   the absence of such information, from the static resource dec-
+tuses, and real-time load, and periodically reporting these as               larations provided in the task specification. While accurate
+6-dimensional state vectors to the State Manager; (2) execut-                predictions can further refine the alignment by reflecting
+ing commands from the Scheduler Core, such as launching                      actual runtime behavior, the fundamental advantage of the
+a container, terminating a task, or signaling a process for                  Hilbert approach, reducing multi-dimensional fragmentation
+resource reclamation (e.g., via SIGUSR1).                                    through geometric clustering, remains robust. This ensures
+   State Manager: A logically centralized, highly available                  that the scheduler efficiently addresses the "resource match-
+key-value store. It maintains the global state of the clus-                  ing" problem by optimizing bin-packing density, a spatial
+ter, including: (1) multiple priority-based task queues, (2)                 benefit that persists even when temporal predictions are
+the Hilbert value and resource state for every node, and (3)                 unavailable or imprecise.
+metadata for ongoing preemption operations. This decou-                         Distance-based Filtering. Matching is performed by
+pled framework allows the Scheduler and Agents to operate                    comparing distances in the Hilbert space:
+asynchronously.
+                                                                                               𝑑 ( 𝑗𝑘 , 𝑛𝑖 ) = |ℎ𝑘𝑡𝑎𝑠𝑘 − ℎ𝑛𝑜𝑑𝑒
+                                                                                                                          𝑖    |
+6.2 The model
+                                                                                A smaller distance indicates a better fit in terms of QoS and
+The foundation of our scheduler is a compact multi-dimensional               workload state. For a task 𝑗𝑘 with priority 𝑞𝑘 , the candidate
+model for both tasks and nodes, capturing essential resource                 set is defined as
+demands together with high quality services. To avoid the
+instability of high-dimensional Hilbert mappings, we sepa-                           C𝑘 = {𝑛𝑖 ∈ N | 𝑟𝑖 ≥ 𝑟𝑘 ∧ 𝑑 ( 𝑗𝑘 , 𝑛𝑖 ) ≤ 𝜃 (𝑞𝑘 ) }
+rate hard resource feasibility from QoS-sensitive placement,
+                                                                               where 𝜃 (𝑞𝑘 ) is a priority-dependent distance threshold.
+resulting in a more efficient 3–4D representation.
+                                                                             High-priority tasks use a small 𝜃 , enforcing a strict match,
+   Definition. A task 𝑗𝑘 is described by 𝑗𝑘 = (𝑟𝑘 , 𝑞𝑘 , 𝜉𝑘 , 𝜏𝑘 ),
+                                                                             while low-priority tasks are allowed a larger threshold, in-
+where 𝑟𝑘 is the aggregated demand for CPU, memory, and
+                                                                             creasing their placement chances.
+GPU (computed as a weighted sum of normalized resources),
+𝑞𝑘 is its priority level, 𝜉𝑘 indicates preemptibility, and 𝜏𝑘 is             6.3 The pipeline
+the estimated duration. A node 𝑛𝑖 is formally defined as a
+                                                                             As shown in the Figure 6, the Scheduler Core executes the
+tuple 𝑛𝑖 = (𝑟𝑖 , 𝑞¯𝑖 , 𝜉¯𝑖 , ℓ¯𝑖 ), where 𝑟𝑖 = (cpu𝑖 , mem𝑖 , gpu𝑖 ) rep-
+                                                                             following pipeline for each scheduling cycle, operating on
+resents the aggregated available resource capacity in terms
+                                                                             the head of the highest-priority non-empty task queue.
+of CPU cores, memory, and GPU count, respectively. The
+                                                                                Phase 1: Candidate Filtering and Adaptive Scanning.
+parameter 𝑞¯𝑖 summarizes the average priority of the tasks
+currently executing on the node, while 𝜉¯𝑖 denotes the ra-                   For a task 𝑗𝑘 , the scheduler first determines its Hilbert an-
+tio of preemptible tasks, incorporating per-GPU tracking to                  chor ℎ𝑘𝑡𝑎𝑠𝑘 in 𝑂 (1) time and queries the State Manager to
+facilitate fine-grained scheduling. Finally, ℓ¯𝑖 serves as a nor-            retrieve a list of nodes that satisfy the basic resource re-
+malized load metric, where higher values indicate heavier                    quirements. To accelerate subsequent matching and posi-
+node utilization, a characteristic preferred during Hilbert-                 tioning, node states in the State Manager are indexed by
+based matching to promote workload consolidation.                            their Hilbert values using a B+-tree. The scheduler performs
+   Hilbert Mapping. Resource feasibility (𝑟𝑖 ≥ 𝑟𝑘 ) is checked               a range query on this index for candidate nodes with ℎ𝑛𝑜𝑑𝑒     𝑖   ∈
+                                                                             [ℎ𝑘 −𝜃
+                                                                                𝑡𝑎𝑠𝑘   (𝑝 𝑘 ) , ℎ𝑘 +𝜃
+                                                                                                 𝑡𝑎𝑠𝑘 (𝑝 𝑘 ) ]. The intersection of these two sets
+first to ensure hard constraints are met. For QoS-sensitive
+
+
+
+                                                                       391
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                       Yilei Lu, et al.
+
+
+                          Scheduler Core                                                  in the State Manager, and the released resources trigger an
+     ① Candidate         empty            ② Preemption         ③ Preemption               immediate rescheduling attempt for task 𝑗𝑘 . This closed-loop
+     filtering   list Ck                  Evaluation           Execution
+                                                                                          process ensures that resources are rapidly re-allocated to
+                           State Manager                                                  high-priority workloads.
+        non-empty      Select the node with the                  Victim selection
+                                                                                             Complexity and Scalability Analysis. The scheduling
+                       minimum Hilbert distance                  and preemption
+      Node Agent                                  Node Agent                              pipeline balances constant-time indexing with linear adap-
+                                                                                          tive scanning. Specifically, the Hilbert anchor positioning
+                                                                                          achieves 𝑂 (1) complexity, while the adaptive scan follows a
+                                                                                          worst-case 𝑂 (𝑛) complexity. Overall, the Hilbert scheduling
+                                                                                          computation is completed on a 100-nanosecond scale, even
+                                                                                          at a scale of 1,024 nodes.
+Figure 6. The pipeline of the Hilbert-based multi-
+dimensional resource scheduling algorithm is integrated into                              7   Evaluations
+a framework composed of the Scheduler Core, Node Agent,
+                                                                                          7.1 Evaluation Configurations
+and State Manager.
+                                                                                          Experimental Setup: Our experiments are conducted on a
+                                                                                          139-node physical cluster composed of five different hard-
+forms the final candidate list C𝑘 . Starting from this anchor,                            ware configurations, as detailed in Table 1. All nodes are
+the scheduler performs a second-round linear scan (𝑂 (𝑛))                                 interconnected via a 100GbE RoCE v2 (RDMA) network.
+on the candidate set C𝑘 to verify resource feasibility (𝑟𝑖 ≥ 𝑟𝑘 )                         This high-performance interconnect is crucial for modern
+and optimize load balance. This design ensures structural                                 distributed ML workloads and ensures that the network does
+robustness: even with low prediction accuracy, the Hilbert                                not become a bottleneck, allowing us to accurately assess the
+curve maintains relative rankings. If C𝑘 is non-empty, the                                scheduler’s performance itself. The software stack across all
+node with the minimum Hilbert distance is chosen, followed                                nodes includes Ubuntu 22.04, Kubernetes v1.28, and NVIDIA
+by sending a LaunchTask command to the corresponding                                      Driver 535+. To eliminate network latency during job startup,
+Node Agent, and the task is dequeued. Otherwise, the sched-                               all necessary container images are pre-pulled to the nodes.
+uler proceeds to Phase 2.                                                                    Benchmark Comparison: We compare the performance
+    Phase 2: Preemption Evaluation. If no suitable node is                                of Wind against four representative baseline schedulers: (1)
+found, the scheduler evaluates the viability of preemption. A                             Kubernetes Default: The default Kubernetes scheduler, which
+preemption is considered beneficial if there exists a node 𝑛𝑖                             serves as the de facto industry standard baseline. (2) DRF
+that, after preempting a set of lower-priority tasks P𝑖 , could                           (Dominant Resource Fairness [16]): A classic algorithm de-
+accommodate the high-priority task 𝑗𝑘 . To prevent system                                 signed to provide fairness across users with multi-resource
+thrashing, the scheduler enforces a cooldown mechanism: a                                 demands. (3) Synergy [35]: A state-of-the-art scheduler that
+preemption on node 𝑛𝑖 is suppressed if the node has under-                                is a direct competitor in multi-dimensional resource-aware
+gone preemption within a dynamically calculated window                                    scheduling.
+𝑇𝑐𝑜𝑜𝑙𝑑𝑜𝑤𝑛 , which is proportional to the recent preemption                                   All the schedulers operate under identical experimen-
+frequency on that node.                                                                   tal conditions and workloads, with a unified configuration
+    Phase 3: Adaptive Preemption Execution. If preemp-                                    across all test dimensions.
+tion is deemed necessary and viable, the scheduler selects                                   Workloads: To ensure our evaluation reflects real-world
+the best preemption target.                                                               scenarios, we use a workload derived from production traces
+    Victim Selection: The scheduler scores potential victim                               of our ML platform. We have categorized the tasks from the
+nodes using a cost function 𝑆 (𝑛𝑖 ) = 𝛾 ·𝑑 ( 𝑗𝑘 , 𝑛𝑖 )+𝐶 (𝑛𝑖 ), which                     trace into three distinct workload scenarios to stress-test
+minimizes both the Hilbert distance (for a better fit) and the                            different aspects of the schedulers: (1) Fixed tasks: Periodic,
+preemption cost 𝐶 (𝑛𝑖 ). The cost 𝐶 (𝑛𝑖 ) penalizes preempting                            fixed-interval compute tasks with stable and predictable re-
+tasks that have run for a long time or have high (relative to                             source footprints. Their arrival patterns and runtimes show
+other preemptible tasks) priority, thereby preserving work.                               low variance. (2) Burst Tasks: High-priority, time-critical
+    Execution and State Reconciliation: Once the victim                                   workloads requiring immediate resource allocation, such
+node 𝑛𝑖 and victim tasks P𝑖 are identified, the scheduler sends                           as inference traffic spikes and emergency parameter tuning.
+a PreemptTask command to the Node Agent on 𝑛𝑖 . For GPU                                   These bursts are typically short-lived but intense. (3) Hybrid
+tasks, our Node Agent implements a two-stage preemption:                                  Workload: Mixed workloads combining periodic background
+it first sends SIGUSR1 to the task’s process group, allowing                              tasks with burst interactive requests, simulating production
+for voluntary checkpointing and resource release. If the re-                              AI platforms with concurrent training and serving demands.
+sources are not freed within a short timeout, SIGTERM is sent
+for forced termination. The preempted tasks are requeued
+
+
+
+
+                                                                                    392
+Bridging the GPU Utilization Gap                                                                                                                                         EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+                                                                                             WIND            K8s Default                                         DRF         Synergy
+
+
+
+
+                                                                                                                           System Throughput (tasks/min)
+                                                                                                                                                                                                                 100
+                                                                                    1000
+
+
+
+
+                                                          P99 Task Comp. Time (s)
+Avg. Response Time (s)
+
+
+
+
+                         400                                                                                                                               2.0
+
+
+
+
+                                                                                                                                                                                           GPU Utilization (%)
+                                                                                                                                                                                                                 80
+                                                                                    800
+                         300                                                                                                                               1.5
+                                                                                                                                                                                                                 60
+                                                                                    600
+                         200                                                                                                                               1.0                                                   40
+                                                                                    400
+
+                         100                                                        200                                                                    0.5                                                   20
+
+                          0                                                           0                                                                    0.0                                                    0
+                               Fixed    Burst    Hybrid                                    Fixed     Burst    Hybrid                                             Fixed   Burst    Hybrid                               Fixed    Burst     Hybrid
+                                (a) Avg. Response Time                                     (b) P99 task complete time                                             (c) System throughput                                   (d) GPU utilization
+
+
+Figure 7. Performance evaluation (average response time, P99 task complete time, system throughput, GPU utilization) under
+different task submission intervals.
+7.2 The Basic Performance                                                                                                                         Baseline without prediction or Hilbert optimization; (2) Kube
+We evaluate the performance of Wind across three work-                                                                                            +Prediction: Integrates prediction into the default sched-
+loads: batch training, model inference, and hybrid load, com-                                                                                     uler (demonstrating the "Prediction-only" gain); (3) WIND-0%:
+paring it with K8s Default, DRF, and Synergy. The results                                                                                         Employs Hilbert scheduling but with zero-accuracy/random
+are summarized in Figure 7, which presents average response                                                                                       predictions (demonstrating the "Hilbert-only" gain); (4) WIND-
+time, P99 job completion time (JCT), system throughput, and                                                                                       100%: The theoretical upper bound with Hilbert and perfect
+GPU utilization.                                                                                                                                  predictions; (5) WIND: The full system with realistic predic-
+   In the batch training workload, Wind achieves the high-                                                                                        tion and Hilbert scheduling. Figure 8 presents the boxplots
+est System Throughput (1.42 min/job) and GPU Utilization                                                                                          for these configurations.
+(91.2%), significantly outperforming all baselines. This is                                                                                          Contribution of Prediction Module. Comparing K8s
+due to its accurate resource demand prediction and multi-                                                                                         Default with Kube+Prediction highlights the benefit of
+dimensional resource packing based on Hilbert curves, which                                                                                       foresight alone. As shown in Figure 8(a-c), adding prediction
+reduces resource fragmentation. In contrast, K8s Default                                                                                          to the standard K8s scheduler leads to a downward shift in
+exhibits low throughput and poor resource utilization due to                                                                                      latency and an upward shift in throughput. Quantitatively,
+the lack of resource awareness. For model inference, Wind                                                                                         the median response time improves by 21%, and the system
+delivers the lowest Average Response Time (28.5s) and P99                                                                                         throughput increases from 0.28 to 0.35 tasks/min (a 25%
+Completion Time (65.1s), outperforming Synergy by 37%                                                                                             improvement). Figure 8(d) shows a tighter GPU utilization
+in response time. This is achieved through its ability to                                                                                         distribution (median increased from 65.7% to 74.3%), proving
+quickly match small, latency-sensitive jobs with fragmented                                                                                       that even without Hilbert optimization, prediction reduces
+resources. K8s Default fails to prioritize latency-sensitive                                                                                      resource stragglers.
+tasks, resulting in significantly higher response times. In                                                                                          Robustness via Hilbert Scheduling. A key finding is the
+the hybrid load scenario, Wind maintains the lowest Aver-                                                                                         performance of WIND-0%. Even when the prediction accuracy
+age Response Time(121.5s), 28% better than K8s Default, by                                                                                        is forced to zero, the Hilbert-based packing strategy signifi-
+leveraging intelligent preemption. It preempts lower-priority                                                                                     cantly outperforms K8s Default. The median response time
+jobs to meet the QoS of high-priority inference tasks. With-                                                                                      drops from 210.6s to 180.3s, and throughput increases to 0.32
+out effective preemption, K8s Default and FIFO suffer from                                                                                        tasks/min. Crucially, WIND-0% exhibits much lower variance
+severe delays, with P99 JCT exceeding 1500 seconds.                                                                                               (shorter whiskers in the boxplots) than K8s Default. This
+   Across all three workloads, Wind outperforms all baselines                                                                                     demonstrates that the Hilbert curve mapping provides a ro-
+by efficiently balancing throughput, latency, and resource                                                                                        bust structural foundation by naturally reducing resource
+utilization. Its combination of resource prediction, multi-                                                                                       fragmentation, regardless of prediction quality.
+dimensional mapping, and preemption offers an effective                                                                                              Synergy and Upper Bound. The full WIND system achieves
+scheduling solution for large-scale GPU clusters.                                                                                                 its best performance by coupling both modules. While WIND-
+                                                                                                                                                  100% sets the theoretical ceiling (e.g., 0.78 tasks/min through-
+7.3  Ablation Study: Prediction and Hilbert                                                                                                       put, 94.1% GPU utilization), the standard WIND with its real-
+     Scheduling                                                                                                                                   world model operates remarkably close to this optimum. It
+To decompose the performance gains of WIND, we conducted                                                                                          achieves a throughput of 0.70 tasks/min and 91.2% GPU uti-
+an ablation study focusing on two core components: the                                                                                            lization. The gap between WIND-0% and WIND (0.32 vs 0.70
+Prediction Module and the Hilbert-based Multidimensional                                                                                          tasks/min) quantifies the additional value that accurate tem-
+Packing. We evaluate five configurations: (1) K8s Default:                                                                                        poral predictions bring to the spatial packing process.
+
+
+
+
+                                                                                                                        393
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                                                                                 Yilei Lu, et al.
+
+
+
+
+                                                                                                 System Throughput (tasks/min)
+                                                                      600                                                                                                             100
+                         250
+Avg. Response Time (s)
+
+
+
+
+                                                                                                                                 0.8
+
+
+
+
+                                                                                                                                                                GPU Utilization (%)
+                                                                      500                                                                                                             80
+                         200
+
+
+
+
+                                                        P99 TCT (s)
+                                                                      400                                                        0.6
+                         150                                                                                                                                                          60
+                                                                      300
+                                                                                                                                 0.4
+                         100                                                                                                                                                          40
+                                                                      200
+                         50                                                                                                      0.2                                                  20
+                                                                      100
+
+             0                                                     0                                                             0.0                                       0
+                   lt   on -0% 00% IND                                   lt   on -0% 00% IND                ult  ion   0% 00% IND                                                lt   on -0% 00% IND
+            e fau icti      D    1 W                              e fau icti      D   1 W                efa dict ND-       -1 W                                           e fau icti    D    1 W
+        s D       re
+                      d   IN ND-                              s D       re
+                                                                            d   IN ND-              s  D      re   I     ND                                           s  D      re
+                                                                                                                                                                                    d  IN ND-
+    K 8         P       W     I                           K 8         P       W     I            K 8        P    W     I                                           K 8        P       W    I
+            e +             W                                     e +             W                     e +          W                                                    e +            W
+        u b                                                   u b                                    ub                                                                u b
+      K                                                     K                                      K                                                                 K
+                               (a) Avg. Response Time                       (b) P99 TCT                                                 (c) System Throughput                               (d) GPU Utilization
+
+
+                               Figure 8. Performance of ablation study: Kube+Prediction (Prediction-only) vs. WIND-0% (Hilbert-only).
+
+   These results validate the functional independence and                                                                        response time from 4.2 seconds to 2.8 seconds, while main-
+combined efficacy of our design: (1) Prediction provides the                                                                     taining sub-second response (0.5 seconds) during idle periods.
+necessary look-ahead to avoid future bottlenecks; (2) Hilbert                                                                    This consistent improvement stems from Wind’s resource
+Scheduling ensures stable and efficient spatial packing even                                                                     quota management established through historical load anal-
+under prediction uncertainty; and (3) together, they bridge                                                                      ysis, enabling proactive resource window identification prior
+the gap between reactive baselines and ideal proactive sched-                                                                    to task arrival. The Hilbert curve optimization compresses
+uling.                                                                                                                           candidate node localization to under 100 milliseconds, achiev-
+                                                                                                                                 ing order-of-magnitude efficiency gains compared to the
+7.4 Performance on Task Submitted Patterns                                                                                       linear scanning strategies of other schedulers.
+We constructed a comprehensive workload comprising 200                                                                              System throughput improvements are most pronounced
+tasks categorized into eight distinct resource consumption                                                                       under high-pressure scenarios, where Wind demonstrates
+profiles, ranging from 1/8 to full resource (8/8) utilization.                                                                   clear superiority. In the burst load scenario, it achieves a
+These profiles correspond to CPU allocations from 2 to 16                                                                        throughput of 8.5 tasks/min, a 46.6% gain over the K8s De-
+cores and memory requirements from 8GB to 64GB. Task de-                                                                         fault scheduler (5.8 tasks/min) and also significantly sur-
+sign follows the principle of positive correlation between re-                                                                   passing DRF and Synergy. The technical foundation of this
+source demands and execution time, where higher resource-                                                                        enhancement lies in Wind’s transformation of traditional
+consuming tasks exhibit proportionally longer runtimes,                                                                          multi-dimensional resource matching into one-dimensional
+thereby simulating the characteristics of real-world compute-                                                                    proximity search. Spatial locality preservation ensures nat-
+intensive applications.                                                                                                          ural clustering of similar resource requirements, thereby
+   To evaluate scheduler performance under varying system                                                                        maintaining high task completion rates even under intensive
+pressures, we established five task submission patterns: zero-                                                                   resource contention.
+interval submission (200 tasks submitted simultaneously,                                                                            Wind maintains consistently high resource utilization,
+simulating burst peak loads), 10-second intervals (high-load                                                                     staying above 92% across all patterns. This contrasts sharply
+scenarios), 20-second intervals (medium load), 40-second                                                                         with the wider fluctuation and lower efficiency of baseline
+intervals (light load), and 80-second intervals (system idle                                                                     schedulers, such as K8s Default (78.4-92.7%). The 17.7% im-
+state). This progressive load design enables systematic obser-                                                                   provement in burst scenarios (92.3% vs. 78.4%) particularly
+vation of scheduling strategy behaviors across system states                                                                     highlights Wind’s dynamic resource reclamation capa-
+ranging from extreme bursts to relative quiescence.                                                                              bility. When compute nodes complete tasks and release
+   Figure 9 presents a comparative performance analysis of                                                                       resources, Wind utilizes real-time Hilbert values to imme-
+Wind against three baseline schedulers: K8s Default, DRF,                                                                        diately identify these resource opportunity windows and
+and Synergy. The results across five distinct task submission                                                                    achieve instant reallocation, reducing resource reuse inter-
+patterns reveal Wind’s substantial advantages in response                                                                        vals from traditional minute-scale to second-scale operations.
+time, system throughput, and resource utilization metrics.
+   Wind consistently outperforms all baseline schedulers,                                                                        7.5 Resource Saving
+achieving significant response time reductions. For instance,                                                                    Figure 10 further validates the advantages of the Wind sched-
+compared to the K8s Default scheduler, it registers improve-                                                                     uler from the perspective of resource savings in a 20-node
+ments of 33-48% across all load patterns. Under burst load                                                                       cluster environment. In the resource usage comparison exper-
+scenarios (0-second intervals), Wind dramatically reduces                                                                        iment, Wind demonstrates superior resource consolidation
+
+
+
+
+                                                                                               394
+ Bridging the GPU Utilization Gap                                                                                                                                                                                                                                                                   EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+                                                                                                                                                                                                                                                             WIND      K8s Default      DRF       Synergy
+
+                                                                                                                                                                                                                                                        20                                                                    100
+                                          4
+
+
+
+
+                                                                                                                                                                                                                               Throughput (tasks/min)
+                      Response Time (s)
+
+
+
+
+                                                                                                                                                                                                                                                                                                            Utilization (%)
+                                                                                                                                                                                                                                                        15
+                                          3                                                                                                                                                                                                                                                                                   90
+
+                                          2                                                                                                                                                                                                             10
+
+                                                                                                                                                                                                                                                                                                                              80
+                                          1                                                                                                                                                                                                             5
+
+
+                                          0                                                                                                                                                                                                             0                                                                     70
+                                                            Burst                                 High                       Medium Light                                                                  Idle                                                Burst   High    Medium Light       Idle                              Burst    High     Medium Light       Idle
+                                                             (0s)                                 (10s)                       (20s) (40s)                                                                 (80s)                                                 (0s)   (10s)    (20s) (40s)      (80s)                               (0s)    (10s)     (20s) (40s)      (80s)
+                                                                                            (a) Average Response Time                                                                                                                                                  (b) System Throughput                                                 (c) Resource Utilization
+
+
+ Figure 9. Performance evaluation (average response time, system throughput, resource utilization) under different task
+ submission intervals.
+                              420
+                                                                          Table 5. Reliability of Wind.
+                      15.0                    14.0 14.0               14.0
+                                                                                                                                            Kube-scheduler                                                       K8s default                                             405
+Used Machine Number
+
+
+
+
+                                                                                                                                                                                                                                                                400
+                                                                                                                                            Wind Scheduler                                                       WIND
+                                                          13.0 13.0                 13.0
+                                                                                                                                                                                                    400
+                                                                                                                                                                              GPU Utilization (W)
+
+
+
+
+                      12.5                                                   12.0          12.0   12.0                                      DRF                                                                  DRF
+                                                                                                               11.0          11.0           Synergy                                                              Synergy                                                                 Failure Category                             Count            %    Rate/1K days
+                                                                                                                      10.0                                                                          380
+                      10.0                                                                               9.0                                          9.0
+                                                                                                                                                                                                                                                                         370
+
+
+                                                                                                                                                                                                                                                                360
+                                                                                                                                          8.0
+                                                                                                                                                                                                    360
+                                                                                                                                                                                                                                                                                         Faulty GPU                                         148      30.1               0.17
+                                                                                                                                                                                                                                     355
+
+                          7.5                                                                                                                   7.0                                                        350
+                                                                                                                                                                                                                                     345                        345
+                                                                                                                                                                                                                                                                         350
+
+                                                                                                                                                                  6.0
+                                                                                                                                                                                                           340
+
+                                                                                                                                                                                                    340                              335
+
+                                                                                                                                                                                                                                                                                         GPU HBM3 Memory                                     72      17.2               0.08
+                                                                                                                                    5.0                                 5.0
+                          5.0                                                                                                                               4.0
+                                                                                                                                                                                                           330
+                                                                                                                                                                                                                                     325                                 325
+                                                                                                                                                                                                           320
+
+                          2.5                                                                                                                                                                       320                                                         315
+
+                                                                                                                                                                                                                                                                                         GPU SRAM Memory                                     19       4.5               0.02
+                          0.0                                                                                                                                                                       300
+                                               Burst
+                                                (0s)
+                                                        High Medium Light
+                                                        (10s)   (20s)  (40s)
+                                                                                Idle
+                                                                               (80s)
+                                                                                                                                                                                                          5.0      7.5 10.0 12.5 15.0 17.5 20.0
+                                                                                                                                                                                                                         Machine Number
+                                                                                                                                                                                                                                                                                         GPU System Processor                                17       4.1               0.02
+                                                   (a) Resource Usage Comparison                                                                                                                                  (b) Burst Scenario Performance
+                                                                                                                                                                                                                                                                                         Silent Data Corruption                               6       1.4               0.01
+                                                                                                                                                                                                                                                                                         GPU Thermal Issues                                   6       1.4               0.01
+                                                              Figure 10. Performance of resource saving.
+                                                                                                                                                                                                                                                                                         Total                                              268      58.7               0.31
+
+ capabilities across all workload intensities. Under medium-
+ load scenarios, Wind requires only 9 machines to complete                                                                                                                                                                                                                           for inter-node communication with dedicated 4-lane bonded
+ tasks, representing a 25% reduction in resource consumption                                                                                                                                                                                                                         storage networking. Reliability is enhanced through hierar-
+ compared to K8s Default’s 12 machines. The performance                                                                                                                                                                                                                              chical monitoring (ranging from 100 ms to 15 s) and a three-
+ gap becomes even more pronounced in lighter workloads: in                                                                                                                                                                                                                           tier storage hierarchy consisting of Local NVMe, Distributed
+ light-load and idle scenarios, Wind uses 5 and 4 machines re-                                                                                                                                                                                                                       Cache, and GPFS for efficient checkpointing. Our evaluation
+ spectively, compared to Kube-scheduler’s 11 and 9 machines,                                                                                                                                                                                                                         spans diverse training workloads across the entire cluster.
+ demonstrating significant resource-saving effects. This dif-                                                                                                                                                                                                                           During 54 days of continuous monitoring, we collected
+ ferentiated performance verifies the technical advantages of                                                                                                                                                                                                                        comprehensive operational data and recorded 419 system
+ advanced scheduling algorithms in resource saving.                                                                                                                                                                                                                                  interruption events. Analysis reveals that GPU-related fail-
+    GPU utilization analysis in burst scenarios reveals the per-                                                                                                                                                                                                                     ures remain the dominant interruption source, accounting
+ formance potential of the Wind scheduler across different                                                                                                                                                                                                                           for 63.9% (268 incidents) of total events, with detailed fail-
+ cluster scales (5 to 20 machines). Wind’s GPU utilization                                                                                                                                                                                                                           ure types shown in Table 5. Among GPU failure categories,
+ gradually increases from an initial 350W at 5 machines to                                                                                                                                                                                                                           general GPU functional failures constitute 30.1% and HBM3
+ over 405W at 20 machines, achieving a 20-25% performance                                                                                                                                                                                                                            high-bandwidth memory failures represent 17.2%. In deploy-
+ improvement compared to K8s Default’s stable fluctuation                                                                                                                                                                                                                            ment, Wind includes an automated self-healing workflow for
+ range of 315-325W. DRF and Synergy demonstrate intermedi-                                                                                                                                                                                                                           GPU faults. When a failure is detected, the system marks the
+ ate performance levels, with GPU utilization reaching 350W                                                                                                                                                                                                                          node unschedulable, waits for running tasks to finish, and
+ and 370W respectively at 20 machines. This gap holds im-                                                                                                                                                                                                                            then replaces the node. This reduces manual work and short-
+ portant cost-efficiency value for resource-intensive AI work-                                                                                                                                                                                                                       ens average recovery time from about 12 hours to roughly 2
+ loads, fully proving the effectiveness of the Wind scheduler’s                                                                                                                                                                                                                      hours.
+ predictive mechanism combined with geometric optimiza-                                                                                                                                                                                                                                 Experimental results demonstrate that Wind achieves two
+ tion in large-scale cluster environments.                                                                                                                                                                                                                                           significant reliability improvements. First, by integrating
+                                                                                                                                                                                                                                                                                     history-based task parameter prediction, the system accu-
+7.6 Reliability                                                                                                                                                                                                                                                                      rately estimates resource requirements based on historical ex-
+We systematically evaluate Wind’s reliability in a large-                                                                                                                                                                                                                            ecution patterns, reducing task failures and system instability
+scale heterogeneous cluster of 13,302 nodes, comprising over                                                                                                                                                                                                                         caused by resource misconfiguration. Second, Wind’s fine-
+100,000 NVIDIA GPUs ranging from H100/H800 to the RTX                                                                                                                                                                                                                                grained scheduling mechanisms combined with dynamic
+4090 series. Each node is equipped with up to 192 CPU cores                                                                                                                                                                                                                          resource quotas and preemption-aware policies substantially
+and 2 TB RAM, utilizing NVLink for intra-node and IB/RoCE                                                                                                                                                                                                                            enhance fault recovery capabilities. Measurements show that
+
+
+
+
+                                                                                                                                                                                                                                                                               395
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                      Yilei Lu, et al.
+
+
+over 90% of GPU-related failures can be rapidly resolved                   We implement cooldown windows and cost modeling to en-
+through automated restart procedures or resource realloca-                 sure preemption remains policy-driven and low-frequency,
+tion strategies without manual intervention or hardware                    preserving overall system throughput and stability.
+replacement.                                                               Fairness, Efficiency, and Future Directions. Traditional
+                                                                           resource allocation models emphasize tenant isolation but
+8    Related Works                                                         often cause resource fragmentation and reduced throughput
+AI Workload Scheduling and Resource Management.                            in high-density GPU clusters. Wind replaces rigid partition-
+Scheduling for AI workloads often relies on established tech-              ing with priority-aware Hilbert mappings and flexible quota
+niques like resource partitioning and queuing (e.g., Tire-                 governance, enabling various AI workloads to co-locate with
+sias [17], ASTRAEA [64]), workload-resource affinity model-                minimal interference. Our operational experience shows that
+ing [14, 20, 53], and flexible job arrangements via time slicing           hierarchical prioritization is not optional but a requirement
+or migration [8, 23, 57]. While systems like Kubernetes [7]                for handling volatility in multi-tenant environments.
+provide basic quotas, and others explore time-sharing [1, 57],                Building on this foundation, we plan to extend Hilbert-
+they often lack adaptive allocation for dynamic workloads.                 based scheduling to explicitly encode network topology
+Dynamic Colocation and GPU Sharing. Mechanisms                             and interconnect affinity. By mapping communication pat-
+for dynamic GPU colocation and sharing frequently uti-                     terns, for example NVLink and InfiniBand constraints, into
+lize spatial or spatio-temporal multiplexing (GSLICE [13],                 the space-filling curve, the scheduler can naturally mitigate
+Gpulet [10]) and interference management [62]. Other works                 cross-node bottlenecks in large-scale distributed training.
+improve throughput via model placement and parallelism [22,                Moving from reactive to proactive orchestration remains a
+31]. However, these approaches are often tailored for infer-               key objective. Integrating lightweight online learning into
+ence workloads and lack a unified framework integrating                    the scheduling loop would allow Wind to anticipate work-
+prediction and preemption-aware scheduling.                                load phase shifts and adjust placement before contention
+Predictive and Locality-Aware Allocation. Predictive                       emerges. Our goal is to evolve GPU management into a self-
+scheduling has been explored using machine learning for job                optimizing closed-loop system that uses real-time telemetry,
+completion prediction (Prophet [67]), reinforcement learn-                 including compute performance and hardware health, to re-
+ing for allocation (Morpheus [12]), and workload forecast-                 calibrate policies dynamically. This direction positions Wind
+ing for serverless computing [18]. In parallel, locality-aware             as a core component of next-generation autonomous infras-
+allocation is addressed through basic NUMA-aware mecha-                    tructure that can handle increasing heterogeneity in both
+nisms [7] or affinity-based placement [58]. Although space-                hardware and workloads.
+filling curves are used for data placement in distributed
+systems [28, 43], their application to priority-aware GPU                  10    Conclusion
+scheduling remains largely unexplored, highlighting a key                  We present Wind, a novel scheduling framework designed
+research gap.                                                              to overcome critical challenges in modern AI cluster re-
+                                                                           source management, including inefficient multi-dimensional
+9    Discussion and Lessons Learned                                        resource coordination, limited predictive capabilities, and
+Stability and Simplicity in Prediction. Real-world deploy-                 the inherent tension between isolation and sharing. Wind
+ment reveals that prediction stability is as critical as accuracy.         achieves this through a unique combination of predictive
+To handle distribution shifts in production, Wind employs                  modeling and geometric resource mapping. By replacing
+conservative fallback mechanisms and hybrid policies. The                  reactive scheduling with proactive resource planning via
+robustness of Hilbert-based spatial packing is vital here, pre-            history-based parameter prediction and implementing Hilbert
+serving locality and load balance even when predictions                    curve-based multi-dimensional resource allocation, Wind
+are imperfect. Furthermore, we found that simplicity often                 fundamentally transforms how heterogeneous computing
+outweighs marginal optimality gains. By projecting multi-                  resources are managed in production AI environments.
+dimensional resources into a one-dimensional Hilbert space,                   Our evaluation shows Wind outperforms existing solu-
+Wind ensures deterministic placement and reduces schedul-                  tions across key metrics, particularly excelling with bursty
+ing jitter, particularly for latency-sensitive workloads.                  workloads that typically challenge conventional schedulers.
+Balancing Isolation, Sharing, and Preemption. A fun-                       The system has been successfully deployed in production as
+damental tension exists between resource isolation and uti-                part of the Baihai IDP platform, where it has delivered effi-
+lization. While naive sharing can cause 18–29% performance                 cient and reliable computing services to thousands of clients
+degradation, strict isolation leads to underutilization. Wind              for multiple years.
+resolves this through predictive scheduling, elastic quotas,
+and preemption-aware sharing. However, preemption must
+be used sparingly due to checkpointing and cache overheads.
+
+
+
+
+                                                                     396
+Bridging the GPU Utilization Gap                                                                        EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+Acknowledgments                                                                        [15] Yanjie Gao, Yichen He, Xinze Li, Bo Zhao, Haoxiang Lin, Yoyo Liang,
+                                                                                            Jing Zhong, Hongyu Zhang, Jingzhou Wang, Yonghua Zeng, et al. 2024.
+We appreciate our shepherd Rohan Sanjeev Patil and anony-                                   An empirical study on low gpu utilization of deep learning jobs. In
+mous reviewers’ constructive comments for improving the                                     Proceedings of the IEEE/ACM 46th International Conference on Software
+quality of this paper.                                                                      Engineering. 1–13.
+                                                                                       [16] Ali Ghodsi, Matei Zaharia, Benjamin Hindman, Andy Konwinski, Scott
+References                                                                                  Shenker, and Ion Stoica. 2011. Dominant resource fairness: Fair alloca-
+                                                                                            tion of multiple resource types. In 8th USENIX symposium on networked
+ [1] Sohaib Ahmad, Hui Guan, Brian D Friedman, Thomas Williams,
+                                                                                            systems design and implementation (NSDI 11).
+     Ramesh K Sitaraman, and Thomas Woo. 2024. Proteus: A high-
+                                                                                       [17] Juncheng Gu, Mosharaf Chowdhury, Kang G Shin, Yibo Zhu, Myeong-
+     throughput inference-serving system with accuracy scaling. In Pro-
+                                                                                            jae Jeon, Junjie Qian, Hongqiang Liu, and Chuanxiong Guo. 2019.
+     ceedings of the 29th ACM International Conference on Architectural
+                                                                                            Tiresias: A GPU cluster manager for distributed deep learning. In 16th
+     Support for Programming Languages and Operating Systems, Volume 1.
+                                                                                            USENIX Symposium on Networked Systems Design and Implementation
+     318–334.
+                                                                                            (NSDI 19). 485–500.
+ [2] Xin Ai, Zijian Li, Yuanyi Zhu, Zixuan Chen, Sen Liu, and Yang Xu. 2025.
+                                                                                       [18] Luanzheng Guo, Dong Li, and Ignacio Laguna. 2021. Paris: Predicting
+     NetJIT: Bridging the Gap from Traffic Prediction to Preknowledge for
+                                                                                            application resilience using machine learning. J. Parallel and Distrib.
+     Distributed Machine Learning. Proceedings of the ACM on Measurement
+                                                                                            Comput. 152 (2021), 111–124.
+     and Analysis of Computing Systems 9, 1 (2025), 1–25.
+                                                                                       [19] Kai Han, An Xiao, Enhua Wu, Jianyuan Guo, Chunjing Xu, and Yunhe
+ [3] Hadeel Albahar, Shruti Dongare, Yanlin Du, Nannan Zhao, Arnab K
+                                                                                            Wang. 2021. Transformer in transformer. Advances in neural informa-
+     Paul, and Ali R Butt. 2022. Schedtune: A heterogeneity-aware gpu
+                                                                                            tion processing systems 34 (2021), 15908–15919.
+     scheduler for deep learning. In 2022 22nd IEEE International Symposium
+                                                                                       [20] Qinghao Hu, Peng Sun, Shengen Yan, Yonggang Wen, and Tianwei
+     on Cluster, Cloud and Internet Computing (CCGrid). IEEE, 695–705.
+                                                                                            Zhang. 2021. Characterization and prediction of deep learning work-
+ [4] Laith Alzubaidi, Jinglan Zhang, Amjad J Humaidi, Ayad Al-Dujaili,
+                                                                                            loads in large-scale gpu datacenters. In Proceedings of the International
+     Ye Duan, Omran Al-Shamma, José Santamaría, Mohammed A Fad-
+                                                                                            Conference for High Performance Computing, Networking, Storage and
+     hel, Muthana Al-Amidie, and Laith Farhan. 2021. Review of deep
+                                                                                            Analysis. 1–15.
+     learning: concepts, CNN architectures, challenges, applications, future
+                                                                                       [21] Tyler Hunt, Zhipeng Jia, Vance Miller, Christopher J Rossbach, and
+     directions. Journal of big Data 8 (2021), 1–74.
+                                                                                            Emmett Witchel. 2019. Isolation and beyond: Challenges for system
+ [5] Gérard Biau and Erwan Scornet. 2016. A random forest guided tour.
+                                                                                            security. In Proceedings of the Workshop on Hot Topics in Operating
+     Test 25, 2 (2016), 197–227.
+                                                                                            Systems. 96–104.
+ [6] Arthur R Butz. 2006. Alternative algorithm for Hilbert’s space-filling
+                                                                                       [22] Jinwoo Jeong, Seungsu Baek, and Jeongseob Ahn. 2023. Fast and
+     curve. IEEE Trans. Comput. 100, 4 (2006), 424–426.
+                                                                                            efficient model serving using multi-GPUs with direct-host-access. In
+ [7] Carmen Carrión. 2022. Kubernetes scheduling: Taxonomy, ongoing
+                                                                                            Proceedings of the Eighteenth European Conference on Computer Systems.
+     issues and challenges. Comput. Surveys 55, 7 (2022), 1–37.
+                                                                                            249–265.
+ [8] Shubham Chaudhary, Ramachandran Ramjee, Muthian Sivathanu,
+                                                                                       [23] Zhuoran Ji and Cho-Li Wang. 2022. Compiler-Directed Incremental
+     Nipun Kwatra, and Srinidhi Viswanatha. 2020. Balancing efficiency
+                                                                                            Checkpointing for Low Latency GPU Preemption. In 2022 IEEE Inter-
+     and fairness in heterogeneous GPU clusters for deep learning. In
+                                                                                            national Parallel and Distributed Processing Symposium (IPDPS). IEEE,
+     Proceedings of the Fifteenth European Conference on Computer Systems.
+                                                                                            751–761.
+     1–16.
+                                                                                       [24] Chenyu Jiang, Zhen Jia, Shuai Zheng, Yida Wang, and Chuan Wu. 2024.
+ [9] Tianqi Chen and Carlos Guestrin. 2016. Xgboost: A scalable tree
+                                                                                            DynaPipe: Optimizing multi-task training through dynamic pipelines.
+     boosting system. In Proceedings of the 22nd acm sigkdd international
+                                                                                            In Proceedings of the Nineteenth European Conference on Computer
+     conference on knowledge discovery and data mining. 785–794.
+                                                                                            Systems. 542–559.
+[10] Seungbeom Choi, Sunho Lee, Yeonjae Kim, Jongse Park, Youngjin
+                                                                                       [25] Ouwen Jin, Qinghui Xing, Ying Li, Shuiguang Deng, Shuibing He, and
+     Kwon, and Jaehyuk Huh. 2022. Serving heterogeneous machine learn-
+                                                                                            Gang Pan. 2023. Mapping very large scale spiking neuron network to
+     ing models on Multi-GPU servers with Spatio-Temporal sharing. In
+                                                                                            neuromorphic hardware. In Proceedings of the 28th ACM International
+     2022 USENIX Annual Technical Conference (USENIX ATC 22). 199–216.
+                                                                                            Conference on Architectural Support for Programming Languages and
+[11] Arnab Choudhury, Yang Wang, Tuomas Pelkonen, Kutta Srinivasan,
+                                                                                            Operating Systems, Volume 3. 419–432.
+     Abha Jain, Shenghao Lin, Delia David, Siavash Soleimanifard, Michael
+                                                                                       [26] Nikhil Ketkar, Jojo Moolayil, Nikhil Ketkar, and Jojo Moolayil. 2021.
+     Chen, Abhishek Yadav, et al. 2024. MAST: Global scheduling of ML
+                                                                                            Introduction to pytorch. Deep learning with python: learn best practices
+     training across Geo-Distributed datacenters at hyperscale. In 18th
+                                                                                            of deep learning models with PyTorch (2021), 27–91.
+     USENIX Symposium on Operating Systems Design and Implementation
+                                                                                       [27] Rudolf Kruse, Sanaz Mostaghim, Christian Borgelt, Christian Braune,
+     (OSDI 24). 563–580.
+                                                                                            and Matthias Steinbrecher. 2022. Multi-layer perceptrons. In Compu-
+[12] Sina Darabi, Mohammad Sadrosadati, Negar Akbarzadeh, Joël Lindeg-
+                                                                                            tational intelligence: a methodological introduction. Springer, 53–124.
+     ger, Mohammad Hosseini, Jisung Park, Juan Gómez-Luna, Onur Mutlu,
+                                                                                       [28] Oh-Kyoung Kwon, Ji-hoon Kang, Seungchul Lee, Wonjung Kim, and
+     and Hamid Sarbazi-Azad. 2022. Morpheus: Extending the last level
+                                                                                            Junehwa Song. 2022. Efficient task-mapping of parallel applications us-
+     cache capacity in GPU systems using idle GPU core resources. In 2022
+                                                                                            ing a space-filling curve. In Proceedings of the International Conference
+     55th IEEE/ACM International Symposium on Microarchitecture (MICRO).
+                                                                                            on Parallel Architectures and Compilation Techniques. 384–397.
+     IEEE, 228–244.
+                                                                                       [29] Baolin Li, Viiay Gadepally, Siddharth Samsi, and Devesh Tiwari. 2022.
+[13] Aditya Dhakal, Sameer G Kulkarni, and KK Ramakrishnan. 2020.
+                                                                                            Characterizing multi-instance gpu for machine learning workloads. In
+     Gslice: controlled spatial sharing of gpus for a scalable inference plat-
+                                                                                            2022 IEEE International Parallel and Distributed Processing Symposium
+     form. In Proceedings of the 11th ACM Symposium on Cloud Computing.
+                                                                                            Workshops (IPDPSW). IEEE, 724–731.
+     492–506.
+                                                                                       [30] Zichong Li, Lan Zhang, Mu Yuan, Miaohui Song, and Qi Song. 2023.
+[14] Wei Gao, Zhisheng Ye, Peng Sun, Yonggang Wen, and Tianwei Zhang.
+                                                                                            Efficient deep ensemble inference via query difficulty-dependent task
+     2021. Chronus: A novel deadline-aware scheduler for deep learning
+                                                                                            scheduling. In 2023 IEEE 39th International Conference on Data Engi-
+     training jobs. In Proceedings of the ACM Symposium on Cloud Comput-
+                                                                                            neering (ICDE). IEEE, 1005–1018.
+     ing. 609–623.
+
+
+
+
+                                                                                 397
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                               Yilei Lu, et al.
+
+
+[31] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng,                       13693–13696.
+     Xin Jin, Yanping Huang, Zhifeng Chen, Hao Zhang, Joseph E Gonzalez,                [48] Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang,
+     et al. 2023. AlpaServe: Statistical multiplexing with model parallelism                 Yong Li, and Wei Lin. 2024. Llumnix: Dynamic scheduling for large
+     for deep learning serving. In 17th USENIX Symposium on Operating                        language model serving. In 18th USENIX Symposium on Operating
+     Systems Design and Implementation (OSDI 23). 663–679.                                   Systems Design and Implementation (OSDI 24). 173–191.
+[32] Chengzhi Lu, Huanle Xu, Kejiang Ye, Guoyao Xu, Liping Zhang,                       [49] Shujiong Tang, Yue Yu, Hui Wang, Guiliang Wang, Wuhui Chen,
+     Guodong Yang, and Chengzhong Xu. 2023. Understanding and op-                            Zenglin Xu, Song Guo, and Wen Gao. 2023. A survey on scheduling
+     timizing workloads for unified resource management in large cloud                       techniques in computing and network convergence. IEEE Communi-
+     platforms. In Proceedings of the Eighteenth European Conference on                      cations Surveys & Tutorials 26, 1 (2023), 160–195.
+     Computer Systems. 416–432.                                                         [50] Qiange Wang, Xin Ai, Yanfeng Zhang, Jing Chen, and Ge Yu. 2023.
+[33] Donald W Marquardt and Ronald D Snee. 1975. Ridge regression in                         HyTGraph: GPU-Accelerated Graph Processing with Hybrid Trans-
+     practice. The American Statistician 29, 1 (1975), 3–20.                                 fer Management. In 2023 IEEE 39th International Conference on Data
+[34] McKinsey & Company. 2024. AI power: Expanding data center capacity                      Engineering (ICDE). IEEE, 558–571.
+     to meet growing demand. Online. https://www.mckinsey.com/indus                     [51] Yidi Wang, Mohsen Karimi, Yecheng Xiang, and Hyoseung Kim. 2021.
+     tries/technology-media-and-telecommunications/our-insights/ai-                          Balancing energy efficiency and real-time performance in GPU sched-
+     power-expanding-data-center-capacity-to-meet-growing-demand                             uling. In 2021 IEEE Real-Time Systems Symposium (RTSS). IEEE, 110–
+     Accessed: 2025-03-19.                                                                   122.
+[35] Jayashree Mohan, Amar Phanishayee, Janardhan Kulkarni, and Vijay                   [52] Sanford Weisberg. 2005. Applied linear regression. Vol. 528. John Wiley
+     Chidambaram. 2022. Looking beyond GPUs for DNN scheduling                               & Sons.
+     on Multi-Tenant clusters. In 16th USENIX Symposium on Operating                    [53] Qizhen Weng, Wencong Xiao, Yinghao Yu, Wei Wang, Cheng Wang,
+     Systems Design and Implementation (OSDI 22). 579–596.                                   Jian He, Yong Li, Liping Zhang, Wei Lin, and Yu Ding. 2022. MLaaS in
+[36] Philipp Moritz, Robert Nishihara, Stephanie Wang, Alexey Tumanov,                       the wild: Workload analysis and scheduling in Large-Scale heteroge-
+     Richard Liaw, Eric Liang, Melih Elibol, Zongheng Yang, William Paul,                    neous GPU clusters. In 19th USENIX Symposium on Networked Systems
+     Michael I Jordan, et al. 2018. Ray: A distributed framework for emerg-                  Design and Implementation (NSDI 22). 945–960.
+     ing AI applications. In 13th USENIX symposium on operating systems                 [54] Qizhen Weng, Lingyun Yang, Yinghao Yu, Wei Wang, Xiaochuan Tang,
+     design and implementation (OSDI 18). 561–577.                                           Guodong Yang, and Liping Zhang. 2023. Beware of fragmentation:
+[37] Kelvin KW Ng, Henri Maxime Demoulin, and Vincent Liu. 2023. Paella:                     Scheduling GPU-Sharing workloads with fragmentation gradient de-
+     Low-latency model serving with software-defined gpu scheduling. In                      scent. In 2023 USENIX Annual Technical Conference (USENIX ATC 23).
+     Proceedings of the 29th Symposium on Operating Systems Principles.                      995–1008.
+     595–610.                                                                           [55] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond,
+[38] Chandandeep Singh Pabla. 2009. Completely fair scheduler. Linux                         Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Rémi Louf,
+     Journal 2009, 184 (2009), 4.                                                            Morgan Funtowicz, et al. 2020. Transformers: State-of-the-art natural
+[39] Bo Pang, Erik Nijkamp, and Ying Nian Wu. 2020. Deep learning with                       language processing. In Proceedings of the 2020 conference on empirical
+     tensorflow: A review. Journal of Educational and Behavioral Statistics                  methods in natural language processing: system demonstrations. 38–45.
+     45, 2 (2020), 227–248.                                                             [56] Bingyang Wu, Zili Zhang, Zhihao Bai, Xuanzhe Liu, and Xin Jin. 2023.
+[40] David Patterson, Joseph Gonzalez, Urs Hölzle, Quoc Le, Chen Liang,                      Transparent GPU sharing in container clouds for deep learning work-
+     Lluis-Miquel Munguia, Daniel Rothchild, David R So, Maud Texier,                        loads. In 20th USENIX Symposium on Networked Systems Design and
+     and Jeff Dean. 2022. The carbon footprint of machine learning training                  Implementation (NSDI 23). 69–85.
+     will plateau, then shrink. Computer 55, 7 (2022), 18–28.                           [57] Wencong Xiao, Romil Bhardwaj, Ramachandran Ramjee, Muthian
+[41] Sudarsanan Rajasekaran, Manya Ghobadi, and Aditya Akella. 2024.                         Sivathanu, Nipun Kwatra, Zhenhua Han, Pratyush Patel, Xuan Peng,
+     CASSINI:Network-Aware Job Scheduling in Machine Learning Clus-                          Hanyu Zhao, Quanlu Zhang, et al. 2018. Gandiva: Introspective cluster
+     ters. In 21st USENIX Symposium on Networked Systems Design and                          scheduling for deep learning. In 13th USENIX Symposium on Operating
+     Implementation (NSDI 24). 1403–1420.                                                    Systems Design and Implementation (OSDI 18). 595–610.
+[42] Zeineb Rejiba and Javad Chamanara. 2022. Custom scheduling in                      [58] Wencong Xiao, Shiru Ren, Yong Li, Yang Zhang, Pengyang Hou, Zhi
+     kubernetes: A survey on common problems and solution approaches.                        Li, Yihui Feng, Wei Lin, and Yangqing Jia. 2020. AntMan: Dynamic
+     Comput. Surveys 55, 7 (2022), 1–37.                                                     scaling on GPU clusters for deep learning. In 14th USENIX Symposium
+[43] Hans Sagan. 2012. Space-filling curves. Springer Science & Business                     on Operating Systems Design and Implementation (OSDI 20). 533–548.
+     Media.                                                                             [59] Kaiqiang Xu, Decang Sun, Han Tian, Junxue Zhang, and Kai Chen.
+[44] David Sculley, Gary Holt, Daniel Golovin, Eugene Davydov, Todd                          2025. GREEN: Carbon-efficient Resource Scheduling for Machine
+     Phillips, Dietmar Ebner, Vinay Chaudhary, Michael Young, Jean-                          Learning Clusters. In 22nd USENIX Symposium on Networked Systems
+     Francois Crespo, and Dan Dennison. 2015. Hidden technical debt                          Design and Implementation (NSDI 25). 999–1014.
+     in machine learning systems. Advances in neural information process-               [60] Kaiqiang Xu, Decang Sun, Hao Wang, Zhenghang Ren, Xinchen Wan,
+     ing systems 28 (2015).                                                                  Xudong Liao, Zilong Wang, Junxue Zhang, and Kai Chen. 2025. Design
+[45] Khaldoun Senjab, Sohail Abbas, Naveed Ahmed, and Atta ur Rehman                         and Operation of Shared Machine Learning Clusters on Campus. In
+     Khan. 2023. A survey of Kubernetes scheduling algorithms. Journal                       Proceedings of the 30th ACM International Conference on Architectural
+     of Cloud Computing 12, 1 (2023), 87.                                                    Support for Programming Languages and Operating Systems, Volume 1.
+[46] Foteini Strati, Xianzhe Ma, and Ana Klimovic. 2024.               Orion:                295–310.
+     Interference-aware, fine-grained GPU sharing for ML applications.                  [61] Pan Xu, Cuong Nguyen, and Srikanta Tirthapura. 2018. Onion curve:
+     In Proceedings of the Nineteenth European Conference on Computer                        A space filling curve with near-optimal clustering. In 2018 IEEE 34th
+     Systems. 1075–1092.                                                                     International Conference on Data Engineering (ICDE). IEEE, 1236–1239.
+[47] Emma Strubell, Ananya Ganesh, and Andrew McCallum. 2020. En-                       [62] Neeraja J Yadwadkar, Francisco Romero, Qian Li, and Christos
+     ergy and policy considerations for modern deep learning research.                       Kozyrakis. 2019. A case for managed and model-less inference serving.
+     In Proceedings of the AAAI conference on artificial intelligence, Vol. 34.              In Proceedings of the Workshop on Hot Topics in Operating Systems.
+                                                                                             184–191.
+
+
+
+
+                                                                                  398
+Bridging the GPU Utilization Gap                                                                   EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+[63] Zhisheng Ye, Wei Gao, Qinghao Hu, Peng Sun, Xiaolin Wang, Yingwei                  Endowment 17, 12 (2024), 3934–3946.
+     Luo, Tianwei Zhang, and Yonggang Wen. 2024. Deep learning work-               [66] Yongkang Zhang, Haoxuan Yu, Chenxia Han, Cheng Wang, Baotong
+     load scheduling in gpu datacenters: A survey. Comput. Surveys 56, 6                Lu, Yunzhe Li, Zhifeng Jiang, Yang Li, Xiaowen Chu, and Huaicheng
+     (2024), 1–38.                                                                      Li. 2025. SGDRC: Software-Defined Dynamic Resource Control for
+[64] Zhisheng Ye, Peng Sun, Wei Gao, Tianwei Zhang, Xiaolin Wang, Shen-                 Concurrent DNN Inference on NVIDIA GPUs. In Proceedings of the
+     gen Yan, and Yingwei Luo. 2021. Astraea: A fair deep learning sched-               30th ACM SIGPLAN Annual Symposium on Principles and Practice of
+     uler for multi-tenant gpu clusters. IEEE Transactions on Parallel and              Parallel Programming. 267–281.
+     Distributed Systems 33, 11 (2021), 2781–2793.                                 [67] Zhenwei Zhang, Qiang Qi, Ruitao Shang, Li Chen, and Fei Xu. 2021.
+[65] Xinchun Zhang, Aqsa Kashaf, Yihan Zou, Wei Zhang, Weibo Liao,                      Prophet: Speeding up distributed DNN training with predictable com-
+     Haoxiang Song, Jintao Ye, Yakun Li, Rui Shi, Yong Tian, et al. 2024.               munication scheduling. In Proceedings of the 50th International Confer-
+     ResLake: Towards Minimum Job Latency and Balanced Resource Uti-                    ence on Parallel Processing. 1–11.
+     lization in Geo-Distributed Job Scheduling. Proceedings of the VLDB
+
+
+
+
+                                                                             399
+

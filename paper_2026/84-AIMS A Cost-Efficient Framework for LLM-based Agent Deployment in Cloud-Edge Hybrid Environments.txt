@@ -1,0 +1,1178 @@
+AIMS: Cost-Efficient LLM-based Agent Deployment in
+         Hybrid Cloud-Edge Environments
+                    Shiyi Liu                                     Haiying Shen                                     Shuai Che
+      Department of Computer Science                     Department of Computer Science                           Microsoft
+           University of Virginia                             University of Virginia                       Che.Shuai@microsoft.com
+            sl9hm@virginia.edu                                hs6ms@virginia.edu
+
+                                         Mahdi Ghandi                                        Mingqin Li∗
+                                        Microsoft                                             Shopify
+                                Mahdi.Ghandi@microsoft.com                             Mingqin.Li@shopify.com
+
+Abstract                                                                          1   Introduction
+In the realm of AI, large language models (LLMs) like GPT-5,                      The landscape of natural language processing (NLP) has
+central to the operation of AI agents, predominantly op-                          evolved with LLMs like GPT-5, showcasing unprecedented
+erate in the cloud, incurring high operational costs. With                        text generation capabilities [35, 57]. These models serve as
+local-based small language models (SLMs) becoming more                            the cognitive core in autonomous AI agents, revolutionizing
+accurate, the necessity of cloud-exclusive processing is being                    traditional AI by integrating reasoning capability and tool
+reconsidered. An AI agent’s response to a user’s request com-                     use, thus enabling diverse interactions and generalization
+prises a series of subtasks or iterations. Existing approaches                    abilities [14, 25, 30, 47, 54, 56, 61, 62, 67].
+choose either an LLM or SLM for the entire request to ensure                         The AI agents, such as the notable Auto-GPT [46] and Au-
+similar outputs, but this is ineffective for AI agents as SLMs                    toGen [59], have expanded AI’s reach. They process a user’s
+may generate differing subtasks, compromising final accu-                         request by breaking it into subtasks and using the Internet
+racy. In this paper, we first conduct experimental analysis to                    search and other tools in an automatic process [24, 26, 67].
+understand the features of AI agent operations. Leveraging                        Each subtask represents a specific action or decision that the
+our findings, we propose the Adaptive Iteration-level Model                       AI agent needs to perform to progress toward completing the
+Selector (AIMS), a lightweight scheduler to automatically par-                    user request. For example, when an AI agent receives a ques-
+tition an AI agent’s subtasks between local-based SLM and                         tion “Who was the maternal grandfather of the person who
+cloud-based LLM. AIMS considers the varying subtask fea-                          directed the 1997 film Titanic?”, it generates three subtasks
+tures and strategically decides the location for each subtask                     “Identify the director of Titanic (1997)”, “Find the director’s
+in order to use SLM as much as possible while maintaining                         mother”, and “Determine the mother’s father”. The language
+the accuracy level. Our experimental results demonstrate                          model is invoked at each step to interpret the current state,
+that AIMS achieves up to a 27.5% relative improvement in                          execute the subtask, and generate the next subtask. This iter-
+accuracy and up to 31.4% relative increase in SLM usage com-                      ative process continues, with the agent potentially creating
+pared to HybridLLM. It offloads 83.4% of subtasks to a local                      new subtasks or refining existing ones based on intermediate
+SLM while attaining similar accuracy on average compared                          results, until it determines that the original request has been
+with the cloud-only LLM approach.                                                 satisfactorily addressed. This process is reminiscent of ad-
+                                                                                  vanced AI techniques like Chain of Thought (CoT) [58] and
+CCS Concepts: • Computing methodologies → Intelli-
+gent agents; Planning and scheduling; Machine learning; •                         Reflexion [45], enhancing the agent’s decision-making and
+Networks → Network algorithms.                                                    problem-solving abilities. The effectiveness of these agents
+                                                                                  heavily depends on the language models’ ability to accurately
+Keywords: LLM systems, AI agents, hybrid cloud-edge com-                          interpret and execute each subtask.
+puting, model routing, cost optimization, small language                             Despite their capabilities, these LLM-based AI agents incur
+models, scheduling                                                                high operational costs ($0.01/1K prompt tokens for GPT-4o)
+ACM Reference Format:                                                             from frequent cloud-based API queries, presenting signif-
+Shiyi Liu, Haiying Shen, Shuai Che, Mahdi Ghandi, and Mingqin                     icant economic challenges [32]. For example, incorporat-
+Li. 2026. AIMS: Cost-Efficient LLM-based Agent Deployment in                      ing ChatGPT for enterprise use is expected to pose a finan-
+Hybrid Cloud-Edge Environments. In 21st European Conference                       cial burden exceeding $9,000 monthly on small businesses
+on Computer Systems (EUROSYS ’26), April 27–30, 2026, Edinburgh,                  [10, 32]. If a company provides AI agent services using its
+Scotland Uk. ACM, New York, NY, USA, 17 pages. https://doi.org/                   own LLM APIs, it incurs high operational costs. For example,
+10.1145/3767295.3803622                                                           serving ChatGPT costs approximately $694,444 per day in
+∗ This work was done when the author was at Microsoft.                            compute hardware costs [43].
+
+                 This work is licensed under a Creative Commons Attribu-
+                 tion 4.0 International License.
+EUROSYS ’26, Edinburgh, Scotland, UK
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2212-7/26/04
+https://doi.org/10.1145/3767295.3803622
+
+
+                                                                           1862
+                                                                       online input; instead, we report latency empirically and show
+                                                                       that scheduling overhead is small.
+                                                                          As shown in Figure 1, AIMS utilizes offline fine-tuned mod-
+                                                                       els to estimate the output similarity of a request or subtask
+                                                                       on SLM and LLM to select the most suitable model. It takes
+                                                                       the following steps: 1) if the outputs for the entire request
+                                                                       are similar, SLM processes the entire request; 2) otherwise,
+               Figure 1. Dataflow of AIMS.                             for each of its subtasks, if its outputs are similar, SLM pro-
+                                                                       cesses the subtask; 3) if the outputs differ, AIMS identifies a
+                                                                       convergence point in the subtask series where the SLM and
+   Companies can reduce the cost of providing AI agent ser-            LLM outputs align and then continues using the SLM until
+vices by leveraging users’ edge devices (e.g., laptops) and            that point; 4) If no convergence is detected, the subtask is
+incentivize users to adopt this system by offering lower ser-          decomposed to simpler subtasks and processed by the SLM
+vice prices. Therefore, this work studies the computation              only if all decomposed subtasks produce outputs similar to
+breakdown for AI agents between the cloud and a user’s                 those of the LLM.
+local edge device. This approach is motivated by previous                 Our hybrid deployment model considers edge devices such
+findings that an SLM can match the accuracy of the LLM in              as smart phone and gaming laptops, running 1-4B parame-
+certain scenarios [12, 40, 63]. HybridLLM [8] employs a clas-          ter models locally, while cloud resources provide access to
+sifier to allocate a request to either SLM or LLM, ensuring            frontier models (GPT-5, Claude) via API calls. The system
+that the SLM’s output matches that of the LLM. We con-                 must dynamically balance local compute utilization against
+ducted experiments on AI agents based on different datasets            network communication costs and cloud service charges.
+and observed:                                                             AIMS differs from existing approaches like HybridLLM
+                                                                       through its holistic treatment of AI agent subtasks. Rather
+  (1) Using HybridLLM to allocate each subtask indepen-                than making isolated decisions, AIMS recognizes the inter-
+      dently to SLM or LLM within an AI agent process may              connected nature of agent reasoning. The system employs
+      degrade the final output’s accuracy, as SLM might pro-           position-aware decision-making, setting higher similarity
+      duce a different subsequent subtask compared to LLM.             thresholds for later subtasks to meet their increased accu-
+  (2) For certain requests and subtasks of a request, their            racy requirements. Furthermore, AIMS identifies the conver-
+      simplicity allows for comparable accuracy when ex-               gence point to increase local processing opportunities. These
+      ecuted locally on a personal device instead of in the            novelties enable AIMS to more effectively balance cost and
+      cloud.                                                           accuracy throughout the agent reasoning process.
+  (3) Subtask position can influence the accuracy impact of               Our contributions are as follows:
+      SLM-LLM switching, with later stages showing greater
+      effects.                                                             • Experimental analysis on subtask allocation in
+  (4) SLM typically generates more subtasks for a later LLM                  AI agents. We made several insightful observations
+      subtask to gradually converge to a similar output.                     from our experimental analysis. For example, unlike
+   Deploying LLM-based agents in a hybrid cloud–edge set-                    allocating a single request between the SLM and LLM
+ting raises a systems question: how to reduce cloud inference                that only needs to ensure the similarity of their outputs,
+cost by executing as much of the agent workflow as possible                  allocating the subtasks for a request for AI agent has
+on an on-device SLM, without materially degrading end-to-                    a unique challenge: if a subtask is allocated to SLM,
+end task success. Unlike conventional request routing, an                    the subsequent subtasks will vary, which affects the
+agent executes an interdependent sequence of subtasks; rout-                 accuracy of the final output.
+ing decisions early in the chain can change later subtasks,                • Proposal of AIMS. Building on the observations from
+cascading into different computational paths and accuracy                    our experimental analysis, we propose AIMS. AIMS
+outcomes. This motivates position-aware routing, where the                   intelligently determines the allocation of subtasks be-
+scheduler must consider both per-subtask characteristics and                 tween the local SLM and cloud-based LLM in order to
+the subtask’s stage in the agent’s reasoning process.                        use SLM as much as possible while maintaining the
+   To meet this need, based on the observations, we propose                  accuracy level.
+the Adaptive Iteration-level Model Selector (AIMS), a light-               • Comprehensive experiments of AIMS. Across nine
+weight scheduler that maximizes the fraction of subtasks                     datasets (HotpotQA, GSM8K, DROP, HumanEval, Web-
+executed on the local SLM while retaining accuracy relative                  Shop, MATH, WebArena, WorFBench, ToolBench), AIMS
+to a cloud LLM, using a similarity-based accuracy target                     delivers a 27.5% relative improvement in output accu-
+learned from offline profiling. In the current design, AIMS                  racy over HybridLLM on average (macro), with ab-
+does not take an explicit latency or monetary budget as an                   solute gains of 12–17%, while increasing SLM usage
+
+
+
+                                                                1863
+       by up to 31.4% (relative) on average. In cost terms,                       SLM usage percentage      Accuracy            Completion rate
+
+       for the Qwen3-4B+GPT-5 pair, AIMS reduces cloud                     100%
+                                                                                                     Qwen3-4B + GPT-5
+       LLM spend by 40.6% versus HybridLLM (macro) and                      80%
+       by 83.4% versus an All-LLM policy. Using our token-                  60%
+       footprint accounting and current API prices, this trans-             40%
+       lates to savings of approximately $3,820 (GPT-5) to                  20%
+       $7,450 (Claude Sonnet 4) per one million requests com-                0%
+       pared to All-LLM, while simultaneously improving                              All-SLM    Random   HybridLLM     Oracle        All-LLM
+
+       accuracy over HybridLLM and Minions [31].                           100%
+                                                                                               Gemma-3-4B + Claude Sonnet 4
+
+                                                                            80%
+
+   This adaptive model selection framework, which is the                    60%
+
+first work in the realm of autonomous AI agents to our knowl-               40%
+
+edge, represents a possibility of more efficient, cost-effective            20%
+
+AI agent applications.                                                       0%
+                                                                                     All-SLM    Random   HybridLLM     Oracle        All-LLM
+
+
+                                                                                   Figure 2. Performance of existing methods.
+2     Motivation and Experiment Analysis
+2.1   Experiment Settings and Metrics
+We implement the agent stack using AutoGen [59]. Exper-
+iments run on a local device with an RTX 5090 GPU. We                     2.2     The Need for a Subtask Scheduler
+evaluate two model pairs: Qwen3-4B (SLM) + GPT-5 (LLM)                    We conducted experiments comparing the performance of
+and Gemma3-4B (SLM) + Claude Sonnet 4 (LLM). Local SLMs                   five existing methods: HybridLLM [8], All-SLM, All-LLM,
+are executed with llama.cpp using 4–6 GB VRAM; cloud                      Oracle, and random assignment (Random). In HybridLLM,
+LLMs are accessed via their public APIs.                                  the routing classifier operates at the subtask level, sending
+   We evaluated on five datasets: GSM8K [6], HotPotQA [65],               each subtask independently to either the local SLM or the
+DROP [9], HumanEval [4], and WebShop [66]. These datasets                 cloud LLM. All-SLM processes an entire request using only
+are widely used for evaluating language model-based AI                    the SLM, while All-LLM processes the request entirely using
+agents [18, 23, 36, 45, 53, 58, 67]. GSM8K has 8,500 grade                the LLM. Oracle achieves the accuracy threshold (empiri-
+school math word problems, and its accuracy is measured                   cally determined as 90% of the All-LLM’s accuracy) while
+by the percentage of correct answers. HotPotQA contains                   maximizing SLM usage by finding the optimal subtask as-
+complex questions requiring reasoning. DROP contains ques-                signment between the SLM and LLM for each user request.
+tions involving numerical operations and discrete reasoning.              It is determined by enumerating all possible assignments for
+The accuracy of HotPotQA and DROP is measured by the F1                   each subtask.
+score. HumanEval contains 164 programming problems, and                       Figure 2 reports macro-averages (across datasets) of SLM
+its accuracy is measured by the pass@1 metric [4]. WebShop                usage, accuracy, and completion rate for each method under
+contains user purchasing requests and its accuracy is based               the two new model pairs. As expected, All-SLM attains the
+on BERTScore [69] compared to the ground-truth product                    lowest accuracy (42.95% on average), while All-LLM achieves
+descriptions. We consider a response to be similar if the                 the highest accuracy (93.15%) at the cost of 0% SLM usage.
+BERTScore is higher than a threshold (e.g., 0.7).                         Random yields moderate accuracy (47.65%), and HybridLLM
+   Completion rate is the percentage of requests completed                improves to 66.08%. Oracle slightly sacrifices accuracy for
+within 5 minutes. The number of subtasks is the number of                 substantially higher SLM usage, reaching 84.05% accuracy
+subtasks to complete a request. SLM usage is the percentage               with 72.25% SLM usage. Compared to Oracle, HybridLLM
+of subtasks processed by SLM per request. In this paper, we               delivers 17.97% lower accuracy and 31.20% lower SLM usage;
+focus on text-based AI agents, therefore we use semantic                  compared to All-LLM, HybridLLM is 27.07% lower in accu-
+similarity to quantify the alignment of SLM outputs and                   racy. Completion rates follow the same ordering for both
+LLM outputs. We define two outputs as similar if the cosine               pairs: Oracle ≈ All-LLM > HybridLLM ≈ Random > All-SLM.
+similarity between their SBERT embeddings [41] exceeds a                      In addition, Table 1 reports the percentage of incorrect
+threshold. Unless otherwise specified, the threshold is set               assignment decisions for HybridLLM and Random relative
+to 0.7, which is empirically determined. AIMS uses a single               to Oracle. An assignment is counted as incorrect when a
+similarity threshold and Section 4.6 presents the sensitivity             subtask is routed to the SLM while Oracle routes it to the
+study of this threshold. We report the average results of all             LLM, or vice versa. HybridLLM makes incorrect assignments
+requests from the two model pairs and for all datasets if not             in 33.80% of cases with Qwen3+GPT-5 and 35.70% with
+specifically indicated in the figure or table.                            Gemma3+Claude S4; Random is higher at 45.25% and 41.95%,
+
+
+
+                                                                   1864
+                             Qwen3-4B + GPT-5                 Gemma-3-4B + Claude Sonnet 4                                                                                                                   15
+                                                                                                                                                                                                                            LLM   SLM
+
+
+
+
+                                                                                                                                                                                        Number of subtasks
+                                                                                                                                                           SLM→LLM          LLM→SLM
+                    Similar final output                                        Similar subtask output                                           +10%
+
+
+
+
+                                                                                                                                Δ Accuracy (%)
+                                                                                                                                                                                                             10
+ 60%                                                          60%                                                                                +5%
+
+ 40%                                                          40%                                                                                +0%                                                          5
+                                                                                                                                                  -5%
+ 20%                                                          20%
+                                                                                                                                                                                                              0
+                                                                                                                                                 -10%                                                                                        l
+                                                                                                                                                                                                                         QA M8K ROP       va   op
+ 0%                                                            0%                                                                                                                                                      ot               nE bSh
+                                               al                                                         al                                            Early         Mid        Late                               tp    GS   D
+                                                                                                                                                                                                                                      ma We
+            ot
+               QA
+                     SM
+                        8K
+                               DR
+                                 OP
+                                           nE
+                                              v
+                                                      Sh
+                                                         op
+                                                                         ot
+                                                                            QA
+                                                                                  SM
+                                                                                     8K
+                                                                                          DR
+                                                                                            OP
+                                                                                                      nE
+                                                                                                         v
+                                                                                                                 Sh
+                                                                                                                    op
+                                                                                                                                                                Subtask position                                  Ho              H u
+         tp         G                   ma
+                                                     b                tp         G                 ma
+                                                                                                                b
+       Ho                                         We                Ho                                       We
+                                      Hu                                                         Hu
+
+                                                                                                                                (a) Accuracy Δ by switching a                           (b) The number of subtasks in
+      Figure 3. Similar output percentage across datasets.                                                                      subtask between SLM and LLM.                            All-SLM and All-LLM.
+
+                                                                                                                                Figure 4. Subtask behavior under different model assign-
+respectively. These errors stem from assigning subtasks in-                                                                     ments.
+dependently without accounting for inter-subtask depen-
+dencies, underscoring the need for holistic, workflow-aware
+assignment. The results highlight the suboptimality of Hy-                                                                      the subtasks into three relative positions: Early (first third),
+bridLLM and Random and the headroom for improved sub-                                                                           Middle (middle third), and Late (final third) stages within the
+task allocation strategies.                                                                                                     request’s subtask sequence.
+                                                                                                                                   Figure 4a shows the average accuracy impact of switching
+            Table 1. Percentage of incorrect assignments.                                                                       a subtask at different stages. The results show that switching
+                                                                                                                                a subtask from LLM to SLM causes an average accuracy
+ Method                        Qwen3 + GPT-5                         Gemma3 + Claude S4                                         drop of 5.25% in the Early stage, 7.59% in the Middle stage,
+ HybridLLM                        33.80%                                  35.70%                                                and 9.53% in the Late stage. Conversely, switching a subtask
+ Random                           45.25%                                  41.95%                                                from SLM to LLM yields accuracy gains of 5.14%, 6.25%,
+                                                                                                                                and 9.40% in the Early, Middle, and Late stages, respectively.
+                                                                                                                                These findings suggest that SLM can manage early subtasks
+      Observation 1. Using the existing HybridLLM infer-
+                                                                                                                                with minimal accuracy loss, but as tasks progress, leveraging
+      ence system in AI agent scenarios, which assigns each
+                                                                                                                                LLM’s advanced capabilities becomes increasingly critical.
+      subtask independently to either the SLM or LLM, fails to
+      optimize accuracy or SLM usage, highlighting the need                                                                                       Observation 3. Subtask position can influence the ac-
+      for a more advanced approach. (Figure 2 and Table 1)                                                                                        curacy impact of SLM-LLM switching, with later stages
+                                                                                                                                                  showing greater effects, highlighting its importance in
+   To investigate subtask-level model assignment and iden-
+                                                                                                                                                  subtask allocation decisions. (Figure 4a)
+tify which subtasks can be effectively handled by SLM, we
+conduct two additional experiments, presented in Figure 3:                                                                         Figure 4b illustrates the average number of subtasks gen-
+1) the percentage of user requests where the final outputs                                                                      erated per user request in All-SLM and All-LLM, respectively,
+are similar when processed entirely by either SLM or LLM                                                                        across all datasets, considering only the requests that pro-
+(left), and 2) the average percentage of individual subtasks of                                                                 duced correct results. All-SLM generates more subtasks per
+a request processed by LLM, for which SLM produces similar                                                                      request than All-LLM, with SLM averaging 6.37 subtasks
+subtask outputs. The figure shows that 23.3%-44.9% of user                                                                      per user request compared to LLM’s 5.9. This indicates that
+requests and 30.2%-68.9% of subtask outputs can be handled                                                                      SLM decomposes requests into more granular subtasks due
+by SLMs without compromising accuracy, with percentages                                                                         to its limited capability to handle complex requests, whereas
+varying across datasets. These findings indicate significant                                                                    LLM’s superior ability enables it to generate fewer, more
+opportunities to reduce cloud usage by leveraging SLMs for                                                                      comprehensive subtasks.
+suitable tasks and subtasks.
+      Observation 2. The SLM can manage certain user
+      requests and subtasks, producing outputs similar to the
+      LLM. (Figure 3)
+
+2.3     Impact of Subtask Stage
+This experiment assessed the accuracy impact of switching
+a single subtask from LLM to SLM while keeping the others
+on LLM, and vice versa, switching one subtask from SLM
+to LLM while keeping the rest on SLM. To account for user
+requests with varying numbers of subtasks, we grouped                                                                                                           Figure 5. S-L distance illustration.
+
+
+
+
+                                                                                                                         1865
+                      4-ST request   5-ST request        6-ST request          7-ST request       8-ST request                                4-ST request       5-ST request         6-ST request         7-ST request       8-ST request
+                        ∞                  S-L distance for matched final results                                                                                       S-L similarity for matched final results
+                                                                                                                                              1.0
+                        2
+                                                                                                                                              0.8
+                        1
+  Avg. S-L distance
+
+
+
+
+                                                                                                                            Avg. similarity
+                                                                                                                                              0.6
+                        0
+
+                       ∞                  S-L distance for unmatched final results                                                                                    S-L similarity for unmatched final results
+                                                                                                                                              0.6
+                      10
+                                                                                                                                              0.4
+                        5
+                                                                                                                                              0.2
+
+                        0                                                                                                                     0.0
+                                 1   2         3        4        5         6          7       8                                                              1    2         3         4         5         6        7      8
+
+
+Figure 6. S-L distance comparison across subtask sequence.                                                                            Figure 7. S-L similarity across subtask sequence IDs.
+
+
+                                                                                                                           Figure 7 shows the changes of S-L similarity as the request
+   To evaluate the convergence of SLM and LLM subtasks,                                                                 progresses in matched and unmatched scenarios. In matched
+we introduce the concept of S-L distance for an LLM subtask.                                                            cases, S-L similarity gradually increases, indicating that SLM
+This distance represents the number of additional SLM sub-                                                              outputs align more closely with LLM outputs in later stages.
+tasks needed to produce a subtask similar (or match) to this                                                            Conversely, in unmatched scenarios, S-L similarity remains
+LLM subtask, with their similarity defined as S-L similarity.                                                           low, suggesting persistent deviations. This measurement
+Figure 5 illustrates the S-L distance, where LLM-generated                                                              supports previous findings and highlights the potential for
+subtasks are denoted as L1, L2, and L3, while SLM-generated                                                             SLM and LLM convergence in subtask sequence, enabling
+subtasks are denoted as S1, S2, S3, S4, S5, and S6. Dashed lines                                                        efficient subtask allocation.
+indicate matched outputs between SLM and LLM subtasks.
+Subtask L1’s S-L distance is 1, indicating that one additional                                                                         Observation 4. SLM typically generates more subtasks
+SLM subtask is needed to match it. L2 has an S-L distance                                                                              for a later LLM subtask to gradually converge to similar
+of 2, requiring two extra SLM subtasks for a match. L3 di-                                                                             outputs. Subtask scheduling must account for whether
+rectly corresponds to S6, resulting in an S-L distance of 0. If                                                                        an SLM’s output can converge with that of an LLM
+no matched SLM subtask is found for an LLM subtask, its                                                                                subtask. (Figures 4b- 7)
+S-L distance is set to infinity. This metric provides insight
+into the alignment between SLM and LLM outputs during re-
+                                                                                                                        3                     Design of AIMS
+quest processing, highlighting how SLM subtask granularity
+compares to that of LLM at different stages.                                                                            3.1                     Overview
+   We ran each request using both All-LLM and All-SLM                                                                   Motivated by Observation 1, we propose AIMS, which dy-
+and categorized the requests into two groups: those with                                                                namically assigns the subtasks of a request between the SLM
+matched final results between LLM and SLM, and those with-                                                              and LLM in order to maximize the SLM usage while main-
+out. Within each group, we further classified the requests                                                              taining the LLM’s accuracy of processing the request.
+into subgroups based on the number of subtasks (ST) gener-                                                                 Based on Observation 2 that the SLM may output simi-
+ated (i.e., request length). Figure 6 presents the average S-L                                                          lar results for a request or for a subtask as the LLM, AIMS
+distance across LLM subtasks with the same sequence ID (X                                                               lets the SLM process the entire request in the former case.
+axis) in each subgroup for matched request group (top) and                                                              Otherwise, it allocates each subtask to either the SLM or
+unmatched request group (bottom), respectively. For exam-                                                               LLM. For each subtask, based on Observation 4, if it finds a
+ple, “4-ST request” represents the request subgroup that has                                                            convergence point, it uses the SLM until the convergence
+4 subtasks. As the subtask sequence progresses, the average                                                             point. Otherwise, it breaks down the current subtask into
+S-L distance gradually increases in the matched group, while                                                            smaller sub-subtasks to facilitate the SLM to process them
+in the unmatched group, many distances reach infinity, indi-                                                            by repeating the above steps for each sub-subtask. To avoid
+cating significant divergence between SLM and LLM subtask                                                               unnecessary LLM execution, the SLM processes decomposed
+outputs. The results suggest that later LLM subtasks typically                                                          sub-subtasks only if all can be handled by the SLM; other-
+require more SLM subtasks to achieve similar outputs. SLM’s                                                             wise, the original subtask is processed by the LLM. Based on
+inability to produce comparable subtask outputs ultimately                                                              Observation 3, we use the subtask’s sequence ID to dynami-
+leads to discrepancies in the final request output compared                                                             cally adjust the similarity threshold, and also consider it in
+to the LLM. This observation echoes Observation 3 that the                                                              predicting the subtask’s convergence point.
+later stage of subtasks is more important to the accuracy of                                                               AIMS consists of several offline-trained estimators based
+the user request.                                                                                                       on profiled data. With the assistance of the estimators, after
+
+
+
+                                                                                                                 1866
+                                          Figure 8. AIMS decision-making workflow.
+
+receiving a user request, AIMS chooses between the SLM                   3.2   System Design
+and LLM for the request or its subtasks.                                 Let 𝑅 denote a given user request, and 𝑆𝑇𝑖 denote the 𝑖 𝑡ℎ dy-
+Offline Profiling. AIMS first profiles the AI agent that uses            namically generated subtask for request 𝑅. The workflow of
+SLM and LLM with various user requests and their corre-                  AIMS is depicted in Figure 8. First, based on Observation 2,
+sponding subtasks. The profiling process collects data on                AIMS employs a hierarchical approach that allows AIMS
+the subtask outputs from SLM and LLM. This data is then                  to leverage the effectiveness of SLM for user requests that
+used to train prediction models, including the user request              can be accurately processed by SLM alone while enabling
+classifier, subtask predictors for the SLM and LLM execution,            fine-grained subtask allocation for more complex requests.
+distance predictor, and subtask decomposer. These trained                Specifically, AIMS utilizes a lightweight request-level classi-
+models are used in the online decision making of AIMS to                 fier to determine if a user’s request can yield similar outputs
+make informed decisions about task or subtask allocation.                when executed entirely on SLM. If yes, AIMS opts for SLM
+Online Decision Making. After receiving a user request                   for the entire request. If not, AIMS proceeds to the next
+or a subtask, AIMS determines its allocation between SLM                 step to perform subtask-level model assignment. The ob-
+and LLM. It first employs the user request classifier, which             jective of AIMS is to design a 𝑟𝑜𝑢𝑡𝑒𝑟 : 𝑆𝑇𝑖 → {0, 1}, where
+determines whether processing the entire request with the                𝑟𝑜𝑢𝑡𝑒𝑟 (𝑆𝑇𝑖 ) = 0 and 𝑟𝑜𝑢𝑡𝑒𝑟 (𝑆𝑇𝑖 ) = 1 mean that the subtask
+SLM will yield output similar to that of the LLM. If not, AIMS           𝑆𝑇𝑖 is routed to the SLM, and to the LLM, respectively.
+proceeds to subtask-level decision-making for a more granu-                 In the subtask-level model assignment, for the 𝑖 𝑡ℎ subtask,
+lar analysis. At this stage, AIMS employs subtask similarity             AIMS takes the following steps:
+evaluator, S-L similarity estimator (SLE), convergence detector          1) Subtask Similarity Evaluator (SSE). Based on Observa-
+(CD), and subtask decomposer (SD) approaches to determine                tion 2, AIMS estimates the output similarity of the 𝑖 𝑡ℎ subtask
+the suitable model for processing the current subtask. AIMS              using LLM and SLM. If they are similar, AIMS uses SLM for
+makes decisions for every subtask using this process until               this subtask. Otherwise, AIMS employs the following three
+producing the final output.                                              steps based on Observation 4:
+   AIMS follows a fast-path/slow-path design pattern: the                2) S-L Similarity Evaluator (SLE). It first estimates the S-L
+fast path executes on the local SLM when predictors indi-                distance 𝑑 for the current subtask, followed by an evalu-
+cate the next-step behavior is safe, while the slow path falls           ation of the S-L similarity. If the S-L similarity meets the
+back to the cloud LLM for accuracy-critical decisions. Con-              required threshold (i.e., 0.7), the subtask is assigned to SLM,
+vergence detection and similarity-validated decomposition                as it is expected to ultimately reach a similar subtask in LLM;
+act as structured recovery paths that safely expand the frac-            otherwise, it proceeds to the next step.
+tion of execution on the fast path without committing to an              3) Convergence Detection (CD). If a convergence point
+irrecoverably divergent subtask.                                         cannot be identified for the current subtask, it may still be
+                                                                         found for a subsequent one. Hence, AIMS continuously es-
+                                                                         timates the outputs of SLM and LLM subtasks, comparing
+
+
+
+
+                                                                  1867
+each SLM-LLM subtask pair until a convergence point is                    for each original subtask, creating a dataset of subtask de-
+identified where the S-L similarity meets the threshold. If a             composition. Using the collected profiled data, we train the
+convergence point is identified, all subtasks preceding it are            following models.
+executed by the SLM. Otherwise, the process moves to the                  User Request Classifier (URC): For each user request in
+next step.                                                                the profiled data, we use the user request as the input feature
+4) Subtask Decomposition (SD). If convergence is not de-                  and the similarity score between the outputs generated by
+tected by CD, AIMS employs its Subtask Decomposer (SD)                    processing the entire user request using All-SLM and All-
+model, which is trained offline (Section 3.3), to predict a               LLM as the target variable. We then train the user request
+sequence of simpler sub-subtasks for the current complex                  classifier model using this input-output data.
+subtask. For example, if a HotpotQA user request asks for the             Subtask Predictor (SP): We train two separate models,
+maternal grandfather of the Titanic director, an AI agent, af-            𝑆𝑃𝑆𝐿𝑀 and 𝑆𝑃𝐿𝐿𝑀 , which learn to predict the next subtask
+ter identifying the director (James Cameron) and his mother               when the current subtask is processed using SLM and LLM,
+(Shirley Cameron née Lowe), might generate a complex sub-                 respectively. For each node in the binary tree of subtasks
+task (𝑆𝑇𝑖 ): ’Verify Shirley Cameron’s father, including cor-             generated during the data collection process, we use the
+roborating biographical details, to confirm his identity as               subtask at that node as the input feature and the subtask
+James Cameron’s maternal grandfather.’ The SD might then                  generated by applying SLM or LLM to the current subtask
+decompose this 𝑆𝑇𝑖 into more granular steps: 𝑆𝑆𝑇1 : ’Search               as the target output for the two models, respectively.
+for Shirley Cameron’s father’; 𝑆𝑆𝑇2 : ’Extract father’s full              Distance Predictor (DP): The distance predictor predicts
+name’; 𝑆𝑆𝑇3 : ’Find key biographical details for verification             the S-L distance. For each request in the profiled data, we
+(e.g., birth/death dates)’; 𝑆𝑆𝑇4 : ’Confirm and state the mater-          extract the content of the LLM subtask and its sequence ID
+nal grandfather’s name’. AIMS then uses its subtask predic-               as the input features and its corresponding S-L distance as
+tors (𝑆𝑃𝑆𝐿𝑀 and 𝑆𝑃𝐿𝐿𝑀 ) to evaluate if the SLM can adequately             the target label. We then train the distance predictor model
+handle each predicted sub-subtask. Only if all predicted sub-             using the input and output data to predict the S-L distance.
+subtasks are deemed suitable for the SLM (i.e., yield similar             Subtask Decomposer (SD): The subtask decomposer is trained
+outputs to the LLM predictions) does AIMS direct the AI                   to break down a complex subtask into smaller, more manage-
+agent to execute this decomposed sequence using the actual                able sub-subtasks. It takes a subtask and the predicted next
+SLM; otherwise, the original 𝑆𝑇𝑖 defaults to the LLM. This                subtask from 𝑆𝑃𝐿𝐿𝑀 for this subtask as inputs, and outputs a
+allows AIMS, as a system-level scheduler, to guide the AI                 sequence of sub-subtasks, aiming to ensure that the output of
+agent towards a more granular execution path that leverages               the last sub-subtask is similar to the predicted next subtask
+the SLM’s capability to handle simpler steps.                             from 𝑆𝑃𝐿𝐿𝑀 . The subtask decomposer is trained using data
+                                                                          derived from decomposing subtasks from user request.
+                                                                             For the above models, we use ModernBERT [55] as the
+3.3 Offline Profiling                                                     base for URC and DP, and Qwen3-0.6B [64] for SP and SD,
+In the offline profiling phase, AIMS collects data to fine-tune           fine-tuning them with LoRA [17]. These models are then
+models that predict the performance of different subtask al-              used in the subsequent components of AIMS to make in-
+locations between SLM and LLM. The profiling is conducted                 formed decisions about task or subtask allocation. The esti-
+on user requests from historical trace datasets (e.g., GSM8K              mator stack requires approximately 2 GB of VRAM, which
+and HotPotQA) and their corresponding subtasks.                           can easily be accommodated on a modern gaming laptop
+Data Collection: For each user request 𝑅, we generate a                   with 8-16 GB of GPU memory.
+binary tree of subtasks, where each node represents a sub-
+task 𝑆𝑇𝑖 and each edge represents using a model (SLM or                   3.4 Online Decision Making
+LLM) to process the parent subtask. Starting from the root                The online decision-making process comprises two stages:
+node, which represents the initial user request, we process               request-level decision-making and subtask-level decision-
+the subtask using both the SLM and LLM, creating two child                making, as detailed below.
+nodes. For each child node, we then recursively process the
+corresponding subtask using both SLM and LLM, further cre-                3.4.1 Request-Level Decision Making. AIMS first uses
+ating child nodes until a predefined depth (e.g., 15 subtasks)            the user request classifier to process an incoming user re-
+is reached or the model thinks the request is finished. At                quest. It leverages the knowledge learned during the offline
+each leaf node, we profile the output of executing the subtask            profiling phase to identify user requests that can be accu-
+using the selected model. In addition to the subtask-level                rately processed by the SLM alone, avoiding unnecessary
+profiling, we also profile the performance of executing the               subtask-level allocation. Specifically, AIMS feeds the request
+entire user request 𝑅 using SLM and LLM. The similarity                   into the user request classifier model. The classifier predicts a
+of the final results from the two models is collected. More-              similarity score between 0 and 1, indicating the expected sim-
+over, we use the SLM to generate multiple smaller subtasks                ilarity between the results of processing the request solely
+
+
+
+                                                                   1868
+using SLM versus the LLM. If the predicted similarity score is           S-L Similarity Evaluator (SLE): Guided by Observation
+above a predefined threshold (e.g., 0.7), AIMS processes the             4, the S-L distance metric helps determine if a future SLM
+entire user request using SLM, bypassing the subtask-level               subtask matches the current LLM subtask, which is crucial
+allocation. Otherwise, AIMS initializes the current subtask as           for deciding whether to process a subtask using SLM or LLM.
+the root request and enters the subtask-level routing stage.             Thus, the S-L similarity evaluator dynamically adjusts the
+                                                                         similarity threshold during task processing based on the
+                                                                         progress stage of the user request. It receives the current sub-
+3.4.2 Subtask-Level Decision Making. If the user request                 task 𝑆𝑇𝑖 and its sequence ID as inputs and uses the distance
+classifier determines that a user request requires subtask-              predictor model to estimate the S-L distance 𝑑 between the
+level allocation, AIMS proceeds to the SSE to process the                outputs of the SLM and the LLM, considering the current
+subtask.                                                                 subtask’s content. The 𝑆𝑃𝑆𝐿𝑀 model then predicts the output
+Subtask Similarity Evaluator (SSE): The subtask similar-                 for the (𝑖 + 𝑑)𝑡ℎ subtask, while the 𝑆𝑃𝐿𝐿𝑀 model predicts the
+ity evaluator compares the outputs of the SLM and the LLM                output for the 𝑖 𝑡ℎ subtask. These outputs are compared using
+for each subtask, assessing their similarity and making ap-              the predefined similarity threshold 𝜅 (same threshold as in
+propriate model assignments based on the stage of the user               the subtask similarity evaluator). If their similarity is higher
+request. For each subtask 𝑆𝑇𝑖 in the user request 𝑅, AIMS                than 𝜅, the subtask 𝑆𝑇𝑖 is assigned to the SLM; otherwise, we
+feeds the current subtask into the 𝑆𝑃𝑆𝐿𝑀 and 𝑆𝑃𝐿𝐿𝑀 mod-                  proceed to the next component.
+els. The 𝑆𝑃𝑆𝐿𝑀 and 𝑆𝑃𝐿𝐿𝑀 models generate the predicted                   Convergence Detector (CD): Guided by Observations 3
+next subtasks for the SLM and the LLM, respectively. The                 and 4, convergence detector identifies a future convergence
+subtask similarity evaluator then estimates the similarity of            point between the outputs of SLM and LLM. Starting from
+the predicted next subtasks as introduced in Section 2.1. If             subtask 𝑆𝑇𝑖 , the convergence detector uses 𝑆𝑃𝑆𝐿𝑀 and 𝑆𝑃𝐿𝐿𝑀
+the similarity is above a predefined threshold 𝜅, the sub-               to predict future subtasks iteratively. It compares the sim-
+task 𝑆𝑇𝑖 is assigned to the SLM. The similarity threshold 𝜅              ilarity of each pair of the SLM and LLM predictions using
+is determined through empirical analysis during the offline              the same similarity metric and threshold as previous compo-
+profiling phase. For each SLM-LLM pair, we analyze a set                 nents. It continues this process for a predefined number of
+of requests and their subtasks, measuring the relationship               future subtasks or until the end of the sequence. If multiple
+between threshold values and final accuracy. The sensitivity             convergence points are found, convergence detector selects
+analysis of the 𝜅 threshold can be found in Section 4.6. Or-             the last one to increase the use of SLM. All subtasks from 𝑆𝑇𝑖
+ganizations deploying AIMS can fine-tune these thresholds                up to the identified convergence point are then assigned to
+during their offline profiling phase based on their specific             SLM. If no convergence is detected, we proceed to the next
+accuracy requirements and cost constraints.                              component.
+   Here, instead of using a constant similarity threshold,               Subtask Decomposer (SD): Guided by Observation 4, which
+based on Observation 3, we set the threshold adaptively                  highlights the granularity and step-by-step nature of SLM
+based on the subtask’s sequence ID. The threshold 𝜅 is smaller           processing, we design the subtask decomposer. It breaks down
+at the early stages of a request, permitting loose compar-               a complex subtask into smaller sub-subtasks, making them
+isons, and increases as the request progresses, making it                easier for the SLM to process. It takes a current subtask 𝑆𝑇𝑖
+more stringent in the later stages. Using the experimental               as input and uses the subtask decomposer model, which is
+data collected for Figure 4a, we compute the threshold as                trained during the offline profiling phase, to generate a se-
+𝜅 = 𝑡ℎ𝑟𝑒𝑠ℎ𝑜𝑙𝑑𝑏𝑎𝑠𝑒 + min(𝐼 𝐷, 5) · 0.02, where 𝑡ℎ𝑟𝑒𝑠ℎ𝑜𝑙𝑑𝑏𝑎𝑠𝑒 =            quence of sub-subtasks, denoted by {𝑆𝑆𝑇1, 𝑆𝑆𝑇2, . . . , 𝑆𝑆𝑇𝑚 }.
+0.6. All parameters are determined empirically.                          AIMS then evaluates each sub-subtask 𝑆𝑆𝑇 𝑗 to determine
+   If the similarity is below the threshold 𝜅, the simplest              its suitability for processing by the SLM. Specifically, AIMS
+way is to use LLM. However, directly using LLM results in                inputs 𝑆𝑆𝑇 𝑗 ’s content into both 𝑆𝑃𝑆𝐿𝑀 and 𝑆𝑃𝐿𝐿𝑀 models,
+lower SLM usage. Observation 4 suggests that while the                   which then predict the next sub-subtask. If the similarity of
+SLM output may differ from the LLM output for the current                the two predicted next sub-subtasks exceeds the predefined
+subtask, a subsequent subtask could still produce a result               threshold 𝜅, the sub-subtask is deemed suitable for SLM pro-
+similar to the LLM. Therefore, we employ three approaches:               cessing. While we could allocate each sub-subtask individu-
+the S-L similarity evaluator, the convergence detector, and the          ally to the SLM or LLM, this may increase the number of LLM
+subtask decomposer. The S-L similarity evaluator identifies              calls. To avoid this, we allocate the entire group of decom-
+when a future SLM subtask matches the current LLM subtask.               posed sub-subtasks or the original subtask as a single unit.
+The convergence detector identifies future subtasks where                That is, only when all sub-subtasks are found suitable for the
+the outputs of the SLM and LLM are similar. The subtask                  SLM, AIMS assigns all sub-subtasks {𝑆𝑆𝑇1, 𝑆𝑆𝑇2, . . . , 𝑆𝑆𝑇𝑚 }
+decomposer breaks down the current subtask into smaller
+subtasks to increase the likelihood of successful processing
+by the SLM. The details are presented in the following.
+
+
+
+                                                                  1869
+to SLM to produce the output for the original subtask. Con-                             All-SLM (Qwen3-4B)    HybridLLM   Minions   AIMS (ours)   All-LLM (GPT-5)
+
+
+versely, if any sub-subtask is unsuitable for SLM, AIMS as-
+                                                                                           100
+
+signs the subtask 𝑆𝑇𝑖 to the LLM.                                                           75
+
+
+
+
+                                                                                   Score
+                                                                                            50
+
+                                                                                            25
+Algorithm 1 AIMS online decision making process.                                           0
+                                                                                        100%
+Require: User request R
+Ensure: Final result
+
+
+
+
+                                                                            SLM usage
+                                                                                        75%
+
+ 1: if URC(R) predicts similar outputs then
+                                                                                        50%
+
+ 2:     Process R using SLM                                                             25%
+
+ 3: else                                                                                   0%
+                                                                                                            8K ROP      val hopMATH
+                                                                                                       QA
+                                                                                                    pot GSM                              ena   nch    nch
+                                                                                                                     anEWebS          bAr orFBe oolBe
+        for each subtask 𝑆𝑇𝑖 generated do
+                                                                                                              D
+ 4:                                                                                              Hot             Hum               We    W     T
+
+ 5:         if SSE(𝑆𝑇𝑖 ) predicts similar outputs then
+ 6:             Process 𝑆𝑇𝑖 using SLM                                                                  Figure 9. Accuracy and SLM usage.
+ 7:         else if SLE(𝑆𝑇𝑖 ) finds high S-L similarity then
+ 8:             Process 𝑆𝑇𝑖 and next d subtasks using SLM
+ 9:         else if CD(𝑆𝑇𝑖 ) finds convergence point then                  processes 𝑆𝑇𝑖 (lines 13-14); otherwise, the SLM processes all
+10:             Process subtasks to convergence using SLM                  the sub-subtasks (line 16).
+11:         else
+12:             sub_subtasks = SD(𝑆𝑇𝑖 )                                    4             Performance Evaluation
+13:             if one sub_subtask’s outputs in 𝑆𝑃𝑆𝐿𝑀 and                  4.1             Experiment Settings
+    𝑆𝑃𝐿𝐿𝑀 are dissimilar then                                              The experiment settings are the same as those in Section 2.1
+14:                  Process 𝑆𝑇𝑖 using LLM                                 unless otherwise specified. We employed GPT-5+Qwen3 4B
+15:             else                                                       as the LLM-SLM pair to generate 1000 subtask traces (i.e., the
+16:                 Process each sub_subtask using SLM                     sequence of subtasks generated by the AI agent from an ini-
+17:             end if                                                     tial user request to its final resolution) using WorFBench [38]
+18:         end if                                                         and GSM8K [6] to fine-tune the models in AIMS. The fine-
+19:     end for                                                            tuning process for all estimators took approximately 2 hours
+20: end if                                                                 on a cloud-based Nvidia A100, a one-time cost that enables
+21: return Final result                                                    subsequent effective decision-making. To evaluate the per-
+                                                                           formance and generalization capabilities of AIMS, we test on
+                                                                           nine benchmarks: HotpotQA, GSM8K, DROP, HumanEval,
+3.4.3 Algorithm for the Process. Algorithm 1 shows the                     WebShop, MATH [15], WorFBench [38], WebArena [71], and
+pseudocode of the decision-making process of AIMS. When a                  ToolBench [39], though we trained the AIMS in only two
+user request is received, the user request classifier (URC) first          of the datasets. The baseline methods for comparison are
+predicts the similarity score of running the entire request on             HybridLLM [8] (explained in Section 2.2) and Minions [31].
+SLM and LLM. If the similarity score exceeds a threshold, the              Minions follows a collaborative cloud–edge execution model
+request is processed entirely by SLM (lines 1-2). Otherwise,               where a planner generates subtasks, and a local small model
+it advances to subtask-level decision-making (line 4). Specif-             first attempts each subtask, escalating to a cloud LLM when
+ically, the subtask similarity evaluator (SSE) compares the                the local model is uncertain, with uncertainty measured by
+predicted outputs of the subtask from SLM and LLM using                    the average log-probability of the generated tokens.
+𝑆𝑃𝑆𝐿𝑀 and 𝑆𝑃𝐿𝐿𝑀 . If the outputs are similar, the subtask is
+assigned to SLM (lines 5-6). If not, the S-L similarity estimator          4.2             Overall Performance
+(SLE) component, using the distance predictor (DP), estimates              Accuracy and SLM usage. Figure 9 summarizes accuracy
+the S-L distance of the current subtask (𝑑). It then uses 𝑆𝑃𝑆𝐿𝑀            and SLM usage. We used three representative datasets to
+and 𝑆𝑃𝐿𝐿𝑀 to predict the S-L similarity. If it is higher than              demonstrate the performance, HotpotQA, HumanEval and
+the threshold, SLM is used (lines 7-8); otherwise, the process             WebShop, under Qwen3-4B+GPT-5. On HotpotQA, AIMS
+moves to convergence detector (CD). It attempts to identify a              reaches 90.75% vs 76.35% (HybridLLM, +14.40%) and 84.20%
+convergence point, where the outputs of the SLM and LLM                    (Minions, +6.55%), with higher SLM usage than both (81.85%
+are similar. If it is found, SLM is used until the convergence             vs 68.40% / 74.10%). On HumanEval, AIMS is 91.45% vs 73.65%
+point (lines 9-10). If not, the subtask decomposer (SD) breaks             (+17.80%) and 86.10% (+5.35%); Minions uses slightly more
+the subtask into smaller sub-subtasks, and the process of                  SLM (86.95%) than AIMS (84.10%) but trails in accuracy.
+the SSE repeats for each sub-subtask. If one sub-subtask’s                 On WebShop, AIMS attains 51.20% vs 34.75% (+16.45%) and
+outputs in the SLM and in the LLM are not similar, LLM                     43.10% (+8.10%), while SLM usage is comparable (81.25% vs
+
+
+
+                                                                    1870
+                                Latency Components                                                                                                            Methods
+                                 SLM latency                                                                                                                    AIMS
+ Average latency (s)
+
+
+
+                                 LLM latency                                                                                                                    All-SLM
+                       30
+                                 Method&Network overhead                                                                                                        All-LLM
+                                                                                                                                                                HybridLLM
+                                                                                                                                                                Minions
+                       20
+
+
+                       10
+
+
+                        0
+                                   HotpotQA          GSM8K           DROP     HumanEval    WebShop           MATH         WebArena       WorFBench       ToolBench
+
+
+
+Figure 10. End-to-end latency breakdown across nine benchmarks (Qwen3-4B + GPT-5 on RTX 5090). AIMS achieves latency
+comparable to HybridLLM/Minions while remaining faster than All-LLM; routing + network overhead is a small fraction of
+total time.
+
+Table 2. Normalized remote cost per 100 requests (All-LLM                                         Table 3. Generalization summary across AIMS settings.
+= 1.0). Costs are computed via token-footprint accounting;
+API prices are as of September 2025.                                                              Setting              ΔAcc      ΔAcc         Cost           Latency
+                                                                                                                       HLLM      Minions      vs All-LLM     vs All-LLM
+                            Dataset         HybridLLM        Minions    AIMS (ours)               Model pairs
+                                                                                                  Qwen+GPT             +12.35    +6.86        0.17×          0.82×
+                            HotpotQA            0.32          0.26          0.18                  Gemma+Claude         +13.14    +6.18        0.22×          0.76×
+                            GSM8K               0.38          0.26          0.18                  Hardware
+                            DROP                0.29          0.22          0.15                  RTX 5090             —         —            —              0.79×
+                            HumanEval           0.33          0.13          0.16                  iPhone 15            +10.65    +6.32        0.19×          2.52×
+                            WebShop             0.29          0.20          0.21
+                                                                                                     Model-pair rows: macro accuracy deltas (%) vs baselines and normalized
+                            MATH                0.28          0.21          0.15
+                                                                                                     cost ratios per 100 tasks. Hardware rows: average end-to-end latency ra-
+                            WebArena            0.23          0.15          0.17                     tios across datasets using the same routing policy/checkpoints (Qwen3-
+                            WorFBench           0.31          0.24          0.21                     4B + GPT-5 unless noted). RTX 5090 vs iPhone 15 differ in throughput;
+                            ToolBench           0.26          0.20          0.19                     routing/SLM usage are unchanged.
+                            Macro avg           0.29          0.20          0.17
+                                                                                                 decision overhead is small (about 3-7% of AIMS’s total time),
+                                                                                                 and measured average network hop latency is 0.58 s, which is
+74.35% / 83.10%). These gains reflect AIMS’s holistic, position-                                 negligible relative to end-to-end latency. Overall, offloading
+aware routing, avoiding the independent or myopic assign-                                        selected subtasks to the local SLM reduces reliance on cloud
+ments that limit HybridLLM and the heuristics in Minions.                                        decoding without incurring noticeable runtime overheads.
+   Higher accuracy with greater SLM share translates to bet-                                     Remote Cost. Remote monetary cost is dominated by the
+ter application outcomes at lower cloud usage. For example,                                      cloud LLM; we treat on-device SLM execution as free and
+on WebShop, AIMS’s 51.20% success (vs 34.75% HybridLLM /                                         ignore edge–cloud transfer fees. We compute cost using
+43.10% Minions) is achieved while using the SLM more, re-                                        token-footprint accounting (prompt + completion tokens)
+ducing GPT-5 usage and cost; on WebArena, AIMS improves                                          multiplied by API prices (prices as of Sep 2025). To reduce
+task success to 57.90% (vs 28.60% / 45.70%) with higher SLM                                      dependence on volatile pricing, Table 2 reports normalized
+usage; on ToolBench, chain correctness rises to 78.35% (vs                                       remote cost relative to the All-LLM baseline (All-LLM = 1.0
+59.40% / 66.10%) with less reliance on the LLM. Taken to-                                        per dataset). Averaged across nine benchmarks, HybridLLM
+gether, for the same budget, AIMS completes more tasks,                                          costs 0.29×, Minions 0.20×, and AIMS 0.17× of All-LLM, cor-
+and to hit the same accuracy target, it requires fewer LLM                                       responding to 83% savings vs. All-LLM, 41% vs. HybridLLM,
+tokens, demonstrating end-to-end benefits beyond per-step                                        and 15% vs. Minions while maintaining higher accuracy than
+accuracy.                                                                                        HybridLLM and Minions.
+Average latency. We measured average end-to-end latency
+on the desktop edge (RTX 5090) and found that AIMS does                                          4.3    Generalizability Evaluation
+not compromise speed. Figure 10 reports the mean across                                          Table 3 summarizes transfer across model pairs and hard-
+datasets: All-SLM 11.14 s, HybridLLM 12.98 s, Minions 14.21 s,                                   ware. For models, AIMS improves accuracy by +12.35% over
+AIMS 13.33 s, and All-LLM 15.82 s. Thus, AIMS is consistently                                    HybridLLM and +6.86% over Minions at 0.17× the cost of
+faster than All-LLM, slower than All-SLM (as expected), and                                      All–LLM with Qwen+GPT, and by +13.14% / +6.18% at 0.22×
+comparable to HybridLLM and Minions. The scheduler’s                                             cost with Gemma3 + Claude Sonnet 4, demonstrating robust
+
+
+
+                                                                                          1871
+accuracy–cost gains across pairs. To isolate the impact of de-                                  78%                                                            84%
+vice throughput, we keep AIMS’s routing policy, thresholds,
+
+
+
+
+                                                                                                                                                                       AIMS SLM-Usage (macro)
+and SLM usage fixed across hardware and change only the                                                                                                        82%
+
+
+
+
+                                                                        AIMS Accuracy (macro)
+                                                                                                76%
+execution platform. Unless noted otherwise, the hardware
+                                                                                                                                                               80%
+results use the Qwen3-4B (SLM) + GPT-5 (LLM) pair, with the
+same estimator checkpoints. On RTX 5090, AIMS achieves                                          74%                                                            78%
+0.79× the All-LLM end-to-end latency; on iPhone 15, AIMS
+is 2.52× due to lower on-device throughput. Importantly,                                        72%
+                                                                                                                                                               76%
+this is a latency effect: the allocation policy is unchanged                                                                                                   74%
+across hardware. Any minor accuracy differences on mobile
+                                                                                                70%                         AIMS Accuracy
+occur only in rare cases where the on-device runtime cannot                                                                                                    72%
+accommodate the full context (e.g., truncation), not because                                                                AIMS SLM-Usage
+                                                                                                                                                               70%
+the routing logic changes.                                                                      68%
+                                                                                                       0%10% 25%               50%                     100%
+4.4 Ablation Study                                                                                                 Training Traces Used
+Ablation—components. Table 4 quantifies the effect of re-
+                                                                        Figure 11. Training-data ablation for AIMS (Qwen3-4B +
+moving AIMS components. Relative to AIMS (full) (77.62% ac-
+                                                                        GPT-5).
+curacy, 83.58% SLM), removing the subtask decomposer (w/o
+SD) lowers accuracy to 76.04% (−1.58%) and reduces SLM us-
+                                                                                                    Table 4. Ablation study of AIMS components.
+age to 78.04% (−5.54%), indicating SD’s role in exposing safe
+SLM opportunities. Further disabling convergence detection
+                                                                                                                                Acc. (%) ↑          SLM (%) ↑
+(URC+SSE+SLE) drops accuracy and SLM usage more sharply                                          Variant
+                                                                                                                               Value     Δ        Value    Δ
+(73.90%, −3.72%; 75.52%, −8.06%), showing CD’s contribution                                      AIMS (full)                   77.62    —         83.58    —
+to stability. Removing SLE as well (URC+SSE) yields 72.48%                                       w/o SD                        76.04 -1.58        78.04 -5.54
+(−5.14%) and 72.36% (−11.22%). With URC only, accuracy                                           URC+SSE+SLE (no CD)           73.90 -3.72        75.52 -8.06
+falls to 70.10% (−7.52%) and SLM usage to 71.98% (−11.60%),                                      URC+SSE (no CD, SLE)          72.48 -5.14        72.36 -11.22
+revealing that single-stage request routing is too conser-                                       w/ URC (URC only)             70.10 -7.52        71.98 -11.60
+vative. Finally, w/o URC retains accuracy (76.82%, −0.82%)                                       w/o URC                       76.82 -0.80        70.18 -13.40
+but incurs the largest SLM reduction (70.18%, −13.44%), con-
+firming URC’s value as an initial filter that safely increases
+SLM share. Overall, each component materially helps decide              the subtask predictors, and the subtask decomposer), then
+when a subtask can be moved to the SLM without harming                  continue serving with the updated checkpoints. In Table 5,
+accuracy.                                                               generalization accuracy without CFT is reported as-is; accu-
+Ablation—training data. Figure 11 varies the fraction of                racy with CFT is shown in parentheses. On training data, es-
+training traces used by the estimators ({0, 10, 25, 50, 100}%).         timator accuracy is consistently high (82.1–84.1%). Without
+The AIMS system components are trained on subtask traces                CFT, generalization accuracy remains strong (75.1–77.9%);
+generated from WorFBench and GSM8K using the indicated                  with CFT (in parentheses) it improves to 78.1–81.3%, a +3–4%
+fraction of training traces, and evaluated as macro-averages            gain. Latency-wise, the subtask predictors dominate estima-
+over the other seven benchmarks (HotpotQA, DROP, Hu-                    tor compute when invoked (SPSLM 42.4%, SPLLM 38.8%), while
+manEval, WebShop, MATH, WebArena, ToolBench). As shown                  URC, the Distance Predictor, and the Convergence Detector
+in Figure 11, accuracy improves monotonically from 68.3% →              are lightweight (6.4%, 7.1%, and 5.3%), enabling fast decisions.
+77.5% while SLM usage rises from 69.5% → 83.6%. Gains are
+most pronounced up to 50% of traces (76.1% accuracy, 81.2%
+SLM), after which improvements taper, indicating dimin-                                              Table 5. Performance of AIMS’s estimators.
+ishing returns and suggesting that moderate data budgets
+already capture most of AIMS’s benefit.                                                                                               Accuracy (%)              Lat.
+                                                                                                Component
+                                                                                                                                Train Generalization           ratio
+4.5   Performance of Estimators                                                                 User Request Classifier          84.1      77.9 (81.3)          6.4%
+                                                                                                Subtask Predictor 𝑆𝑃𝑆𝐿𝑀          83.9      76.1 (80.1)         42.4%
+Table 5 reports estimator accuracy and latency share. We                                        Subtask Predictor 𝑆𝑃𝐿𝐿𝑀          82.1      75.1 (78.1)         38.8%
+train on WorFBench and GSM8K and evaluate generalization                                        Distance Predictor               83.6      76.2 (79.4)          7.1%
+on the remaining benchmarks. We optionally apply contin-                                        Convergence Detector             82.4      75.8 (79.1)          5.3%
+ual fine-tuning (CFT) every 500 new requests: we collect the                                    Training: WorFBench, GSM8K; Generalization: Other benchmarks
+most recent batch of 500 execution traces and perform in-
+cremental LoRA updates to the estimator stack (URC, DP,
+
+
+
+                                                                 1872
+                                                                                                                                                    88%
+                       Accuracy        SLM usage                                                               Accuracy          SLM usage
+           78%                                                88%                                                                                   86%
+                                                                                                 78%
+                                                              86%
+
+
+
+
+                                                                                                                                                         SLM Usage
+                                                                   SLM Usage
+
+
+
+
+                                                                                      Accuracy
+           77%                                                                                                                                      84%
+Accuracy
+
+
+
+
+                                                              84%                                77%
+           76%                                                82%                                                                                   82%
+                                                                                                 76%
+           75%                                                80%
+                                                                                                                                                    80%
+                                                              78%                                75%
+           74%
+                                                              76%                                                                                   78%
+                                                                                                 74%
+                 0.5       0.5
+                              8      2   6 .7 .74 .78
+                                  0.6 0.6 0   0  0                                                     0.6          0.6
+                                                                                                                          6    0.7  0.7
+                                                                                                                                        4     0.8
+                                   τ_req                                                                                      τ_sse
+
+                             (a) Impact of 𝜏𝑟𝑒𝑞                                                                      (b) Impact of 𝜏𝑠𝑠𝑒
+                                                  Figure 12. Sensitivity of AIMS on its parameters.
+
+                                  Table 6. Comparison of mechanisms in AIMS, HybridLLM, and Minions.
+
+                                  HybridLLM [8]                  Minions [31]                                AIMS
+       Core idea                  classifier-based routing       confidence-based routing                    adaptive iteration-level routing
+       Decision granularity       per subtask (independent)      per subtask (independent)                   per subtask (dependency-aware)
+       Position-aware routing     No                             No                                          Yes (adaptive 𝜅 (𝑖))
+       Dependency handling        No                             No                                          Yes (subtask prediction + convergence detector
+                                                                                                             + subtask decomposition)
+
+
+4.6         Sensitivity Testing                                                       Mechanism Comparison. Table 6 compares AIMS, Hy-
+We analyze two routing thresholds with macro averages                                 bridLLM, and Minions in terms of their mechanisms. Hy-
+across datasets: the request-level threshold 𝜏req (Fig. 12a) and                      bridLLM uses classifier-based routing, where an ML clas-
+the subtask-similarity threshold 𝜏sse (Fig. 12b). Both exhibit                        sifier forwards each subtask to an SLM or LLM. Minions
+a monotonic trade-off: as the threshold increases, accuracy                           uses confidence-based routing: an SLM first attempts a sub-
+rises while SLM usage falls.                                                          task and escalates to a cloud LLM if confidence is low. Both
+Request threshold (𝜏req ). Sweeping from 0.50 to 0.78 in-                             handle subtasks independently, ignoring subtask position or
+creases accuracy from 74.25% to 77.90% (+3.65%) while reduc-                          dependencies. In contrast, AIMS uses adaptive iteration-level
+ing SLM usage from 88.40% to 76.30% (–12.10%). A balanced                             routing that is position- and workflow-aware: it considers
+operating point is 𝜏req ∈ [0.66, 0.70], which keeps accuracy                          how routing decisions affect subsequent subtasks, becomes
+≥77.10% with SLM usage ≈79–81%.                                                       more conservative for later subtasks, and incorporates con-
+Subtask similarity (𝜏sse ). Sweeping from 0.60 to 0.80 in-                            vergence detection and subtask decomposition to achieve
+creases accuracy from 75.10% to 77.65% (+2.55%) while re-                             high accuracy and cost-efficiency. These differences are crit-
+ducing SLM usage from 86.20% to 78.55% (–7.65%). The knee                             ical because subtasks are interdependent; an early routing
+appears around 𝜏sse ∈ [0.70, 0.74], offering near-max accu-                           mistake can affect the final result, and late-stage subtasks
+racy at materially higher SLM share than more conservative                            are often most accuracy-sensitive.
+settings. Overall, higher thresholds push AIMS toward con-                            Experiment Results Analysis. In our experiments in Sec-
+servative routing (more LLM), improving accuracy at the                               tion 4.2, for each request, we record the sequence of subtasks
+cost of SLM efficiency; mid-range values deliver the best                             generated by the agent along with the routing decision (SLM
+accuracy–SLM balance for both thresholds.                                             or LLM) made at each step by each method. To better un-
+                                                                                      derstand the behavioral differences among the methods, we
+                                                                                      analyze the execution traces of 100 requests, where AIMS
+                                                                                      successfully outputs correct results but both HybridLLM and
+                                                                                      Minions produce incorrect results. An incorrect result is de-
+                                                                                      fined as a final output that fails the task-specific correctness
+4.7         Understanding Performance Gains
+                                                                                      criterion (Section 2.1), e.g., incorrect final answer, failed test
+To explain the performance gains of AIMS over HybridLLM                               case, or similarity score below a threshold. By comparing
+and Minions in Section 4.2, we analyze where the baselines                            routing decisions and subtask sequences across the three
+lose accuracy or cost-efficiency relative to AIMS.
+
+
+
+                                                                               1873
+methods, we identify two main trace patterns that explain              5   Limitations and Future Work
+why the baselines fail while AIMS succeeds.                            While AIMS demonstrates promising results in balancing
+                                                                       cost-effectiveness and accuracy for AI agent deployment,
+                                                                       several limitations warrant further research:
+   • Early divergence accumulation: An early subtask                   Application-specific accuracy requirements. In this pa-
+     may appear simple, leading Minions and HybridLLM                  per, we assume a uniform similarity threshold across all
+     to offload it to the SLM. However, the resulting state            applications. However, different applications may have vary-
+     change can alter subsequent subtasks, causing the                 ing accuracy requirements, which our approach does not
+     downstream subtask chain to drift. AIMS mitigates                 currently account for. In future work, we aim to extend our
+     this by checking the predicted subtask’s SLM-LLM                  framework to incorporate application-specific accuracy re-
+     output similarity in making routing decision and by               quirements, enabling a more tailored and effective decision-
+     searching for future convergence when the SLM-LLM                 making process.
+     output similarity is high.                                        Cost model. Our current implementation uses a simplified
+   • Late-stage sensitivity: In tasks with long subtask                cost model focusing primarily on LLM API costs. However,
+     sequences, such as WebArena and ToolBench, later                  real-world deployments involve additional considerations.
+     subtasks often involve final action selection, argument           Future work should develop a more comprehensive model
+     validation, or consistency checks. HybridLLM and Min-             incorporating dynamic SLA-aware scheduling, resource uti-
+     ions do not consider subtask position, leading to ag-             lization monitoring, network-aware decision making, and
+     gressive late-stage offloading where divergence is more           multi-tenant optimization.
+     impactful, producing incorrect final results. AIMS ad-            Extensive profiling. The current system requires extensive
+     dresses this by tightening its similarity threshold for           profiling of each SLM and LLM pair, which can be time-
+     later subtasks, favoring LLM to ensure accuracy.                  consuming and hard to retrain. Future work could explore
+                                                                       more efficient profiling techniques to leverage information
+                                                                       from previously profiled models.
+Performance Difference Breakdown. We consider Hy-                      Multi-model extension. While AIMS currently supports
+bridLLM or Minions to exhibit performance differences when             any compatible SLM-LLM pair, as demonstrated with Qwen-
+they either produce an incorrect final outcome or produce a            4B/GPT-5 and Gemma3 4B/Claude Sonnet 4, it could be ex-
+correct final outcome but require more cloud LLM invoca-               tended to leverage multiple models simultaneously.
+tions than AIMS, resulting in lower SLM usage and higher               Making AIMS SLA-aware. The current AIMS design op-
+cost. For each performance difference case, we analyze the             timizes cloud cost reduction (by maximizing SLM usage)
+routing decisions and resulting subtask sequences to identify          subject to an accuracy-retention target, and reports latency
+the dominant cause among three categories: early divergence            empirically rather than enforcing an explicit online budget.
+accumulation, late-stage sensitivity, and lack of convergence          To make AIMS SLA-aware, a deployment could provide per-
+and decomposition handling. The first two categories corre-            request budgets (e.g., a maximum expected remote-token
+spond to incorrect final outcomes and are explained in the             budget 𝐵 $ and/or latency budget 𝐵𝑡 ). AIMS can then tighten
+previous paragraph, while the third category corresponds               routing thresholds or cap lookahead/convergence search
+to cases with correct final outcomes but higher cost, where            depth to satisfy 𝐵𝑡 , while prioritizing cloud fallback for late-
+the baseline incurs more cloud LLM invocations because                 stage or high-risk subtasks when the remaining budget is low.
+it cannot exploit convergence or decomposition opportuni-              Implementing this requires lightweight runtime signals such
+ties used by AIMS. We analyze 150 cases and calculate the              as network RTT, device throughput, and queueing/resource
+percentage of each cause among these cases for each method.            utilization, enabling budget-aware threshold adaptation and
+   For HybridLLM, the gap relative to AIMS is dominated                network-aware routing.
+by early divergence accumulation (53.18%), followed by late-
+stage sensitivity (29.64%) and lack of convergence and decom-
+position handling (17.18%). For Minions, late-stage sensitiv-          6   Related Work
+ity dominates (45.86%), with early divergence accumulation             LLM-based AI Agents. Recent developments in LLMs have
+(30.07%) and lack of convergence and decomposition han-                led to a surge in constructing LLM-based autonomous agents
+dling (24.07%). These patterns align with the mechanism                aimed at achieving human-level decision-making capabilities
+differences summarized in Table 6: both HybridLLM and                  [2, 58]. Most studies within this domain can be categorized
+Minions treat subtasks independently and lack awareness                into three main areas: agent architecture design [37, 45, 46,
+of subtask position or dependencies. Overall, AIMS’s advan-            59, 60, 62, 67, 70], capability acquisition [42, 44, 54], and
+tage comes from accounting for subtask dependencies and                application domains [1, 5, 37, 52, 72]. These works are com-
+position when offloading subtasks to the SLM, improving                plementary to our work and have the potential to be included
+both accuracy and cost-efficiency.                                     in AIMS.
+
+
+
+                                                                1874
+   In parallel with research on agent architecture, researchers               Recent research has also explored broader LLM inference
+have been working on agent orchestration frameworks that                   optimization challenges like latency, throughput, and re-
+make it easier to specify multi-step or graph-structured                   source utilization [16, 21, 27, 28, 33, 48, 68]. For instance, Ne-
+agent workflows, manage state, and integrate tool calls (e.g.,             uPIMs [16] proposes a heterogeneous NPU-PIM architecture
+LangGraph [22] and Microsoft Semantic Kernel [29]). These                  to accelerate batched LLM inference by efficiently handling
+frameworks primarily focus on agent programming abstrac-                   different types of matrix operations. PagedAttention [21] op-
+tions and runtime orchestration, and typically assume a fixed              timizes memory management for LLM serving by introduc-
+choice of underlying model(s). AIMS is complementary: it                   ing a paging mechanism for the KV cache. SpecInfer [27] ac-
+can be integrated underneath these frameworks as a backend                 celerates LLM serving through speculative inference. Other
+routing layer that decides, at runtime, whether each step/-                works have focused on efficient scheduling [28, 33], pipeline
+subtask should run on an edge SLM or a cloud LLM to reduce                 parallelism and recomputation [48], and distributed serving
+cost while preserving end-to-end accuracy.                                 systems [68], all aiming to improve latency, throughput, and
+Hybrid ML Inference. Recent ML advancements have intro-                    resource utilization in LLM inference.
+duced hybrid inference techniques that strategically combine               7    Conclusion
+models of different sizes to optimize cost and efficiency [3,
+8, 11, 13, 20, 34, 49]. These systems typically route simpler              Motivated by the need to reduce LLM inference costs while
+queries to smaller models while directing complex tasks to                 maintaining response accuracy in AI agents, this paper presents
+larger, more capable ones [3, 7, 19, 20]. The idea of arrang-              an experimental analysis that yields several insightful ob-
+ing predictors into a cascade—where cheap stages handle                    servations. Based on these findings, we propose AIMS, a
+the common/easy cases and expensive stages are invoked                     cost-efficient framework for AI agents in hybrid cloud-edge
+only for hard cases—predates LLMs and has long been used                   environments. AIMS leverages local SLMs for request- and
+in systems and ML pipelines. A classical example is the Vi-                subtask-level computation partitioning. Unlike existing ap-
+ola–Jones boosted cascade for rapid object/face detection,                 proaches that allocate requests in isolation, AIMS takes a
+which uses early rejectors to avoid unnecessary expensive                  holistic approach, leveraging subtask position-aware deci-
+computation on most inputs. Modern LLM cascades and                        sions to account for the interconnected nature of agent rea-
+routing systems inherit this same “common-case fast path”                  soning and identifies convergence points between LLM and
+principle, but must additionally account for generation un-                SLM subtask sequences to enhance local processing. Exten-
+certainty and task semantics [50, 51]. While approaches like               sive experiments on nine datasets demonstrate that AIMS
+LLM-Blender [19], which ensembles outputs from multiple                    outperforms state-of-the-art methods in achieving this bal-
+LLMs by ranking and fusing them using its PairRanker and                   ance.
+GenFuser modules, and FrugalGPT [3], which queries a cas-
+cade of LLMs from least to most expensive until a satisfactory
+                                                                           Acknowledgements
+answer is obtained, utilize multiple LLMs or multiple calls                We thank our shepherd, Dr. Y. Charlie Hu, and the anony-
+per request, our method aims to achieve comparable quality                 mous reviewers for their valuable feedback and suggestions
+primarily through intelligent routing between a single SLM                 that helped improve this paper. This research was supported
+and a single LLM per subtask, potentially reducing overall                 in part by U.S. NSF grants NSF-2421782, NSF-2350425, NSF-
+operational overhead associated with managing and query-                   2319988, NSF-2206522, Microsoft Research Faculty Fellow-
+ing numerous models for each request. HybridLLM [8], most                  ship 8300751, Amazon research award, AWS Cloud Credit
+closely related to our work, routes requests between LLM                   for Research, and the Commonwealth Cyber Initiative (CCI),
+and SLM using a classifier, whereas AIMS optimizes subtask                 an investment in the advancement of cyber research, inno-
+allocation within an AI agent’s decision-making process. In                vation and workforce development. For more information
+contrast, Minions [31] targets collaboration between an on-                about CCI, visit cyberinitiative.org.
+device small model and a remote large model at the subtask
+level, using handshakes and gating to recover cloud-only                   References
+quality at lower cost. It does not model the internal subtask               [1] Andres M Bran, Sam Cox, Andrew D White, and Philippe Schwaller.
+structure of agent workflows (decomposition, position ef-                       Chemcrow: Augmenting large-language models with chemistry tools.
+                                                                                arXiv preprint arXiv:2304.05376, 2023.
+fects), whereas AIMS performs fine-grained, position-aware                  [2] Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared
+routing within a request via its design. Empirically, this struc-               Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam,
+tural awareness lets AIMS sustain higher accuracy at similar                    Girish Sastry, Amanda Askell, Sandhini Agarwal, Ariel Herbert-Voss,
+or lower cost while maintaining a higher SLM share on a                         Gretchen Krueger, Tom Henighan, Rewon Child, Aditya Ramesh,
+                                                                                Daniel M. Ziegler, Jeffrey Wu, Clemens Winter, Christopher Hesse,
+variety of tasks.
+                                                                                Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess,
+                                                                                Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya
+                                                                                Sutskever, and Dario Amodei. Language models are few-shot learners.
+                                                                                In Hugo Larochelle, Marc’Aurelio Ranzato, Raia Hadsell, Maria-Florina
+
+
+
+
+                                                                    1875
+     Balcan, and Hsuan-Tien Lin, editors, Advances in Neural Information               [15] Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven
+     Processing Systems 33: Annual Conference on Neural Information Pro-                    Basart, Eric Tang, Dawn Song, and Jacob Steinhardt. Measuring mathe-
+     cessing Systems 2020, NeurIPS 2020, December 6-12, 2020, virtual, 2020.                matical problem solving with the MATH dataset. CoRR, abs/2103.03874,
+ [3] Lingjiao Chen, Matei Zaharia, and James Zou. Frugalgpt: How to use                     2021.
+     large language models while reducing cost and improving performance.              [16] Guseul Heo, Sangyeop Lee, Jaehong Cho, Hyunmin Choi, Sanghyeon
+     arXiv preprint arXiv:2305.05176, 2023.                                                 Lee, Hyungkyu Ham, Gwangsun Kim, Divya Mahajan, and Jongse
+ [4] Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Pondé                       Park. Neupims: Npu-pim heterogeneous acceleration for batched llm
+     de Oliveira Pinto, Jared Kaplan, Harri Edwards, Yuri Burda, Nicholas                   inferencing. In Proceedings of the 29th ACM International Conference
+     Joseph, Greg Brockman, Alex Ray, Raul Puri, Gretchen Krueger,                          on Architectural Support for Programming Languages and Operating
+     Michael Petrov, Heidy Khlaaf, Girish Sastry, Pamela Mishkin, Brooke                    Systems, Volume 3, pages 722–737, 2024.
+     Chan, Scott Gray, Nick Ryder, Mikhail Pavlov, Alethea Power, Lukasz               [17] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi
+     Kaiser, Mohammad Bavarian, Clemens Winter, Philippe Tillet, Fe-                        Li, Shean Wang, Lu Wang, and Weizhu Chen. Lora: Low-rank adapta-
+     lipe Petroski Such, Dave Cummings, Matthias Plappert, Fotios                           tion of large language models. arXiv preprint arXiv:2106.09685, 2021.
+     Chantzis, Elizabeth Barnes, Ariel Herbert-Voss, William Hebgen Guss,              [18] Shengran Hu, Cong Lu, and Jeff Clune. Automated design of agentic
+     Alex Nichol, Alex Paino, Nikolas Tezak, Jie Tang, Igor Babuschkin,                     systems. arXiv preprint arXiv:2408.08435, 2024.
+     Suchir Balaji, Shantanu Jain, William Saunders, Christopher Hesse, An-            [19] Dongfu Jiang, Xiang Ren, and Bill Yuchen Lin. LLM-blender: Ensem-
+     drew N. Carr, Jan Leike, Joshua Achiam, Vedant Misra, Evan Morikawa,                   bling large language models with pairwise ranking and generative
+     Alec Radford, Matthew Knight, Miles Brundage, Mira Murati, Katie                       fusion. In Anna Rogers, Jordan Boyd-Graber, and Naoaki Okazaki,
+     Mayer, Peter Welinder, Bob McGrew, Dario Amodei, Sam McCandlish,                       editors, Proceedings of the 61st Annual Meeting of the Association for
+     Ilya Sutskever, and Wojciech Zaremba. Evaluating large language                        Computational Linguistics (Volume 1: Long Papers), pages 14165–14178,
+     models trained on code. CoRR, abs/2107.03374, 2021.                                    Toronto, Canada, July 2023. Association for Computational Linguistics.
+ [5] Yinfang Chen, Huaibing Xie, Minghua Ma, Yu Kang, Xin Gao, Liu Shi,                [20] Anil Kag and Igor Fedorov. Efficient edge inference by selective query.
+     Yunjie Cao, Xuedong Gao, Hao Fan, Ming Wen, Jun Zeng, Supriyo                          In International Conference on Learning Representations, 2023.
+     Ghosh, Xuchao Zhang, Chaoyun Zhang, Qingwei Lin, Saravan Rajmo-                   [21] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin
+     han, Dongmei Zhang, and Tianyin Xu. Automatic root cause analysis                      Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica.
+     via large language models for cloud incidents. In Proceedings of the                   Efficient memory management for large language model serving with
+     Nineteenth European Conference on Computer Systems, EuroSys ’24,                       pagedattention. In Proceedings of the 29th Symposium on Operating
+     page 674–688, New York, NY, USA, 2024. Association for Computing                       Systems Principles, pages 611–626, 2023.
+     Machinery.                                                                        [22] LangChain AI. Langgraph: A low-level orchestration framework for
+ [6] Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Hee-                        building stateful agents. https://github.com/langchain-ai/langgraph,
+     woo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton,                 2024. Accessed: Mar. 6, 2026.
+     Reiichiro Nakano, et al. Training verifiers to solve math word problems.          [23] Yifei Li, Zeqi Lin, Shizhuo Zhang, Qiang Fu, Bei Chen, Jian-Guang
+     arXiv preprint arXiv:2110.14168, 2021.                                                 Lou, and Weizhu Chen. Making language models better reasoners
+ [7] Dujian Ding, Sihem Amer-Yahia, and Laks VS Lakshmanan. On ef-                          with step-aware verifier. In Anna Rogers, Jordan L. Boyd-Graber, and
+     ficient approximate queries over machine learning models. arXiv                        Naoaki Okazaki, editors, Proceedings of the 61st Annual Meeting of the
+     preprint arXiv:2206.02845, 2022.                                                       Association for Computational Linguistics (Volume 1: Long Papers), ACL
+ [8] Dujian Ding, Ankur Mallick, Chi Wang, Robert Sim, Subhabrata                           2023, Toronto, Canada, July 9-14, 2023, pages 5315–5333. Association
+     Mukherjee, Victor Rühle, Laks VS Lakshmanan, and Ahmed Hassan                          for Computational Linguistics, 2023.
+     Awadallah. Hybrid llm: Cost-efficient and quality-aware query routing.            [24] Yaobo Liang, Chenfei Wu, Ting Song, Wenshan Wu, Yan Xia, Yu Liu,
+     In International Conference on Learning Representations, 2023.                         Yang Ou, Shuai Lu, Lei Ji, Shaoguang Mao, Yun Wang, Linjun Shou,
+ [9] Dheeru Dua, Yizhong Wang, Pradeep Dasigi, Gabriel Stanovsky,                           Ming Gong, and Nan Duan. Taskmatrix.ai: Completing tasks by con-
+     Sameer Singh, and Matt Gardner. Drop: A reading comprehension                          necting foundation models with millions of apis. Intelligent Computing,
+     benchmark requiring discrete reasoning over paragraphs. arXiv                          3:0063, 2024.
+     preprint arXiv:1903.00161, 2019.                                                  [25] Pan Lu, Baolin Peng, Hao Cheng, Michel Galley, Kai-Wei Chang,
+[10] Exploding Topics. Chatgpt enterprise: The future of ai in business.                    Ying Nian Wu, Song-Chun Zhu, and Jianfeng Gao. Chameleon: plug-
+     https://explodingtopics.com/blog/chatgpt-enterprise, 2025. Accessed:                   and-play compositional reasoning with large language models. In
+     Mar. 6, 2026.                                                                          Proceedings of the 37th International Conference on Neural Informa-
+[11] Ruibo Fan, Xiangrui Yu, Peijie Dong, Zeyu Li, Gu Gong, Qiang Wang,                     tion Processing Systems, NIPS ’23, Red Hook, NY, USA, 2023. Curran
+     Wei Wang, and Xiaowen Chu. Spinfer: Leveraging low-level sparsity                      Associates Inc.
+     for efficient large language model inference on gpus. In Proceedings of           [26] Grégoire Mialon, Roberto Dessì, Maria Lomeli, Christoforos Nalmpan-
+     the Twentieth European Conference on Computer Systems, EuroSys ’25,                    tis, Ram Pasunuru, Roberta Raileanu, Baptiste Rozière, Timo Schick,
+     page 243–260, New York, NY, USA, 2025. Association for Computing                       Jane Dwivedi-Yu, Asli Celikyilmaz, et al. Augmented language models:
+     Machinery.                                                                             a survey. arXiv preprint arXiv:2302.07842, 2023.
+[12] Yao Fu, Hao Peng, Litu Ou, Ashish Sabharwal, and Tushar Khot. Spe-                [27] Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu
+     cializing smaller language models towards multi-step reasoning. In                     Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang,
+     International Conference on Machine Learning, pages 10421–10430.                       Xiaoxiang Shi, et al. Specinfer: Accelerating large language model
+     PMLR, 2023.                                                                            serving with tree-based speculative inference and verification. In
+[13] Shiwei Gao, Youmin Chen, and Jiwu Shu. Fast state restoration in                       Proceedings of the 29th ACM International Conference on Architectural
+     llm serving with hcache. In Proceedings of the Twentieth European                      Support for Programming Languages and Operating Systems, Volume 3,
+     Conference on Computer Systems, EuroSys ’25, page 128–143, New                         pages 932–949, 2024.
+     York, NY, USA, 2025. Association for Computing Machinery.                         [28] Xupeng Miao, Chunan Shi, Jiangfei Duan, Xiaoli Xi, Dahua Lin, Bin Cui,
+[14] Thorsten Händler. Balancing autonomy and alignment: A multi-                           and Zhihao Jia. Spotserve: Serving generative large language models
+     dimensional taxonomy for autonomous llm-powered multi-agent ar-                        on preemptible instances. In Proceedings of the 29th ACM International
+     chitectures. arXiv preprint arXiv:2310.03659, 2023.                                    Conference on Architectural Support for Programming Languages and
+
+
+
+
+                                                                                1876
+     Operating Systems, Volume 2, pages 1112–1127, 2024.                             [42] Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta Raileanu, Maria
+[29] Microsoft. Semantic Kernel: An open-source SDK for integrating LLMs                  Lomeli, Eric Hambro, Luke Zettlemoyer, Nicola Cancedda, and Thomas
+     into applications. https://github.com/microsoft/semantic-kernel, 2023.               Scialom. Toolformer: Language models can teach themselves to use
+     Accessed: 2025.                                                                      tools. In Alice Oh, Tristan Naumann, Amir Globerson, Kate Saenko,
+[30] Reiichiro Nakano, Jacob Hilton, Suchir Balaji, Jeff Wu, Long Ouyang,                 Moritz Hardt, and Sergey Levine, editors, Advances in Neural Informa-
+     Christina Kim, Christopher Hesse, Shantanu Jain, Vineet Kosaraju,                    tion Processing Systems 36: Annual Conference on Neural Information
+     William Saunders, et al. Webgpt: Browser-assisted question-answering                 Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December
+     with human feedback. arXiv preprint arXiv:2112.09332, 2021.                          10 - 16, 2023, 2023.
+[31] Avanika Narayan, Dan Biderman, Sabri Eyuboglu, Avner May, Scott                 [43] SemiAnalysis. The inference cost of search disruption – large lan-
+     Linderman, James Zou, and Christopher Re. Minions: Cost-efficient                    guage model cost analysis. https://semianalysis.com/2023/02/09/the-
+     collaboration between on-device and cloud language models. arXiv                     inference-cost-of-search-disruption/, 2023. Accessed: Mar. 6, 2026.
+     preprint arXiv:2502.15964, 2025.                                                [44] Yongliang Shen, Kaitao Song, Xu Tan, Dongsheng Li, Weiming Lu, and
+[32] Neoteric. How much does it cost to use gpt models? gpt-3 pricing                     Yueting Zhuang. Hugginggpt: Solving AI tasks with chatgpt and its
+     explained. https://neoteric.eu/blog/how-much-does-it-cost-to-use-                    friends in hugging face. In Alice Oh, Tristan Naumann, Amir Glober-
+     gpt-models-gpt-3-pricing-explained/, 2023. Accessed: Mar. 6, 2026.                   son, Kate Saenko, Moritz Hardt, and Sergey Levine, editors, Advances
+[33] Hyungjun Oh, Kihong Kim, Jaemin Kim, Sungkyun Kim, Junyeol Lee,                      in Neural Information Processing Systems 36: Annual Conference on
+     Du-seong Chang, and Jiwon Seo. Exegpt: Constraint-aware resource                     Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans,
+     scheduling for llm inference. In Proceedings of the 29th ACM Interna-                LA, USA, December 10 - 16, 2023, 2023.
+     tional Conference on Architectural Support for Programming Languages            [45] Noah Shinn, Federico Cassano, Ashwin Gopinath, Karthik R
+     and Operating Systems, Volume 2, pages 369–384, 2024.                                Narasimhan, and Shunyu Yao. Reflexion: Language agents with ver-
+[34] Isaac Ong, Amjad Almahairi, Vincent Wu, Wei-Lin Chiang, Tian-                        bal reinforcement learning. In Thirty-seventh Conference on Neural
+     hao Wu, Joseph E Gonzalez, M Waleed Kadous, and Ion Stoica.                          Information Processing Systems, 2023.
+     Routellm: Learning to route llms with preference data. arXiv preprint           [46] Significant Gravitas. Autogpt. https://github.com/Significant-
+     arXiv:2406.18665, 2024.                                                              Gravitas/AutoGPT, 2023. Accessed: Mar. 6, 2026.
+[35] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wain-                 [47] Theodore Sumers, Shunyu Yao, Karthik Narasimhan, and Thomas
+     wright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina                      Griffiths. Cognitive architectures for language agents. Transactions on
+     Slama, Alex Ray, et al. Training language models to follow instruc-                  Machine Learning Research, 2024. Survey Certification.
+     tions with human feedback. Advances in Neural Information Processing            [48] Zhenbo Sun, Huanqi Cao, Yuanwei Wang, Guanyu Feng, Shengqi Chen,
+     Systems, 35:27730–27744, 2022.                                                       Haojie Wang, and Wenguang Chen. Adapipe: Optimizing pipeline
+[36] Haritz Puerto, Gözde Şahin, and Iryna Gurevych. MetaQA: Combining                    parallelism with adaptive recomputation and partitioning. In Proceed-
+     expert agents for multi-skill question answering. In Andreas Vlachos                 ings of the 29th ACM International Conference on Architectural Support
+     and Isabelle Augenstein, editors, Proceedings of the 17th Conference                 for Programming Languages and Operating Systems, Volume 3, pages
+     of the European Chapter of the Association for Computational Linguis-                86–100, 2024.
+     tics, pages 3566–3580, Dubrovnik, Croatia, May 2023. Association for            [49] Zhenbo Sun, Shengqi Chen, Yuanwei Wang, Jian Sha, Guanyu Feng,
+     Computational Linguistics.                                                           and Wenguang Chen. Mepipe: Democratizing llm training with
+[37] Chen Qian, Wei Liu, Hongzhang Liu, Nuo Chen, Yufan Dang, Jiahao                      memory-efficient slice-level pipeline scheduling on cost-effective ac-
+     Li, Cheng Yang, Weize Chen, Yusheng Su, Xin Cong, Juyuan Xu, Da-                     celerators. In Proceedings of the Twentieth European Conference on
+     hai Li, Zhiyuan Liu, and Maosong Sun. ChatDev: Communicative                         Computer Systems, EuroSys ’25, page 1263–1278, New York, NY, USA,
+     agents for software development. In Lun-Wei Ku, Andre Martins, and                   2025. Association for Computing Machinery.
+     Vivek Srikumar, editors, Proceedings of the 62nd Annual Meeting of              [50] Paul Viola and Michael Jones. Rapid object detection using a boosted
+     the Association for Computational Linguistics (Volume 1: Long Papers),               cascade of simple features. In Proceedings of the 2001 IEEE computer
+     pages 15174–15186, Bangkok, Thailand, August 2024. Association for                   society conference on computer vision and pattern recognition. CVPR
+     Computational Linguistics.                                                           2001, volume 1, pages I–I. IEEE, 2001.
+[38] Shuofei Qiao, Runnan Fang, Zhisong Qiu, Xiaobin Wang, Ningyu                    [51] Paul Viola and Michael J Jones. Robust real-time face detection. Inter-
+     Zhang, Yong Jiang, Pengjun Xie, Fei Huang, and Huajun Chen. Bench-                   national journal of computer vision, 57(2):137–154, 2004.
+     marking agentic workflow generation. arXiv preprint arXiv:2410.07869,           [52] Guanzhi Wang, Yuqi Xie, Yunfan Jiang, Ajay Mandlekar, Chaowei
+     2024.                                                                                Xiao, Yuke Zhu, Linxi Fan, and Anima Anandkumar. Voyager: An
+[39] Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu,                    open-ended embodied agent with large language models. Transactions
+     Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, et al. Toolllm: Facili-               on Machine Learning Research, 2024.
+     tating large language models to master 16000+ real-world apis. arXiv            [53] Kuan Wang, Yadong Lu, Michael Santacroce, Yeyun Gong, Chao Zhang,
+     preprint arXiv:2307.16789, 2023.                                                     et al. Adapting llm agents with universal feedback in communication.
+[40] Leonardo Ranaldi and André Freitas. Aligning large and small language                In ICML 2024 Workshop on Foundation Models in the Wild, 2024.
+     models via chain-of-thought reasoning. In Yvette Graham and Matthew             [54] Lei Wang, Chen Ma, Xueyang Feng, Zeyu Zhang, Hao Yang, Jingsen
+     Purver, editors, Proceedings of the 18th Conference of the European                  Zhang, Zhiyuan Chen, Jiakai Tang, Xu Chen, Yankai Lin, et al. A
+     Chapter of the Association for Computational Linguistics, EACL 2024                  survey on large language model based autonomous agents. Frontiers
+     - Volume 1: Long Papers, St. Julian’s, Malta, March 17-22, 2024, pages               of Computer Science, 18(6):1–26, 2024.
+     1812–1827. Association for Computational Linguistics, 2024.                     [55] Benjamin Warner, Antoine Chaffin, Benjamin Clavié, Orion Weller,
+[41] Nils Reimers and Iryna Gurevych. Sentence-BERT: Sentence embed-                      Oskar Hallström, Said Taghadouini, Alexis Gallagher, Raja Biswas,
+     dings using Siamese BERT-networks. In Kentaro Inui, Jing Jiang,                      Faisal Ladhak, Tom Aarsen, Griffin Thomas Adams, Jeremy Howard,
+     Vincent Ng, and Xiaojun Wan, editors, Proceedings of the 2019 Confer-                and Iacopo Poli. Smarter, better, faster, longer: A modern bidirectional
+     ence on Empirical Methods in Natural Language Processing and the 9th                 encoder for fast, memory efficient, and long context finetuning and
+     International Joint Conference on Natural Language Processing (EMNLP-                inference. In Wanxiang Che, Joyce Nabende, Ekaterina Shutova, and
+     IJCNLP), pages 3982–3992, Hong Kong, China, November 2019. Asso-                     Mohammad Taher Pilehvar, editors, Proceedings of the 63rd Annual
+     ciation for Computational Linguistics.                                               Meeting of the Association for Computational Linguistics (Volume 1:
+
+
+
+
+                                                                              1877
+     Long Papers), pages 2526–2547, Vienna, Austria, July 2025. Association           [67] Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik
+     for Computational Linguistics.                                                        Narasimhan, and Yuan Cao. React: Synergizing reasoning and acting
+[56] Jason Wei, Maarten Bosma, Vincent Zhao, Kelvin Guu, Adams Wei                         in language models. CoRR, abs/2210.03629, 2022.
+     Yu, Brian Lester, Nan Du, Andrew M. Dai, and Quoc V Le. Finetuned                [68] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim,
+     language models are zero-shot learners. In International Conference                   and Byung-Gon Chun. Orca: A distributed serving system for
+     on Learning Representations, 2022.                                                    {Transformer-Based} generative models. In 16th USENIX Sympo-
+[57] Jason Wei, Yi Tay, Rishi Bommasani, Colin Raffel, Barret Zoph, Sebas-                 sium on Operating Systems Design and Implementation (OSDI 22), pages
+     tian Borgeaud, Dani Yogatama, Maarten Bosma, Denny Zhou, Donald                       521–538, 2022.
+     Metzler, Ed H. Chi, Tatsunori Hashimoto, Oriol Vinyals, Percy Liang,             [69] Tianyi Zhang*, Varsha Kishore*, Felix Wu*, Kilian Q. Weinberger, and
+     Jeff Dean, and William Fedus. Emergent abilities of large language                    Yoav Artzi. Bertscore: Evaluating text generation with bert. In Inter-
+     models. Transactions on Machine Learning Research, 2022. Survey                       national Conference on Learning Representations, 2020.
+     Certification.                                                                   [70] Yadong Zhang, Shaoguang Mao, Tao Ge, Xun Wang, Yan Xia, Man Lan,
+[58] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Brian                         and Furu Wei. K-level reasoning: Establishing higher order beliefs in
+     Ichter, Fei Xia, Ed H. Chi, Quoc V. Le, and Denny Zhou. Chain-of-                     large language models for strategic reasoning. In Luis Chiruzzo, Alan
+     thought prompting elicits reasoning in large language models. In                      Ritter, and Lu Wang, editors, Proceedings of the 2025 Conference of the
+     Sanmi Koyejo, S. Mohamed, A. Agarwal, Danielle Belgrave, K. Cho,                      Nations of the Americas Chapter of the Association for Computational
+     and A. Oh, editors, Advances in Neural Information Processing Systems                 Linguistics: Human Language Technologies (Volume 1: Long Papers),
+     35: Annual Conference on Neural Information Processing Systems 2022,                  pages 7212–7234, Albuquerque, New Mexico, April 2025. Association
+     NeurIPS 2022, New Orleans, LA, USA, November 28 - December 9, 2022,                   for Computational Linguistics.
+     2022.                                                                            [71] Shuyan Zhou, Frank F Xu, Hao Zhu, Xuhui Zhou, Robert Lo, Abishek
+[59] Qingyun Wu, Gagan Bansal, Jieyu Zhang, Yiran Wu, Beibin Li,                           Sridhar, Xianyi Cheng, Tianyue Ou, Yonatan Bisk, Daniel Fried, et al.
+     Erkang (Eric) Zhu, Li Jiang, Xiaoyun Zhang, Shaokun Zhang, Ahmed                      Webarena: A realistic web environment for building autonomous
+     Awadallah, Ryen W. White, Doug Burger, and Chi Wang. Autogen:                         agents. arXiv preprint arXiv:2307.13854, 2023.
+     Enabling next-gen llm applications via multi-agent conversation. In              [72] Xizhou Zhu, Yuntao Chen, Hao Tian, Chenxin Tao, Weijie Su, Chenyu
+     COLM 2024, August 2024.                                                               Yang, Gao Huang, Bin Li, Lewei Lu, Xiaogang Wang, et al. Ghost in
+[60] Wenshan Wu, Shaoguang Mao, Yadong Zhang, Yan Xia, Li Dong, Lei                        the minecraft: Generally capable agents for open-world enviroments
+     Cui, and Furu Wei. Mind’s eye of llms: Visualization-of-thought elic-                 via large language models with text-based knowledge and memory.
+     its spatial reasoning in large language models. In Amir Globersons,                   arXiv preprint arXiv:2305.17144, 2023.
+     Lester Mackey, Danielle Belgrave, Angela Fan, Ulrich Paquet, Jakub M.
+     Tomczak, and Cheng Zhang, editors, Advances in Neural Information
+     Processing Systems 38: Annual Conference on Neural Information Pro-
+     cessing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, December
+     10 - 15, 2024, 2024.
+[61] Zhiheng Xi, Wenxiang Chen, Xin Guo, Wei He, Yiwen Ding, Boyang
+     Hong, Ming Zhang, Junzhe Wang, Senjie Jin, Enyu Zhou, et al. The
+     rise and potential of large language model based agents: A survey.
+     arXiv preprint arXiv:2309.07864, 2023.
+[62] Binfeng Xu, Zhiyuan Peng, Bowen Lei, Subhabrata Mukherjee, Yuchen
+     Liu, and Dongkuan Xu. Rewoo: Decoupling reasoning from obser-
+     vations for efficient augmented language models. arXiv preprint
+     arXiv:2305.18323, 2023.
+[63] Canwen Xu, Yichong Xu, Shuohang Wang, Yang Liu, Chenguang Zhu,
+     and Julian McAuley. Small models are valuable plug-ins for large
+     language models. In Lun-Wei Ku, Andre Martins, and Vivek Srikumar,
+     editors, Findings of the Association for Computational Linguistics: ACL
+     2024, pages 283–294, Bangkok, Thailand, August 2024. Association for
+     Computational Linguistics.
+[64] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui,
+     Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et al.
+     Qwen3 technical report. arXiv preprint arXiv:2505.09388, 2025.
+[65] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen,
+     Ruslan Salakhutdinov, and Christopher D. Manning. HotpotQA: A
+     dataset for diverse, explainable multi-hop question answering. In Ellen
+     Riloff, David Chiang, Julia Hockenmaier, and Jun’ichi Tsujii, editors,
+     Proceedings of the 2018 Conference on Empirical Methods in Natural
+     Language Processing, pages 2369–2380, Brussels, Belgium, October-
+     November 2018. Association for Computational Linguistics.
+[66] Shunyu Yao, Howard Chen, John Yang, and Karthik Narasimhan. Web-
+     shop: Towards scalable real-world web interaction with grounded
+     language agents. In Sanmi Koyejo, S. Mohamed, A. Agarwal, Danielle
+     Belgrave, K. Cho, and A. Oh, editors, Advances in Neural Information
+     Processing Systems 35: Annual Conference on Neural Information Pro-
+     cessing Systems 2022, NeurIPS 2022, New Orleans, LA, USA, November
+     28 - December 9, 2022, 2022.
+
+
+
+
+                                                                               1878
+

@@ -1,0 +1,1405 @@
+  TailorLLM: Collaborative End-Cloud Inference of
+Large and Small Language Models Based on Low-Rank
+                    Adaptation
+                  Zian Wang                                       Ziyi Wang∗                                     Haonan Jin
+       Beijing University of Posts and                 Beijing University of Posts and                   Beijing University of Posts and
+            Telecommunications                              Telecommunications                                Telecommunications
+
+                                            Jie Xing                                      Lanshan Zhang∗
+                                Beijing University of Posts and                      Beijing University of Posts and
+                                     Telecommunications                                   Telecommunications
+Abstract                                                                         Keywords: Large Language Models, Edge Computing, Col-
+With the rapid expansion of large language model inference                       laborative Inference, Low Rank Adaptation, Scheduling
+service users, cloud computing resource costs have become                        ACM Reference Format:
+a critical challenge for service providers. Although utilizing                   Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang.
+end-device resources for auxiliary inference provides new                        2026. TailorLLM: Collaborative End-Cloud Inference of Large and
+possibilities to reduce cloud computing costs, existing solu-                    Small Language Models Based on Low-Rank Adaptation. In Euro-
+tions struggle to achieve an ideal balance across multi-task                     pean Conference on Computer Systems (EUROSYS ’26), April 27–30,
+accuracy, end-to-end latency, and cloud computing costs.                         2026, Edinburgh, Scotland Uk. ACM, New York, NY, USA, 16 pages.
+   We present TailorLLM, a task-level collaborative end-cloud                    https://doi.org/10.1145/3767295.3769346
+inference solution based on low-rank fine-tuning for large
+language models. This framework comprises two core al-                           1     Introduction
+gorithms that support offline and online optimization, re-                       Large language model (LLM) inference services (such as
+spectively: (i) To reduce transmission overhead while main-                      GPT[42], Gemini[46], etc.) are globally attracting users at a
+taining model performance, Resource-Friendly Low-Rank                            considerable rate, who rely on purely cloud-based remote
+Adaptation (RFLoRA) decouples pre-trained parameters into                        inference services for large language models to perform all
+cold and hot modules, reducing trainable parameters. (ii)                        kinds of general-purpose machine learning tasks, including
+To ensure coverage of users’ common tasks, we introduce                          text translation, content summarization, knowledge retrieval,
+AdapterMgr, an imitation learning-based replacement strat-                       and logical inference. However, with the surge in the number
+egy that enables near-optimal dynamic management of the                          of users, service providers have to increase their investment
+on-device LoRA matrix library. Finally, we implemented the                       in cloud computing resources to maintain service quality[15,
+TailorLLM prototype system on NVIDIA 3090 and Tesla T4                           34, 58], which has caused the cost of inference services to
+servers and thoroughly evaluated it on public task datasets.                     rise sharply, even reaching or exceeding the well-known
+Compared to a series of baselines, TailorLLM reduces cloud                       main expenditure of large language models: the cost of pre-
+resource consumption by up to 69.8% and inference latency                        training[13].
+by up to 62% while maintaining high accuracy.                                       In this context, deploying lightweight Small Language
+                                                                                 Models (such as TinyLlama[64], Phi-2[31], and MobileVLM[6])
+CCS Concepts: • Computing methodologies → Distributed                            in fast-growing end-side devices is becoming an effective
+computing methodologies; Natural language genera-                                way to reduce the cost of LLM inference services[27, 27, 54].
+tion.                                                                            However, constrained by the memory capacity of end devices,
+                                                                                 Small Language Models (SLMs) typically do not exceed an
+∗ Corresponding Authors: Ziyi Wang (wangziyi0821@gmail.com) and Lan-
+                                                                                 order of magnitude of 10B, below the 30B+ parameter thresh-
+shan Zhang (zls326@sina.com).
+                                                                                 old required to achieve complex cognitive tasks[1, 2, 7, 28],
+                                                                                 which leads to a significant gap between the accuracy of
+                                                                                 small language models and cloud-based LLMs on complex
+                                                                                 tasks[4, 52, 53].
+This work is licensed under a Creative Commons Attribution 4.0 Interna-             To promote the large-scale application of LLM inference
+tional License.
+EUROSYS ’26, Edinburgh, Scotland Uk
+                                                                                 services, a key challenge in scaling LLM inference services is
+© 2026 Copyright held by the owner/author(s).
+                                                                                 ‘balancing multi-task accuracy, end-to-end latency, and cloud
+ACM ISBN 979-8-4007-2212-7/26/04                                                 computing costs’. Single cloud or end deployment faces trade-
+https://doi.org/10.1145/3767295.3769346                                          offs: cloud LLMs offer high accuracy but with high costs
+
+
+
+                                                                          1144
+        EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                         Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang
+
+
+                 5                                                                              can be performed entirely on the device, avoiding frequent
+                                                                                                token validation with the cloud and significantly reducing
+Topic Category
+
+
+                 4                                                                              latency.
+                                                                                                   Based on these observations, we propose TailorLLM, a
+                 3                                                                              task-level model collaboration framework. It integrates a
+                                                                                                small number of low-rank adaptation (LoRA) [23] matrices
+                 2                                                                              into the local SLM to improve inference accuracy for mul-
+                                                                                                tiple high-frequency tasks, enabling most user requests to
+                 1
+                                                                                                be processed on the end-side with lower latency and higher
+                     0   150   300   450   600   750   900   1050   1200   1350   1500
+                                           Q&A Sequence                                         precision, while the cloud LLM handles more complex or rare
+                                                                                                tasks. This design reduces the frequency of end-cloud interac-
+       Figure 1. Statistics on long-term conversational task topics                             tions, ensuring efficient and responsive inference. Neverthe-
+       from the publicly available dataset LoCoMo[39], with the                                 less, TailorLLM still faces challenges in adapting to changing
+       vertical axis representing the 5 categories and the horizontal                           user needs under limited end-side storage. To address this,
+       axis representing the order of questions.                                                we propose two algorithms: RFLoRA and AdapterMgr, for
+                                                                                                the offline training and online inference stages respectively.
+                                                                                                   Motivated by observation (i), we need to deploy multiple
+       and latency, while end-device SLMs provide low latency                                   task-specific SLMs on the device side. To address resource
+       but limited accuracy. This paper proposes a collaborative                                limitations, we store LoRAs for different tasks instead of full
+       end–cloud framework to better balance these metrics.                                     models, enabling lightweight task switching. RFLoRA further
+          From the perspective of end–cloud collaborative systems,                              reduces transmission and storage costs by decoupling param-
+       current mainstream research on LLM inference optimiza-                                   eters and analyzing their importance to freeze low-impact
+       tion can be broadly categorized into two main directions:                                parameters. This effectively doubles the number of LoRAs
+       model partitioning based on a single model[29, 30, 37, 67],                              that can be stored on the end-side device. Inspired by obser-
+       and model collaboration involving multiple models[5, 11, 19,                             vation (ii), AdapterMgr enhances adaptability to dynamic
+       61, 68? ]. In the model partitioning approach, the decoder-                              task demands by prefetching potentially useful LoRAs from
+       stacked LLM is split across end and cloud, but the resulting                             the cloud. By employing the imitation learning strategy, its
+       communication overhead makes it unsuitable for inference                                 performance approximates a near-optimal prefetching pol-
+       under weak network conditions. In contrast, token-level col-                             icy. Together, these two designs enable the end-side device
+       laborative inference exploits the autoregressive nature of                               to achieve high task hit rates and efficient storage utilization
+       LLMs, allowing the SLM to generate a preliminary draft that                              under conditions of limited resources and dynamic demand.
+       is subsequently validated by the cloud. However, frequent                                   We implemented end-side and cloud-side prototype sys-
+       end–cloud interactions introduce cumulative latency, and                                 tems of TailorLLM on NVIDIA Tesla T4 and RTX 3090 GPUs,
+       cloud-side validation partially offsets the anticipated cost                             respectively, connected via wireless network. The Llama3-
+       savings.                                                                                 1B and Llama3-70B[16] models were deployed as the SLM
+          To circumvent the shortcomings of the above approach,                                 and LLM, respectively. Performance evaluation was con-
+       we analyze the large language model inference task flow                                  ducted using simulated user datasets derived from public
+       and obtain two key observations. (i) A few tasks cover                                   data [8, 9, 60] with periodic behavior. We compared our ap-
+       most (over 70%) of the user’s requests[51]. Despite the                                  proach against SOTA methods. Experimental results demon-
+       multitasking capability of LLM, user requests in real-world                              strate that TailorLLM achieves up to a 69.8% reduction in
+       scenarios are highly concentrated on a small number of high-                             cloud computing resource usage and up to a 62% decrease in
+       frequency tasks (e.g., text translation, content summariza-                              task processing latency, while maintaining relatively high
+       tion, etc.). This finding suggests that by targeting and op-                             multitasking accuracy.
+       timizing the performance of SLM on high-frequency tasks,                                    In summary, the major contributions of this paper are as
+       the dependence on cloud-based LLM calls can be signifi-                                  follows:
+       cantly reduced while maintaining accuracy. (ii) User re-                                      • We propose TailorLLM, a task-level end-cloud collabo-
+       quests are more predictable at the task-level rather                                            rative inference system for LLMs. While maintaining
+       than the token-level. These requests show cyclical pat-                                         task accuracy, TailorLLM significantly reduces cloud
+       terns tied to temporal contexts; for example, among every 50                                    computing costs and end-to-end inference latency.
+       questions, 1 to 3 categories are typically repeated, with each                                • We propose the AdapterMgr algorithm to achieve effi-
+       appearing at a relatively stable cyclicality (see Figure 1). By                                 cient management of LoRA modules on end devices
+       leveraging these predictable temporal patterns, end devices                                     through a near-optimal model replacement strategy
+       can proactively preload task-specific SLMs. Given that the                                      so that most inference tasks can be done locally.
+       inference accuracy of these SLMs is trustworthy, inference
+
+
+
+                                                                                         1145
+TailorLLM: Collaborative End-Cloud Inference of LLM and SLM Based on LoRA                                                                                 EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+         • We propose RFLoRA as a resource-friendly low-rank                                       terminator <EOS> ends the generation (as shown in Figure
+           adaptation algorithm that reduces the transmission                                      2(b)).
+           overhead by nearly half and improves the efficiency                                        The autoregressive nature of this inference process poses
+           of offline fine-tuning training.                                                        unique challenges for LLM deployment, especially in terms
+                                                                                                   of cloud computing costs and latency. In ‘single request’ sce-
+2          Background and Motivation                                                               narios (i.e., cases that do not include parallel processing of
+This section describes the autoregressive inference mecha-                                         multiple requests), the process cannot effectively utilize the
+nism for large language models, task-oriented, lightweight                                         powerful parallel computing capabilities of cloud platforms,
+fine-tuning approaches, and highlights the limitations of                                          as the sequential nature of token generation becomes a ma-
+existing model collaboration methods.                                                              jor bottleneck. This leads to higher operational costs when
+                                                                                                   using high-performance GPUs, as their superior computational
+2.1 Decoder-based LLM Inference                                                                    capabilities remain largely underutilized.
+Decoder-based LLM architecture. Decoder-based language
+                                                                                                   2.2 Task-Specific Small Language Model
+models, encompassing both pure decoder architectures and
+encoder-decoder architectures, have emerged as the predom-                                         End-side generation task requirements. In the field of
+inant approach for generative tasks. Notable examples of                                           natural language processing, generative tasks include lan-
+these models include GPT-4[42], LLaMA[16], Qwen[59], and                                           guage modeling, machine translation, text summarization,
+GLM-130B[12].                                                                                      and question answering, which have been integrated into
+   A typical large-scale decoder-based language model is                                           a variety of end devices, including smartphones. Examples
+built on top of a series of stacked decoder layers. In the case                                    include offline voice command parsing and multilingual nav-
+of LLaMA, each decoder layer contains several key compo-                                           igation for Tesla Motors; native speech-to-text message writ-
+nents (see Figure 2(a)). The first is the normalization of the                                     ing for Apple Watch; and real-time menu translation for
+input using RMSNorm[63], followed by a complex attention                                           Nreal AR glasses. Lightweight optimization of task-specific
+mechanism to identify and process relevant information in                                          LLMs for on-device deployment is a trend to meet the grow-
+the sequence. The output of the attention mechanism is then                                        ing user demands for personalization, fast response time,
+passed to the feedforward network. While the specific im-                                          and privacy.
+plementation of the different models may vary, for example,
+                                                                                                                    100
+                                                                                                                     80
+their choice of normalization techniques (LayerNorm vs. RM-                                                                             9   1   . 1
+                                                                                                                                                      9   3   . 2
+                                                                                                                                                                                                                                            8   9   . 9   1
+
+
+
+                                                                                                                                                                                                8   1   . 4
+
+
+SNorm), the underlying architectural framework of these
+                                                                                                                     60
+                                                                                                                                                                                                                            7   9   . 1     2                                             7   9   . 6   1
+                                                                                                                                                                                  7   8   . 1
+                                                                                                   A c c u ra c y
+
+
+
+
+high-level language models is consistent.                                                                                                                           6   0   . 9
+
+
+
+
+                                                                                                                     40
+                                                                                                                          5   4   . 6
+
+
+
+
+                       <EOS>                    You should       wash        hands
+                                                                                                                     20
+                                                                                                                      0
+                                                                                                                                                                                                                                                                                                            L l a m   a - 1   B
+
+
+
+
+ down                  Llama-3 Decoder Layer        iter0         iter1       iter2
+                                                                                                                                                                                                                  4   . 1   5                                                   3   . 4   4                 L l a m   a - 1   B       &   L o   R   A
+                                                                                                                                                                                                                                                                  1   . 2   7
+
+
+                                                                                                                                                                                                                                                                                                            L l a m   a - 7   0   B
+
+               SiLU
+                         Feed Forward Network         Large Language Model                                                              s s t 2                                   Q   Q    P                  S   Q   L     G   e   n   e   r a t i o         n             g   s m       8   k
+
+
+
+    up         gate                                          Decoder Layer
+                               RMSNorm
+           O                                                 Decoder Layer
+                         Attention Mechanism
+ self-attention                                                   …                   × 𝑁          Figure 3. Task accuracy comparison of Llama-1B before and
+                               RMSNorm                       Decoder Layer
+    RoPE
+                           Input Embedding                   Decoder Layer
+                                                                                                   after LoRA and with Llama3-70B. Performance is close to
+K          Q      V
+                                                                                                   the 70B model in some tasks, but has low accuracy on more
+                      You should wash hands         wash        hands        <EOS>
+                                                                                                   complex tasks (Math).
+                        （a）                                      （b）
+
+                                                                                                      Parameter-Efficient Fine-Tuning. To make models per-
+Figure 2. Subfigure (a) shows the single decoder-layer struc-                                      form better on specific tasks, models are often retrained us-
+ture in Llama 3, and subfigure (b) shows the autoregressive                                        ing Full Fine-tuning for specific downstream tasks. However,
+inference pattern for LLM inference.                                                               there are three main challenges in traditional full-parameter
+                                                                                                   fine-tuning: first, this process requires huge computational
+   Autoregressive inference. Generative LLMs use an au-                                            resources and training data; second, it may destroy the ac-
+toregressive inference mechanism to generate text through                                          quired knowledge in the pre-trained model, which is prone
+word-by-word iteration. Each generated lexical element serves                                      to cause catastrophic capability degradation; third, single-
+as a new input for subsequent generation, e.g., given the ini-                                     task fine-tuned models require storing multiple instances for
+tial prompt “You should”, the model first generates “wash”;                                        different tasks, leading to high storage demands. To solve
+the next round takes “You should wash” as an input to gener-                                       the above problems, the Parameter-Efficient Fine-Tuning
+ate “hands”. The process continues to accumulate the gener-                                        (PEFT) technique was developed, whose core idea is to make
+ated lexical elements in the input sequence until the output                                       large-scale pre-trained LLMs quickly adapt to downstream
+
+
+
+                                                                                            1146
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                         Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang
+
+
+tasks while maximally retaining their general-purpose capa-             compared with the token-level approach, thus effectively
+bility through the tuning of a very small number of trainable           controlling the end-to-end response latency of the system.
+parameters (usually only 0.1%-5% of the original model pa-              In addition, through a reasonable task distribution strategy,
+rameters).                                                              the approach also ensures that the inference accuracy of the
+   Among many PEFT methods, LoRA has attracted much                     overall system can meet the user’s needs.
+attention due to its excellent performance and unique ‘plug-
+and-play’ feature. The core idea of LoRA is to approximate
+the model update by superimposing a very small low-rank
+matrix on the original weight matrix (see Figure 3). More               3   Overview of TailorLLM
+importantly, the LoRA modules can be stored and reused                  We propose TailorLLM, a task-level collaborative inference
+independently of the original model. This feature allows the            framework for LLMs based on low-rank adaptation. The
+LoRA module to support flexible switching between different             system solves the problem of difficulty in balancing the
+tasks, which greatly reduces the storage pressure on the end-           three-dimensional metrics of ‘multi-task accuracy-response
+side devices. Our experimental results show that the time               latency-cloud computing costs’ in LLM end-cloud collabo-
+overhead of LoRA module switching on the Llama3-1B model                rative inference, especially alleviating the latency problem
+is less than 1 ms.                                                      caused by token-level collaboration. As shown in Figure 4,
+                                                                        the TailorLLM system consists of two main parts: online and
+2.3 Challenges for LLM Collaboration                                    offline.
+We focus more on the research path of model collaborative                  Online inference stage. The processing flow of the on-
+approaches due to the high communication latency, unavail-              line inference service can be decomposed into three modules:
+ability under weak network conditions, and limited flexibility          semantic categorization, task allocation, and LoRAs schedul-
+of dynamic adjustment of model partitioning approaches.                 ing.
+The mainstream approach adopts the speculative decoding                    TailorLLM adopts a dynamic task classification framework
+mechanism of end-side SLM, generating drafts and cloud                  based on unsupervised learning, and realizes open category
+LLM co-verification to realize token-level collaboration. Its           recognition through the combined Contriever[26] semantic
+theoretical basis lies in the fact that the output probability          coder and HDBSCAN[40] density clustering, which avoids
+distribution of SLM in a simple token generation task has               the problem of misclassification of new categories by su-
+a high similarity with LLM. The method cleverly balances                pervised learning. Specifically, high-dimensional semantic
+the complementary characteristics between LLM and SLM                   features are first extracted using the Contriever semantic
+flexibly by adjusting the value of the confidence level to              coder, dimensionality is reduced by the UMAP algorithm to
+achieve dynamic optimization of accuracy and cloud com-                 minimize computational overhead, and finally, dynamic cat-
+puting costs.                                                           egory discovery and incremental updating are accomplished
+   However, the token-level model collaborative approach                with the help of HDBSCAN hierarchical density clustering.
+has a serious problem: the communication frequency be-                  The method achieves more than 95% accuracy in 15 catego-
+tween the end and the cloud is too high. Due to the autore-             rization benchmark tests.
+gressive generative property of language models, an erro-                  Next, the task allocator schedules tasks based on the classi-
+neous token generated by a small model may propagate the                fication result, ensuring multi-task accuracy. Firstly, it checks
+error to the generation of subsequent tokens, which ulti-               the table to determine whether the SLM meets the accuracy
+mately leads to disastrous results. To ensure reliability, the          requirement of the task, and then checks whether there is
+system needs to verify token-by-token and provide real-time             LoRA in the local cache. When it is confirmed that the SLM
+feedback through cloud LLM. This high-frequency interac-                has the basic processing capability, then it checks whether
+tion mechanism may trigger dozens of end-cloud commu-                   the LoRA required for the task exists in the local cache, and
+nications for a single Q&A in practical applications, which             if both conditions are satisfied, the system will load the cor-
+is superimposed on the round-trip latency of the wireless               responding LoRA module to enhance the SLM and complete
+network, leading to a significant increase in the overall re-           the inference computation at the terminal directly. If the
+sponse time. At the same time, frequent cloud validations               classification is a new category, the capacity is judged insuf-
+can partially offset the expected costs savings.                        ficient, or the corresponding LoRA does not exist locally, the
+   In comparison, we propose a task-level model collabora-              problem will be sent to the cloud for large model inference.
+tive approach. It carries out triage according to the access               To further increase the probability that a task is assigned
+frequency and complexity of the task: for simple tasks that             to an end-side device for inference, the TailorLLM system
+are frequently accessed by users, for more complex or less              employs a deep neural network to analyze the user’s his-
+frequently accessed tasks (see Figure 3), they are transferred          torical access data. It mines the regularity of user inference
+to the cloud LLM for inference. This task-level collaboration           tasks, extracts personal preference features from them, and
+approach reduces the end-cloud communication frequency                  dynamically adjusts the end-side LoRA library accordingly
+
+
+
+                                                                 1147
+TailorLLM: Collaborative End-Cloud Inference of LLM and SLM Based on LoRA                    EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+              OFFLINE                             ONLINE                     AdapterMgr (§4.1)
+                                   Low-rank
+                                   Adapters                                   Prediction Module
+                                  …
+                                                       Cloud     Download                                 Concat
+                      Save Incremental Weights        Adapter    Adapters？              Mamba                          Projection Wf
+               RFLoRA (§4.2)                           Library
+                                                                                       Embedding                       Embedding
+                    Magnitude Factor
+                                                                                                          ……
+                                                                                       time series          t
+                   Column−wise Norm                                                                                             Cache State
+                                                   Large Model                                                                  Acquisition
+                                                                                              Allocator
+                Small Model        B                                 Offload Task？                                       Adapters Cache
+                 Pretrained                                                                                                         Adapter
+                  Weight           A                                             Task Classifier                                    Retrieving
+
+                      Parameter-Efficient                                                                 Small Modal & Adapter
+                      Fine-Tuning
+                                                                                                                                +
+                                                                                 Please summary the
+                       Diff. downstream                                             article below …
+                     tasks’training data
+
+
+                                                                    Trainable weight       Frozen weight           Cloud-side        End-side
+
+
+Figure 4. Framework of TailorLLM. Online inference (right): given a user request, the Allocator decides whether to offload it to
+a cloud-based large model or process it locally using a small model with a task-specific adapter, while AdapterMgr determines
+whether to download a new adapter from the cloud; Offline fine-tuning (left): RFLoRA is employed to train low-rank adapters
+for different downstream tasks and store the adapters on the cloud.
+
+(download from the cloud-side), and the related implementa-                 fine-tuning technique to reduce parameter transmission. To-
+tion will be detailed in Section 4.1.                                       gether, these two algorithms lead to an increase in the acqui-
+   Offline fine-tuned stage. TailorLLM uses the RFLoRA                      sition rate of inference tasks for end devices.
+algorithm to realize the trade-off between transmission over-
+head and model performance. In the current system, to en-                   4.1 Online: AdapterMgr
+hance the capability of the terminal-side SLM, it is necessary
+                                                                            Similar to the operating system dynamically managing lim-
+to transmit a low-rank matrix, which inevitably introduces
+                                                                            ited memory space through a memory replacement mecha-
+additional network resource overhead. Existing solutions
+                                                                            nism, this system dynamically updates and replaces LoRA
+usually reduce the LoRA rank value or decrease the num-
+                                                                            parameters based on access patterns under the condition of
+ber of LoRA application modules to compress the param-
+                                                                            limited end-side storage space to achieve efficient inference
+eter scale, but these approaches often lead to a significant
+                                                                            for resource-constrained devices. In the field of memory re-
+drop in model accuracy. Our analysis shows that after fine-
+                                                                            placement algorithms, Van Roy et al.[49] proved that the
+tuning, the A matrix in LoRA varies little across tasks and
+                                                                            Belady algorithm (i.e., the strategy of evicting the content
+mainly serves as an encoder projecting inputs into a sub-
+                                                                            with the longest reuse distance in the cache) is the optimal
+space, whereas the B matrix is more task-sensitive and re-
+                                                                            solution to cache replacement and similar problems. How-
+sponsible for transformation. Based on this, RFLoRA freezes
+                                                                            ever, since this system cannot predict the user’s future access
+the less task-sensitive 𝐴 while decoupling 𝐵 into direction
+                                                                            information to calculate the reuse distance, the Belady algo-
+and magnitude, increasing its adaptability. This difference is
+                                                                            rithm is difficult to apply in actual environments. To address
+also reflected in their initialization methods: A uses Kaim-
+                                                                            this challenge, we proposed AdapterMgr, a deep neural net-
+ing initialization[21], whereas B is typically zero-initialized.
+                                                                            work algorithm based on imitation learning. The algorithm
+Through fine-grained analysis of weight contributions, this
+                                                                            uses information from two modalities, the user’s historical
+design preserves model accuracy while significantly reduc-
+                                                                            access sequence and the current end-side LoRA library stor-
+ing transmission costs.
+                                                                            age state, and uses the decision of the Belady algorithm as the
+                                                                            learning target in the training phase so that it can make ap-
+4    Design                                                                 proximately optimal update decisions in the actual inference
+TailorLLM’s core strategy lies in shifting inference tasks                  phase.
+to end devices to reduce cloud dependency. In this section,                    Formal definition of the problem. Consider a time se-
+we propose the AdapterMgr algorithm to dynamically ad-                      ries X = (𝑥 1, 𝑥 2, ..., 𝑥𝑛 ) representing user query traces with
+just the end-side low-rank parameter library in real-time                   length 𝑛. Given the limited input context of the model, we
+and the RFLoRA algorithm to optimize the offline low-rank                   define a hyperparameter 𝐻 to represent the history length:
+
+
+
+                                                                    1148
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                               Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang
+
+
+at time 𝑡, we take the current point 𝑥𝑡 and the preceding                  where 𝑊 represents the number of independent LoRAs that
+𝐻 − 1 points, denoted as X𝑡 = (𝑥𝑡 −𝐻 +1, ..., 𝑥𝑡 −1, 𝑥𝑡 ), as the          can be stored in the cache, and 𝐻 represents the length of the
+user query history. On the end-side device, we maintain a                  sliding window. We employ two independently initialized
+storage space with maximum capacity 𝑤 for storing LoRA                     projection matrices, W𝑥 and W𝑙 , which map the original
+matrices, where L = (𝑙 1, 𝑙 2, ..., 𝑙 𝑤 ) represents the composi-          data into different feature spaces. To simplify the model
+tion of LoRA categories in storage, and L𝑡 denotes its state at            structure and reduce the number of hyperparameters, we
+time 𝑡. These two inputs exhibit different data characteristics:           uniformly set the dimensions of both feature spaces to 𝑑.
+X𝑡 represents a temporal sequence capturing long-term user
+behavior, whereas L𝑡 reflects an instantaneous snapshot of                                                 Policy Score : 𝝅
+                                                                                                                          ෝ
+the LoRA storage state.
+                                                                                                             ……
+   Based on the heterogeneous characteristics of the inputs
+X𝑡 and L𝑡 , we define the state vector at time 𝑡 as 𝑠𝑡 =                                                 Prediction Module
+(X𝑡 , L𝑡 ). Given this state, our objective is to generate an                𝒆 𝒍𝟏
+
+
+
+
+                                                                                       Projection
+optimal decision vector Y = (𝜋 1, 𝜋2, ..., 𝜋 𝑤 | 𝑠𝑡 ), where                  ……
+                                                                                                               Concat
+
+
+
+
+                                                                                           Wf
+                                                                            𝒆 𝒍𝒘−𝟏                                                        SSM
+𝜋𝑖 ∈ {0, 1}. Here, 𝜋𝑖 = 1 indicates a decision to clear the
+                                                                            𝒆 𝒍𝒘                                                               σ   σ
+𝑖-th storage location and load the LoRA model parameters                                                                                  Conv
+corresponding to 𝑥𝑡 , whereas 𝜋𝑖 = 0 means the existing                                                     Mamba Block
+
+parameters in the 𝑖-th storage location remain unchanged.                                           𝒆(𝒙𝒕−𝑯+𝟏 ) …… 𝒆(𝒙𝒕−𝟏)     𝒆(𝒙𝒕 )
+   The decision vector Y must satisfy two constraints: (1)
+at most one component in Y can be 1, and (2) when all
+components of Y are 0, the current storage content remains                                    Figure 5. Structure of AdapterMgr.
+unchanged. The system dynamically updates the local stor-
+age content according to the generated strategy vector Y,                     Time series modeling. We adopt the latest state-space
+with these updated storage states serving as the foundation                model (SSM)-based architecture Mamba[17] to extract the
+for subsequent decisions. Through this continuous decision                 temporal characteristics of user access behavior. Compared
+process, our optimization goal is to maximize the hit rate                 with traditional time series modeling methods, Mamba has
+of end-side LoRA model parameters, thereby increasing the                  significant advantages: (1) Mamba breaks through the serial
+probability of completing inference tasks directly on the                  computing limitations of recurrent neural networks (RNNs).
+end-side device.                                                           In RNN, the calculation of subsequent time steps must wait
+   Data embedding. Because of the significant data hetero-                 for the previous step to complete, but Mamba supports par-
+geneity in the temporal characteristics of user access behav-              allel processing, which greatly improves the calculation effi-
+ior and the distribution characteristics of LoRA categories in             ciency. (2) Although convolutional neural networks (CNNs)
+storage space, this study formalizes them into a bimodal data              also have parallel computing capabilities, their inherent local
+structure. Specifically, user access data depicts the user’s one-          receptive field makes capturing long-range dependencies in
+dimensional behavioral trajectory in a discrete time series,               sequences difficult. In contrast, Mamba can model global
+showing significant temporal dependence characteristics;                   temporal information effectively. (3) Mamba demonstrates
+while end-side storage data reflects the logical connection re-            excellent parameter efficiency. In the same time series task,
+lationship between multiple categories. Although traditional               only shallower network layers and fewer parameters are
+embedding technology can uniformly map multi-modal data                    needed to achieve or even exceed the performance of Trans-
+to a d-dimensional vector space, considering that the non-                 former. Based on the above advantages, this algorithm uses
+linear transformation in the subsequent encoding process                   a single-layer Mamba Block to extract time series features:
+will reconstruct the structural characteristics of the origi-
+nal semantic space, if hetero-modal data is embedded in the                  Δ𝑡 = 𝜎 (𝑊Δ · 𝑥𝑡 + 𝑏 Δ )
+same subspace, it may cause the feature expressions between                  𝐴¯𝑡 = exp (Δ𝑡 𝐴) , 𝐵¯𝑡 = (Δ𝑡 𝐴) −1 (exp (Δ𝑡 𝐴) − 𝐼 ) · Δ𝑡 𝐵
+modalities to interfere with each other, thereby reducing the
+accuracy of feature extraction. Based on the above analy-                    ℎ𝑡 = 𝐴¯𝑡 · ℎ𝑡 −1 + 𝐵¯𝑡 · 𝑥𝑡                                               (2)
+                                                                                  (
+sis, this study proposes a modality-independent embedding                           Parallel(𝑥𝑡 −𝐻 +1:𝑡 , 𝐴, 𝐵)                 if training
+strategy, whose formal definition is as follows:                             ℎ𝑡 =
+                                                                                    Recurrent(ℎ𝑡 −1, 𝑥𝑡 , 𝐴, 𝐵)                 if inference
+            𝐸 (L) = W𝑙 · L         ∈ R𝑊 ×𝑑                                 where ℎ𝑡 ∈ R𝑑 represents the hidden state at time step 𝑡,
+            𝐸 (X) = W𝑥 · X + 𝐸 (𝑝𝑜𝑠) ∈ R           𝐻 ×𝑑                    and Δ𝑡 is the selective update gate that controls the intensity
+                     (                                       (1)           of state updates. 𝐻 expresses the length of the sliding win-
+                              𝑝𝑜𝑠
+                       sin( 10000𝑖/𝑑 )    if 𝑖 = 2𝑘                        dow that the model can see during the experiment. 𝐴 and 𝐵
+           𝐸 (𝑝𝑜𝑠) =           𝑝𝑜𝑠
+                       cos( 10000𝑖 −1/𝑑 ) if 𝑖 = 2𝑘 + 1                    are learnable matrices parameterizing the continuous-time
+
+
+
+                                                                    1149
+TailorLLM: Collaborative End-Cloud Inference of LLM and SLM Based on LoRA                     EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+system: 𝐴 governs the state transition, and 𝐵 governs the                   This historical window-based feature extraction method
+projection of the input 𝑥 (𝑡). The discrete parameters 𝐴𝑡 and               significantly accelerates the model’s convergence process.
+𝐵𝑡 are computed from 𝐴, 𝐵, and the step size Δ𝑡 via zero-                   Given the task’s unique characteristic—where the replace-
+order hold (ZOH) discretization, which involves the matrix                  ment strategy can only select one object for replacement at
+exponential 𝑒𝑥𝑝 (Δ𝑡 𝐴) and the identity matrix 𝐼 . Compared                 each time point—and our observation that traditional imi-
+to traditional RNNs, one major advantage of Mamba lies in                   tation learning algorithms are limited to learning only the
+its ability to utilize the Parallel mechanism for parallel com-             Belady strategy’s optimal actions (i.e., the cached content
+putation during training, enabling efficient batch processing               with the highest eviction probability), we introduce a binary
+of sequences, while still employing the Recurrent mode dur-                 cross-entropy (BCE) loss function in AdapterMgr to guide
+ing inference, processing sequences through step-by-step                    the model’s learning direction. This loss function effectively
+state updates.                                                              distinguishes between ‘correct’ and ‘incorrect’ strategies, en-
+   Multimodal feature fusion. After obtaining the user’s                    hancing the model’s prediction accuracy and generalization
+temporal features and the storage space distribution features,              capability. The BCE Loss between the generated strategy
+we need to fuse these two modal features. Multimodal feature                and the ideal strategy is calculated as follows:
+fusion is of great significance in this algorithm. On the one                                 𝜋ˆ = Softmax(MLP(𝐹𝑜𝑢𝑡 ))
+hand, by integrating multimodal information under the same                                                 𝑊
+time window, the model can deeply understand and simulate                                              1 ∑︁
+                                                                                       L𝐵𝐶𝐸 = −              [ 𝜋𝑖 · log( 𝜋ˆ𝑖 )+                                  (4)
+the behavior pattern of the Belady algorithm, thereby im-                                              𝑊 𝑖=1
+proving the robustness of the prediction; on the other hand,                                                    (1 − 𝜋𝑖 ) · log(1 − 𝜋ˆ𝑖 ) ]
+mapping the features of different modalities to a unified
+semantic space for fusion can not only capture the comple-                  where 𝑊 represents the number of decisions (corresponding
+mentary information between modalities but also adaptively                  to the number of independent LoRAs that can be stored in the
+highlight key features through the attention mechanism, re-                 cache), 𝜋 is the ideal policy (represented as a one-hot vector),
+ducing the impact of noise and redundant information. This                  and 𝜋ˆ𝑖 , indicates the predicted probability of selecting the
+algorithm adopts an intuitive modal fusion method based on                  𝑖-th position.
+projection. Specifically, the modal information from differ-
+ent subspaces is first mapped to the same subspace through                     -- Trainable
+projection, and then the features are concatenated. This fu-                                                                                        Output
+                                                                               -- Frozen
+sion method retains the information integrity of the original                                               Magnitude
+features to the greatest extent while achieving a unified ex-                                                                     𝑚 ∈ 𝑅1×𝑘
+pression of the feature space:                                                                Output         Direction
+                𝐹 𝑓 𝑢𝑠𝑒𝑑 = Concat(W𝑓 · 𝐸 (L), ℎ𝑡 )                                                                               1/| 𝑉 + Δ𝑉 |𝑐
+                                                             (3)
+                    𝐹𝑜𝑢𝑡 = LayerNorm(𝐹 𝑓 𝑢𝑠𝑒𝑑 )
+                                                                              Pretrained        B
+where 𝐸 (L) represents the embedding representation of                                          r                   Pretrained      𝐵1         𝐵2       𝐵3 … 𝐵𝑛
+                                                                               Weights                               Weights
+cache information, and W𝑓 is a learnable transformation                       𝑊 ∈ 𝑅 𝑑×𝑘         A                   𝑊 ∈ 𝑅𝑑×𝑘                        𝐴    share
+matrix that maps cache features to the same feature space                                       d
+
+as user access data. ℎ𝑡 denotes the hidden state output of                                    Input                                 Input
+the Mamba model at the last time step of the sequence. The
+transformed cache features and Mamba output are combined                             (a)                                                 (b)
+through a Concat operation, followed by layer normalization
+LayerNorm to obtain the final fused feature representation
+𝐹𝑜𝑢𝑡 .                                                                      Figure 6. Subfigure (a) illustrates the structure of LoRA,
+   Training strategy. In the dataset preparation stage, we                  while subfigure (b) shows the structure of RFLoRA
+first utilize the core principles of the Belady algorithm to
+generate theoretical optimal strategies for each time point
+𝑥𝑡 as model training labels, based on the user’s initial access             4.2 Offline: RFLoRA
+behavior sequence X. Simultaneously, we record the mem-                     LoRA achieves efficient fine-tuning by injecting a low-rank
+ory state after applying each replacement strategy, which                   decomposition matrix next to the weight matrix 𝑊 of the
+serves as the memory LoRA category distribution feature                     pre-trained language model. The core idea is to decompose
+input for the subsequent time point during training. Dur-                   the high-dimensional weight update Δ𝑊 into the product of
+ing the training phase, we employ continuous sequences of                   two low-rank matrices 𝐴 and 𝐵. This decomposition is based
+length 𝑏 as warm-up samples and extract historical access                   on the observation that the weight update of the neural
+information with a fixed window size 𝐻 for each time point.                 network actually has an inherent low-rank property, and
+
+
+
+                                                                    1150
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                           Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang
+
+
+even the adaptive changes of large-scale pre-trained models               where ||𝑊 ||𝑐 ∈ R𝑑 denotes the column-wise norm of the
+often have effective degrees of freedom far lower than the                weight matrix that captures the magnitude component by
+dimensionality of the full parameter space. Specifically, the                                                          𝑊         𝑑 ×𝑑 rep-
+                                                                          computing the norm for each column, and | |𝑊   | |𝑐 ∈ R
+weight update of LoRA can be expressed as                                 resents the direction component obtained through column-
+                                                                          wise normalization.
+                    ′
+                 𝑊 = 𝑊0 + Δ𝑊 = 𝑊0 + 𝐵 · 𝐴                   (5)              Specifically, during the fine-tuning of different tasks, all
+                                                                          tasks share the same matrix 𝐴, which is initialized once from
+where 𝑊0 ∈ R𝑑 ×𝑘 represents the original pre-trained weight,              a normal distribution and kept frozen throughout training.
+𝐴 ∈ R𝑟 ×𝑘 and 𝐵 ∈ R𝑑 ×𝑟 are low-rank decomposition ma-                    During backpropagation, only the magnitude component
+trices, and 𝑟 is a rank hyperparameter that satisfies 𝑟 ≪                 and LoRA’s matrix 𝐵 are updated. This design not only re-
+𝑚𝑖𝑛(𝑑, 𝑘). During the fine-tuning phase,𝑊0 remains constant,              duces the number of transmission parameters by nearly 50%,
+and only the underlined parameters undergo training, while                but more importantly, it focuses LoRA’s effect on optimizing
+matrix 𝐵 is initialized to zero, ensuring that Δ𝑊 = 𝐵𝐴 is                 the directional component. As a result, it alleviates the con-
+zero at the beginning of training. Notably, this decomposi-               straints imposed by the frozen matrix 𝐴 on fine-tuning the
+tion form of Δ𝑊 can be flexibly replaced with other LoRA                  magnitude component of the pre-trained parameters, thereby
+variants. Furthermore, by integrating the trained Δ𝑊 with                 ensuring the overall fine-tuning performance of the model.
+                                   ′
+the pre-trained weight 𝑊0 into 𝑊 before deployment, LoRA                  The update mechanism of pre-trained model parameters in
+and its related variants maintain the same computational                  RFLoRA can be expressed as follows:
+efficiency as the original model during inference, without                           ′          𝑉 + Δ𝑉            𝑊0 + 𝐵 · 𝐴
+introducing additional latency.                                                    𝑊 =𝑚 ·                  =𝑚 ·                        (7)
+                                                                                              ||𝑉 + Δ𝑉 ||𝑐      ||𝑊0 + 𝐵 · 𝐴||𝑐
+   LoRA achieves efficient model adaptation with minimal
+parameter overhead through this low-rank decomposition.                   where the underlined parameters indicate the trainable com-
+However, although the scale of LoRA parameter matrices is                 ponents, and Δ𝑉 represents the directional update obtained
+far smaller than that of LLMs or even SLMs, wireless net-                 through the multiplication of two low-rank matrices 𝐵 and 𝐴.
+work updates of local LoRA libraries in our system still incur            Following LoRA’s initialization strategy, matrices 𝐵 ∈ R𝑑 ×𝑟
+considerable transmission overhead. While parameter com-                  and 𝐴 ∈ R𝑟 ×𝑘 are initialized such that 𝑊 ′ is equivalent to
+pression can be further achieved by reducing the rank of                  𝑊0 at the start of fine-tuning.
+LoRA matrices or decreasing the number of LoRA applica-                      During the inference process, since matrices 𝐴 have been
+tion layers, these direct compression methods face two major              frozen in the training phase and shared among different tasks,
+challenges in practical applications: First, fine-tuning perfor-          the local terminal only needs to store one copy of matrices 𝐴
+mance will inevitably decline, potentially failing to meet the            in advance. When the low-rank adapter of a new task needs
+accuracy consistency requirements between end-side and                    to be transmitted from the cloud LoRA library, the system
+cloud-side inference; Second, different tasks often require               only needs to transmit matrices 𝐵 corresponding to the task
+different optimal compression schemes, which significantly                and the fine-tuned amplitude parameter 𝑚 from the cloud.
+increases the complexity of algorithm deployment when han-                This effectively reduces the transmission overhead by about
+dling a large number of heterogeneous tasks. This section                 50%, and also reduces the pressure on local storage, allowing
+proposes RFLoRA to address these challenges.                              resource-constrained terminal devices to store more low-
+   The design of RFLoRA algorithm is based on two key                     rank adapters corresponding to tasks.
+findings: First, when training LoRA independently on differ-
+ent datasets, matrices 𝐴 tend to converge while matrices 𝐵
+                                                                          5   Experiments
+exhibit distinguishable characteristics, indicating that ma-              This section compares TailorLLM with baselines across mul-
+trices 𝐴 tend to capture domain-invariant common features                 tiple metrics. We also evaluate the impact of different RTTs
+while matrices 𝐵 adapts to domain-specific variations; Sec-               on latency, show the performance of TailorLLM’s three mod-
+ond, the parameters of pre-trained models can be decoupled                ules, and analyze end-side overhead.
+into ‘direction’ and ‘magnitude’ components, which accel-
+                                                                          5.1 Evaluation Setup
+erates convergence and improves the effectiveness of fine-
+tuning. Based on these observations, RFLoRA decomposes                    Cloud-side hardware device. The computing platform uti-
+the pre-trained model weight 𝑊 into direction and magni-                  lizes four NVIDIA RTX 3090 GPUs (24GB of GDDR6X mem-
+tude matrices and introduces LoRA to optimize the direc-                  ory) as the core computing units, runs on Ubuntu 20.04 LTS
+tion component with more parameters. For the pre-trained                  operating system, and realizes low-latency communication
+weight matrix 𝑊 , its decomposition can be expressed as:                  with the end-side nodes via wireless network. Under stan-
+                                                                          dard network load test conditions, the measured end-to-end
+                            𝑉                   𝑊                         network round-trip latency (RTT) is stably distributed in the
+               𝑊 =𝑚 ·             = ||𝑊 ||𝑐 ·               (6)           47ms range.
+                          ||𝑉 ||𝑐             ||𝑊 ||𝑐
+
+
+
+                                                                   1151
+TailorLLM: Collaborative End-Cloud Inference of LLM and SLM Based on LoRA                                                                                                                      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+
+          1.0                                                                                                                                                                                                                                            1.2
+                            c l o   u   d   - o   n   l y                e   n   d   - o   n   l y   H   S       L   P   e   t a l s    T   a i l o          r L L M   T   a i l o   r L L M   - L R   U   T   a i l o   r L L M   - L o          R      A
+
+
+
+
+          0.8                                                       20                                                                                       1.0                                                                                         1.0
+
+
+
+
+                                                                                                                                               e r i e s )
+
+
+
+
+                                                                                                                                                                                                                                           e r i e s )
+                                                                                                                                                             0.8
+                                                                                                                                                                                                                                                               T   r a   n   s m       i s s i o   n   C   o   s t
+
+
+
+
+                                                                    15                                                                                                                                                                                   0.8
+
+
+
+                                                        e r y )
+                                                                                                                                                                                                                                                               C   l o   u   d     C    o   s t
+
+
+
+
+          0.6
+
+
+
+
+                                                                                                                                               u
+                                                                                                                                                             0.6
+
+
+
+
+                                                                                                                                                                                                                                           u
+                                                                                                                                                                                                                                                         0.6
+
+
+
+
+                                                                                                                                               q
+
+
+
+
+                                                                                                                                                                                                                                           q
+                                                        u
+r a c y
+
+
+
+
+                                                                    10
+
+
+
+
+                                                                                                                                               k
+
+
+
+
+                                                                                                                                                                                                                                           k
+                                                        ( s / q
+          0.4
+
+
+
+
+                                                                                                                                               / 1
+                                                                                                                                                             0.4
+
+
+
+
+                                                                                                                                                                                                                                           / 1
+                                                                                                                                                                                                                                                         0.4
+
+
+
+
+                                                                                                                                               ( $
+
+
+
+
+                                                                                                                                                                                                                                           ( $
+c c u
+
+
+
+
+                                                                     5
+
+                                                        c y
+          0.2
+
+
+
+
+                                                                                                                                               s t
+                                                                                                                                                             0.2
+
+
+
+
+                                                                                                                                                                                                                                           s t
+                                                                                                                                                                                                                                                         0.2
+A
+
+
+
+
+                                                        L a t e n
+
+
+
+
+                                                                                                                                               o
+
+
+
+
+                                                                                                                                                                                                                                           o
+                                                                                                                                               C
+
+
+
+
+                                                                                                                                                                                                                                           C
+          0.0                                                        0                                                                                       0.0                                                                                         0.0
+
+
+
+
+                                                                                                                                                                                                                                           t a l
+                                                                                                                                               d
+                                                                                                                                               u
+                                                                                                                                               l o
+
+
+
+
+                                                                                                                                                                                                                                           o
+                                                                                                                                                                                                                                           T
+                                                                                                                                               C
+                  ( a )                                                                              ( b     )                                                                                 ( c )                                                                                                                 ( d   )
+
+
+
+
+Figure 7. Comparison between TailorLLM and baselines on average task accuracy, end-to-end latency (s/query), and cloud
+computing costs ($/1k queries). Total costs ($/1k queries), including transmission, are also reported. These results are averaged
+over 10 runs.
+
+   End-side hardware device. The compute nodes are built                                                                                                     (4) Petals[32]. Splitting the LLM is also another popular
+on NVIDIA Tesla T4 GPUs (16GB of raw video memory),                                                                                                          end-cloud cooperative inference scheme. In our experiments,
+which are limited to 10GB of video memory by a visible re-                                                                                                   considering the memory limitations of the end-side devices,
+source constraint technique to approximate typical resource-                                                                                                 we split the model of Llama3-70B into 5:65 for end-side and
+constrained scenarios for edge devices. The nodes run the                                                                                                    cloud-side inference, respectively.
+isomorphic Ubuntu 20.04 LTS operating system. Tesla T4 has                                                                                                   (5) Ablation Models. In addition to the aforementioned
+about one-sixth the compute performance of an RTX 3090.                                                                                                      baselines, we conducted ablation studies on TailorLLM. Specif-
+   Dataset. Our evaluation employs nine public datasets rep-                                                                                                 ically, TailorLLM-LoRA represents a variant where the origi-
+resenting diverse task types: GSM8K[9], MRPC, COLA, QNLI,                                                                                                    nal RFLoRA is replaced with standard LoRA, while TailorLLM-
+RTE, SST-2, MNLI, QQP[60], and BoolQ[8]. These datasets                                                                                                      LRU refers to a version where the original local LoRA repos-
+encompass a wide range of tasks, including mathematical                                                                                                      itory update algorithm is replaced with a simple LRU mech-
+inference, sentiment analysis, grammatical error correction,                                                                                                 anism.
+etc. Notably, for GSM8K as a mathematical inference task, we                                                                                                    Metrics. To comprehensively measure the usability of
+found that low-rank fine-tuning on a 1B-scale model cannot                                                                                                   the system, we evaluate the end-to-end performance of the
+achieve performance comparable to an 8B model. Therefore,                                                                                                    system in terms of three main metrics: cloud computing over-
+in our experiments, GSM8K tasks are automatically offloaded                                                                                                  head, average multi-tasking accuracy, and response latency.
+to the cloud as soon as they are recognized. In our experi-                                                                                                  For the cloud computing overhead indicator, we refer to the
+mental design, we split each task’s dataset using an 8:2 ratio,                                                                                              API price of GPT-4o ($2.50/1M input tokens, $10.00/1M out-
+with 80% used for fine-tuning and 20% for testing. In addition                                                                                               put tokens) on the OpenAI website, and compute the costs
+to task composition, we also designed a user multitasking                                                                                                    by counting the tokens generated in the cloud. Response la-
+access model. Inspired by the periodicity of human inter-                                                                                                    tency metrics are processed to show end-to-end latency, and
+ests, we adopt a fixed periodic structure. Task types are kept                                                                                               we also show ‘Time to First Token (TTFT)’ and ‘Time Per
+constant in each cycle, while the nine tasks have different                                                                                                  Output Token (TPOT)’, two refinement metrics. In addition,
+combinations in different cycles. To introduce variability, we                                                                                               in addition to the cloud computing overhead, we also count
+randomly change the task order within each cycle.                                                                                                            the total overhead, including network overhead. For network
+   Baseline. To anchor our work on the positioning of large                                                                                                  overhead, we refer to the communication price ($0.09/GB)
+language model end-cloud system inference and better eval-                                                                                                   on the AWS website.
+uate the system performance, we selected several advanced                                                                                                       Parameter Settings. We employ a fixed sliding window
+works for comparative experiments. The following is a de-                                                                                                    of size 𝐻 = 100 to generate sampled user access sequences,
+tailed description of the baseline method:                                                                                                                   with the cache size 𝑤 set to 5. The temporal feature extractor
+(1) cloud-side only. As the current mainstream deployment                                                                                                    consists of a single Mamba block. The user access temporal
+scheme of LLM inference service, it can provide users with                                                                                                   data and cache state data are embedded and mapped, and
+a stable experience. In our experiments, we construct a pure                                                                                                 the dimension 𝑑 of their subspace hidden states is set to
+cloud-side inference system with Llama3-70B.                                                                                                                 128. Across all datasets, the rank hyperparameter 𝑟 in the
+(2) end-side only. Experiments are conducted to construct                                                                                                    RFLoRA implementation is set to 16. The UMAP reduces
+a pure end-side inference system based on Llama3-1B.                                                                                                         the dimensionality to 3, and HDBSCAN is configured with a
+(3) HSL[20]. It is the most recent solution represented by the                                                                                               minimum cluster size of 40.
+token-level end-cloud collaborative inference system. In our
+subsequent experiments, the models used on the end-side
+                                                                                                                                                             5.2 End-to-end Performance
+and the cloud-side remain unchanged, and the verification
+frequency of ‘drafts’ is set to every 5 token verifications.                                                                                                 We conducted a comprehensive performance evaluation of
+                                                                                                                                                             TailorLLM using a test set derived from the aforementioned
+
+
+
+                                                                                                                                       1152
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang
+
+
+public dataset. As shown in Figure 7, TailorLLM delivers                  in the attention mechanism), thereby offering potential opti-
+leading or near-best results in all three key metrics: cloud              mization space for further reducing transmission overhead.
+computing costs, multitasking accuracy, and end-to-end la-                However, this strategy has not been experimentally explored
+tency.                                                                    in this work.
+   Low-rank adaptive fine-tuning substantially enhances the
+performance of the SLM on specific tasks. As illustrated in               5.3 Impact of RTT on Latency
+Figure 7(a), after applying low-rank fine-tuning, LLaMA3-1B               To further illustrate the impact of RTT on the inference la-
+significantly outperforms the unmodified end-side model                   tency of TailorLLM and baseline methods, we select four
+across a range of tasks. Furthermore, by offloading more                  RTT environments, 20ms, 50ms, 100ms and 200ms, for la-
+challenging tasks, such as complex mathematical inference,                tency testing, where the first two groups simulate LAN and
+to the cloud, TailorLLM further improves overall system                   MAN scenarios, and the latter two groups correspond to
+accuracy, approaching the performance level of a fully cloud-             cross-country network environments. To quantify the im-
+based solution.                                                           pact of RTT on user experience, the end-to-end latency is
+   The optimization of the end-to-end latency of the Tailor-              subdivided into two key metrics: TTFT (first response time,
+LLM system is mainly due to the inference speed advantage                 the shorter the value the better) and TPOT (continuous gen-
+of SLM over LLM. In our experiments, LLaMA3-1B achieves                   eration speed, the higher the value the better). The former
+an inference speed of 22.6 ms/token, while LLaMA3-70B                     reflects the system response efficiency, and the latter reflects
+reaches 5.3 ms/token. TailorLLM reduces end-to-end latency                the speed of large content generation.
+by approximately 62% compared to cloud-only solutions
+(Figure 7(b)). Even under ideal network conditions, HSL in-                      600            C   l o       u   d
+
+
+
+                                                                                                                    4
+                                                                                                                    45
+                                                                                                                     0
+                                                                                                                                       E n   d     H   S   L   P   e t a l s    T   a i l o   r L L M                     T   a i l o   r L L M    - L R   U
+
+
+
+
+curs high latency due to over 15 transmission verifications                      500                                35
+                                                                                 400                                30
+
+
+
+
+                                                                                                                                                                      s / s )
+                                                                                       B   e   t t e      r
+
+
+
+
+per query, making its performance close to cloud-only ap-
+                                                                                                                    25
+                                                                           s )
+
+
+
+
+                                                                                 300
+
+
+
+
+                                                                                                                                                                      n
+                                                                                                                    20
+
+
+
+
+                                                                                                                                                                      k e
+                                                                           ( m
+
+
+
+
+proaches and limiting its practicality. In contrast, the differ-
+                                                                                                                                                                                                                                           B   e   t t e   r
+
+
+
+
+                                                                                 200                                15
+
+
+
+
+                                                                                                                                                                      ( t o
+                                                                           F T
+
+
+
+
+                                                                                                                    1
+                                                                                                                    50
+                                                                           T
+
+
+
+
+                                                                                                                                                                      T
+ence in cache hit rates between TailorLLM and TailorLLM-                         100
+                                                                           T
+
+
+
+
+                                                                                                                                                                      O
+                                                                                                                                                                      P
+                                                                                   00 20406080100120140160180200220 00 20406080100120140160180200220
+
+
+
+
+                                                                                                                                                                      T
+LRU has little effect on end-to-end latency, as the text output
+is small and TailorLLM requires far fewer transmissions than                                                          R   T   T       ( m    s )                                                        R   T    T    ( m     s )
+
+
+
+
+HSL.                                                                                                                          ( a )                                                                             ( b   )
+
+
+
+
+   As shown in Figure 7(c), compared with the pure cloud so-
+lution, TailorLLM successfully saves about 69.8% of the cloud             Figure 8. The pattern of latency metrics varying with RTT.
+computing costs. The vertical axis in the figure represents               Subfigure (a) is the Time To First Token metric; subfigure (b)
+the cloud computing overhead required for processing 1,000                is the Time Per Output Token metric.
+questions (based on the statistical average input of 38.86                   TailorLLM’s response efficiency is higher compared to
+tokens and output of 85.33 tokens). By comparing the ex-                  other end-cloud collaboration systems. As shown in Figure
+perimental results of TailorLLM and TailorLLM-LRU, it can                 8(a), TailorLLM’s TTFT is always maintained at a low level,
+be seen that the key to the system saving cloud computing                 thanks to its architectural design, where about 70% of the
+resources lies in successfully allocating tasks to the end-side           computation tasks are accomplished through end-side infer-
+for execution. This principle is similar to HSL, which also               ence. In contrast, the HSL approach has a high TTFT due
+aims to reduce reliance on cloud-based LLMs. Unlike HSL,                  to the need to generate five tokens and complete the LLM
+which limits SLMs to simple token generation by lowering                  verification process via a small model. It is worth noting that
+the confidence of ‘draft’, we argue that SLM limitations are              traditional cloud collaboration solutions rely more on large
+localized to some tasks, not global. SLMs can match LLM                   models on the cloud side, and their TTFT growth trends con-
+performance on specific tasks. Based on this, TailorLLM is                verge with cloud latency characteristics, while TailorLLM
+designed to ‘let a small model focus on what it does best’,               shows a smoother latency growth curve due to its localized
+and experiments confirm the effectiveness of this approach.               computing advantage.
+   In terms of transmission overhead, TailorLLM shows data                   In terms of sustained generation performance, TailorLLM’s
+transmission requirements compared to other baselines. As                 Token generation rate remains high in the network fluctua-
+shown in Figure 7(d), although the size of each task adapter              tion environment. TailorLLM shows only 1% performance
+of LLaMA3-1B is reduced from 22MB to 11.56MB through                      degradation when the RTT increases from 20ms to 200ms
+RFLoRA technology, this still constitutes a large transmission            (see Figure 8(b)). In the comparison scenario, HSL and Petals
+load, making the amount of external data transmission of                  produce significant degradation of 22% and 46% in the gen-
+TailorLLM at a higher level among all benchmark methods. It               eration rate due to the frequent end-cloud communication
+is worth noting that LoRA also supports selectively applying              mechanism, respectively. This difference stems from Tailor-
+to specific network modules (such as the Q and K matrices                 LLM’s task-level computation offloading strategy that ef-
+                                                                          fectively reduces the frequency of communication between
+
+
+
+                                                                   1153
+TailorLLM: Collaborative End-Cloud Inference of LLM and SLM Based on LoRA                                                                                                                                                            EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+Table 1. Evaluation results of the base models (Llama3-1B and Llama3-70B) and different fine-tuning methods, showing the
+accuracy scores and the number of trainable parameters for each fine-tuning method.
+
+                                                                          Method                    MRPC COLA                                      QNLI                    RTE    SST-2     MNLI                                  QQP     BoolQ           Avg.           Params(%)
+                                                                      Llama3-1B                     67.4                          70.8                   49.0              49.6    55.3           31.7                            67.3      62.9          56.9                    -
+                                                                      Llama3-70B                    76.0                          80.8                   87.0              90.8    94.5           78.2                            85.0      88.7          85.1                    -
+                                                                        LoRA                        74.0                          82.6                   75.7              74.1    93.5           81.4                            83.8      79.2          81.2                0.454
+                                                                        DoRA                        76.0                          82.0                   79.6              75.1    94.3           81.4                            84.1      79.3          82.1                0.484
+                                                                       AdaLoRA                      77.1                          82.2                   76.1              73.5    92.6           82.4                            85.0      74.3          81.0                0.680
+                                                                      HydraLoRA                     73.8                          82.3                   77.8              74.5    93.8           80.3                            84.2      77.5          81.2                1.277
+                                                                       RFLoRA                       78.1                          81.9                   78.6              73.7    93.0           80.7                            85.8      75.9          81.6                0.273
+
+
+end-cloud devices. Experimental data confirms that Tailor-                                                                                                                                and the requested content is missed. (3) Parrot[35]. It uses
+LLM is not only a leader in response speed and generation                                                                                                                                 an LSTM network to extract temporal features from users’
+efficiency, but also shows better robustness in terms of latency.                                                                                                                         historical behaviors and combines these features with cache
+                                                                                                                                                                                          states through a global-attention mechanism to generate an
+5.4 Microbenchmarks and Ablation Study                                                                                                                                                    optimal strategy.
+To evaluate the effectiveness of the TailorLLM system frame-                                                                                                                                 As shown in Figure 9, thanks to its rich parameter struc-
+work’s optimizations in addition to the effectiveness of the                                                                                                                              ture, the AdapterMgr algorithm can make cache decisions
+core task classification logic, we will further analyze the per-                                                                                                                          that are closest to Belady’s optimal strategy. Also, we find
+formance of the scheduling algorithm AdapterMgr and the                                                                                                                                   that the more dynamic the user request is, the more our
+performance of the classification module.                                                                                                                                                 algorithm demonstrates an advantage over LRU.
+
+           0.8             b    e   l a d       y
+                                                                                                                                                                                                                           
+                                                                                                                                                                                                                                                       * U 8 '
+           0.6             A    d   a p       t e       r M   g   r
+
+
+
+
+                                                                                                                                                                                                                                      8 , 2 U 8 '
+           0.4
+                           p    a r r o       t
+   a t e
+
+
+
+
+                           L R      U
+                                                                                                                                                                                                                                                                                                       . _ J X G 2 U 8 '
+                                                                                                                                                                                                                                                     2 U 8 '
+   R
+
+
+
+
+                                                                                                                                                                                             ' I I [ X G I _    
+
+
+
+
+           0.2
+   i t
+
+
+
+
+                                                                                                                                                                                                                                                                          ' J G 2 U 8 '
+   H
+
+
+
+
+           0.0   M   o   v i e      L e     n       s                 M   o   v i e   L e   n   s    O      r i g   i n   a l                O   r i g   i n     a l
+                                                                                                                                                                                                                           
+                                                                                                                                                                                                                                                                ( K Z Z K X
+                 c a c h    e    - 0    . 3     %                     c a c h   e   - 0   . 9   %   p   e   r i o   d     3   0          p   e   r i o   d   2   0     0
+
+
+
+
+Figure 9. Average end-side hit rates for inference: Adapter-                                                                                                                                                                 
+Mgr vs. baselines. The results are averaged over 10 runs.                                                                                                                                                                                                                                       
+                                                                                                                                                                                                                                                           3 U J K R  6 G X G S K Z K X Y   3 
+
+   Scheduling module. To verify the effectiveness of the                                                                                                                                  Figure 10. Accuracy vs. parameter count for five fine-tuning
+AdapterMgr algorithm, we conducted experimental evalu-                                                                                                                                    methods discussed above. The arrow indicates the region
+ations on the MovieLens real dataset and the constructed                                                                                                                                  where a smaller number of trainable parameters and higher
+original dataset. The MovieLens dataset contains 162,541                                                                                                                                  accuracy.
+users’ five-star ratings and free text label data for 62,423 dif-
+ferent movies, spanning from January 9, 1995, to November                                                                                                                                    Fine-tune module. We evaluate RFLoRA on Llama3-
+21, 2019. We used users’ rating behavior to simulate con-                                                                                                                                 1B, with baselines including the unfine-tuned Llama3-1B,
+tent access patterns and selected relevant request data from                                                                                                                              Llama3-70B and PEFT methods LoRA, DoRA, AdaLoRA, and
+10,000 movies from January 1, 2016. The dataset is divided                                                                                                                                HydraLoRA[47]. All PEFT methods share identical training
+into training and test sets in a ratio of 8:2. In the experi-                                                                                                                             schedules, dataset splits and hyperparameters. However, we
+ment of the original dataset, we designed two different cycle                                                                                                                             train and evaluate all methods in 𝑟 = 16 except HydraLoRA
+modes (cycle 50 and cycle 200) to simulate user preference                                                                                                                                — due to the gradient explosion under 𝑟 = 16 — where we
+changes at different frequencies.                                                                                                                                                         revert to using 𝑟 = 32.
+   In addition, we also selected 3 methods as baselines for                                                                                                                                  As shown in Table 1, RFLoRA achieves an overall accuracy
+comparison, which are: (1) Belady. It is an optimal offline al-                                                                                                                           of 81.6% with only 3.4M trainable parameters, fewer than
+gorithm that evicts the cached content with the largest reuse                                                                                                                             0.3% of full model parameters. It narrows the performance
+distance when the cache storage is full and the requested con-                                                                                                                            gap with Llama-70B from 28.2 to 3.5 points, surpassing the
+tent is missed. (2) LRU. It evicts the cached content that has                                                                                                                            original LoRA (+0.4pt), HydraLoRA (+0.4pt) and AdaLoRA
+been requested least recently when the cache storage is full                                                                                                                              (+0.6pt) while using roughly half the trainable parameters of
+
+
+
+                                                                                                                                                                                  1154
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                            Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang
+
+
+the strongest PEFT baseline (DoRA). These results demon-                                    stabilized at less than 5%. It should be noted that when the
+strate that RFLoRA delivers a superior trade-off between pa-                                classification scale is extended to 30 categories, the accuracy
+rameter efficiency and downstream performance, confirming                                   rate decreases significantly and the number of abnormal
+its suitability as the offline fine-tuning backbone in Tailor-                              samples increases sharply, which is consistent with the ob-
+LLM, as evidenced by the trend illustrated in Figure 10.                                    servation that ‘users’ high-frequency usage scenarios are
+                                                                                            concentrated in a small number of tasks’ and verifies the
+          5 Categories Original Labels        5 Categories Classification Results
+      0
+      1
+                                                                                            applicability of the system’s design boundary.
+      2
+      3
+      4
+                                                                                            5.5 End-side Overhead Analysis
+                                                                                            We evaluate the runtime overhead of the system on end-side
+                                                                                0
+                                                                                            devices in terms of latency, memory, and energy. For latency,
+                                                                                1
+                                                                                2
+                                                                                3
+                                                                                            task classification (0.45–1.53 ms) and LoRA switching (0.26
+                                                                                4
+                                                                                -1          ms) together account for only 2–7% of the inference latency
+                                                                                            (22.6 ms/token), which is negligible. Regarding internal mem-
+          6 Categories Original Labels        6 Categories Classification Results           ory distribution, the LLaMA3-1B/3B models dominate con-
+                                                                                            sumption (70–86% of the total, Figure 12), while auxiliary
+                                                                                            components such as the classification module contribute
+                                                                                            marginal overhead that can be further reduced through light-
+                                                  0
+                                                                                            weight architectures and fewer low-rank parameters. At the
+      0                                           1
+      1
+      2
+                                                  2
+                                                  3
+                                                                                            device level, the LLaMA3-1B model requires about 2.8 GB of
+      3                                           4
+      4
+      5
+                                                  5
+                                                  -1                                        memory during inference—roughly 17.5% of RAM on a 16 GB
+                                                                                            mobile device and less than 9% on a 32 GB personal computer.
+                                                                                            In terms of energy, running LLaMA3-1B on smartphones via
+Figure 11. Dimension reduction visualization of task clas-                                  llama.cpp has been shown to incur a power demand roughly
+sification effects for categories 5-6. Top pair: original vs.                               comparable to that of lightweight 2D games, suggesting that
+categorized labels in 5-class. Bottom pair: comparisons after                               the overall deployment is energetically feasible [25]. Taken
+adding 1 new category.                                                                      together, these results demonstrate that the system can be
+                                                                                            practically deployed on conventional mobile and edge plat-
+                                                                                            forms.
+Table 2. Classification Accuracy, Recall, and Unclassified
+Rate for Different Numbers of Categories                                                              R   F L o     R   A       s
+                                                                                                                                                    6 .9 %                            3 .3 % 4 .5 %
+                                                                                                                                                             9 .6 %
+                                                                                                      A   d   a p     t e   r M         g   r
+                                                                                                                                                                                                  5 .9 %
+                                                                                                      C   a t e   g     o   r y
+
+
+
+
+  Categories Accuracy                    Recall        Unclassified Rate (%)                          L l a m       a       m       o   d   e   l
+
+                                                                                                                                                                1 2 .6 %
+
+          10               0.969         0.953                 1.66
+          15               0.957         0.933                 2.52                                                             7 0 .9 %
+                                                                                                                                                                           8 6 .3 %
+          30               0.736         0.494                 32.8                                                                                 (a )                                 (b )
+
+
+
+   Classification module. We use the density-based HDB-                                     Figure 12. Ratio of memory usage of each module for end-
+SCAN algorithm to construct a dynamic classification system,                                side inference: Llama3-1B vs. Llama3-3B.
+whose core advantage lies in the autonomous identification
+of new categories through semantic spatial distribution fea-
+                                                                                            6   Related Work
+tures. The downscaling visualization results show (see Fig-
+ure 11) that the algorithm can effectively delineate decision                               6.1 LLM on resource-constrained devices
+boundaries and identify new categories in the 5/6 classifi-                                 Cloud-based deployments of large language models often
+cation task. When unclassifiable samples are detected, the                                  face cost issues, prompting researchers to explore alternative
+system automatically marks them as “-1”, without the need                                   deployment strategies. One effective approach is to deploy
+to retrain the model, and the unclassified samples will be                                  LLMs across different devices for lower latency or more com-
+transferred to the cloud for processing to ensure the stability                             putational resources. He et al.[22] deployed LLMs in a MEC
+of the output.                                                                              architecture, proposing a reward-free guided active inference
+   Experiments show (see Table 2) that when using the Con-                                  method to manage task offloading and resource allocation.
+triever semantic coder, the system performs well in about                                   Hao et al. [19] introduced a collaborative approach between
+15 classification tasks: the average accuracy rate reaches                                  large and small language models, deploying smaller mod-
+more than 95%, and the proportion of anomalous samples is                                   els on edge devices for most generation tasks while larger
+
+
+
+                                                                                     1155
+TailorLLM: Collaborative End-Cloud Inference of LLM and SLM Based on LoRA                 EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+models supervise and refine outputs. PipeEdge[24] proposed                  7   Discussion & Limitation
+a distributed inference method, partitioning LLMs across                    Q1: How does TailorLLM handle long-tail distribution
+different devices and using pipeline parallelism to accelerate              tasks, such as those in private domains with specific
+inference. PETALS[3] further improved the distributed in-                   rules or highly customized, domain-specific tasks?
+ference architecture, dynamically managing heterogeneous                        For scarce-data, domain-specific tasks, TailorLLM decom-
+devices in computational networks.                                          poses them into subtasks and combines lightweight LoRA
+                                                                            adapters (e.g., for key info extraction, terminology, style) to
+6.2 Cache Replacement Algorithms
+                                                                            address requirements compositionally. For private domains,
+Edge-cloud systems employ various cache replacement al-                     it fine-tunes lightweight adapters with domain data and rules
+gorithms to enhance overall system performance. The main                    [50], ensuring adherence to domain constraints without de-
+principle of these methods is to cache content on edge de-                  grading the base model.
+vices that end devices are likely to request, thereby reduc-                Q2: What is the specific role of AdapterMgr — is it used
+ing data transmission between end devices and the cloud.                    to manage memory or storage?
+Caca[18] uses video features to predict popularity, employing                   AdapterMgr manages LoRA modules in RAM, not storage.
+a reinforcement learning model to guide an admission deci-                  It balances memory limits and fast inference via caching,
+sion process that prioritizes popular feature combinations for              eviction, and prefetching. This avoids excessive RAM usage
+caching. JEANA[62] uses reinforcement learning to optimize                  while keeping LoRA loading latency low ( 0.26 ms vs. much
+both cache size and replacement strategy for small content                  slower storage).
+providers on elastic CDNs. LRB[45] uses machine learning to                 Q3: How does TailorLLM handle new task types that
+approximate the optimal Belady caching algorithm, achiev-                   do not fit any known category beyond offloading to the
+ing a significant reduction in WAN traffic in CDNs through                  cloud?
+a relaxed Belady approach and a novel good decision ratio                       TailorLLM groups uncategorized queries in the feature
+metric. However, these studies predominantly focus on sce-                  space based on similarity. When a dense cluster forms with
+narios such as video streaming, where data transmission                     sufficient instances, the cloud fine-tunes a new adapter for
+volumes and request patterns differ significantly from our                  that task. This requires accumulating enough data before
+context. Consequently, they do not adequately address the                   establishing a new category.
+challenges specific to our scenario.                                        Q4: What are the limitations of TailorLLM?
+                                                                                The LoRA modules need to be transmitted between the
+6.3 Model Compression Techniques
+                                                                            edge and the cloud, which can lead to high latency or trans-
+The enormous memory requirements of large language mod-                     mission failures under limited bandwidth. Moreover, when
+els have motivated researchers to explore model compression                 the SLM model is updated, the existing LoRA adapters need
+techniques. Quantization reduces the precision of numerical                 to be retrained.
+values to lower storage and computation costs[14, 36, 43,
+55, 57]. Pruning eliminates redundant parameters or con-
+nections to improve efficiency[38, 56, 66]. Knowledge dis-                  8   Conclusion
+tillation transfers knowledge from larger teacher models to                 To address the rising costs of large language model inference
+smaller student models[33, 48]. While effective, these meth-                services, this paper proposes TailorLLM, a task-level end-
+ods often require substantial model modifications or remain                 cloud collaborative inference framework. Leveraging the
+task-agnostic, making them misaligned with our need for                     long-tail and temporal patterns of user requests, TailorLLM
+flexible, user-centric adaptation.                                          enhances end-side SLMs with dynamically updated LoRA
+    LoRA [23] stands out for enhancing model performance                    modules for frequent tasks while offloading complex queries
+with lightweight updates: dense layers are augmented with                   to cloud LLMs. We introduce two key algorithms: RFLoRA
+low-rank matrices, achieving both parameter and computa-                    for compact parameter tuning and AdapterMgr for adaptive
+tional efficiency. Several LoRA-based extensions further op-                LoRA management via imitation learning. Finally, we built an
+timize this idea. DoRA[41] dynamically allocates parameter                  end-cloud prototype system and validated the effectiveness
+budgets across low-rank components. AdaLoRA[65] adapts                      of our approach through evaluations on public datasets.
+ranks across layers under a fixed budget. QLoRA[10] inte-
+grates LoRA with 4-bit quantization, enabling large-model
+fine-tuning on memory-limited hardware. For federated train-                Acknowledgments
+ing, SLoRA[44] extends LoRA to address data heterogeneity                   We would like to thank all anonymous reviewers, and our
+and communication constraints.                                              shepherd, Chandranil (Nil) Chakraborttii, for their insight-
+    However, for executing large models on edge devices, the                ful comments and feedback. This work is supported by the
+aforementioned approaches remain limited by model size                      National Natural Science Foundation of China under Grant
+and hardware constraints.                                                   Number 62402050.
+
+
+
+                                                                    1156
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                           Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang
+
+
+References                                                                                    (OSDI 24). 135–153.
+ [1] Armen Aghajanyan, Lili Yu, Alexis Conneau, Wei-Ning Hsu, Karen                      [16] Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, and et al. 2024.
+     Hambardzumyan, Susan Zhang, Stephen Roller, Naman Goyal, Omer                            The Llama 3 Herd of Models. arXiv:2407.21783 [cs.AI] https://arxiv.
+     Levy, and Luke Zettlemoyer. 2023. Scaling laws for generative mixed-                     org/abs/2407.21783
+     modal language models. In International Conference on Machine Learn-                [17] Albert Gu and Tri Dao. 2024. Mamba: Linear-Time Sequence Modeling
+     ing. PMLR, 265–279.                                                                      with Selective State Spaces. arXiv:2312.00752 [cs.LG] https://arxiv.
+ [2] Ibrahim M Alabdulmohsin, Behnam Neyshabur, and Xiaohua Zhai.                             org/abs/2312.00752
+     2022. Revisiting neural scaling laws in language and vision. Advances               [18] Yu Guan, Xinggong Zhang, and Zongming Guo. 2019. Caca: Learning-
+     in Neural Information Processing Systems 35 (2022), 22300–22312.                         based content-aware cache admission for video content in edge
+ [3] Alexander Borzunov, Max Ryabinin, Artem Chumachenko, Dmitry                              caching. In Proceedings of the 27th ACM International Conference on
+     Baranchuk, Tim Dettmers, Younes Belkada, Pavel Samygin, and                              Multimedia(MM). 456–464.
+     Colin A Raffel. 2023. Distributed Inference and Fine-tuning of Large                [19] Zixu Hao, Huiqiang Jiang, Shiqi Jiang, Ju Ren, and Ting Cao. 2024.
+     Language Models Over The Internet. In Advances in Neural Information                     Hybrid SLM and LLM for Edge-Cloud Collaborative Inference. In
+     Processing Systems, Vol. 36. 12312–12331.                                                Proceedings of the Workshop on Edge and Mobile Foundation Models.
+ [4] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D                           Association for Computing Machinery, 36–41. doi:10.1145/3662006.
+     Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish                      3662067
+     Sastry, Amanda Askell, et al. 2020. Language models are few-shot                    [20] Zixu Hao, Huiqiang Jiang, Shiqi Jiang, Ju Ren, and Ting Cao. 2024.
+     learners. Advances in neural information processing systems 33 (2020),                   Hybrid SLM and LLM for Edge-Cloud Collaborative Inference. In
+     1877–1901.                                                                               Proceedings of the Workshop on Edge and Mobile Foundation Models
+ [5] Fenglong Cai, Dong Yuan, Zhe Yang, and Lizhen Cui. 2024. Edge-                           (Minato-ku, Tokyo, Japan) (EdgeFM ’24). Association for Computing
+     LLM: A Collaborative Framework for Large Language Model Serving                          Machinery, New York, NY, USA, 36–41. doi:10.1145/3662006.3662067
+     in Edge Computing. In 2024 IEEE International Conference on Web                     [21] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2015. Delv-
+     Services (ICWS). 799–809. doi:10.1109/ICWS62655.2024.00099                               ing deep into rectifiers: Surpassing human-level performance on ima-
+ [6] Xiangxiang Chu, Limeng Qiao, Xinyang Lin, Shuang Xu, Yang Yang,                          genet classification. In Proceedings of the IEEE international conference
+     Yiming Hu, Fei Wei, Xinyu Zhang, Bo Zhang, Xiaolin Wei, et al. 2023.                     on computer vision. 1026–1034.
+     Mobilevlm: A fast, reproducible and strong vision language assistant                [22] Ying He, Jingcheng Fang, F. Richard Yu, and Victor C. Leung. 2024.
+     for mobile devices. arXiv preprint arXiv:2312.16886 2, 6 (2023), 7.                      Large Language Models (LLMs) Inference Offloading and Resource
+ [7] Aidan Clark, Diego de Las Casas, Aurelia Guy, Arthur Mensch, Michela                     Allocation in Cloud-Edge Computing: An Active Inference Approach.
+     Paganini, Jordan Hoffmann, Bogdan Damoc, Blake Hechtman, Trevor                          IEEE Transactions on Mobile Computing 23, 12 (2024), 11253–11264.
+     Cai, Sebastian Borgeaud, et al. 2022. Unified scaling laws for routed lan-               doi:10.1109/TMC.2024.3415661
+     guage models. In International conference on machine learning. PMLR,                [23] Edward J Hu, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+     4057–4086.                                                                               Wang, Lu Wang, Weizhu Chen, et al. 2022. LoRA: Low-Rank Adapta-
+ [8] Christopher Clark, Kenton Lee, Ming-Wei Chang, Tom Kwiatkowski,                          tion of Large Language Models. In International Conference on Learning
+     Michael Collins, and Kristina Toutanova. 2019.               BoolQ: Ex-                  Representations.
+     ploring the Surprising Difficulty of Natural Yes/No Questions.                      [24] Yang Hu, Connor Imes, Xuanang Zhao, Souvik Kundu, Peter A. Beerel,
+     arXiv:1905.10044 [cs.CL] https://arxiv.org/abs/1905.10044                                Stephen P. Crago, and John Paul Walters. 2022. PipeEdge: Pipeline
+ [9] Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Hee-                          Parallelism for Large-Scale Model Inference on Heterogeneous Edge
+     woo Jun, Lukasz Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton,                   Devices. In 2022 25th Euromicro Conference on Digital System Design
+     Reiichiro Nakano, Christopher Hesse, and John Schulman. 2021. Train-                     (DSD). 298–307. doi:10.1109/DSD57027.2022.00048
+     ing Verifiers to Solve Math Word Problems. arXiv:2110.14168 [cs.LG]                 [25] Zhengxiang Huang, Chaoyue Niu, Zhaode Wang, Jiarui Xue, Han-
+     https://arxiv.org/abs/2110.14168                                                         ming Zhang, Yugang Wang, Zewei Xin, Xiaotang Jiang, Chengfei Lv,
+[10] Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer.                      Fan Wu, and Guihai Chen. 2025. MNN-AECS: Energy Optimization
+     2023. QLoRA: Efficient Finetuning of Quantized LLMs. In Thirty-                          for LLM Decoding on Mobile Devices via Adaptive Core Selection.
+     seventh Conference on Neural Information Processing Systems. https:                      arXiv:2506.19884 [cs.OS] https://arxiv.org/abs/2506.19884
+     //openreview.net/forum?id=OUIFPHEgJU                                                [26] Gautier Izacard, Mathilde Caron, Lucas Hosseini, Sebastian Riedel,
+[11] Dujian Ding, Ankur Mallick, Chi Wang, Robert Sim, Subhabrata                             Piotr Bojanowski, Armand Joulin, and Edouard Grave. 2022. Un-
+     Mukherjee, Victor Rühle, Laks V. S. Lakshmanan, and Ahmed Has-                           supervised Dense Information Retrieval with Contrastive Learning.
+     san Awadallah. 2024. Hybrid LLM: Cost-Efficient and Quality-Aware                        arXiv:2112.09118 [cs.IR] https://arxiv.org/abs/2112.09118
+     Query Routing. In The Twelfth International Conference on Learning                  [27] Harshit Joshi, Abishai Ebenezer, José Cambronero Sanchez, Sumit
+     Representations. https://openreview.net/forum?id=02f3mUtqnM                              Gulwani, Aditya Kanade, Vu Le, Ivan Radiček, and Gust Verbruggen.
+[12] Zhengxiao Du, Yujie Qian, Xiao Liu, Ming Ding, Jiezhong Qiu, Zhilin                      2024. Flame: A small language model for spreadsheet formulas. In
+     Yang, and Jie Tang. 2022. GLM: General Language Model Pretraining                        Proceedings of the AAAI Conference on Artificial Intelligence, Vol. 38.
+     with Autoregressive Blank Infilling. arXiv:2103.10360 [cs.CL] https:                     12995–13003.
+     //arxiv.org/abs/2103.10360                                                          [28] Jared Kaplan, Sam McCandlish, Tom Henighan, Tom B Brown, Ben-
+[13] Amir Efrati and Aaron Holmes. [n. d.]. Why OpenAI Could Lose                             jamin Chess, Rewon Child, Scott Gray, Alec Radford, Jeffrey Wu, and
+     5 Billion This Year. https://www.theinformation.com/articles/why-                        Dario Amodei. 2020. Scaling laws for neural language models. arXiv
+     openai-could-lose-5-billion-this-year                                                    preprint arXiv:2001.08361 (2020).
+[14] Elias Frantar, Saleh Ashkboos, Torsten Hoefler, and Dan Alistarh. 2022.             [29] Hui Li, Xiuhua Li, Qilin Fan, Qiang He, Xiaofei Wang, and Victor C. M.
+     OPTQ: Accurate quantization for generative pre-trained transformers.                     Leung. 2024. Distributed DNN Inference With Fine-Grained Model
+     In The Eleventh International Conference on Learning Representations.                    Partitioning in Mobile Edge Computing Networks. IEEE Transactions
+[15] Yao Fu, Leyang Xue, Yeqi Huang, Andrei-Octavian Brabete, Dmitrii                         on Mobile Computing 23, 10 (2024), 9060–9074. doi:10.1109/TMC.2024.
+     Ustiugov, Yuvraj Patel, and Luo Mai. 2024. {ServerlessLLM}:{Low-                         3357874
+     Latency} serverless inference for large language models. In 18th                    [30] Jing Li, Weifa Liang, Yuchen Li, Zichuan Xu, Xiaohua Jia, and Song Guo.
+     USENIX Symposium on Operating Systems Design and Implementation                          2023. Throughput Maximization of Delay-Aware DNN Inference in
+
+
+
+
+                                                                                  1157
+TailorLLM: Collaborative End-Cloud Inference of LLM and SLM Based on LoRA                              EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+     Edge Computing by Exploring DNN Model Partitioning and Inference                       Networked Systems Design and Implementation (NSDI 20). 529–544.
+     Parallelism. IEEE Transactions on Mobile Computing 22, 5 (2023), 3017–            [46] Gemini Team, Petko Georgiev, Ving Ian Lei, Ryan Burnell, Libin Bai,
+     3030. doi:10.1109/TMC.2021.3125949                                                     Anmol Gulati, and et al. 2024. Gemini 1.5: Unlocking multimodal under-
+[31] Yuanzhi Li, Sébastien Bubeck, Ronen Eldan, Allie Del Giorno, Suriya                    standing across millions of tokens of context. arXiv:2403.05530 [cs.CL]
+     Gunasekar, and Yin Tat Lee. 2023. Textbooks are all you need ii: phi-1.5               https://arxiv.org/abs/2403.05530
+     technical report. arXiv preprint arXiv:2309.05463 (2023).                         [47] Chunlin Tian, Zhan Shi, Zhijiang Guo, Li Li, and Cheng-Zhong Xu.
+[32] Yiran Li, Zhen Liu, Ze Kou, Yannan Wang, Guoqiang Zhang, Yidong                        2024. Hydralora: An asymmetric lora architecture for efficient fine-
+     Li, and Yongqi Sun. 2024. Real-Time Adaptive Partition and Resource                    tuning. Advances in Neural Information Processing Systems 37 (2024),
+     Allocation for Multi-User End-Cloud Inference Collaboration in Mobile                  9565–9584.
+     Environment. IEEE Transactions on Mobile Computing 23, 12 (July 2024),            [48] Inar Timiryasov and Jean-Loup Tastet. 2023. Baby Llama: knowl-
+     13076–13094. doi:10.1109/TMC.2024.3430103                                              edge distillation from an ensemble of teachers trained on a small
+[33] Chen Liang, Simiao Zuo, Qingru Zhang, Pengcheng He, Weizhu Chen,                       dataset with no performance penalty. In Proceedings of the BabyLM
+     and Tuo Zhao. 2023. Less is more: Task-aware layer-wise distillation for               Challenge at the 27th Conference on Computational Natural Language
+     language model compression. In International Conference on Machine                     Learning(CoNLL). 279–289.
+     Learning. 20852–20867.                                                            [49] Benjamin Van Roy. 2007. A short proof of optimality for the MIN
+[34] Chaofan Lin, Zhenhua Han, Chengruidong Zhang, Yuqing Yang, Fan                         cache replacement algorithm. Information processing letters 102, 2-3
+     Yang, Chen Chen, and Lili Qiu. 2024. Parrot: Efficient serving of                      (2007), 72–73.
+     {LLM-based} applications with semantic variable. In 18th USENIX                   [50] Haochun Wang, Sendong Zhao, Zewen Qiang, Zijian Li, Chi Liu, Nuwa
+     Symposium on Operating Systems Design and Implementation (OSDI                         Xi, Yanrui Du, Bing Qin, and Ting Liu. 2025. Knowledge-tuning large
+     24). 929–945.                                                                          language models with structured medical knowledge bases for trust-
+[35] Evan Zheran Liu, Milad Hashemi, Kevin Swersky, Parthasarathy Ran-                      worthy response generation in Chinese. ACM Transactions on Knowl-
+     ganathan, and Junwhan Ahn. 2020. An imitation learning approach for                    edge Discovery from Data 19, 2 (2025), 1–17.
+     cache replacement. In Proceedings of the 37th International Conference            [51] Jiayin Wang, Weizhi Ma, Peijie Sun, Min Zhang, and Jian-Yun Nie. 2024.
+     on Machine Learning (ICML’20). JMLR.org, Article 579, 11 pages.                        Understanding User Experience in Large Language Model Interactions.
+[36] Jing Liu, Ruihao Gong, Xiuying Wei, Zhiwei Dong, Jianfei Cai, and                      arXiv preprint arXiv:2401.08329 (2024).
+     Bohan Zhuang. 2024. QLLM: Accurate and Efficient Low-Bitwidth                     [52] Jason Wei, Yi Tay, Rishi Bommasani, Colin Raffel, Barret Zoph, Sebas-
+     Quantization for Large Language Models. In The Twelfth International                   tian Borgeaud, Dani Yogatama, Maarten Bosma, Denny Zhou, Donald
+     Conference on Learning Representations(ICLR).                                          Metzler, Ed H. Chi, Tatsunori Hashimoto, Oriol Vinyals, Percy Liang,
+[37] Zhicheng Liu, Meng Tian, Mianxiong Dong, Xiaofei Wang, Chao Qiu,                       Jeff Dean, and William Fedus. 2022. Emergent Abilities of Large Lan-
+     and Cheng Zhang. 2024. MoEI: Mobility-Aware Edge Inference Based                       guage Models. arXiv:2206.07682 [cs.CL] https://arxiv.org/abs/2206.
+     on Model Partition and Service Migration. IEEE Transactions on Mobile                  07682
+     Computing 23, 10 (2024), 9437–9450. doi:10.1109/TMC.2024.3366186                  [53] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Brian
+[38] Xinyin Ma, Gongfan Fang, and Xinchao Wang. 2023. Llm-pruner: On                        Ichter, Fei Xia, Ed H. Chi, Quoc V. Le, and Denny Zhou. 2024. Chain-
+     the structural pruning of large language models. Advances in neural                    of-thought prompting elicits reasoning in large language models. In
+     information processing systems 36 (2023), 21702–21720.                                 Proceedings of the 36th International Conference on Neural Informa-
+[39] Adyasha Maharana, Dong-Ho Lee, Sergey Tulyakov, Mohit Bansal,                          tion Processing Systems (New Orleans, LA, USA) (NIPS ’22). Curran
+     Francesco Barbieri, and Yuwei Fang. 2024. Evaluating very long-term                    Associates Inc., Red Hook, NY, USA, Article 1800, 14 pages.
+     conversational memory of llm agents. arXiv preprint arXiv:2402.17753              [54] Xuansheng Wu, Huachi Zhou, Yucheng Shi, Wenlin Yao, Xiao Huang,
+     (2024).                                                                                and Ninghao Liu. 2024. Could small language models serve as recom-
+[40] Claudia Malzer and Marcus Baum. 2020. A Hybrid Approach To Hi-                         menders? towards data-centric cold-start recommendation. In Proceed-
+     erarchical Density-based Cluster Selection. In 2020 IEEE International                 ings of the ACM Web Conference 2024. 3566–3575.
+     Conference on Multisensor Fusion and Integration for Intelligent Systems          [55] Haojun Xia, Zhen Zheng, Xiaoxia Wu, Shiyang Chen, Zhewei Yao,
+     (MFI). IEEE, 223–228. doi:10.1109/mfi49285.2020.9235263                                Stephen Youn, Arash Bakhtiari, Michael Wyatt, Donglin Zhuang,
+[41] Yulong Mao, Kaiyu Huang, Changhao Guan, Ganglin Bao, Fengran Mo,                       Zhongzhu Zhou, Olatunji Ruwase, Yuxiong He, and Shuaiwen Leon
+     and Jinan Xu. 2024. DoRA: Enhancing Parameter-Efficient Fine-Tuning                    Song. 2024. Quant-LLM: Accelerating the Serving of Large Lan-
+     with Dynamic Rank Distribution. arXiv preprint arXiv:2405.17357                        guage Models via FP6-Centric Algorithm-System Co-Design on Mod-
+     (2024).                                                                                ern GPUs. In 2024 USENIX Annual Technical Conference (USENIX
+[42] OpenAI, Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ah-                          ATC 24). USENIX Association, Santa Clara, CA, 699–713. https:
+     mad, Ilge Akkaya, and et al. 2024.          GPT-4 Technical Report.                    //www.usenix.org/conference/atc24/presentation/xia
+     arXiv:2303.08774 [cs.CL] https://arxiv.org/abs/2303.08774                         [56] Mengzhou Xia, Tianyu Gao, Zhiyuan Zeng, and Danqi Chen. 2024.
+[43] Wenqi Shao, Mengzhao Chen, Zhaoyang Zhang, Peng Xu, Lirui Zhao,                        Sheared LLaMA: Accelerating Language Model Pre-training via Struc-
+     Zhiqian Li, Kaipeng Zhang, Peng Gao, Yu Qiao, and Ping Luo. 2024.                      tured Pruning. In The Twelfth International Conference on Learning
+     OmniQuant: Omnidirectionally Calibrated Quantization for Large                         Representations(ICLR).
+     Language Models. In The Twelfth International Conference on Learning              [57] Guangxuan Xiao, Ji Lin, Mickael Seznec, Hao Wu, Julien Demouth, and
+     Representations(ICLR).                                                                 Song Han. 2023. Smoothquant: Accurate and efficient post-training
+[44] Ying Sheng, Shiyi Cao, Dacheng Li, Coleman Hooper, Nicholas Lee,                       quantization for large language models. In International Conference on
+     Shuo Yang, Christopher Chou, Banghua Zhu, Lianmin Zheng, Kurt                          Machine Learning(ICML). 38087–38099.
+     Keutzer, et al. 2024. Slora: Scalable serving of thousands of lora                [58] Yifan Xiong, Yuting Jiang, Ziyue Yang, Lei Qu, Guoshuai Zhao,
+     adapters. Proceedings of Machine Learning and Systems 6 (2024), 296–                   Shuguang Liu, Dong Zhong, Boris Pinzur, Jie Zhang, Yang Wang, et al.
+     311.                                                                                   2024. {SuperBench}: Improving Cloud {AI} Infrastructure Reliability
+[45] Zhenyu Song, Daniel S Berger, Kai Li, Anees Shaikh, Wyatt Lloyd,                       with Proactive Validation. In 2024 USENIX Annual Technical Conference
+     Soudeh Ghorbani, Changhoon Kim, Aditya Akella, Arvind Krishna-                         (USENIX ATC 24). 835–850.
+     murthy, Emmett Witchel, et al. 2020. Learning relaxed belady for                  [59] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan
+     content distribution network caching. In 17th USENIX Symposium on                      Hui, Bo Zheng, and et al. 2025.             Qwen3 Technical Report.
+
+
+
+
+                                                                                1158
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                     Zian Wang, Ziyi Wang, Haonan Jin, Jie Xing, and Lanshan Zhang
+
+
+     arXiv:2505.09388 [cs.CL] https://arxiv.org/abs/2505.09388                      [65] Qingru Zhang, Minshuo Chen, Alexander Bukharin, Nikos Karampatzi-
+[60] Linyi Yang, Shuibai Zhang, Libo Qin, Yafu Li, Yidong Wang, Han-                     akis, Pengcheng He, Yu Cheng, Weizhu Chen, and Tuo Zhao. 2023.
+     meng Liu, Jindong Wang, Xing Xie, and Yue Zhang. 2023. GLUE-X:                      AdaLoRA: Adaptive Budget Allocation for Parameter-Efficient Fine-
+     Evaluating Natural Language Understanding Models from an Out-                       Tuning. arXiv:2303.10512 [cs.CL] https://arxiv.org/abs/2303.10512
+     of-distribution Generalization Perspective. arXiv:2211.08073 [cs.CL]           [66] Yingtao Zhang, Haoli Bai, Haokun Lin, Jialin Zhao, Lu Hou, and
+     https://arxiv.org/abs/2211.08073                                                    Carlo Vittorio Cannistraci. 2024. Plug-and-play: An efficient post-
+[61] Yao Yao, Zuchao Li, and Hai Zhao. 2024. GKT: A Novel Guidance-Based                 training pruning method for large language models. In The Twelfth
+     Knowledge Transfer Framework For Efficient Cloud-edge Collabora-                    International Conference on Learning Representations.
+     tion LLM Deployment. In Findings of the Association for Computational          [67] Juntao Zhao, Borui Wan, Chuan Wu, Yanghua Peng, and Haibin Lin.
+     Linguistics: ACL 2024, Lun-Wei Ku, Andre Martins, and Vivek Srikumar                2024. POSTER: LLM-PQ:Serving LLM on Heterogeneous Clusters with
+     (Eds.). Association for Computational Linguistics, Bangkok, Thailand,               Phase-Aware Partition and Adaptive Quantization. In Proceedings of
+     3433–3446. doi:10.18653/v1/2024.findings-acl.204                                    the 29th ACM SIGPLAN Annual Symposium on Principles and Practice
+[62] Jiahui Ye, Zichun Li, Zhi Wang, Zhuobin Zheng, Han Hu, and Wenwu                    of Parallel Programming (Edinburgh, United Kingdom) (PPoPP ’24).
+     Zhu. 2021. Joint cache size scaling and replacement adaptation for                  Association for Computing Machinery, New York, NY, USA, 460–462.
+     small content providers. In IEEE INFOCOM 2021-IEEE Conference on                    doi:10.1145/3627535.3638480
+     Computer Communications. 1–10.                                                 [68] Xiaomao Zhou, Qingmin Jia, Yujiao Hu, Renchao Xie, Tao Huang,
+[63] Biao Zhang and Rico Sennrich. 2019. Root mean square layer normal-                  and F. Richard Yu. 2024. GenG: An LLM-Based Generic Time Series
+     ization. Advances in neural information processing systems 32 (2019).               Data Generation Approach for Edge Intelligence via Cross-Domain
+[64] Peiyuan Zhang, Guangtao Zeng, Tianduo Wang, and Wei Lu. 2024.                       Collaboration. In IEEE INFOCOM 2024 - IEEE Conference on Computer
+     Tinyllama: An open-source small language model. arXiv preprint                      Communications Workshops (INFOCOM WKSHPS). 1–6. doi:10.1109/
+     arXiv:2401.02385 (2024).                                                            INFOCOMWKSHPS61880.2024.10620716
+
+
+
+
+                                                                             1159
+

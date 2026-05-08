@@ -1,0 +1,1354 @@
+E!cient Multimodal Serving via Module Multiplexing
+                              Zicong Hong ¶ Yuyan Chen† Haoyue Zhang ¶ Peng Li$
+                                     Wuhui Chen† Song Guo ¶ Xiaowei Shen𝐿
+                         ¶ The Hong Kong University of Science and Technology                       † Sun Yat-sen University
+                                                     $ Xi’an Jiaotong University             𝐿 MetaX
+
+                congcong@ust.hk,chenyy536@mail2.sysu.edu.cn,hzhangex@connect.ust.hk,pengli@xjtu.edu.cn
+                      chenwuh@mail.sysu.edu.cn,songguo@cse.ust.hk,xiaowei.shen@metax-tech.com
+
+Abstract
+                                                                                                                                                                   Batch 𝑖    Batch 𝑖 + 1
+Multimodal learning enables models to process and reason
+                                                                                                                              Batch 𝑖
+                                                                                           Visual                                                                             1
+
+
+
+
+                                                                                                                                                 GPU Utilization
+over diverse information sources, unlocking human-like per-
+
+
+
+
+                                                                                                    GPU Utilization
+                                                                                          Encoder
+
+
+
+
+                                                                                                                                        Bubble
+                                                                                                                                                                                    4
+ceptual and cognitive capabilities. As such models gain adop-                        Q
+                                                                                            Text                         12        12                                7       12
+
+tion, e!ciently serving them on GPUs has become increas-                                  Encoder
+
+
+ingly important. However, the modular architecture of mul-                                                                              12                                          12
+                                                                                           Text
+                                                                                     A
+                                                                                          Decoder                                                                            Time
+timodal models poses signi"cant challenges to existing uni-
+                                                                                                                                Time
+                                                                                 (a) Architecture                     (b) Existing Works         (c) Module Multiplexing
+modal serving systems, which treat models as monolithic and
+overlook inter-module heterogeneity. This results in severe
+                                                                                 Figure 1. Comparison between the existing multimodal
+GPU underutilization. To address this, we propose E!"!!, a
+                                                                                 model serving scheme and our E!"!! (i.e., module multi-
+multimodal serving system based on a new scheduling para-
+                                                                                 plexing). Each number denotes a module’s batch size.
+digm we call module multiplexing. Unlike prior approaches
+that execute all modules sequentially with uniform batch
+sizes, E!"!! schedules modality-speci"c modules concur-
+rently on the same GPU with independently tuned batching                         1       Introduction
+and resource allocation. This design enables "ne-grained                         Multimodal learning is widely regarded as a transformative
+GPU sharing, boosting intra-GPU parallelism and improv-                          step toward arti"cial general intelligence, aiming to develop
+ing request-level throughput. We implement a prototype of                        models capable of ingesting, interpreting, and reasoning over
+E!"!! and evaluate it on several representative multimodal                       diverse information sources. Driven by advances in trans-
+models (e.g., CLIP, BLIP, LLaVA, InternVL). Our results show                     former architectures, a range of powerful pre-trained multi-
+that E!"!! signi"cantly outperforms state-of-the-art serving                     modal models have emerged, including CLIP [44], BLIP [32],
+systems in both throughput and GPU utilization.                                  BLIP-2 [31], and LLaVA [35], which have fueled a broad
+                                                                                 spectrum of downstream applications [3, 22, 33, 54, 58].
+CCS Concepts: • Computing methodologies → Machine                                   As these models become increasingly prevalent, the need
+learning.                                                                        for e!cient multimodal model serving—achieving low la-
+                                                                                 tency and high resource utilization—has become critical.
+Keywords: Multimodal model, GPU multiplexing, e!cient
+                                                                                 While prior work has made signi"cant progress in developing
+serving system
+                                                                                 model serving systems, such as TF-Serving [40], Clipper [12],
+                                                                                 TurboTransformers [18], and Triton [39], these systems are
+ACM Reference Format:
+Zicong Hong ¶      Yuyan Chen† Haoyue Zhang ¶        Peng Li$ ,                  primarily designed for unimodal models and fall short when
+Wuhui Chen   †   Song Guo ¶   Xiaowei Shen . 2026. E!cient Mul-
+                                          𝐿                                      serving complex multimodal architectures.
+timodal Serving via Module Multiplexing. In European Confer-                        These systems typically treat a model as a monolithic
+ence on Computer Systems (EUROSYS ’26), April 27–30, 2026, Ed-                   computation graph, executing each layer sequentially with
+inburgh, Scotland Uk. ACM, New York, NY, USA, 16 pages. h!ps:                    a uniform batch size. To improve GPU utilization, they scale
+//doi.org/10.1145/3767295.3769389                                                up the batch size until the inference latency violates the
+                                                                                 Service-Level Objective (SLO). However, such strategies be-
+                                                                                 come ine!cient when applied to multimodal models. For
+                                                                                 example, our preliminary experiments (Figure 4 in § 3) show
+                                                                                 that GPU utilization drops below 10% for over 50% of the
+This work is licensed under a Creative Commons Attribution 4.0 Interna-
+                                                                                 time when serving BLIP on a Visual Question Answering
+tional License.
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+                                                                                 (VQA) task using NVIDIA Triton.
+© 2026 Copyright held by the owner/author(s).                                       This ine!ciency stems from a fundamental mismatch:
+ACM ISBN 979-8-4007-2212-7/26/04. . . $15.00                                     existing unimodal serving systems fail to account for the
+h!ps://doi.org/10.1145/3767295.3769389                                           intra-model heterogeneity introduced by modality-speci"c
+
+
+
+                                                                          2292
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                              Zicong Hong, et al.
+
+
+modules with varying computational characteristics. A typ-                                                           “Answer”                       “Answer”
+ical multimodal model comprises multiple such modules,                         Image Encoder      Text Encoder      Text Decoder
+each implemented as a separate transformer tailored to pro-
+                                                                                                                                                Text Encoder
+                                                                                                                                               N×        ...
+cess a speci"c modality. These modules often adopt di#erent               N×
+                                                                                Feed Forward       Feed Forward     Feed Forward
+                                                                                                                                                    Merge Layer
+
+architectures and exhibit vastly di#erent performance pro-                      Self Attention     Cross Atten.      Cross Atten.     Image     Cross          Cross     Image
+
+"les [28]. For instance, as shown in Figure 1a, BLIP for VQA                                                                         Encoder    Atten.         Atten.   Encoder
+
+
+consists of three modules: a text encoder, a visual encoder,                                       Self Attention   Self Attention                       ...
+
+and a text decoder (see § 2.1). As shown in Figure 1b, GPU                                       “[Encoder] + Q” “[Decoder]”                   “[Encoder] + Q”
+
+utilization $uctuates sharply between modules: the visual                                        (a) VQA                                        (b) NLVR
+encoder is highly compute-intensive and often constrained
+by insu!cient GPU resources, while the text encoder and                                          Figure 2. The architecture of BLIP.
+decoder underutilize the GPU, introducing substantial GPU
+bubbles. This imbalance leads to poor intra-GPU utilization
+                                                                          and reducing overall throughput. Second, unlike sequential
+and degraded overall throughput.
+                                                                          execution, where intermediate outputs are immediately for-
+   Besides the architectural di#erences among modules dis-
+                                                                          warded to the next module, module multiplexing disrupts
+cussed above, multimodal models exhibit two other forms of
+                                                                          this execution order. Consequently, the outputs of upstream
+inter-module heterogeneity that further exacerbate GPU un-
+                                                                          modules must be temporarily cached until their downstream
+derutilization under the existing unimodal serving systems.
+                                                                          consumers are scheduled, introducing memory and I/O over-
+   First, there is an imbalance in input patterns across modali-
+                                                                          head that must be carefully managed by the serving system.
+ties, resulting in uneven workloads. Computing each module
+                                                                             To address these challenges, we introduce E!"!!, an ef-
+sequentially with the same batch size can lead to GPU waste
+                                                                          "cient multimodal model serving system based on module
+for modules with lighter workloads. For example, in a VQA
+                                                                          multiplexing. E!"!! analyzes the characteristics of modality-
+application, a user’s conversation may contain several ques-
+                                                                          speci"c modules and available GPU resources to schedule
+tions referring to the same image, targeting di#erent regions
+                                                                          and cache their computations independently. It orchestrates
+or tasks (e.g., "ne-grained recognition, activity detection, or
+                                                                          "ne-grained resource allocation across modules to improve
+knowledge-based reasoning) [1]. In such cases, the workload
+                                                                          throughput while maintaining system e!ciency.
+on the visual encoder remains relatively low compared to
+                                                                             The key contributions of this paper are as follows:
+that of the text encoder. Similar behavior is observed in other
+                                                                              • We present an in-depth empirical analysis of the per-
+modalities such as videos [52] and tables [6].
+                                                                                 formance bottlenecks in existing unimodal serving
+   Second, preprocessing demands vary widely across modal-
+                                                                                 systems when applied to multimodal models. Based
+ities. Preprocessing is essential to ensure data consistency,
+                                                                                 on this, we identify three core sources of ine!ciency
+normalization, and e#ective feature extraction, and typically
+                                                                                 and motivate the design of module multiplexing.
+involves CPU computation and I/O operations. Visual in-
+                                                                              • To mitigate the additional system overhead caused by
+puts—such as images and videos—require signi"cantly more
+                                                                                 module multiplexing, we propose a module caching
+preprocessing time than text due to their higher dimension-
+                                                                                 control design that supports e!cient management (in-
+ality and noise (see § 3). When preprocessing and inference
+                                                                                 cluding identi"cation, caching, and reusing) of module
+are performed sequentially, the GPU may remain idle while
+                                                                                 intermediate inference results.
+waiting for preprocessing to complete.
+                                                                              • To strike a balance between resource competition and
+   The interplay of these three forms of inter-module het-
+                                                                                 inference cooperation between modules, we propose
+erogeneity motivates us to propose a new serving paradigm
+                                                                                 a new heuristic algorithm that operates within a con-
+called module multiplexing. As illustrated in Figure 1c, we
+                                                                                 strained search space to orchestrate computations and
+move away from treating the multimodal model as a mono-
+                                                                                 allocate resources between modules.
+lithic unit for scheduling and execution. Instead, we con-
+                                                                              • We implement a prototype of E!"!! and evaluate it
+sider modality-speci"c modules as independently schedula-
+                                                                                 in CLIP, BLIP, LLaVA, and InternVL in various mul-
+ble units, each with its own batch size and execution timeline
+                                                                                 timodal tasks. The results show that it increases the
+on the same GPU. This enables "ne-grained intra-GPU par-
+                                                                                 throughput by 157% and reduces the latency by about
+allelism, improving GPU utilization and throughput.
+                                                                                 90%, compared to state-of-the-art serving systems.
+   Despite its potential, module multiplexing introduces sev-
+eral challenges. First, determining an e#ective scheduling
+                                                                          2      Background
+strategy is non-trivial, as modality-speci"c modules must not
+only compete for shared GPU resources but also cooperate to               2.1      Multimodal Models
+complete each inference request. Over-allocating resources                Multimodal Transformer Models (MTMs). An MTM con-
+to one module may accelerate its execution, but can leave                 sists of several modules, each of which is a transformer model.
+other modules starved, ultimately shifting the bottleneck                 We use the well-established MTM, BLIP [32], as an example.
+
+
+
+                                                                   2293
+E"icient Multimodal Serving via Module Multiplexing                                                                            EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+              Input          Encoder        LLM          Decoder        Output
+                                                                                                                                                                   
+ BLIP-2     Text, Image    ViT   Q-former   FlanT5                         Text
+
+
+
+
+                                                                                                                                                     
+                                                                                              
+ LLaVA      Text, Image    ViT         L    LLaMA                          Text
+                                                                                                                                                                      
+            Text, Image,                                               Text, Image,
+NExT-GPT    Video, Audio
+                           ImageBind   L    Vicuna   L     Diffusers
+                                                                       Video, Audio
+
+                                                                                                                                                                      
+                                                                                                                                                                                 
+Figure 3. Comparison of the overview schematic of recent                                                                                                                     
+
+proposed MLLMs. L represents linear projection layers.                                                                    (a) BLIP                                              (b) BLIP-2
+
+                                                                                             Figure 4. Percentage of active SMs in the GPU while pro-
+The overall architecture, depicted in Figure 2a, consists of                                 cessing a batch of requests in Triton.
+three modules. The vision module uses ViT [16] as the im-
+age encoder to extract visual features. The two text modules
+are based on BERT [14]: one is a text encoder that extracts                                     Batching. It combines multiple model inference requests
+text features, and the other is a text decoder that generates                                into a single batch to improve GPU utilisation. This takes ad-
+text output. Each module includes a set of self-attention and                                vantage of the parallel processing capabilities of the GPU to
+feedforward networks to capture contextual relationships                                     process multiple inputs simultaneously and e!ciently reduce
+within its respective modality. Some modules incorporate                                     idle time. E#ective batching requires careful consideration of
+self-attention variants (e.g., early summation, hierarchical at-                             batch size, latency constraints and workload characteristics.
+tention, cross-attention) to enable cross-modal interactions.                                The challenge is to balance latency and throughput, as overly
+In BLIP, the text encoder and text decoder employ cross-                                     large batches can result in unacceptable delays for end users.
+attention to integrate visual and textual information. As                                       GPU Multiplexing. It allows multiple workloads to share
+shown in Figure 2b, another task, Natural Language Visual                                    GPU. This involves leveraging the GPU’s Streaming Multi-
+Reasoning (NLVR), determines if a sentence corresponds to                                    processors (SMs), the units executing parallel tasks. Temporal
+a description of a pair of images [48].                                                      sharing schedules di#erent tasks simultaneously, maintain-
+   Multimodal Large Language Models (MLLMs). The re-                                         ing consistent GPU activity without resource contention.
+markable capabilities of Large Language Models (LLMs) have                                   Spatial sharing enables multiple tasks to run concurrently
+inspired e#orts to integrate them with existing multimodal                                   by distributing workloads across SMs. Multi-Process Service
+models [53]. An MLLM can be conceptualized as a combina-                                     (MPS) [37] and multi-instance GPU (MIG) [36] enables simul-
+tion of several modules: multiple encoders for di#erent input                                taneous execution of multiple models. This paper is based on
+modalities, a pre-trained LLM, and multiple decoders for out-                                MPS because MIG provides only rigid partitioning, leading
+putting various modalities. As shown in Figure 3, BLIP-2 [31]                                to GPU overprovisioning and underutilization, and is only
+uses ViT [16] alongside a lightweight transformer called Q-                                  available in the latest generation of GPUs.
+Former as its visual encoder, with Flan-T5 [11] or OPT [56] as
+its LLM. LLaVA replaces the Q-Former structure with a single                                 3                  Motivations
+linear layer [35]. NExT-GPT [51] utilizes ImageBind [21], a                                  3.1                     Observations
+versatile six-modality encoder, and various di#usion models
+for di#erent modal generations, including Stable Di#usion                                                       Finding 1. Low GPU Utilization: Using existing
+(SD) for image synthesis, Zeroscope for video synthesis, and                                                    unimodal serving systems to serve multimodal models
+AudioLDM for audio synthesis.                                                                                   leads to signi!cant GPU under-utilization.
+   MTMs vs MLLMs. The emergence of MLLMs does not
+mean that traditional MTMs should be discarded. MTMs                                            We begin by evaluating the GPU utilization (i.e., the per-
+require fewer resources and achieve relatively good perfor-                                  centage of active SMs) when serving multimodal models with
+mance across a wide range of multimodal tasks. As such, they                                 existing systems. We use BLIP and BLIP-2 on the VQA task,
+are well suited for edge scenarios, and this paper considers                                 deployed in NVIDIA Triton on a GeForce RTX 3090 GPU.
+both MTMs and MLLMs. As many MTMs and MLLMs follow                                           Implementation details are provided in § 8.1. The batch size
+similar architectures such as BLIP and BLIP-2 respectively,                                  is set to 8. Figure 4 illustrates the GPU utilization throughout
+our paper focuses mainly on their serving.                                                   the processing of a batch of requests. While the GPU occa-
+                                                                                             sionally reaches full utilization, it remains under-utilized for
+2.2 Model Serving                                                                            most of the time. As shown in Figure 4a, the inference is
+Existing serving systems handle inference requests using                                     divided into three phases, marked by two red dotted lines:
+various accelerators (e.g. GPUs). Although GPU-based sys-                                    visual encoder, text encoder, and text decoder. The GPU
+tems o#er low latency for inference, high utilisation of GPU                                 reaches near-full utilization only during the latter half of
+computing resources requires the following technologies.                                     the "rst phase. Similarly, Figure 4b shows the three phases
+
+
+
+                                                                                      2294
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                             Zicong Hong, et al.
+
+
+      Table 1. Details of modules in BLIP and BLIP-2.
+
+                     Module             Model        Params                        %        -              -                   %   ()   )     -
+
+
+                  Visual Encoder       ViT-B/16       86M
+
+
+
+
+                                                                            .
+        BLIP       Text Encoder
+                                       BERT𝑀𝑁𝑂𝑃          110M
+                   Text Decoder
+                  Visual Encoder       ViT-g/14            1B
+                                                                                                     %%(               )
+
+
+       BLIP-2       Q-Former           BERT𝑀𝑁𝑂𝑃          188M                                                  (a) Latency
+                       LLM             FlanT5𝑄 𝑅          2.8B
+                                                                                  . %       /-             /-              . %     (          /-
+
+
+
+
+for BLIP-2: visual encoder, Q-Former, and LLM. We identify
+
+
+
+
+                                                                            ).-
+three main causes for this low utilization, elaborated below.
+
+
+
+
+                                                                            (.
+                                                                                                     %%(       -           -
+
+
+                                                                                                      (b) Throughput
+    Finding 2. Inference Heterogeneity: The computa-
+    tional complexity of modules in a multimodal model
+                                                                          Figure 5. Performance of di#erent modules in BLIP and BLIP-
+    varies signi!cantly due to di"erences in architecture
+                                                                          2 for VQA with di#erent batch sizes and SM percentages.
+    and modality-speci!c processing mechanisms.
+
+   As described in § 2.1, a key distinction between unimodal
+                                                                                        )                          (
+                                                                                        )
+
+and multimodal models is that the latter consist of multi-
+                                                                                        (
+
+
+ple modules with distinct architectures and computation                       (
+
+characteristics, each optimized for a speci"c modality. These                                    (
+
+modules exhibit divergent GPU resource usage patterns.
+   To illustrate this heterogeneity, Table 1 shows the parame-            Figure 6. Input preprocessing and inference latency of dif-
+ter settings of BLIP and BLIP-2 on the VQA task. Their perfor-            ferent modules in BLIP for VQA (left). Latency of visual
+mance varies drastically. As shown in Figure 5a, the visual en-           preprocessing operations for a batch size of 16 (right).
+coder in BLIP exhibits up to 8↑ the latency of the text encoder.
+In addition, their throughput responds di#erently to batch
+size scaling. Figure 5b shows that the text encoder’s through-            converting text into token sequences, embedding them nu-
+put improves substantially when increasing the batch size                 merically, and assembling them into tensors. Since tokeniza-
+from 1 to 8, indicating that small batches fail to fully uti-             tion introduces negligible latency, unimodal serving typically
+lize GPU resources. In contrast, the visual encoder—being                 performs preprocessing and inference serially without no-
+more compute-intensive—achieves near-maximum utiliza-                     ticeable performance degradation. In contrast, multimodal
+tion even at small batch sizes. The text encoder reaches                  models handle inputs from diverse modalities, each requir-
+saturation around a batch size of 8, while the text decoder               ing more complex preprocessing beyond tokenization. For
+continues to bene"t from batching beyond 32.                              example, image inputs may need resizing, normalization,
+   According to Finding 2, applying the same batch size                   and color space conversion; video inputs may require frame
+and allocating 100% of SMs to each module—following the                   extraction; and audio inputs often involve discrete cosine
+convention of unimodal model serving—can result in low                    transforms or resampling [9].
+GPU utilization. This motivates a shift toward treating each                 The latency of such operations can account for a signi"-
+module as an independently schedulable unit, allowing cus-                cant portion of overall inference time. For instance, in BLIP,
+tomized batching and resource allocation that better align                image preprocessing involves image loading, resizing, tensor
+with its computational characteristics.                                   conversion, normalization, and data transfer to GPU mem-
+                                                                          ory. As shown in Figure 6, this preprocessing step can take
+                                                                          up to 40% of the visual encoder’s computation time.
+    Finding 3. Preprocessing Overhead: Multimodal                            According to Finding 3, executing preprocessing and in-
+    model serving relies on CPU resources for data pre-                   ference serially—especially in multimodal settings—leaves
+    processing. The CPU workload is heterogeneous across                  the GPU idle during preprocessing, resulting in poor hard-
+    modalities, as di"erent input types require distinct pre-             ware utilization. This motivates a "ner-grained view of ex-
+    processing operations.                                                ecution, where each module is further divided into prepro-
+                                                                          cessing and inference stages that can be scheduled indepen-
+  In unimodal language-only models, the input is text, which              dently. Such stage-level parallelism helps reduce GPU idle
+undergoes lightweight preprocessing such as tokenization—i.e.,            time caused by input preparation delays.
+
+
+
+                                                                   2295
+E"icient Multimodal Serving via Module Multiplexing                                                           EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+
+
+                                       
+                                                                                                     (        %               )    %                 )       %
+                                                        
+
+                                                        
+
+                                                       
+                                                                                 
+
+
+
+
+                                                                                               %
+                                                                   
+
+            (a) VQA                                              (b) VideoQA
+                                                                                                                                                                 (
+
+
+Figure 7. The distribution of query frequency for each image                                                   (a) Existing Unimodal Serving System
+or video in the test set of two multimodal tasks.
+                                                                                                          )               (              (               )
+
+
+
+
+      Finding 4. Input Imbalance: In a multimodal
+
+
+
+
+                                                                                                (
+      model serving system, the distribution of inputs from
+
+
+
+
+                                                                                                                                                 (
+      di"erent modalities may be imbalanced.
+                                                                                                                                                             % )
+
+   In multimodal serving, user interactions often include                                                (b) Our Strawman System of Module Multiplexing
+multiple queries referring to previous input modalities. For
+instance, in the VQA task, users may ask multiple questions                                   Figure 8. Pipeline (left) and latency (right) of modules in
+targeting speci"c areas or tasks (e.g., "ne-grained recogni-                                  BLIP for VQA. The throughput for the existing system is 22.2
+tion, activity recognition, or knowledge-based reasoning)                                     requests/s, and for module multiplexing is 34.4 requests/s.
+of an image [1]. For example, given an image, a user might
+ask: “Here’s a photo of my garden. Can you identify the
+plants?” Subsequently, they might follow up with: “In the
+photo, which of these plants needs the most sunlight?” As
+shown in Figure 7a, the VQA2 dataset [20] reveals that each
+
+
+
+
+                                                                                                                                             )
+image is associated with at least three questions—and in some
+                                                                                                %
+
+
+
+
+cases, up to 246. Similarly, in the VideoQA task, as illustrated
+in Figure 7b, each video in the MSVD-QA dataset [52] av-                                                                                                     (
+erages around 20 questions. Comparable patterns are also
+found in tasks involving tables and other modalities [6].
+                                                                                              Figure 9. Pipeline (left) and latency (right) of the module
+   According to Finding 4, not all modality-speci"c mod-
+                                                                                              multiplexing scheme with a bad strategy di#erent from that
+ules are needed for every request. Recomputing all mod-
+                                                                                              in Figure 8b. The throughput is 14.1 requests/s.
+ules—regardless of whether their outputs are required—wastes
+compute resources and increases latency. This further rein-
+forces the need to treat modules as independently schedula-                                   a module are treated as separate stages that can be exe-
+ble units, enabling "ne-grained execution paths that match                                    cuted concurrently to improve pipeline utilization. 3) Request-
+the actual query requirements.                                                                aware reuse: Not all modules are required for every request;
+                                                                                              modules whose outputs are shared across requests can cache
+3.2    Strawman                                                                               and reuse results to avoid redundant computation.
+Existing unimodal serving systems typically treat models as                                      Preliminary Experiment. We implement a prototype of
+monolithic entities, executing all layers sequentially with uni-                              the strawman design; implementation details are provided in
+form batch sizes and identical GPU resource allocation across                                 § 7. Both the strawman and the unimodal-style baseline are
+requests. As discussed in § 3.1, this approach is ill-suited for                              evaluated with a batch size of 6. In BLIP for VQA, we apply a
+multimodal serving due to the inherent heterogeneity in                                       speci"c multiplexing strategy illustrated in Figure 8b. In each
+module computation, input patterns, and preprocessing re-                                     batch, the inference for the visual encoder on two requests is
+quirements. The result is consistently low GPU utilization. To                                shifted to run concurrently with the text decoder of the previ-
+address this limitation, we propose a novel serving scheme                                    ous batch and is allocated 70% of the SMs. Preprocessing and
+called module multiplexing tailored for multimodal models.                                    inference are executed in parallel, allowing GPU computa-
+A preliminary strawman system is outlined below.                                              tion to begin without waiting for CPU-side preprocessing to
+   Design. 1) Module-level scheduling: Each module is sched-                                  complete. Finally, request-aware reuse is applied by caching
+uled independently, enabling parallel execution with vary-                                    the outputs of the visual encoder to avoid recomputation for
+ing batch sizes based on its computational characteristics. 2)                                repeated image inputs. Compared to the baseline (Figure 8a),
+Stage-level parallelism: Preprocessing and inference within                                   our prototype achieves a 54.95% improvement in throughput.
+
+
+
+                                                                                       2296
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                              Zicong Hong, et al.
+
+
+                                                                    Img. 2
+                                                                                                                                 𝑄1 , 𝑄2 , ... 𝑄𝑁
+                                          Q1: What is the                                                                                                         𝐴1
+                                          cat doing?                  Q3
+     User                                                                                                  Visual      Visual        Text            Text         𝐴2 ,
+                                                                    Img. 3
+                                          Q2: What is the                                                 Encoder      Tokens      Encoder          Decoder       ...
+                                                                      Q4
+                           Image 1        color of the cat?        Q5    Q6                                                                                       𝐴𝑁
+                                                                                                                                 Modal Cache
+        Img. 1        Img. 2                  Img. 3
+                                                                                                          Encoder-decoder-based Multimodal Models
+         Q1             Q3           Q2        Q4         Q5         Q6         Time
+                                                                                                                                         𝑄1 , 𝑄2 , ... 𝑄𝑁
+                                                                                                                                                                  𝐴1
+                                                                                                           Visual      Visual                                     𝐴2 ,
+                                                                                                                                         Text Decoder
+           Offline                                      Online                                            Encoder      Tokens                                     ...
+                                                                                                                                                                  𝐴𝑁
+      Module Multiplexing                              Execution                                                                         Modal Cache
+      Strategy #1, #2, ...
+                                      Scheduler                              Controller
+                                                        Engine                                                Decoder-based Multimodal Models
+
+        Model Structure
+                                      Module 1         Module 2      …        Module N           Figure 11. Modal cache (highlighted in red) for serving
+                                                                                                 di#erent multimodal models in context-insensitive scenarios.
+       Application SLO
+       GPU Cluster Info.
+
+     Configuration #1, #2, ...
+                                                         GPUs
+
+                                                                                                    To mitigate inter-module resource contention and pre-
+          Figure 10. Architecture overview of E!"!!.                                             serve cooperative inference behavior caused by module mul-
+                                                                                                 tiplexing, a global scheduler coordinates module execution
+   Challenges. Despite these initial gains, module multiplex-                                    across the system. During the o%ine phase, it generates
+ing introduces several system-level challenges. First, design-                                   a set of multiplexing strategies, each tailored to a speci"c
+ing an e#ective multiplexing strategy is non-trivial, as mod-                                    deployment con"guration de"ned by the type of model, ap-
+ules not only compete for limited GPU resources but must                                         plication requirements, and GPU hardware. At runtime, the
+also coordinate to ful"ll each request. As shown in Figure 9,                                    scheduler selects the appropriate strategy based on the ac-
+an alternative scheduling plan led to lower throughput than                                      tive deployment con"guration and applies it to coordinate
+the baseline due to excessive resource contention. Second,                                       the scheduling of module processes on each GPU, ensuring
+"ne-grained scheduling introduces overhead. In particular,                                       balanced and e!cient execution under dynamic workloads.
+request-aware reuse requires identifying, caching, and man-
+aging intermediate module outputs, which places pressure                                         5     Module Caching Control
+on memory and I/O subsystems. These challenges motivate                                          A fundamental consequence of module multiplexing is that
+the design of a dedicated system for e!cient multimodal                                          the execution of modules no longer follows a strict sequential
+serving: E!"!!, introduced in the next section.                                                  order. Unlike traditional serving systems—where interme-
+                                                                                                 diate outputs are immediately forwarded to the next mod-
+4    System Overview                                                                             ule—module multiplexing introduces temporal gaps between
+The overall architecture of E!"!!, illustrated in Figure 10, is                                  upstream and downstream modules. As a result, the outputs
+designed to fully realize the bene"ts of module multiplexing.                                    of earlier modules must be temporarily cached until their
+E!"!! operates on one or more GPUs to serve multimodal                                           consumers are scheduled. This introduces non-trivial mem-
+models and handle task requests from multiple users, includ-                                     ory and I/O overhead that must be carefully managed.
+ing both context-sensitive and context-free queries involving                                       To support this, E!"!! equips each GPU with a controller
+visual inputs. E!"!! consists of two main components: a con-                                     that manages intermediate results at module granularity. The
+troller (§ 5) and a scheduler (§ 6). On each GPU, multiple                                       controller identi"es reusable outputs, caches them across re-
+processes are launched, each dedicated to a speci"c module                                       quests, and orchestrates their e!cient retrieval when needed.
+of the multimodal model and con"gured with individualized                                        In addition to enabling asynchronous execution, this design
+batch sizes and SM allocations. GPU multiplexing enables                                         also supports reuse of shared computations—such as avoid-
+these module processes to execute concurrently, enabling                                         ing redundant visual encoding for repeated inputs—thus
+"ne-grained scheduling and improved resource utilization.                                        improving both e!ciency and throughput.
+   To address the temporal decoupling introduced by module
+multiplexing—where downstream modules may not imme-                                              5.1   Module Computation Caching
+diately follow upstream ones—a controller is deployed on                                         We de"ne the intermediate outputs of a multimodal model
+each GPU. It maintains both an active cache for ongoing                                          that are reusable across multi-turn interactions as the modal
+requests and a historical cache for completed ones. The con-                                     cache. The design of the modal cache depends on the model’s
+troller manages the reuse of cached module outputs while                                         input type, internal structure, and inter-module dependen-
+balancing the compute demands of new requests with the                                           cies. While we take vision-language models as an example in
+I/O overhead associated with cache access and eviction.                                          this section, the approach generalizes to other modalities. In
+
+
+
+                                                                                          2297
+E"icient Multimodal Serving via Module Multiplexing                                                                      EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+
+
+                                                                                                   SM Percentage
+GPU             Encoder            LLM                          LLM
+          (a) Full Computation                                              CPU                                    𝑝1𝑒      𝑏1𝑒            𝑏2𝑒                𝑏𝑒𝑒
+                                                             Visual        Memory
+                                                            KV Cache                                               𝑝12     𝑏12                   𝑏22
+GPU   Encoder                    LLM        Visual                                                                                                         𝑏𝑒2
+IO                Modal Cache              Encoder        Compress                                                𝑝11       𝑏11           𝑏21
+                                                                            GPU
+        (b) Modal Cache Reusing             Visual       Critical Visual   Memory
+                                            Tokens        KV Cache                                                        ℒ1 (𝑠1 )         ℒ2 (𝑠2 )         ℒ𝑒 (𝑠𝑒 )
+GPU Encoder           LLM                 GPU     Encoder       LLM                                                                         Time
+                                                   Critical
+IO  Modal Cache                           IO     Modal Cache
+
+   (c) Modal Cache Reusing w/ Pipeline   (d) Critical Modal Cache Reusing w/ Pipeline          Figure 13. Notation de"nitions in the problem formulation
+                                                                                               of BLIP for VQA. If 𝑀 11 = 𝑀 22 = 𝑀𝑃𝑃 ω 0, the other 𝑀𝑇 𝑆 = 0,
+    Figure 12. Illustration of modal cache management.                                           1     2
+                                                                                               𝑁 1 = 𝑁 2 = 𝑁𝑃 = 100, and the other 𝑁𝑇 = 0, the scheduling
+                                                                                                            𝑃                         𝑆
+
+                                                                                               strategy of E!"!! is the same as that of the existing unimodal
+                                                                                               serving. Otherwise, it is a strategy of module multiplexing.
+vision-related queries, the construction of the modal cache
+depends on whether the interaction is context-sensitive. In
+context-sensitive cases, the cache corresponds to the stan-                                    deemed to have minimal contribution to model outputs and
+dard KV cache used in language models. In context-insensitive                                  are removed. This compression mechanism is modular and
+cases, however, the modal cache structure di#ers. As illus-                                    can be replaced with other strategies [4, 24, 49]. We refer
+trated in Figure 11, we categorize vision-language models                                      to the compressed version as the critical modal cache. As
+into two types: 1) Encoder-Decoder Models: For MTMs and                                        shown in Figure 12(d), the full modal cache is stored in host
+MLLMs such as BLIP and BLIP-2 with FlanT5, the modal                                           memory due to its size, while the smaller critical modal cache
+cache stores the KV pairs of visual tokens consumed by the                                     is prioritized for GPU memory to support fast access. Dur-
+cross-attention layers in the text encoder. 2) Decoder-Only                                    ing inference, the controller dynamically decides whether
+Models: For MLLMs such as BLIP-2 with OPT and LLaVA,                                           to load the full or critical modal cache based on the number
+the modal cache consists of the KV pairs of visual tokens                                      of eligible requests and system state. When GPU resources
+consumed by the decoder.                                                                       are tight or request volume is high, the system prefers the
+                                                                                               critical modal cache; otherwise, it retrieves the full cache to
+5.2 Modal Cache Reusing                                                                        maximize accuracy and completeness.
+As shown in Figure 12(a), when processing new requests that
+initiate a multimodal conversation, the system computes all                                    6              Synergistic Scheduling Algorithm
+required modules, and the controller stores the resulting                                      Unlike previous spatio-temporal GPU sharing approaches for
+modal cache in GPU memory. If the cache exceeds available                                      multiple models that only compete for resources [10, 17], the
+GPU memory, older entries are either evicted to host memory                                    modules of a multimodal model process di#erent modalities
+or discarded. Subsequent requests that reference previously                                    and must cooperate to ful"ll requests. This motivates the
+seen images or videos can retrieve their corresponding modal                                   design of a new scheduling algorithm that considers the
+cache from GPU or host memory, bypassing redundant com-                                        synergistic nature of these modules.
+putation. This allows the system to skip recomputing the
+visual encoder and the pre"ll stage of the decoder for visual                                  6.1 Problem Formulation
+tokens, as shown in Figure 12(b). Furthermore, the system                                      The set of modules in a multimodal model is denoted as M.
+overlaps encoder computation for new requests with modal                                       Each inference of a multimodal model consists of multiple
+cache loading for prior requests, as illustrated in Figure 12(c),                              stages, with each stage corresponding to a module. Di#erent
+improving pipeline e!ciency.                                                                   stages share the GPU temporally. If the output of module 𝑂
+                                                                                               serves as the input for module 𝑃 (𝑂, 𝑃 ↓ M), then the stage
+5.3 Modal Cache Compression                                                                    of 𝑂 precedes that of 𝑃. The egress module (e.g., the text
+Multimodal models convert visual inputs into a sequence of                                     decoder in BLIP) is represented by 𝑄 ↓ M.
+tokens that interact with language components. For instance,                                      As discussed in § 3, not only temporal multiplexing, but
+BLIP-2 generates 32 visual tokens, while LLaVA produces up                                     also spatial multiplexing of modules within a stage can ben-
+to 576, re$ecting a higher granularity of visual information.                                  e"t the inference of a multimodal model. Thus, during the
+A larger number of visual tokens increases the size of the                                     execution of module 𝑂 ↓ M, multiple modules may run con-
+modal cache, posing challenges for storage and loading per-                                    currently. During this stage, the batch size of module 𝑂 is
+formance. As shown in Figure 12(c), cache loading time can                                     denoted as 𝑀𝑇 𝑇 , and its SM percentage as 𝑁 𝑇 . The batch size of
+                                                                                                                                             𝑇
+sometimes exceed encoder inference time.                                                       module 𝑃 ↓ M\𝑂 is denoted as 𝑀𝑇      𝑆 , and its SM percentage is
+
+   To address this, E!"!!’s controller prunes redundant en-                                    𝑁𝑇𝑆 . In each batch, the total batch size of module 𝑃 is given by
+                                                                                                      !
+tries in the modal cache by analyzing token-wise attention                                     𝑀 𝑆 = 𝑇↓ M 𝑀𝑇   𝑆 . The scheduling strategy of the serving sys-
+
+scores. Tokens with consistently low or sparse attention are                                   tem is denoted as s = {𝑅𝑇 }𝑇↓ M , where 𝑅𝑇 = {(𝑀𝑇         𝑇 𝑆↓ M .
+                                                                                                                                                    𝑆 , 𝑁 𝑆 )}
+
+
+
+
+                                                                                        2298
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                  Zicong Hong, et al.
+
+
+  Figure 13 shows an example of the problem formulation.                                 Algorithm 1: Overall Work$ow
+Considering the characteristics of multimodal model serving,                              Input: The set of modules M, o%ine pro"le for all
+the strategy should adhere to the following three constraints:                                    modules L𝑇 (·), latency constraint ω
+  First, at any times, the sum of the SM percentages of all                               Output: The optimal resource scheduling strategy s↘
+modules M in a GPU should fully utilize, but not exceed, the                            1 Init s = {𝑅𝑇 }𝑇↓ M where 𝑅𝑇 = {(𝑀𝑇 , 𝑁𝑇 )}𝑆↓ M as the
+                                                                                                                            𝑆   𝑆
+GPU’s maximum compute resource1 , i.e.,                                                    best strategy by executing M sequentially with a
+                   "
+                       𝑁𝑇𝑆
+                           = 100, ↔𝑂 ↓ M.                  (1)                             uniform batch size that meets constraints (1), (2), (3)
+                                                                                        2 while true do
+                      𝑆↓ M
+                                                                                        3     Let s↘ = s
+   Second, the computation of di#erent modalities is inter-                             4     for 𝑃 ↓ M do
+dependent because one module’s input can be the output                                             // Profile the negative effect on the latency
+of another. Speci"cally, the batch size of each module is an                                          for new possible strategies
+integer multiple of the batch size of the egress module, i.e.,                          5          for 𝑂 ↓ M do
+                                                                                        6              Let 𝑈𝑇𝑆 = 𝑀𝑆 + 𝑆 𝑆
+                           𝑆      𝑆 𝑃
+                         𝑀 = 𝑆 𝑀 , ↔𝑃 ↓ M,                               (2)                                      𝑇
+                                                                                        7              Let 𝑈𝑇𝑈 = 𝑀 𝑈 , ↔𝑉 ↓ M\𝑃
+                                                                                                                  𝑇
+in which 𝑆 𝑆 is the batch size multiplier for module 𝑃. The set-                        8              Let 𝑅𝑇        𝑇 𝑇 𝑈 ↓ M where 𝑅𝑇 meets
+                                                                                                            ⇐ = {(𝑈 𝑈 , 𝑊 𝑈 )}          ⇐
+ting is determined by two factors: 1) Model Structure: For                                              constraint (1) and 𝑅𝑇 = arg min𝑂𝐿⇐ L (𝑅𝑇
+                                                                                                                               ⇐               ⇐ )
+instance, in BLIP for NVLR (Figure 2b), the image encoder’s                                        // Accommodate 𝑆’s batch increment with the
+batch size is twice that of the text decoder. 2) User Pattern:                                        minimum negative effect on the latency
+For example, in the VQA task, each image corresponds to an                              9          Let 𝑂 = arg min𝑇↓ M (L (𝑅𝑇
+                                                                                                                            ⇐ ) ≃ L (𝑅 ))
+                                                                                                                                      𝑇
+average of three questions (Finding 4), making the image                               10          Update 𝑅𝑇 in s
+                                                                                                           ⇐
+encoder’s batch size one-third of the text decoder’s.
+   Third, given a strategy 𝑅𝑇 during the stage of module 𝑂,                            11      if constraint (3) is not met for s then break
+we denote the latency of module 𝑃 ↓ M as L𝑆 (𝑅𝑇 ), which                               12   return s↘
+can be obtained from the o%ine pro"le. The latency of the
+stage of module 𝑂 is denoted by L (𝑅𝑇 ) = max𝑆↓ M L𝑆 (𝑅𝑇 ).
+Given the latency constraint of the multimodal model as ω,
+                                                                                       and cannot be changed until the end of the process. Each pro-
+the latency of a batch should satisfy
+                                                                                       "ling must restart the process, resulting in high downtime
+                             "
+                   L (s) =       L (𝑅𝑇 ) ↗ ω.                (3)                       (2-15s) due to the framework startup cost [41].
+                                𝑇↓ M
+                                                                                       6.2     Algorithm Design
+   For a strategy s↘ to maximize the throughput of the multi-
+                                                                                       We propose a greedy algorithm to mitigate the large search
+modal serving system, we formulate the problem as follows
+                                                                                       space and reduce the search cost for scheduling. The main
+                                                                                       idea is to incrementally increase the batch size of each modal-
+                          s↘ = arg max T (s)                             (4)           ity, starting from a small value, and place the increment
+                                                                                       where it will have the minimum negative impact on batch
+                               s.t.(1), (2), (3).
+                                                                                       latency, all while satisfying the three speci"ed constraints.
+                                                                                       The complete procedure is detailed in Algorithm 1.
+                                                                                          Coupled Module Initialization. To quickly identify an
+   Problem Hardness. The strategy has a huge search space,                             optimal scheduling strategy, it is crucial to start the process
+               # M |$ | M |
+speci"cally 𝑇 99+|
+                | M | ≃1    for the maximum batch size 𝑇 and                           in a favorable state (line 1). Instead of random initialization,
+the set of modules M. For example, if 𝑇 is 32 for BLIP for                             we initialize the state using the best strategy by treating
+VQA, the search space size is about 4 ↑ 1012 . Moreover,                               the model as a monolithic unit (i.e., executing each module
+L𝑆 (𝑅𝑇 ) is a black box, and o%ine pro"ling for all possible                           sequentially with a uniform batch size) that satis"es all three
+L𝑆 (𝑅𝑇 ) will be expensive. This is because the SM percentage                          constraints: (1), (2), and (3). If the batch size increases without
+is set as an environment variable before CUDA initialization                           adjusting the SM allocation among modules, the strategy
+                                                                                       would violate one or more constraints.
+1We set total active thread percentage to 100% rather than over-provisioning              Minimum Negative Increment. To increase throughput
+SMs [37], as we can reasonably estimate the workload of each module                    while adhering to the constraints, the algorithm decouples
+o%ine and allocate SMs accordingly. We also experimented with SM over-                 module scheduling and allows spatial GPU multiplexing be-
+provisioning in the early stages, but observed increased resource contention
+between modules, leading to degraded overall performance. Thus, based                  tween modules. The process is iterative and runs in several
+on these empirical results, we chose to restrict total SM allocation to 100%,          rounds. In each round, before increasing the batch size of a
+which provided more stable and predictable scheduling behavior.                        module (denoted as 𝑆 𝑆 for module 𝑃 ↓ M), we attempt to
+
+
+
+                                                                                2299
+E"icient Multimodal Serving via Module Multiplexing                                     EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+place the increment in the stage of each module and reallo-                     Placement                     Scheduling          Replication
+
+cate SMs from other modules to the target module within the
+
+
+
+
+                                                                                                 GPU1 Util.
+                                                                          GPU 1    A   B.0 C                                 4   GPU 1
+same stage. The impact of this placement can be estimated                                                      6     8
+using a linear model-based prediction [5, 10]. A heuristic                         A   B.1 C
+                                                                                                                             6
+                                                                          GPU 2                                                  GPU 2
+search, discussed later, determines a new SM percentage for                                                        Time
+
+the stage (lines 4-8). After simulating the result, the incre-
+ment is placed in the stage with the minimum increase in                 Figure 14. An example of E!"!! for serving a multi-modal
+latency (lines 9 and 10). The algorithm terminates when the              model with three modules (i.e., A, B, and C) in two GPUs.
+batch size can no longer be increased (line 11).
+   Balanced SM Allocation. To minimize the pro"le cost                   E!"!! employs a replication approach for data parallelism,
+during the search, the algorithm uses a heuristic design to de-          where each GPU contains a replica of the module. Modules in
+termine the new percentages of SM allocation (line 8) instead            the former category utilize intra-operator model parallelism
+of an exhaustive search. The latency of a stage is determined            to optimize performance. Second, E!"!! selects a GPU and
+by the module with the longest execution time. Thus, the                 applies Algorithm 1 to determine its scheduling strategy,
+optimal SM allocation aims to equalize the latency of all mod-           with two key modi"cations: (1) the latency of a module 𝑃
+ules within a stage. To achieve this, the algorithm transfers            in the "rst class, L𝑆 (𝑅𝑇 ), re$ects the latency of one of its
+SMs from the module with the shortest latency to the mod-                partitions after intra-operator parallelism, rather than the
+ule with the longest latency. For example, as illustrated in             entire module; and (2) the batch size for modules in the
+Figure 13, when placing Module 1 in the stage of the egress              second class is multiplied by the number of GPUs. Finally, the
+module, Module 2 has the shortest latency in the stage. Con-             determined strategy is replicated across all GPUs to ensure
+sequently, the algorithm transfers some SMs from Module 2                consistent and e!cient execution.
+to Module 1. This process continues until the latency of all
+modules within the stage is approximately equal.                         6.5    Analysis
+                                                                         The complexity of the algorithm is 100𝑇|M | 2 , far smaller
+6.3   Adapting to Dynamic Workloads                                                                              # M |$ | M |
+Our o%ine scheduling algorithm is designed to compute opti-              than the problem’s search space of 𝑇 99+|| M | ≃1    . |M | 2 de-
+mal strategies for di#erent combinations of GPU, model, and              notes the process of placing the batch increment of every
+SLO requirements. For each con"guration, it determines the               module in every stage, as shown in lines 4 and 5. 100 denotes
+maximum sustainable request throughput (i.e., max capacity)              the maximum possible number of SM percentages allocated
+that satis"es SLO. If the incoming request rate exceeds this             to the module for each placement. This reduction in search
+max capacity, the system responds by allocating additional               space has a signi"cant bene"t in terms of convergence speed
+GPUs and switching to the corresponding precomputed strat-               and performance improvement. A detailed analysis refers
+egy. It eliminates the need to re-run the scheduler at runtime           to Appendix A. The results in § 8 show that the proposed
+and ensures e!cient adaptation to dynamic workloads.                     algorithm achieves 30% better performance than traditional
+   For e!cient switching, E!"!! employs a standard ac-                   heuristic algorithms with the same number of search steps.
+tive–standby switching mechanism, similar to other MPS                      The algorithm naturally generalizes to models with mul-
+systems [14]. When the request pattern drifts beyond a preset            tiple modalities or nonlinear module dependencies, as the
+threshold, the system launches a standby MPS instance with               system represents a multimodal model as a directed acyclic
+the closest pre-pro"le strategy. Both instances run concur-              graph in § 6.1. The only added challenge for more modalities
+rently during transition, and tra!c is atomically redirected             lies in the expanded search space, but it remains tractable in
+to the new one. Since model weights are already resident                 practice due to the bounded number of modules per model
+in memory, switching only updates scheduler metadata and                 for the existing multimodal models.
+completes within a few milliseconds. The threshold is com-
+puted using a sliding window over recent distribution. If                7     Implementation
+no close match is found, E!"!! falls back to a conservative              We develop a prototype of E!"!! with approximately 5, 000
+default strategy to ensure robustness.                                   lines of Python, utilizing vLLM [29] as the inference en-
+                                                                         gine for the backend. For each speci"c module of the mul-
+6.4   GPU Scaling                                                        timodal model, we launch a vLLM process con"gured with
+To accelerate the inference of large modules (such as the LLM            a distinct batch size and SM allocation setting. To allocate
+in an MLLM), E!"!! incorporates parallelism in a multi-GPU               GPU resources to the modules, we use NVIDIA MPS [37].
+setting. As illustrated in Figure 14, the work$ow consists               While module multiplexing is demonstrated with MPS in our
+of three main steps. First, the modules are classi"ed into               prototype, it can also be applied to MIG, which will be ex-
+two categories: those that bene"t from intra-operator model              plored in future work. Within the same server, we use shared
+parallelism within GPUs and those that do not. For the latter,           memory for inter-module communication. For each GPU, a
+
+
+
+                                                                  2300
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                               Zicong Hong, et al.
+
+
+controller process manages the shared GPU memory space,               treat each module of a multimodal model as an independent
+allowing module processes and the scheduler to access it              model and enforce a "xed, shared batch size across all mod-
+via the CUDA IPC handler. Additionally, to reduce memory              ules. For a fair comparison, all baselines are integrated with
+usage caused by multiple processes using the same mod-                the same underlying inference engine, vLLM [29].
+ule, the controller stores a read-only copy of each module’s          Metrics. First, we use a widely used throughput metric, max
+parameters in the GPU’s shared memory. The controller                 capacity, which is de"ned as the maximum request load (in
+tags each module output to be cached using 64-bit hash.               queries per second) that a serving system can sustain while
+Entries 〈hash, tensor, last-access〉 are stored in per-module          meeting certain latency targets (including average SLO and
+hashmaps. A global LRU queue manages eviction when GPU                99th percentile (P99) SLO). Second, we use average and P99
+memory usage exceeds its quota. Stale tensors are either              latency to measure the delay between the time a user submits
+spilled to host memory or freed by a background thread                a request and the time the request is completed. Third, we
+overlapping with kernel launches, ensuring that compute               use the percentage of active SMs to measure the average GPU
+operations are never stalled. To assess GPU performance,              utilisation of a serving system within a time slot. Evaluation
+we utilize NVIDIA Nsight [38], a professional performance             results are based on the average of three random trials to
+analysis tool developed by NVIDIA. In our work, we use the            account for unpredictable performance $uctuations.
+“SMs Active” metric in Nsight to measure GPU utilization.
+                                                                      8.2   Capacity
+                                                                      We evaluate the performance of E!"!!, Triton, and Gpulet
+8     Experiment
+                                                                      on BLIP for VQA and NLVR tasks under the Poisson and
+8.1   Experimental Setup                                              Azure workloads. For VQA, the SLO is de"ned as 4↑, 6↑, and
+Workloads. We evaluate "ve multimodal models: CLIP [44],              8↑ the inference latency of BLIP with a batch size of 2. For
+BLIP [32], BLIP-2 [31], LLaVA-1.5 [35], and InternVL2.5-              NLVR, the SLO is de"ned as 4↑, 6↑, and 8↑ the inference
+8B [8]. Requests are generated from three datasets—VQA2 [20],         latency of BLIP with a batch size of 1. Note that this refers
+NVLR2 [48], and COCO [34]—and support VQA, NVLR, and                  only to how the SLO is de"ned—not the batch size used
+image-text matching (ITM). Workload request arrival pat-              during execution. At runtime, batch sizes are determined
+terns are modeled using Poisson distributions and sampled             dynamically by the request arrival rate, the SLO target, and
+from traces in Azure [42], to simulate production-like work-          the multiplexing strategy.
+load arrival patterns and characteristics. For images with               As shown in Figure 15 and Figure 16, E!"!! outperforms
+multiple questions, a query on an image is initiated after the        Triton and Gpulet in most cases. For instance, on a 3090
+previous query on the image has been completed. The modal             server, E!"!! improves the maximum capacity by 157% on av-
+cache is compressed at a 30% ratio.                                   erage for the Azure Workload compared to the best baseline.
+Node setup. We evaluate E!"!! on two server con"gura-                 For Triton, only temporal multiplexing leads to resource un-
+tions to test its scalability and generality across di#erent          derutilization. For Gpulet, there are scenarios where certain
+hardware tiers. The high-end server is equipped with an In-           modules require substantial computational resources, mak-
+tel Xeon Gold 6230R CPU (104 cores), 503 GB of memory, and            ing exclusive utilization a more e#ective option. In contrast,
+8 NVIDIA A100 40GB GPUs, representing a modern data-                  E!"!!’s integration of both temporal and spatial multiplex-
+center-grade setup for large-scale inference workloads. The           ing overcomes this ine!ciency. It not only avoids ine!cient
+low-end server is equipped with an Intel Xeon E5-2698 v4              resource allocation for modules with minimal computational
+CPU (80 cores), 377 GB of memory, and 8 NVIDIA GeForce                demands but also ensures that modules with high computa-
+RTX 3090 GPUs, representing a more a#ordable commodity                tional needs have access to the necessary resources. At the
+hardware con"guration. All GPUs are connected to their                same time, the preprocessing and request decoupling of the
+host CPUs via PCIe 3.0, o#ering a peak bandwidth of 32                module multiplexing improves GPU utilisation.
+GB/s. Both servers run Ubuntu 20.04.5, Docker 23.0.1, CUDA               With a more stringent SLO, E!"!! exhibits performance
+11.8, Python 3.8, and PyTorch 2.0.1.                                  2.54 times higher than Triton and 1.9 times higher than
+Baselines. We compare E!"!! against two serving systems               Gpulet. This is because Triton, in this case, has a limited batch
+originally designed for unimodal models. (1) Triton [39] is           size, causing lower utilization. This suggests that E!"!! has
+a widely used serving framework developed by NVIDIA.                  greater potential for optimization. A reduction in the SLO
+It treats the multimodal model as a monolithic graph, exe-            threshold enables Triton to expand the batch size, thereby
+cuting all modules sequentially with a uniform batch size.            improving utilization. Additionally, for the Poisson Work-
+This approach represents the dominant paradigm adopted                load, the capacity is greater than that of the Azure Workload.
+by most existing serving systems when extended to support             Given that the Azure Workload exhibits a higher coe!cient
+multimodal models. (2) Gpulet [10] is a system that enables           of variation, the system experiences more burst requests,
+spatial and temporal GPU sharing across multiple concur-              which may temporarily exceed the system’s capacity, lead-
+rent models. To support multimodal inference in Gpulet, we            ing to a signi"cant amount of queuing delay.
+
+
+
+                                                               2301
+E"icient Multimodal Serving via Module Multiplexing                                           EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+
+
+                                                                                                                (
+
+
+
+
+                                                                                                                                (
+  )
+
+
+
+
+                    )
+
+
+
+
+                                      )
+
+
+
+
+                                                      )
+  (
+
+
+
+
+                    (
+
+
+
+
+                                      (
+
+
+
+
+                                                      (
+  )
+
+
+
+
+                    )
+
+
+
+
+                                      )
+
+
+
+
+                                                      )
+
+
+
+
+                                                                                                                 (
+
+
+
+
+                                                                                                                                   (
+  (
+
+
+
+
+                    (
+
+
+
+
+                                      (
+
+
+
+
+                                                      (
+           (a) Poisson Workload           (b) Azure Workload                         (a) Poisson Workload             (b) Azure Workload
+
+Figure 15. Capacity (in queries per second) of BLIP for VQA.                Figure 16. Capacity (in queries per second) of BLIP for NVLR.
+
+
+                                                                                                                 (           ) (
+      (
+
+
+
+
+                                  (
+
+
+                                                               (a) Average Latency
+
+
+                                                                                                                 (            ) (
+      (
+
+
+
+
+                                  (
+
+
+                                                                 (b) P99 Latency
+
+             Figure 17. Latency of "ve multimodal models at low, medium, high load with Triton, Gpulet, and E!"!!.
+
+8.3       Latency                                                                                                                      (
+
+We evaluate E!"!!, Triton, and Gpulet on "ve multimodal
+models under the Poisson workload on an A100 server. The
+                                                                             %
+
+
+
+
+SLO is de"ned as 4↑ the inference latency for each task with
+                                                                             (
+
+
+
+
+a batch size of 2. The load levels are de"ned as 14 , 35 , and 10
+                                                                9
+
+of E!"!!’s peak throughput, corresponding to low, medium,
+and high loads, respectively. As shown in Figure 17, E!"!!
+                                                                                 Figure 18. Average percentage of active SMs for BLIP.
+reduces both average latency and P99 latency for both MTMs
+and MLLMs across various workloads compared to Triton
+and Gpulet. For instance, for LLaVA, E!"!! decreases the
+average latency by about 90% compared to Triton under high
+workload conditions. As the workload increases, the latency                 multimodal models compared to the baselines. In particu-
+of all systems increases. However, the performance improve-                 lar, E!"!! achieves, on average, nearly 90% active SMs in
+ment of E!"!! becomes more signi"cant with higher work-                     BLIP for VQA and NVLR. As shown in Figure 4, there is
+loads. This is because E!"!! can fully utilize GPU resources,               signi"cant time with low GPU utilization in Triton. While
+mitigating the latency increase under higher workloads.                     Gpulet supports spatio-temporal GPU multiplexing between
+                                                                            modules, its average SM percentage is higher than Triton’s.
+                                                                            However, Gpulet does not account for stage-level parallelism
+                                                                            and request-aware reusing, which results in lower GPU uti-
+8.4       Micro-benchmark                                                   lization compared to E!"!!.
+GPU Utilization. As shown in Figure 18, E!"!! demon-                        Scheduling Algorithms. Figure 20 shows the performance
+strates signi"cantly higher GPU utilization when serving                    of the synergistic scheduling algorithm in E!"!! compared
+
+
+
+                                                                     2302
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                 Zicong Hong, et al.
+
+
+
+
+                                                                         (
+                                                                                                              )
+
+                                                                                                  (a) 3090 Server
+Figure 19. Modal cache size and score under di#erent bud-
+gets for modal cache compression.
+
+
+
+
+                                                                         (
+                                                                                                              )
+
+                                                                                                 (b) A100 Server
+
+
+Figure 20. Comparison of four scheduling algorithms (SA:                      Figure 22. Data transfer latency between modules.
+Simulated Annealing and GA: Genetic Algorithm) for BLIP.
+
+                                                                        the system’s ability to e!ciently handle growing workloads.
+                                                                        This performance improvement is due to E!"!!’s integration
+                                                                        of both model and data parallelism in a multi-GPU setting,
+                                                                        as discussed in § 6.4. Model parallelism divides the mod-
+                                                                        ule across multiple GPUs, allowing simultaneous processing
+                                                                        of di#erent parts, while data parallelism distributes data
+                                                                        batches across GPUs for concurrent processing. Together,
+Figure 21. Capacity (in queries per second) when there are              these strategies ensure e!cient use of resources and scala-
+di#erent numbers of GPUs for BLIP-2 and LLaVA.                          bility as more GPUs are added to the system.
+                                                                        Multiplexing Overhead. Figure 22 shows the data transfer
+to three traditional heuristic algorithms. The heuristic algo-          between the processes of modules caused by the module mul-
+rithms include a simulated annealing algorithm, a genetic               tiplexing, as discussed in § 4. The results demonstrate that
+algorithm, and a greedy algorithm that randomly selects so-             using shared memory for inter-module communication, as
+lutions to solve the problem in Equation 4. To ensure a fair            outlined in § 7, signi"cantly reduces the transfer latency be-
+comparison, all algorithms are run with the same number                 tween modules, especially when the size of the embeddings
+of search steps, and the hyperparameters are carefully cho-             to be transferred is large.
+sen. The results demonstrate that the proposed algorithm                Ablation Study. We conduct an ablation study on the 3090
+achieves a performance improvement of up to 30.10% com-                 server using BLIP for VQA under a Poisson-simulated work-
+pared to the most e#ective baseline. This is attributed to the          load. We evaluate the impact of each component of our de-
+three designs of the proposed algorithm (including coupled              sign in isolation. Speci"cally, stage-level parallelism, module-
+module initialization, minimum negative increment, and bal-             level scheduling, and request-aware reuse improve the sys-
+anced SM allocation), which reduces the search space.                   tem’s request-handling capacity—measured under average
+Modal Cache Management. Figure 19 shows the size of                     SLO constraints—by 146%, 152%, and 116%, respectively.
+the modal cache and the score after di#erent compression
+budgets for LLaVA. As the budget decreases, i.e. more modal             8.5    Generalizability to More Modalities
+cache is compressed, the size of the modal cache decreases              We select vision-language models for evaluation based on
+signi"cantly, while the score decreases only slightly. This             two considerations. First, visual understanding represents a
+makes it easier to store and load the modal cache in E!"!!.             mature and widely adopted class of multimodal tasks, sup-
+Multi-GPU Environment. Figure 21 shows the maximum                      ported by strong benchmarks, well-established model ar-
+capacity of E!"!! in a multi-GPU system with varying num-               chitectures, and a broad range of real-world applications.
+bers of A100 GPUs. As the number of GPUs in E!"!! in-                   These characteristics make vision-language tasks a practi-
+creases, throughput scales almost linearly, demonstrating               cal and impactful testbed for analyzing multimodal serving
+
+
+
+                                                                 2303
+E"icient Multimodal Serving via Module Multiplexing                                    EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+behavior. Second, many modern multimodal models pro-                      System-level Design. Several works improve the e!ciency
+cess non-visual modalities using transformer-based encoder                of multimodal model training through system-level design [50,
+architectures that are structurally similar to those used in              57]. For example, Huang et al. propose an e!cient training
+the visual domain. For instance, ImageBind [21, 51] encodes               system called DISTMM for multimodal models [23]. It ex-
+modalities such as audio, depth, IMU, and thermal signals                 ploits the heterogeneity of modules by applying di#erent
+using ViT-like transformer blocks that operate on tokenized               distributed parallelism strategies for each module. Feng et al.
+inputs. Besides, many visual-language-action models [27] for              propose Optimus, a distributed MLLM training system that
+embodied AI are "ne-tuned from vision-language models.                    enables the scheduling of encoder computation within LLM
+This architectural consistency supports the generalizabil-                bubbles to achieve performant 3D parallelism [19]. Similar
+ity of our design and "ndings beyond vision-centric tasks.                to these works, we also observe the heterogeneity of the
+In addition, we provide a preliminary evaluation indicating               modules in a multimodal model. However, most of them aim
+E!"!!’s potential on di#usion-based modules in Appendix B.                to mitigate the negative in$uence of module heterogeneity
+                                                                          on the parallelism paradigms of distributed training for mul-
+9     Related Work                                                        timodal models. Meta [30] evaluates the performance of its
+                                                                          multimodal models and analyzes the e#ectiveness of some
+9.1   E!cient Unimodal Model Inference
+                                                                          system-level and workload-speci"c optimizations applied
+Batching. Many serving systems utilize batching techniques                to them. ModServe [43], a concurrent work, also targets ef-
+to enhance inference e!ciency, including TF-serving [40],                 "cient multimodal serving but adopts a di#erent strategy.
+Clipper [12], TurboTransformers [18], and Triton [39]. They               ModServe places di#erent modules on separate GPUs, using a
+typically employ traditional batching strategies, which rely              method conceptually similar to pre"ll-decode disaggregation.
+on batch time windows and a maximum allowed batch size,                   In contrast, our method focuses on intra-GPU scheduling
+treating the model as an indivisible whole. A closely related             and SM-level optimization. Both approaches are orthogonal,
+approach is DVABatch [13], which optimizes batching by                    addressing complementary aspects of the system design, and
+accounting for input, operator, and load diversity within a               could be integrated in future work.
+model. DVABatch enables operators within a model to ex-
+ecute at di#erent batch sizes based on their computational
+complexity. However, while e#ective for unimodal models,                  10    Conclusion
+DVABatch does not adapt its batching strategies or GPU                    We present E!"!!, an e!cient multimodal model serving sys-
+multiplexing to the intricate internal structures and interde-            tem that adopts a module multiplexing approach. E!"!! per-
+pendencies characteristic of modules in a multimodal model.               forms "ne-grained scheduling across modality-speci"c mod-
+GPU Multiplexing. To improve GPU utilization, some ap-                    ules by independently managing their computation and re-
+proaches load multiple models into GPU memory to share a                  source allocation. This design signi"cantly improves GPU uti-
+single GPU [7, 15, 46, 47, 55]. For example, Choi et al. propose          lization and system throughput. Experimental results show
+a spatio-temporal multiplexing system for multi-model ML                  that E!"!! improves throughput by 157%, reduces latency
+inference servers [10], while Duan et al. introduce MuxServe,             by 90%, and achieves up to 90% GPU utilization under both
+a spatio-temporal multiplexing system speci"cally designed                Poisson-simulated and real-world workloads from Azure. Fu-
+for e!cient serving of multiple LLMs [17]. However, these                 ture work focuses on extending support to a broader range
+spatio-temporal GPU sharing techniques are limited to re-                 of multimodal models, such as vision-language-action (VLA)
+source competition among independent models and fail to                   models for embodied AI and robotics applications.
+adapt to the synergistic interactions between di#erent mod-
+ules within a multimodal model, as discussed in § 6.
+                                                                          Acknowledgments
+9.2   E!cient Multimodal Model Inference                                  This research was supported by fundings from the Hong
+Algorithm-level Design. Many works have been conducted                    Kong RGC General Research Fund (152169/22E, 152228/23E,
+to optimise the algorithms of multimodal models to accel-                 162161/24E, 162116/25E), Research Impact Fund (No. R5060-
+erate their inference [26]. We summarize them as follows.                 19, No. R5011-23), Collaborative Research Fund (No. C1042-
+1) Quantization: Shi et al. propose a universal multimodal                23GF), NSFC/RGC Collaborative Research Scheme (Grant
+pruning framework UPop for compressing vision-language                    No. 62461160332 & CRS_HKUST602/24), Areas of Excellence
+Transformers [45]. 2) Token merging/pruning: Cao et al. pro-              Scheme (AoE/E-601/22-R), the InnoHK (HKGAI), and the
+pose a multimodal alignment-guided dynamic token pruning                  National Natural Science Foundation of China (No. 62471383).
+approach [24]. 3) Knowledge distillation: Jin et al. investigate          Song Guo and Xiaowei Shen are the corresponding authors.
+the knowledge transfer from a large multimodal model to a                 We thank all anonymous reviewers and our shepherd Rong
+smaller one [25]. These works are orthogonal to E!"!! and                 Chen, who helped improve the paper. We also thank MetaX
+can be combined together to enable better performance.                    Technology for supporting this research.
+
+
+
+                                                                   2304
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                      Zicong Hong, et al.
+
+
+References                                                                            [14] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.
+ [1] Stanislaw Antol, Aishwarya Agrawal, Jiasen Lu, Margaret Mitchell,                     2019. BERT: Pre-training of Deep Bidirectional Transformers for Lan-
+     Dhruv Batra, C. Lawrence Zitnick, and Devi Parikh. 2015. VQA: Visual                  guage Understanding. In Proceedings of the 2019 Conference of the
+     Question Answering. In International Conference on Computer Vision.                   North American Chapter of the Association for Computational Linguis-
+ [2] Jiuhai Chen, Zhiyang Xu, Xichen Pan, Shusheng Yang, Can Qin, An                       tics: Human Language Technologies, Volume 1 (Long and Short Papers).
+     Yan, Honglu Zhou, Zeyuan Chen, Tianyi Zhou, Silvio Savarese, Le Xue,                  4171–4186.
+     Caiming Xiong, and Ran Xu. 2025. BLIP3o-NEXT: A Next-Generation                  [15] Aditya Dhakal, Sameer G Kulkarni, and K. K. Ramakrishnan. 2020.
+     Multimodal Foundation Model. h!ps://jiuhaichen.github.io/BLIP3o-                      GSLICE: controlled spatial sharing of GPUs for a scalable inference
+     NEXT.github.io/                                                                       platform. In ACM Symposium on Cloud Computing. 492–506.
+ [3] Kevin Chen, Junshen K. Chen, Jo Chuang, Marynel Vázquez, and Silvio              [16] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weis-
+     Savarese. 2021. Topological Planning with Transformers for Vision-                    senborn, Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani,
+     and-Language Navigation. In 2021 IEEE/CVF Conference on Computer                      Matthias Minderer, Georg Heigold, Sylvain Gelly, Jakob Uszkoreit,
+     Vision and Pattern Recognition (CVPR). 11271–11281.                                   and Neil Houlsby. 2021. An Image is Worth 16x16 Words: Transform-
+ [4] Liang Chen, Haozhe Zhao, Tianyu Liu, Shuai Bai, Junyang Lin, Chang                    ers for Image Recognition at Scale. ICLR (2021).
+     Zhou, and Baobao Chang. 2024. An Image is Worth 1/2 Tokens Af-                   [17] Jiangfei Duan, Runyu Lu, Haojie Duanmu, Xiuhong Li, Xingcheng
+     ter Layer 2: Plug-and-Play Inference Acceleration for Large Vision-                   Zhang, Dahua Lin, Ion Stoica, and Hao Zhang. 2024. MuxServe: Flexible
+     Language Models. In European Conference on Computer Vision.                           Spatial-Temporal Multiplexing for Multiple LLM Serving. In Forty-!rst
+ [5] Quan Chen, Hailong Yang, Jason Mars, and Lingjia Tang. 2016. Bay-                     International Conference on Machine Learning.
+     max: QoS Awareness and Increased Utilization for Non-Preemptive                  [18] Jiarui Fang, Yang Yu, Chengduo Zhao, and Jie Zhou. 2021. TurboTrans-
+     Accelerators in Warehouse Scale Computers. In Proceedings of the                      formers: An E!cient GPU Serving System for Transformer Models.
+     Twenty-First International Conference on Architectural Support for Pro-               In Proceedings of the 26th ACM SIGPLAN Symposium on Principles and
+     gramming Languages and Operating Systems. 681–696.                                    Practice of Parallel Programming. 389–402.
+ [6] Wenhu Chen, Ming-Wei Chang, Eva Schlinger, William Yang Wang,                    [19] Weiqi Feng, Yangrui Chen, Shaoyu Wang, Yanghua Peng, Haibin Lin,
+     and William W. Cohen. 2021. Open Question Answering over Tables                       and Minlan Yu. 2024. Optimus: Accelerating Large-Scale Multi-Modal
+     and Text. In International Conference on Learning Representations.                    LLM Training by Bubble Exploitation. arXiv:2408.03505 [cs.CL] h!ps:
+ [7] Wenyan Chen, Zizhao Mo, Huanle Xu, Kejiang Ye, and Chengzhong                         //arxiv.org/abs/2408.03505
+     Xu. 2023. Interference-aware Multiplexing for Deep Learning in GPU               [20] Yash Goyal, Tejas Khot, Douglas Summers-Stay, Dhruv Batra, and
+     Clusters: A Middleware Approach. In Proceedings of the International                  Devi Parikh. 2017. Making the V in VQA Matter: Elevating the Role of
+     Conference for High Performance Computing, Networking, Storage and                    Image Understanding in Visual Question Answering. In Conference on
+     Analysis.                                                                             Computer Vision and Pattern Recognition (CVPR).
+ [8] Zhe Chen, Jiannan Wu, Wenhai Wang, Weijie Su, Guo Chen, Sen Xing,                [21] Jiaming Han, Renrui Zhang, Wenqi Shao, Peng Gao, Peng Xu, Han
+     Muyan Zhong, Qinglong Zhang, Xizhou Zhu, Lewei Lu, et al. 2024.                       Xiao, Kaipeng Zhang, Chris Liu, Song Wen, Ziyu Guo, Xudong Lu,
+     Internvl: Scaling up vision foundation models and aligning for generic                Shuai Ren, Yafei Wen, Xiaoxin Chen, Xiangyu Yue, Hongsheng Li, and
+     visual-linguistic tasks. In Proceedings of the IEEE/CVF Conference on                 Yu Qiao. 2023. ImageBind-LLM: Multi-modality Instruction Tuning.
+     Computer Vision and Pattern Recognition. 24185–24198.                                 arXiv:2309.03905 [cs.MM] h!ps://arxiv.org/abs/2309.03905
+ [9] Yang Cheng, Dan Li, Zhiyuan Guo, Binyao Jiang, Jiaxin Lin, Xi Fan,               [22] Yicong Hong, Qi Wu, Yuankai Qi, Cristian Rodriguez-Opazo, and
+     Jinkun Geng, Xinyi Yu, Wei Bai, Lei Qu, Ran Shu, Peng Cheng,                          Stephen Gould. 2021. VLNBERT: A Recurrent Vision-and-Language
+     Yongqiang Xiong, and Jianping Wu. 2019. DLBooster: Boosting End-                      BERT for Navigation. In 2021 IEEE/CVF Conference on Computer Vision
+     to-End Deep Learning Work$ows with O%oading Data Preprocessing                        and Pattern Recognition (CVPR). 1643–1653.
+     Pipelines. In International Conference on Parallel Processing.                   [23] Jun Huang, Zhen Zhang, Shuai Zheng, Feng Qin, and Yida Wang. 2024.
+[10] Seungbeom Choi, Sunho Lee, Yeonjae Kim, Jongse Park, Youngjin                         DISTMM: Accelerating Distributed Multimodal Model Training. In
+     Kwon, and Jaehyuk Huh. 2022. Serving Heterogeneous Machine Learn-                     Networked Systems Design and Implementation. 1157–1171.
+     ing Models on Multi-GPU Servers with Spatio-Temporal Sharing. In                 [24] Cao Jianjian, Ye Peng, Li Shengze, Yu Chong, Tang Yansong, Lu Jiwen,
+     USENIX Annual Technical Conference. 199–216.                                          and Chen Tao. 2024. MADTP: Multimodal Alignment-Guided Dynamic
+[11] Hyung Won Chung, Le Hou, Shayne Longpre, Barret Zoph, Yi Tay,                         Token Pruning for Accelerating Vision-Language Transformer. IEEE
+     William Fedus, Yunxuan Li, Xuezhi Wang, Mostafa Dehghani, Sid-                        Conference on Computer Vision and Pattern Recognition (2024).
+     dhartha Brahma, Albert Webson, Shixiang Shane Gu, Zhuyun Dai,                    [25] Woojeong Jin, Maziar Sanjabi, Shaoliang Nie, Liang Tan, Xiang Ren,
+     Mirac Suzgun, Xinyun Chen, Aakanksha Chowdhery, Alex Castro-                          and Hamed Firooz. 2021. MSD: Saliency-aware Knowledge Distilla-
+     Ros, Marie Pellat, Kevin Robinson, Dasha Valter, Sharan Narang, Gau-                  tion for Multimodal Understanding. In Findings of the Association for
+     rav Mishra, Adams Yu, Vincent Zhao, Yanping Huang, Andrew Dai,                        Computational Linguistics: EMNLP 2021. 3557–3569.
+     Hongkun Yu, Slav Petrov, Ed H. Chi, Je# Dean, Jacob Devlin, Adam                 [26] Yizhang Jin, Jian Li, Yexin Liu, Tianjun Gu, Kai Wu, Zhengkai Jiang,
+     Roberts, Denny Zhou, Quoc V. Le, and Jason Wei. 2022. Scaling                         Muyang He, Bo Zhao, Xin Tan, Zhenye Gan, Yabiao Wang, Chengjie
+     Instruction-Finetuned Language Models. arXiv:2210.11416 [cs.LG]                       Wang, and Lizhuang Ma. 2024. E!cient Multimodal Large Language
+     h!ps://arxiv.org/abs/2210.11416                                                       Models: A Survey. arXiv:2405.10739 [cs.CV]
+[12] Daniel Crankshaw, Xin Wang, Guilio Zhou, Michael J. Franklin,                    [27] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin
+     Joseph E. Gonzalez, and Ion Stoica. 2017. Clipper: A Low-Latency On-                  Balakrishna, Suraj Nair, Rafael Rafailov, Ethan Foster, Grace Lam,
+     line Prediction Serving System. In USENIX Symposium on Networked                      Pannag Sanketi, Quan Vuong, Thomas Kollar, Benjamin Burch"el, Russ
+     Systems Design and Implementation. 613–627.                                           Tedrake, Dorsa Sadigh, Sergey Levine, Percy Liang, and Chelsea Finn.
+[13] Weihao Cui, Han Zhao, Quan Chen, Hao Wei, Zirui Li, Deze Zeng,                        2024. OpenVLA: An Open-Source Vision-Language-Action Model.
+     Chao Li, and Minyi Guo. 2022. DVABatch: Diversity-aware Multi-                        arXiv preprint arXiv:2406.09246 (2024).
+     Entry Multi-Exit Batching for E!cient Processing of DNN Services                 [28] Wonjae Kim, Bokyung Son, and Ildoo Kim. 2021. ViLT: Vision-and-
+     on GPUs. In USENIX Annual Technical Conference. 183–198.                              Language Transformer Without Convolution or Region Supervision.
+                                                                                           In International Conference on Machine Learning. 5583–5594.
+
+
+
+
+                                                                               2305
+E"icient Multimodal Serving via Module Multiplexing                                                    EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk
+
+
+[29] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin                       [45] Dachuan Shi, Chaofan Tao, Ying Jin, Zhendong Yang, Chun Yuan,
+     Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, and Ion Sto-                        and Jiaqi Wang. 2023. UPop: Uni"ed and Progressive Pruning for
+     ica. 2023. E!cient Memory Management for Large Language Model                          Compressing Vision-Language Transformers. In Proceedings of the
+     Serving with PagedAttention. In Proceedings of the ACM SIGOPS 29th                     40th International Conference on Machine Learning. 31292–31311.
+     Symposium on Operating Systems Principles.                                        [46] Sudipta Saha Shubha, Haiying Shen, and Anand Iyer. 2024. USHER:
+[30] Yejin Lee, Anna Sun, Basil Hosmer, Bilge Acun, Can Balioglu, Chang-                    Holistic Interference Avoidance for Resource Optimized ML Inference.
+     han Wang, Charles David Hernandez, Christian Puhrsch, Daniel                           In USENIX Symposium on Operating Systems Design and Implementa-
+     Haziza, Driss Guessous, Francisco Massa, Jacob Kahn, Je#rey Wan,                       tion. 947–964.
+     Jeremy Reizenstein, Jiaqi Zhai, Joe Isaacson, Joel Schlosser, Juan Pino,          [47] Foteini Strati, Xianzhe Ma, and Ana Klimovic. 2024.              Orion:
+     Kaushik Ram Sadagopan, Leonid Shamis, Linjian Ma, Min-Jae Hwang,                       Interference-aware, Fine-grained GPU Sharing for ML Applications.
+     Mingda Chen, Mostafa Elhoushi, Pedro Rodriguez, Ram Pasunuru,                          In Proceedings of the Nineteenth European Conference on Computer
+     Scott Yih, Sravya Popuri, Xing Liu, and Carole-Jean Wu. 2025. Char-                    Systems. 1075–1092.
+     acterizing and E!ciently Accelerating Multimodal Generation Model                 [48] Alane Suhr, Stephanie Zhou, Ally Zhang, Iris Zhang, Huajun Bai, and
+     Inference. arXiv:2410.00215 [cs.LG] h!ps://arxiv.org/abs/2410.00215                    Yoav Artzi. 2019. A Corpus for Reasoning about Natural Language
+[31] Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi. 2023. BLIP-                     Grounded in Photographs. In Proceedings of the 57th Annual Meeting
+     2: Bootstrapping Language-Image Pre-training with Frozen Image                         of the Association for Computational Linguistics. 6418–6428.
+     Encoders and Large Language Models. arXiv:2301.12597 [cs.CV]                      [49] Zhongwei Wan, Ziang Wu, Che Liu, Jinfa Huang, Zhihong Zhu, Peng
+[32] Junnan Li, Dongxu Li, Caiming Xiong, and Steven Hoi. 2022.                             Jin, Longyue Wang, and Li Yuan. 2024. LOOK-M: Look-Once Optimiza-
+     BLIP: Bootstrapping Language-Image Pre-training for Uni"ed Vision-                     tion in KV Cache for E!cient Multimodal Long-Context Inference. In
+     Language Understanding and Generation. arXiv:2201.12086 [cs.CV]                        Findings of the Association for Computational Linguistics: EMNLP 2024.
+[33] Yikuan Li, Shishir Rao, José Roberto Ayala Solares, Abdelaali Has-                     4065–4078.
+     saine, Rema Ramakrishnan, Dexter Canoy, Yajie Zhu, Kazem Rahimi,                  [50] Yujie Wang, Shenhan Zhu, Fangcheng Fu, Xupeng Miao, Jie Zhang,
+     and Gholamreza Salimi-Khorshidi. 2020. BEHRT: transformer for                          Juan Zhu, Fan Hong, Yong Li, and Bin Cui. 2024. E!cient Multi-Task
+     electronic health records. Scienti!c reports 10, 1 (2020), 7155.                       Large Model Training via Data Heterogeneity-aware Model Manage-
+[34] Tsung-Yi Lin, Michael Maire, Serge Belongie, Lubomir Bourdev, Ross                     ment. arXiv:2409.03365 [cs.DC] h!ps://arxiv.org/abs/2409.03365
+     Girshick, James Hays, Pietro Perona, Deva Ramanan, C. Lawrence                    [51] Shengqiong Wu, Hao Fei, Leigang Qu, Wei Ji, and Tat-Seng Chua. 2023.
+     Zitnick, and Piotr Dollár. 2015. Microsoft COCO: Common Objects in                     NExT-GPT: Any-to-Any Multimodal LLM.
+     Context. arXiv:1405.0312 [cs.CV] h!ps://arxiv.org/abs/1405.0312                   [52] Dejing Xu, Zhou Zhao, Jun Xiao, Fei Wu, Hanwang Zhang, Xiang-
+[35] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee. 2023.                         nan He, and Yueting Zhuang. 2017. Video Question Answering via
+     Visual Instruction Tuning. In Neural Information Processing Systems.                   Gradually Re"ned Attention over Appearance and Motion. In ACM
+[36] NVIDIA. 2025. NVIDIA Multi-Instance GPU (MIG). Retrieved                               Multimedia.
+     March 15, 2025 from h!ps://docs.nvidia.com/datacenter/tesla/mig-                  [53] Shukang Yin, Chaoyou Fu, Sirui Zhao, Ke Li, Xing Sun, Tong Xu, and
+     user-guide/index.html                                                                  Enhong Chen. 2024. A Survey on Multimodal Large Language Models.
+[37] NVIDIA. 2025. NVIDIA Multi-Process Service (MPS). Retrieved March                      arXiv:2306.13549 [cs.CV] h!ps://arxiv.org/abs/2306.13549
+     15, 2025 from h!ps://docs.nvidia.com/deploy/mps/index.html                        [54] Jinliang Yuan, Chen Yang, Dongqi Cai, Shihe Wang, Xin Yuan, Zeling
+[38] NVIDIA. 2025. NVIDIA Nsight Systems. Retrieved March 15, 2025                          Zhang, Xiang Li, Dingge Zhang, Hanzi Mei, Xianqing Jia, Shangguang
+     from h!ps://developer.nvidia.com/nsight-systems                                        Wang, and Mengwei Xu. 2024. Mobile Foundation Model as Firmware.
+[39] NVIDIA. 2025. NVIDIA Triton Inference Server. Retrieved March 15,                      In Proceedings of the 30th Annual International Conference on Mobile
+     2025 from h!ps://www.nvidia.com/en-us/ai-data-science/products/                        Computing and Networking. 279–295.
+     triton-inference-server/                                                          [55] Bowen Zhang, Shuxin Li, and Zhuozhao Li. 2024. MIGER: Integrating
+[40] Christopher Olston, Noah Fiedel, Kiril Gorovoy, Jeremiah Harmsen, Li                   Multi-Instance GPU and Multi-Process Service for Deep Learning
+     Lao, Fangwei Li, Vinu Rajashekhar, Sukriti Ramesh, and Jordan Soyke.                   Clusters. In International Conference on Parallel Processing. 504–513.
+     2017. Tensor$ow-serving: Flexible, high-performance ml serving.                   [56] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya Chen,
+     arXiv preprint arXiv:1712.06139 (2017).                                                Shuohui Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Victoria
+[41] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Brad-                       Lin, Todor Mihaylov, Myle Ott, Sam Shleifer, Kurt Shuster, Daniel
+     bury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein,                  Simig, Punit Singh Koura, Anjali Sridhar, Tianlu Wang, and Luke
+     Luca Antiga, Alban Desmaison, Andreas Köpf, Edward Yang, Zach                          Zettlemoyer. 2022. OPT: Open Pre-trained Transformer Language
+     DeVito, Martin Raison, Alykhan Tejani, Sasank Chilamkurthy, Benoit                     Models. arXiv:2205.01068 [cs.CL] h!ps://arxiv.org/abs/2205.01068
+     Steiner, Lu Fang, Junjie Bai, and Soumith Chintala. 2019. PyTorch:                [57] Zili Zhang, Yinmin Zhong, Ranchen Ming, Hanpeng Hu, Jianjian Sun,
+     an imperative style, high-performance deep learning library. Curran                    Zheng Ge, Yibo Zhu, and Xin Jin. 2024. DistTrain: Addressing Model
+     Associates Inc.                                                                        and Data Heterogeneity with Disaggregated Training for Multimodal
+[42] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Inigo                       Large Language Models. arXiv:2408.04275 [cs.DC] h!ps://arxiv.org/
+     Goiri, Saeed Maleki, and Ricardo Bianchini. 2024. Splitwise: E!cient                   abs/2408.04275
+     generative LLM inference using phase splitting. In ISCA.                          [58] Hao Zhou, Wengang Zhou, Weizhen Qi, Junfu Pu, and Houqiang Li.
+[43] Haoran Qiu, Anish Biswas, Zihan Zhao, Jayashree Mohan, Alind                           2021. Improving Sign Language Translation with Monolingual Data
+     Khare, Esha Choukse, Íñigo Goiri, Zeyu Zhang, Haiying Shen, Chetan                     by Sign Back-Translation. In IEEE/CVF Conference on Computer Vision
+     Bansal, Ramachandran Ramjee, and Rodrigo Fonseca. 2025. Mod-                           and Pattern Recognition (CVPR). 1316–1325.
+     Serve: Scalable and Resource-E!cient Large Multimodal Model Serv-
+     ing. arXiv:2502.00937 [cs.DC] h!ps://arxiv.org/abs/2502.00937
+[44] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel
+                                                                                       A Convergence and Optimality Guarantees
+     Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin,              We adopt the notation and constraints of § 6.1. We use
+     Jack Clark, Gretchen Krueger, and Ilya Sutskever. 2021. Learning                  M to index both modules and stages; the egress module
+     Transferable Visual Models From Natural Language Supervision.                     is 𝑄. A scheduling strategy is s = {𝑅𝑇 }𝑇↓ M , where 𝑅𝑇 =
+     arXiv:2103.00020 [cs.CV]
+                                                                                                𝑇 𝑆↓ M denotes, for stage 𝑂, the batch assignments
+                                                                                       {(𝑀𝑇𝑆 , 𝑁 𝑆 )}
+
+
+
+
+                                                                                2306
+EUROSYS ’26, April 27–30, 2026, Edinburgh, Scotland Uk                                                                                                                        Zicong Hong, et al.
+
+ 𝑆 and SM percentages 𝑁 𝑆 for each module 𝑃. The e#ective
+𝑀𝑇                        𝑇 !
+batch of module 𝑃 is 𝑀 𝑆 = 𝑇↓ M 𝑀𝑇    𝑆 = 𝑆 𝑆 𝑀 𝑃 with integer                                                                                         
+
+
+
+
+                                                                                 
+
+
+
+
+                                                                                                                                         
+multipliers 𝑆 ⇒ 1. Stage latency is L!(𝑅𝑇 ) = max𝑆↓ M L𝑆 (𝑅𝑇 )
+             𝑆
+
+and end-to-end latency is L (s) = 𝑇↓ M L (𝑅𝑇 ). The SLO
+                                                                                                                                                          
+
+
+requires L (s) ↗ ω. Throughput is T (s) = 𝑀 𝑃 /L (s).
+                                                                                                                                                          
+
+   Algorithmic move set. Algorithm 1 initializes from the
+                                                                                                                                                                                   
+                                                                                                                                                                       
+
+best coupled (monolithic) feasible strategy and then itera-                                                 (a) Batch size = 1                                      (b) Batch size = 4
+tively: (i) picks a module 𝑃 and proposes to increase its batch
+by one multiplier unit 𝑆 𝑆 ; (ii) tries placing this increment in               Figure 23. Percentage of active SMs for BLIP3o-NEXT-3B
+each stage 𝑂 ↓ M; (iii) rebalances the stage’s SM percent-                      with varying batch size in RTX 3090 GPU.
+ages to minimize the induced increase in L (𝑅𝑇 ) (“Minimum
+Negative Increment”); and (iv) commits the least-harmful fea-
+sible placement only if it does not reduce T (s). The search                    stage
+                                                                                  # placements
+                                                                                            $      𝑂, and up to 𝑋 SM reallocations, yielding
+stops when no such single-increment move exists.                                O |M | 2 · 𝑋 stage evaluations per accepted step. Multiplying
+                                                                                by the number of accepted steps 𝑇 ≃𝑀 𝑃init gives the bound. ↭
+   Assumptions. (A1) Finite discrete space. For each mod-
+ule 𝑃, the admissible batch 𝑀 𝑆 lies on a "nite grid determined                 Theorem A.3 (Monotone improvement and 1-exchange op-
+by SLO. Let 𝑇 be the global maximum egress batch in § 6.1.                      timality). Let {s𝑉 }𝑉 ⇒0 denote the subsequence of strategies
+By the coupling constraint 𝑀 𝑆 = 𝑆 𝑆𝑀 𝑃 , we set 𝑇𝑆 = 𝑆 𝑆 𝑇 and                 produced by Algorithm 1 immediately after each accepted
+restrict candidates to {0, 𝑆 𝑆 , 2𝑆 𝑆 , . . . , 𝑇𝑆 }. (A2) Feasibility          update, with s0 being the coupled initialization, and let s𝐿 be
+oracle. For any candidate increment and within-stage SM                         the !nal returned strategy. Then: (i) for every 𝑍 ⇒ 0, T (s𝑉 +1 ) ⇒
+reallocation, feasibility L (s) ↗ ω is testable via the pro"led                 T (s𝑉 ); and (ii) s𝐿 is 1-exchange optimal: there is no single fea-
+latency model. (A3) Monotone latency. Increasing a mod-                         sible increment (increasing any 𝑀 𝑆 by 𝑆 𝑆 and rebalancing SMs
+ule’s batch weakly increases its own latency and does not                       within any one stage) that yields strictly higher throughput.
+decrease others’ latency within the same stage; increasing a                    Proof. (i) By design, the algorithm commits an update only
+module’s SM share weakly decreases its latency while (under                     if it does not reduce throughput, hence T (s𝑉 +1 ) ⇒ T (s𝑉 )
+"xed 100% SM per stage) weakly increasing the rest.                             for all 𝑍 ⇒ 0. (ii) Upon termination, every single-increment
+Theorem A.1 (Feasibility invariants). Starting from the cou-                    proposal either violates feasibility (L (·) ↗ ω) or fails the
+pled feasible initialization, every accepted update preserves all               non-decreasing-throughput acceptance test; therefore no
+constraints (per-stage SM budget, batch coupling, and SLO).                     strictly improving 1-exchange move exists, establishing 1-
+Hence all intermediate and !nal strategies are feasible.                        exchange optimality.                                        ↭
+
+Proof. Each candidate increment respects coupling by adding                     B                   Extending to Di"usion-based Modules
+an integer multiple 𝑆 𝑆 ; the stage’s SM percentages are re-                    In § 3.1, we show that reusing unimodal serving systems for
+balanced to satisfy the per-stage SM budget; the update is                      BLIP/BLIP-2–style multimodal models leads to pronounced
+committed only if the recomputed latency obeys L (s) ↗ ω.                       GPU under-utilization. Here we extend the evaluation to a
+Therefore, feasibility is an invariant by construction.   ↭                     newer architecture BLIP3o-NEXT [2] whose output module
+Theorem A.2 (Finite-time convergence and complexity).                           is di#usion-based. It "rst uses an autoregressive (AR) mod-
+Algorithm 1 terminates after at most 𝑇 ≃ 𝑀 𝑃init ↗ 𝑇 accepted                   ule to produce intermediate features, and then conditions a
+increments, where 𝑇 is the global maximum egress batch (cf.                     di#usion decoder on these features to synthesize images.
+Assumption A1) and 𝑀 𝑃init is the egress batch in the coupled                      As illustrated in Figure 23, we observe a clear asymmetry
+initialization. Moreover, the algorithm performs at most                        between the two phases of BLIP3o-NEXT: (i) the AR phase
+                     %                          &                               exhibits persistently low SM utilization and shows weak
+                   O |M| 2 · (𝑇 ≃ 𝑀 𝑃init ) · 𝑋                                 sensitivity to batch size; (ii) the di#usion phase is compute-
+stage evaluations, where 𝑋 ↗ 100 upper-bounds the discrete                      dominated and its latency grows sharply with batch size. Our
+SM reallocation trials per stage.                                               module multiplexing is expected to exploit this heterogeneity
+                                                                                by overlapping a portion of di#usion denoising with the
+Proof. By the coupling constraint 𝑀 𝑆 = 𝑆 𝑆𝑀 𝑃 , any accepted                   AR compute and rebalance per-stage SM shares to preserve
+update that adds one multiplier unit 𝑆 𝑆 to some 𝑀 𝑆 is equiva-                 the SLO. This scheduling will increase GPU utilization and
+lent to increasing the egress batch by one. Assumption (A1)                     shorten end-to-end latency. This experiment is intended to
+restricts 𝑀 𝑃 to {0, 1, . . . , 𝑇}, hence at most 𝑇 ≃ 𝑀 𝑃init accepted          surface the headroom of module multiplexing in di#usion-
+increments are possible, proving termination. For the com-                      augmented multimodal pipelines and to motivate dedicated
+plexity bound, in each accepted step the algorithm may ex-                      di#usion-aware designs as future work.
+amine 𝑌 (|M |) choices of the module 𝑃, 𝑌 (|M|) candidate
+
+
+
+                                                                         2307
+
