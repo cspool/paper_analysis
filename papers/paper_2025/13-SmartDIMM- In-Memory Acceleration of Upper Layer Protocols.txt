@@ -1,0 +1,1335 @@
+       2024 IEEE International Symposium on High-Performance Computer Architecture (HPCA)
+
+
+              SmartDIMM: In-Memory Acceleration of
+                      Upper Layer Protocols
+                    Neel Patel         Amin Mamandipoor        Mohammad Nouri      Mohammad Alian
+                                                      University of Kansas
+                                      {nmpatel,amin.mamandi, mohammadnouri,alian}@ku.edu
+
+
+   Abstract—There has been significant focus on offloading upper-
+                                                                           Unencrypted
+                                                                          Unencrypted
+                                                                           Unencrypted Message
+                                                                                      Message
+                                                                                       Message                Encrypted
+                                                                                                            Encrypted
+                                                                                                             Encrypted  Message
+                                                                                                                      Message
+                                                                                                                       Message                        TCP
+                                                                                                                                                     TCP
+                                                                                                                                                     TCP  Header
+                                                                                                                                                         Header
+                                                                                                                                                         Header
+layer network protocols (ULPs) to accelerators located on CPUs
+                                                                                                   SSD
+                                                                                                 SSD                               SSD
+and SmartNICs. However, restricting accelerator placement to                                      SSD                            SSD
+                                                                                                                                  SSD                               SSD
+                                                                                                                                                                  SSD
+                                                                                                                                                                  SSD
+
+these locations limits both the variety of ULPs that can be acceler-                    111
+                                                                                          DMADMA
+                                                                                            DMA                           1DMA
+                                                                                                                       11 DMADMA                                    DMA
+                                                                                                                                                               11 DMA
+                                                                                                                                                                  1DMA
+                                                                             Core       LLC       DRAM
+                                                                                                DRAM
+                                                                                                  DRAM                             DRAM
+ated and the overall performance. In particular, it overlooks the          Core
+                                                                            Core      LLC
+                                                                                       LLC
+                                                                                           WBWB
+                                                                                            WB
+                                                                                                 DRAM
+                                                                                               DRAM
+                                                                                                 DRAM       Core
+                                                                                                          Core
+                                                                                                           Core       LLC
+                                                                                                                    LLC
+                                                                                                                     LLC
+                                                                                                                          WB
+                                                                                                                           WBWB
+                                                                                                                                 DRAM
+                                                                                                                                   DRAM
+                                                                                                                                  DRAM
+                                                                                                                                DRAM
+                                                                                                                                 DRAM         Core
+                                                                                                                                            Core
+                                                                                                                                            Core         LLC
+                                                                                                                                                       LLC
+                                                                                                                                                       LLC          DRAM
+                                                                                                                                                                 DRAM
+                                                                                                                                                                  DRAM
+
+opportunity to accelerate ULPs running atop a stateful transport           2 22
+                                                                                              read
+                                                                                            read
+                                                                                             read
+                                                                                                           22 2
+                                                                                                                               read
+                                                                                                                            read
+                                                                                                                             read
+                                                                                                                                              22 2
+                                                                                          WBWB
+                                                                                           WB                                WB
+protocol in the face of high cache contention. That is, at high           memcpy
+                                                                         memcpy
+                                                                          memcpy
+                                                                                             read
+                                                                                           read
+                                                                                            read
+                                                                                                           memcpy
+                                                                                                         memcpy
+                                                                                                          memcpy           WB
+                                                                                                                           WB
+                                                                                                                               read
+                                                                                                                            read
+                                                                                                                                             CompCpy
+                                                                                                                                           CompCpy
+                                                                                                                                           CompCpy                Enc
+                                                                                                                                                               33 3  Enc
+                                                                                                                                                                   Enc
+                                                                                                                             read
+network rates, the frequent DRAM accesses and SmartNIC-CPU                  3 33
+                                                                             Enc
+                                                                           Enc
+                                                                            Enc           WBWB
+                                                                                           WB
+                                                                                                            33 3
+                                                                                                           Dummy
+                                                                                                         Dummy
+                                                                                                          Dummy             WB
+                                                                                                                           WB
+                                                                                                                           WB
+                                                                                                             Enc
+synchronizations outweigh the benefits of hardware acceleration.            4 44                 5DMA
+                                                                                                   DMA
+                                                                                                           Enc
+                                                                                                            Enc
+                                                                                                           44 4                              44 4                   DMA
+                                                                                                                                                               55 DMA
+                                                                                                                                                                  5DMA
+                                                                                               55DMA                           55 5 DMA
+                                                                                                                                  DMA
+This work introduces SmartDIMM, which unlocks the opportunity               TCP/IP
+                                                                          TCP/IP
+                                                                           TCP/IP                          TCP/IP
+                                                                                                         TCP/IP
+                                                                                                          TCP/IP
+                                                                                                                                   DMA
+                                                                                                                                             TCP/IP
+                                                                                                                                           TCP/IP
+                                                                                                                                            TCP/IP
+
+for accelerating ULPs running atop stateful transport protocols                            DMA
+                                                                                         555  DMA
+                                                                                             DMA                         55 5 DMA
+                                                                                                                             DMA
+                                                                                                                            DMA                                 DMA
+                                                                                                                                                              DMA
+                                                                                                                                                          55 5DMA
+
+that primarily operate on data stored in DRAM. We prototyped                                                Sync
+                                                                                                           Sync
+                                                                                                          Sync   onon
+                                                                                                                on    packet
+                                                                                                                     packet
+                                                                                                                    packet        Enc
+                                                                                                                                 Enc
+                                                                                                                                Enc 66 6
+                                                                                                              loss/reorder
+                                                                                                            loss/reorder
+                                                                                                           loss/reorder
+SmartDIMM using Samsung’s AxDIMM and implemented end-
+                                                                                                   NIC
+                                                                                                  NIC
+                                                                                                 NIC                               NIC
+                                                                                                                                  NIC
+                                                                                                                                 NIC                                NIC
+                                                                                                                                                                  NIC
+                                                                                                                                                                  NIC
+to-end offloading of (de/en)cryption and (de)compression– two
+ULPs widely employed in datacenters. We then compared the
+                                                                                     (a) CPU                    (b) SmartNIC                          (c) This Work
+performance of SmartDIMM with accelerator placements on the
+CPU, SmartNIC, and PCIe cards. Our results demonstrate that            Fig. 1. System-level data movement in a web server that encrypts web pages
+ULP offloading on SmartDIMM outperforms CPU, SmartNIC                  stored on a storage device before packetizing them and sending them over
+and PCIe-based offload configurations. In comparison to a              TCP connections to clients. At high request rates, (a) on-chip encryption
+server executing (de/en)cryption and (de)compression on the            acceleration is hindered by frequent DRAM accesses, and (b) autonomous
+CPU, SmartDIMM achieves 21.0% to 10.28× higher requests per            NIC offloading [26] of encryption is limited by both CPU side memory copies
+                                                                       as well as costly synchronizations between the NIC and CPU during packet
+second and 36.3% to 88.9% lower memory bandwidth utilization.
+                                                                       reorderings and losses. (c) SmartDIMM unleashes the full potential of ULP
+                                                                       acceleration by minimizing system-level data movement, without disrupting
+                       I. I NTRODUCTION                                the layered storage and network software stack.
+   Upper Layer Network Protocols (ULPs) are widely deployed
+at scale for data protection via encryption [1–3], facilitating
+communication in heterogeneous software deployments via web-server application encrypts websites before sending them
+serialization [4–7], and reducing data transfer times via through TCP connections to clients. Owing to the streaming
+compression [8, 9]. Such operations, often referred to as nature of data serving, the large working set of the web server,
+datacenter taxes, consume a significant number of datacenter and the asynchronicity between the storage stack, encryption-
+cycles [10, 11], with (de)compression and (de/en)cryption layer protocol, and TCP/IP packet processing, data read from
+consuming up to 14% and 23% of datacenter cycles for top storage frequently exhibits a ping-pong access pattern between
+Google and Meta services [12–14].                               on-chip caches and DRAM before being sent over the network.
+   With the effective end of Dennard’s scaling and the ex- Fig.1b demonstrates the offloading of encryption to a SmartNIC,
+ponential increase in network bandwidth requirements in where the encryption of TCP payloads is postponed until the
+datacenters [15], supplying the compute demand of ULPs payload reaches the SmartNIC accelerator, while the TCP
+is only possible through hardware acceleration. Current plat- header is constructed using the TCP/IP stack on the CPU.
+forms for accelerating (de/en)cryption and (de)compression Although SmartNIC offloading can free CPU cycles, it may
+include SmartNICs [16–19], PCIe cards [20–22], and CPU still be subject to the ping-pong data movement between caches
+chips [23, 24]. However, these accelerator placements are and DRAM, as well as synchronization overheads between the
+sub-optimal for accelerating ULPs operating atop the layered CPU and SmartNIC following packet reordering or losses [26].
+network software stack, which can exhibit several hundred         In this work, we introduce SmartDIMM that enables fine-
+milliseconds of latency between software layers. That is, the   grain, adaptive offloading of ULP processing to memory.
+excessive data movement over PCIe and DDR channels [25]         SmartDIMM     implements a domain-specific accelerator on the
+and frequent SmartNIC-CPU synchronizations [26] diminishes      buffer device of a Dual In-line Memory Module (DIMM) and
+the benefits of hardware acceleration.                          synchronously   transforms data as it traverses the DDR chan-
+   Figure 1a shows a sub-optimal configuration in which the     nel. Additionally,  SmartDIMM’s software stack dynamically
+CPU is responsible for ULP processing. In this example, a       probes  the LLC   contention and adaptively enables or disables
+offloading of ULP processing to memory. Fig.1c illustrates              DRAM devices, the CPU memory controller, or the
+how SmartDIMM eliminates cache thrashing by rerouting                   synchronous JEDEC-compliant DDR interface.
+outbound network data to directly pass through DRAM, while
+                                                                                         II. BACKGROUND
+the unmodified TCP/IP stack operates on the CPU.
+   Adaptively offloading computation to memory Requires (R1)          Upper-layer protocols (ULPs) – also known as layer-5
+sharing the address space between the CPU and SmartDIMM,           network protocols – are widespread, seeing use across the
+(R2) operating SmartDIMM as a regular DIMM when ULPs are           Internet and in production environments. They often reside
+processed on the CPU, and (R3) implementing a lightweight          on top of the TCP/IP layer, providing additional services
+synchronization mechanism between the CPU and near-memory          to applications. (de/en)cryption and (de)compression are two
+processors. Meeting requirements R1 and R2 is challenging          important ULPs that consume a significant number of cycles
+with JEDEC-compliant DDR-attached DIMMs, as only one               in datacenters [14]. In this section we provide background on
+memory controller can be used to maintain the status of            these two ULPs.
+each DRAM bank [27–29]. Fulfilling R3 through conventional         (De/en)cryption. The Transport Layer Security (TLS) [33]
+polling or interrupt mechanisms introduces significant overhead.   protocol provides privacy over a reliable, yet insecure, network
+Although prior work [30] eliminates the notification overhead      connection between two clients. TLS is often added on top of
+by performing computation synchronously with memory ac-            TCP/IP, with messages being encrypted or decrypted before
+cesses, it does not share the address space and tends to use       they are sent to or received from the TCP layer.
+memory modules more as accelerators than as memory devices.           AES-GCM [34] is an authenticated encryption algorithm,
+   To meet the aforementioned requirements, we introduce the       widely adopted as the block cipher in TLS 1.2 and TLS 1.3.
+concept of Compute Copy (CompCpy). CompCpy is an API               It encrypts plaintext messages by performing bitwise XOR
+that transforms data within SmartDIMM while concurrently           operations with an encrypted stream. This stream is generated
+copying it from a source buffer to a destination buffer. This      by incrementing and encrypting a counter value, which is
+approach enables ULP offloading without requiring extensive        initially combined with an initialization vector (IV). To provide
+code changes in existing software stacks and ULP frameworks.       authentication, a GHASH function is applied, and its result
+As offloads are performed synchronously, the software does         is appended to the TLS record as an authentication tag. AES-
+not need to depend on polling or interrupts to synchronize with    GCM is widely used due to its performance, as it can be
+the near-memory processor, thus satisfying requirement R3.         effectively pipelined in hardware and parallelized.
+   We developed a SmartDIMM prototype capable of of-               (De)compression. Dictionary-based compression algorithms,
+floading Transport Layer Security (TLS) processing using           such as Deflate [35], are employed to compress HTTP responses
+Samsung’s AxDIMM [31]. To facilitate application-layer access      from clients [36]. Deflate operates in two stages: compression
+to SmartDIMM, we implemented an OpenSSL engine [32]                and encoding. Initially, the data stream is processed using the
+which utilizes the CompCpy API to skip the library’s on-CPU        dictionary-based LZ77 algorithm [37]. In this phase, input data
+(de/en)cryption routines and instead pass (un)encrypted TLS        is compared with entries in a dynamically updated dictionary,
+messages to the (de/en)cryption engine on SmartDIMM.               based on the contents of a sliding history window. When a
+   Offloading (de/en)cryption and (de)compression as rep-          match is found in the dictionary, the matching data is replaced
+resentative ULPs to SmartDIMM results in 21.0%-10.28×              with an LZ symbol that indicates the length of the duplicate
+and 11.9%-50.3% higher requests per second, respectively,          string and the distance from its previous occurrence. Following
+compared to a server executing them on the CPU and Smart-          the LZ77 match-finding phase, the data undergoes Huffman
+NIC. Additionally, SmartDIMM achieves 36.3%-88.9% and              encoding [38], where input symbols are replaced with shorter-
+7.6%-59.9% lower memory bandwidth utilization, respectively,       length codes.
+compared with CPU and SmartNIC implementations.
+   In this work we make the following contributions:               System-level Data Movement with ULPs. As illustrated in
+                                                                   Fig.1, before a network message is processed by a ULP, it is
+   • Identify that DRAM is on the processing path of ULPs
+                                                                   cloned into another buffer designated to hold the ULP’s result
+     running atop the layered software stack in the era of
+                                                                   (e.g., encrypted text). In addition to ULP processing, there are
+     high-throughput network devices.
+                                                                   at least two more data copies in an optimized software stack
+   • Introduce SmartDIMM, a bump-in-the-DDR near-memory
+                                                                   related to the DMA transactions from NIC and storage devices.
+     processing architecture for in-line acceleration of ULPs.
+                                                                   Modern CPUs implement Direct Cache Access technology
+   • Utilize the on-chip caches to implement a novel self-
+                                                                   (e.g., Intel DDIO [39] and ARM Cache Stashing [40]), routing
+     recycling mechanism, autonomously recycling a near-
+                                                                   DMA data through the Last-Level Cache (LLC) to minimize
+     memory scratchpad.
+                                                                   memory bandwidth usage. However, if the usage distance of the
+   • Introduce CompCpy API that transforms data within
+                                                                   DMA data is long – which is often the case for ULP processing
+     memory while concurrently copying it from a source
+                                                                   as the software stack and DMA accesses are asynchronous –
+     buffer to a destination buffer.
+                                                                   the DMA data may leak to DRAM before the CPU utilizes
+   • Prototype SmartDIMM on Samsung’s AxDIMM to ac-
+                                                                   it [41, 42].
+     celerate two widely used ULPs, (de/en)cryption and
+     (de)compression, without modifying the cost-sensitive
+                                 SmartNIC
+                                  HTTPS (SmartNIC)        https
+                                                          HTTPS (CPU)    http
+                                                                         HTTP
+                                 100
+
+
+            Bandwidth (Gbit/s)
+                                  80
+                                  60
+                                  40
+                                  20
+                                   0
+                                       0%    1%      2%      3%     4%    5%
+                                              Packet Drop Percentage
+                                                                                Fig. 3. HTTPS memory bandwidth utilization normalized to HTTP for different
+Fig. 2. Achievable bandwidth over an encrypted connection for SmartNIC and      numbers of concurrent connections.
+CPU under packet drops.
+
+
+                                                                                Observation 2: PCIe-based offload is suitable for latency-
+                                            III. M OTIVATION                    insensitive, coarse-grain offloads. PCIe accelerators, such as
+  In this section, we discuss several observations that informed                Intel QuickAssist[44], can offload costly key derivations using
+SmartDIMM’s design. The observations are either generally-                      RSA [45] and ECDH [46], as well as symmetric encryption
+accepted design decisions discussed in previous studies or made                 and decryption operations, from the host CPU. However,
+by experimental data we collected.                                              the need for frequent PCIe transactions to transfer data and
+                                                                                notifications between the accelerator and the CPU renders
+Observation 1: ULP offload on SmartNIC can be sub-
+                                                                                PCIe accelerators less appealing for latency-sensitive data
+optimal. Ethernet is the backbone of datacenter networks,
+                                                                                transformations, especially when the offload size is small.
+where packet loss and reordering are expected. It is the job
+                                                                                Additionally, the notification mechanism between the CPU
+of the TCP protocol to recover from these events and provide
+                                                                                and accelerator, whether interrupt or polling, significantly
+reliability to the upper layers. ULP processing takes place
+                                                                                bottlenecks PCIe-attached acceleration [47, 48]. Due to these
+before/after TCP processing on the TX/RX path, while the
+                                                                                overheads, various techniques and system configurations have
+SmartNIC sees TX/RX data after/before it is processed by
+                                                                                been proposed to minimize PCIe traversals [11, 49–53].
+the TCP stack. Offloading a ULP to a SmartNIC without
+also offloading TCP/IP processing limits the types of data                      Observation 3: DIMM is on the path of ULP processing
+transformations that can be performed. In particular, SmartNICs                 at high LLC contention. Direct Cache Access technology
+require that the ULP preserves the payload size as shrinking or                 does not always eliminate DRAM access, and during LLC
+expanding the payload interferes with the TCP state machine.                    contention, DRAM accesses become inevitable [41, 42, 54, 55].
+This makes it challenging to offload non-size preserving ULPs                   This issue is further compounded by the presence of ULPs.
+such as (de)compression to a SmartNIC [26].                                     Since buffers are DMAed to/from the LLC without being
+   NVIDIA SmartNICs implement autonomous TLS offloading,                        immediately consumed, they are at risk of being evicted back
+which speculatively offloads symmetric cipher computations to                   to DRAM [25].
+the NIC while running the TCP/IP stack on the CPU [16, 26].                        Fig.3 compares the memory bandwidth utilization of HTTP
+As shown in Fig.1b, autonomous SmartNIC ULP offloading                          and HTTPS web servers with varying numbers of concurrent
+requires the ULP library to skip performing the offloaded                       connections. As the number of connections increases, the
+operation in software, passing the plaintext payload down                       memory bandwidth utilization of the HTTPS web server
+the network stack before the NIC performs the accelerated                       significantly rises, showing up to a 2.5× increase compared
+computation. The SmartNIC driver performs hardware re-                          to a server performing equivalent encrypted file transfers. The
+synchronization and falls back to CPU computation in the                        cache thrashing caused by ULP processing not only reduces
+presence of packet reordering or loss. Using an NVIDIA                          the packet processing rate but also causes interference with
+ConnectX-6 SmartNIC, we offload TLS computation of an                           co-running applications and generates unnecessary DRAM
+HTTPS stream to the NIC and inject packet drops using                           bandwidth.
+a programmable switch. For detailed information on our                          Observation 4: ULPs are often incrementally computable.
+experimental methodology, refer to Sec.VI. Surprisingly, as                     Many ULP data transformations can be computed over arbitrary
+shown in Fig.2, we see the same, or even lower, throughput                      byte ranges of a message as it is sequentially received
+when offloading TLS to the SmartNIC. We suspect that this is                    or transmitted from or to the network. For example, the
+due to the performance improvement of AES-NI in Xeon                            AES-GCM cipher can encrypt or decrypt messages without
+CPUs [43]1 . More importantly, the benefits of SmartNIC                         performing cipher block-chaining operations. Any range of
+offloading fade away as soon as there are packet drops.                         bytes can be XORed with a pre-generated stream to produce
+                                                                                the (de/en)crypted message data. In the case of (de)compression,
+1 Bluefield 2 SmartNIC and Intel Xeon Gold CPU we tested on were launched
+                                                                                the LZ77-based deflate algorithm consumes or emits an input or
+ the same year (2020)
+                                                                                output stream byte by byte, allowing streaming (de)compression
+operations over any sequentially received or transmitted portion                                            Buffer Dev             DRAM
+of a ULP message.                                                               Cache                          comp
+                                                                                                               DSA
+   This property enables ULP processing to commence even                         sbuff                                             sbuff
+before the complete ULP message has transitioned from or to                                     copy
+                                                                                                                   intercept
+
+the application layer of the network stack, as is often the case               copy
+
+when a single message is encapsulated across multiple TCP                                                      dbuff               dbuff
+                                                                                 dbuff        DDR4
+segments.                                                                                                   Scratchpad
+The Case for In-Memory Acceleration of ULPs. Leveraging
+                                                                                 CPU                                  SmartDIMM
+the commercial availability of DIMM-based near-memory
+processing products [31], we introduce SmartDIMM. This                                   Copy          Intercept         Compute
+                                                                                            (a) Compute Copy operation
+innovation enables the use of DIMMs as an alternative location
+for ULP computation. SmartDIMM embodies a bump-in-                                                         Buffer Dev          DRAM
+                                                                                Cache
+the-DDR architecture that can be dynamically configured to                                                    DSA
+perform ULP computations within the buffer device of DIMMs
+as data traverses through the DDR channels.                                                  writeback
+                                                                                                             intercept
+                                                                                                                               recycle
+
+  The following section details how we implement Smart-                                                                            dbuff
+                                                                                                              dbuff
+DIMM through a co-design of hardware and software.                              dbuff         DDR4
+                                                                                                           Scratchpad
+             IV. S MART DIMM A RCHITECTURE
+                                                                                CPU                                  SmartDIMM
+   We design SmartDIMM for accelerating ULPs with the
+following goals in mind:                                                          Writeback            Intercept         Recycle
+                                                                                            (b) Self-Recycle operation
+   • Adaptive, per message offload: SmartDIMM enables the
+     software stack to adaptively switch between offloading
+                                                                                      Fig. 4. CompCpy inline offload model.
+     ULPs to the near-memory accelerator or on-loading ULP
+     processing to the CPU based on the current LLC miss
+     rate at the granularity of 4KB OS pages.                      A. Offload Model
+   • Inline offload: SmartDIMM removes the need for a
+     synchronization mechanism between the CPU and near-              At a high level, as a source buffer (sbuff) is copied to a
+     memory accelerator in the common case.                        destination buffer (dbuff), sbuff is fed to a Domain-Specific
+   • Minimized data movement: SmartDIMM does not intro-
+                                                                   Accelerator (DSA), and the result is stored on SmartDIMM’s
+     duce extra memory copies when processing ULPs and             buffer device. We introduce CompCpy, a modified memory
+     piggybacks on the existing memory copies in the software      copy API that performs the above sequence of actions and
+     stack to perform the offload.                                 hides the hardware implementation details from the user.
+   • Application readiness: SmartDIMM does not require
+                                                                      Before starting an offload, the user must register both sbuff
+     new programming interfaces and leverages the existing         and dbuff to SmartDIMM as acceleration ranges and flush
+     programming style and Linux APIs.                             sbuff to DRAM. SmartDIMM registers a range at 4KB OS
+   • Preserved processing order: SmartDIMM preserves the
+                                                                   page granularity. SmartDIMM only performs computation on
+     processing order within the network stack and non-            the data accessed within the acceleration range; otherwise,
+     speculatively offloads ULPs to the near-memory accelera-      SmartDIMM will operate in non-acceleration mode like a
+     tor.                                                          regular DIMM. Note that the software stack periodically
+   • Minimal changes to the processor and DRAM architecture:
+                                                                   measures the LLC contention and enables SmartDIMM offload
+     SmartDIMM works with current CPU architectures with-          on-demand. Therefore, when SmartDIMM offload is enabled,
+     out requiring hardware support. Additionally, SmartDIMM       sbuff is likely to be in DRAM and the overhead of the cache
+     leaves the DRAM devices unmodified, isolating changes         flush is minimal. Our experimental results show that flushing
+     to the DIMM’s buffer device.                                  4KB data is 50% faster when the data is already in DRAM.
+   • Preservation of host accesses to DRAM: SmartDIMM
+                                                                   While registering the addresses, the application also writes any
+     minimizes changes to the datapath for reads and writes        configuration and context (e.g., the key and initialization vector
+     from the host, preserving performance for regular accesses.   for TLS offload) required for computation to SmartDIMM.
+                                                                      Next, the CompCpy API will copy sbuff to dbuff (Fig.4a).
+   We design SmartDIMM to satisfy the above goals by
+                                                                   As sbuff is read from DRAM, SmartDIMM intercepts the data
+implementing the Compute Copy (CompCpy) API. In this
+                                                                   that passes through the DIMM buffer device and sends it to
+section, we first explain the offload model of CompCpy and then
+                                                                   the DSA. Since the CPU memory controller synchronously
+explain the hardware and software architecture of SmartDIMM
+                                                                   controls SmartDIMM’s local DRAM devices, we cannot write
+that realizes CompCpy.
+                                                                   the output of the DSA directly to DRAM. Thus, the DSA
+                                                                   stores the results in a temporary on-chip memory called the
+                                                                   Scratchpad. This staging buffer is essential to avoid an
+ Algorithm 1: Force-Recycle method reads the list of pending                                                                                  Arbiter
+ pages from SmartDIMM’s MMIO config space and explicitly                                       A
+                                                                                                                                    Rows
+                                                                                                                                                                Row
+
+ flushes those addresses to DRAM. This method is rarely called.
+                                                                                              CS                                                               BG,BA   Addr Remap
+                                                                                              BG                                                                 Col
+                                                                  wrData                      BA
+                                                                                                                   Slot
+                                                                   to           DDR PHY                                                       Bank                      physical address
+1 Force-Recycle(requiredToBeFree)                                 DRAM
+                                                                                              ACT
+                                                                                             wrCAS           Decoder                BGBAs
+2  pendingList = readPendingList(SmartDIMMConfig)                                            rdCAS                                            Table                    Translation
+                                                                     selectWr
+3 for page in pendingList do                                                        wrData                              {BG,BA,Col}_Wr                                    Table
+4      flush(page, 4KB)                                                                                           {BG,BA,Col}_Rd
+
+5      freed += 1                                                               MIG PHY
+                                                                                                                                                   match
+6      if freed > requiredToBeFree then                                         rdData
+7            break                                                rdData                        ctrl &
+                                                                                                                   Controller                       insert entry
+                                                                                                                                                                         Scratch
+8      end                                                          to              DSA      notification                                          ScratchpadAddr
+                                                                   Host
+9 end                                                                                              ctrl
+                                                                                                                                                   ScratchpadAddr
+                                                                                                                                                                             pad
+                                                                                                                                            ctrl
+                                                                     selectRd     Config              Addr/data
+                                                                                                                           result
+                                                                                   Mem
+                                                                                                              scratchpad data
+
+
+                                                                                   Fig. 5. SmartDIMM’s buffer device architecture.
+additional DIMM-side memory controller.
+   Letting the CPU memory controller manage SmartDIMM’s
+address space provides four Benefits: (B1) the OS can manage C. Hardware Architecture
+SmartDIMM’s address space like any regular DIMM, (B2)              SmartDIMM is solely controlled by read (i.e., read Column
+SmartDIMM’s capacity counts towards the total system mem- Address Strobe (rdCAS)) and write (i.e., write Column Address
+ory, (B3) memory access latency to the non-acceleration range Strobe (wrCAS)) commands received at the DIMM’s buffer
+is not increased, and (B4) the hardware complexity of the device. SmartDIMM integrates the following logic within the
+buffer device is reduced by precluding an additional DIMM- buffer device: an Arbiter, Scratchpad, DSA, Config
+side memory controller and CPU-DIMM synchronization Memory, DDR PHY, and MIG PHY. These components are
+mechanisms.                                                     highlighted in red in Fig.5. The Arbiter decodes rdCAS
+B. Scratchpad Recycling: Self- vs. Force-Recycling              and wrCAS commands from DDR PHY, determines whether
+                                                                the commands target SmartDIMM’s MMIO config space or
+   The offload model, as explained in Sec.IV-A, introduces acceleration range, and coordinates near-memory computation
+a challenge: the Scratchpad space is limited and requires and recycling of Scratchpad. Fig.6 summarizes the decision-
+frequent recycling. To recycle a page in the Scratchpad, its making process of the arbiter logic upon receiving a CAS
+contents must be written back to the corresponding addresses command. The flowchart in Fig.6 is referenced while discussing
+in DRAM. The offload model of SmartDIMM capitalizes on the hardware and software architecture of SmartDIMM in this
+an opportunity to automatically recycle buffers by utilizing section and in Sec.IV-D.
+the inevitable writeback of dbuff cachelines to DRAM, as           DDR PHY and MIG PHY provide high-speed physical inter-
+shown in Fig.4a. Specifically, when a write Column Address faces to the host memory controller and SDRAM, respectively.
+Strobe (wrCAS) to a cacheline stored in Scratchpad is The DDR PHY buffers 512-bit data bursts received from the
+received at the buffer device (triggered by an LLC writeback), host memory controller and forwards them to the Arbiter.
+SmartDIMM replaces the wrCAS data with the data stored in The MIG PHY then relays the DDR4 signals from the DDR
+the Scratchpad and invalidates the corresponding cacheline PHY to the DRAM chips to perform memory accesses. Similar
+in the Scratchpad. Once all the cachelines of a page are to Samsung’s AxDIMM [56], SmartDIMM’s buffer device op-
+written back to DRAM (i.e., invalidated), the Scratchpad erates at one-fourth the DRAM clock frequency. Consequently,
+page is freed and becomes available for another offload. This the DDR PHY encodes four DRAM commands within a single
+automatic recycling of the Scratchpad is referred to as SmartDIMM clock cycle, while the MIG PHY serially issues
+Self-Recycle.                                                   them on consecutive DDR4 clock cycles to the DRAM chips.
+   While LLC writebacks can opportunistically recycle Therefore, each clock cycle contains four slots, each decoding
+Scratchpad buffers, there is no guarantee that the buffers a different DDR command [57]. The command in slot 0 is
+will be recycled in time. In the rare instance that the issued to the DRAM chips first, followed sequentially up to
+Scratchpad is full during a new offload attempt, a Force- the command in slot 3.
+Recycle function is invoked by CompCpy. As detailed in             As illustrated in Fig.5, DDR PHY sends Address (A), Chip
+Algorithm 1, the Force-Recycle method reads the addresses of Select (CS), Bank Group (BG), and Bank Address (BA) signals
+pending pages from SmartDIMM and explicitly issues write- to the Slot Decoder. The Slot Decoder then decodes
+requests to the physical address ranges of those pending pages. the commands within each slot, generates Row, BA, and BG for
+Sec.VII-A presents experimental evidence showing that calls each respective slot, and forwards them to the Bank Table.
+to Force-Recycle are infrequent. This low frequency is due to      The Bank Table is a memory array consisting of N
+SmartDIMM being utilized primarily when LLC contention is entries, where N represents the total number of banks in each
+high.                                                           SmartDIMM rank. Each entry in the Bank Table records
+                                                                the ID of the active row within its corresponding bank. The
+                                                                contents of the Bank Table are updated upon receiving a
+                                                         RdCAS/WrCAS
+                                                           Address                                                  match physical page numbers in a single cycle. However,
+            Ignore/Drop Data
+                                                                                                                    CAMs are expensive and power-hungry [58], and given that the
+                         (S18)    Yes
+
+                                                                           Yes      Match in
+                                                                                                                    Translation        Table is accessed every clock cycle, a CAM
+                                        CompCpy      Yes   Addressing                              No Regular DRAM
+                                      In Progress?
+                                          (S14)
+                                                          Config Mem?
+                                                                               TranslationTable?
+                                                                                                         Access
+                                                                                                               (S2)
+                                                                                                                    implementation   could  exceed the power and thermal limits of
+                                                               (S3)                  (S1)
+           MMIO Write Config
+                   Data                        No                 No
+                                                                                                                    the  buffer device  in the DIMM. Instead, we implement the
+                          (S17) WrCAS
+                                                                                                                    Translation Table as a 3-ary cuckoo hash table [59],
+                                    RdCAS/WrCAS
+                                          (S15)         Compute Started?                                            utilizing three distinct hash functions for indexing. It has
+             Intercept Data &    RdCAS
+                                                               (S4)
+               Send to DSA
+                          (S16)
+                                                   Yes                     No                                       been experimentally demonstrated that at low occupancy
+                                                                                                                    (less than 50%), a 3-ary cuckoo hash table typically inserts
+                                                          Incrementally
+                                        Compute Done?       Compute              RdCAS/WrCAS                        a translation either on the first attempt or with a single
+                                                                          RdCAS
+                                                                    (S6)              (S5)
+                                              (S8)
+                                                       No                                                           displacement. Furthermore, at an occupancy of less than 50%,
+                                         Yes                                              WrCAS
+                    RdCAS                                                                                           the probability of insertion failure is effectively zero [60]. To
+   Read from SP             RdCAS/WrCAS                                 WrCAS     Ignore Write
+           (S10)                 (S9)                                                        (S7)                   ensure low occupancy, we size the Translation Table
+                                      WrCAS
+                                                             RdCAS/WrCAS
+                                                                  (S12)
+                                                                                                                    to be three times larger than the total required entries (i.e.,
+                                                                                   Retry Read
+                                Recycle
+                                                                        RdCAS
+                                                                                             (S13)                  12K   entries), maintaining the occupancy of the cuckoo hash
+                               Cacheline
+                                        (S11)                                                                       table below 33% and thereby reducing the probability of
+                                                                                                                    displacement. Additionally, we incorporate an 8-entry CAM
+Fig. 6. Arbiter logic operation. The gray symbols show the unlikely states.                                         array for immediate mapping insertions and execute cuckoo
+A read or write command to a cacheline with pending computation is ignored
+(S7 and S13). S13 utilizes the ALERT_N signal to inform the memory controller
+                                                                                                                    hash table insertions outside the critical path.
+to retry the rdCAS.                                                                                                    A new entry is inserted into the Translation Table
+                                                                                                                    when the user registers new source and destination pages for
+                                                                                                                    acceleration (S17 in Fig.6). SmartDIMM features an MMIO
+RAS command (to activate a row) or a Precharge command (to register designed to capture the source page number, destination
+close a row). For example, if a RAS command targeting BGBA page number, and any additional context required for the
+8 with Row ID 10 is received, the value 10 will be recorded offload, all within a 64-byte MMIO write. Upon receiving
+in the eighth row of the Bank Table.                                                                                a write to the MMIO register, the SmartDIMM registers both
+    When a rdCAS or wrCAS command is received from the source and destination pages by creating translation entries
+DDR PHY, the SmartDIMM must determine whether the CAS in the Translation Table for each. The translation entry
+command targets an acceleration range (S1 in Fig.6). To for the source page includes the address of the destination
+achieve this, the Row ID from the CAS is retrieved from page (or multiple pages if the computation does not preserve
+the Bank Table and provided to an Addr Remap module, size) and an offset in Config Memory where the context for
+along with BG, BA, and Col information, to regenerate the processing the source page is stored. Software can further
+physical address of the CAS command. Knowing the physical write additional context into Config Memory using the
+address is essential because it is impossible to determine the same mechanism. The translation entry for the destination
+range of addresses within an OS page solely with knowledge page specifies a Scratchpad offset where the DSA’s output
+of BG, BA, Row, and Col. The physical address is then (results) will be stored.
+input into a Translation Table. If a match is found                                                                    The Scratchpad is a local SRAM implemented in Smart-
+in the Translation Table, it returns a mapping to an DIMM to temporarily store DSA’s output on the buffer device
+offset within a Config Memory (S3→Yes in Fig.6) or without writing it back to the DRAM chips. This design allows
+Scratchpad (S3→No in Fig.6).                                                                                        the CPU to manage the entire SmartDIMM address space,
+    The size of the Translation Table is contingent on akin to a regular DIMM. The Scratchpad is organized as a
+the number of pages and entries in the Scratchpad and 64-byte addressable memory array and allocated at 4KB page
+Config Memory. We have configured the Scratchpad granularity. Config Memory is also a 64-byte addressable
+and Config Memory sizes to minimize the occurrence of block memory that holds a fixed context space for each source
+Force-Recycle method calls. Our experimental results indicate page (sbuff) upon which the DSA operates. The size of the
+that sizing the Scratchpad and Config Memory to 2048 context is dependent on the application; for instance, the context
+pages effectively leads to nearly zero Force-Recycle method size for TLS offloading is 1KB per source page (Sec.V-A).
+calls (§VII-A). The Translation Table operates at page
+granularity for mapping memory addresses, thus requiring D. Software Architecture
+4096 translation entries to cover both the Config Memory                                                               Algorithm 2 outlines the high-level implementation of
+and Scratchpad. It is important to note that a single CompCpy. CompCpy extends the standard memory copy API.
+Translation Table is utilized to maintain mappings for Beyond merely copying a source buffer (sbuff) to a destination
+both the Scratchpad and Config Memory, differentiated buffer (dbuff), CompCpy also configures SmartDIMM to
+by a single-bit flag.                                                                                               process the data from the source buffer before saving it to the
+    A naive implementation for the Translation Table dbuff’s physical DRAM addresses. Prior to initiating inline
+involves using a Content Addressable Memory (CAM) to acceleration, CompCpy must verify whether the limited space of
+ Algorithm 2: CompCpy inline acceleration.                                 an argument to CompCpy and, if necessary, breaks the memory
+ 1 global variable: freePages = -1                                         copy into 64-byte segments, inserting a memory barrier between
+ 2 CompCpy(uint8_t * dbuff, uint8_t * sbuff, uint16_t size, uint8_t        each (lines 25–28).
+     *context, bool ordered)                                                  DSA processes 64-byte data chunks as they are read
+ 3 // Check to ensure data and dbuff are 4KB page aligned
+ 4 if !PageAligned(dbuff) OR !PageAligned(sbuff) then                      from DRAM (S6 in Fig.6) and stores the results in the
+ 5       return "Not Aligned"                                              Scratchpad. Before an application can read the result, it
+ 6 end
+                                                                           must ensure that DSA has completed the computation. A
+ 7 lock.lock()
+ 8 if freePages <= (size / 4KB) then                                       straightforward, yet naive, approach would require applications
+ 9       freePages = SmartDIMMConfig[0]                                    to poll the dbuff to confirm completion. However, we observed
+10       // Unlikely condition                                             that the time lag between the first read command from sbuff and
+11        if unlikely(freePages <= (size / 4KB)) then
+12            Force-Recycle(size)                                          the first write command to dbuff usually provides enough buffer
+13       end                                                               to allow for the completion of a ULP operation on a 64-byte
+14 end
+                                                                           cacheline. This slack arises from the batching of write requests
+15 // reserve the required pages
+16 freePages -= (1 + size / 4KB)                                           in the memory controller, the intricacies of the cache coherency
+17 lock.release()                                                          protocol, and the overhead of toggling DDR channels between
+18 // flush sbuff to DRAM
+                                                                           read and write modes. Our measurements using Samsung’s
+19 flush(sbuff, size)
+20 // register both sbuff and dbuff address ranges in acceleration range   AxDIMM on an Intel Broadwell server indicate this time
+21 for pages in sbuff and dbuff do                                         budget exceeds 1µs. Consequently, rather than resorting to
+22       register(sbuff, dbuff, context)                                   polling, we optimistically assume that SmartDIMM completes
+23 end
+24 if ordered then                                                         the computation on a cacheline before its consumption (i.e.,
+25        for i in (0, (size / 64)) do                                     before being read by the CPU). In the rare instance that
+26              memcpy(dbuff, sbuff, 64)                                   the computation is not finished, SmartDIMM employs the
+27              membar()
+28       end                                                               ALERT_N signal from the DDR standard [61] to prompt the
+29 else                                                                    memory controller to retry the read request (S13 in Fig.6).
+30         memcpy(dbuff, sbuff, size)                                         The gray-shaded states in Fig.6 represent scenarios that are
+31
+32 USE(uint8_t* dbuff)                                                     unlikely to occur. One such unlikely event is if a cacheline in
+33 flush(dbuff)                                                            dbuff is written back before DSA completes its computation.
+34 return dbuff
+                                                                           In this situation, the wrCAS command is disregarded, and the
+                                                                           cacheline in the Scratchpad is not recycled (S7 in Fig.6).
+                                                                           Consequently, the computed cacheline must be read from the
+the Scratchpad would preclude SmartDIMM from accepting                     Scratchpad when the dbuff is subsequently accessed (S10
+a new offload.                                                             in Fig.6).
+   CompCpy monitors the available Scratchpad space using                   E. Discussion
+a global variable (freePages in Algorithm 2), which is
+                                                                              The offload model described and implemented in this section
+protected by a lock. CompCpy lazily updates the freePages
+                                                                           is meticulously designed to be compatible with off-the-shelf
+variable only when the number of pages needed for an offload
+                                                                           CPU and DRAM components. Given the opportunity to modify
+exceeds the current value of freePages (lines 8–9). Due
+                                                                           the memory controller and introduce new DDR commands, it
+to the Self-Recycling facilitated by LLC writebacks (see
+                                                                           would be possible to devise a more optimized offload model that
+Sec.IV-B), our experiments indicate that the Scratchpad
+                                                                           could eliminate cache pollution entirely. Referring to Fig.4a,
+rarely runs out of space. On the rare occasion that there is
+                                                                           a DDR command that directs DRAM data solely to DSA–
+not enough space in the Scratchpad, CompCpy invokes
+                                                                           without bringing data to the CPU memory controller – could
+the Force-Recycle method to free up some pages in the
+                                                                           conserve DDR data bandwidth and avoid populating the on-chip
+Scratchpad (see Algorithm 1). After securing the necessary
+                                                                           caches. In such a setup, the memory controller would maintain
+number of pages in the Scratchpad, CompCpy registers
+                                                                           the addresses of the currently offloaded memory in a hardware
+the pages spanned by sbuff and dbuff as acceleration ranges
+                                                                           table (akin to extended directories [62]), assigning a timer value
+by writing their page numbers and the required context for
+                                                                           for eventual eviction back to DRAM. This eviction would entail
+offloading into the MMIO config register (lines 21–22).
+                                                                           issuing a special DDR command to SmartDIMM, prompting
+   SmartDIMM receives memory read and write requests at a
+                                                                           the writeback of the Scratchpad’s data to DRAM.
+64-byte granularity from the CPU. Typically, the CPU memory
+                                                                              The current CompCpy API supports offloading ULPs that
+controller reorders these requests before dispatching them
+                                                                           do not utilize a zero-copy software stack. While zero-copy
+to DRAM. If DSA needs to process data in the order it
+                                                                           software stacks can enhance performance, they often compli-
+was generated by the application, then CompCpy must insert
+                                                                           cate buffer recycling within the kernel, disrupt the separate
+a memory fence between each 64-byte segment during the
+                                                                           development of ULPs and applications, and pose security risks
+memory copy to SmartDIMM. The if condition on line 24 of
+                                                                           for communication [63–65]. Nonetheless, CompCpy could be
+Algorithm 2 checks for the ordering requirement specified as
+                                                                           expanded to incorporate near-memory acceleration on DMA
+       CPU               12B
+                                                            SmartDIMM                                                offloading TLS. As illustrated in the figure, the hash subkey (H)
+                                     16B
+                         IV          Key            Config Mem                   Scratchpad                          and encrypted initialization vector (EIV) are computed on the
+                                                          IV,Key,EIV
+                                                                                                                     CPU and provided to the TLS DSA via an MMIO write to the
+
+
+
+
+                                                    2KB
+
+
+
+
+                                                                                  TLS record
+
+
+
+
+                                                                                                               4KB
+          0128      AES-NI           H      MMIO          H,H4,H8,...
+
+     {IV,031,1}
+                                                          IV,Key,EIV
+                                                            256 260
+                                                                                                 Cipher
+                                                                                                  Text
+                                                                                                                     Config Memory page associated with the sbuff pages. This
+                    AES-NI           EIV                  H ,H ,...
+                                                             ...                                                     is a crucial design decision since offloading the computation
+                                                                              tag                  ...               of H and EIV to SmartDIMM complicates the DSA design
+     H            Pipelined GF Multiplier                               (init to EIV)
+
+                    H4   H8                H252
+                                                                                                                     and provides no benefit. This is because the CPU can compute
+       TLS                                                                                                           H and EIV by executing a single AES-NI instruction operating
+       DSA                                            H, H4, ...
+                                                                             partial tag
+                                                                                                                     on an immediate value without any data dependencies. Since
+         IV       Incr         AES                                                                                   rdCAS commands of a sbuff range can be received out of order
+                  rdData [511:0]                   GHASH                                       (partial) tag         at SmartDIMM, the DSA pre-computes the ith powers of H in
+                                                                                                                     strides of 4 to remove the dependency chain between GHASH
+                                                                                                                     calculations of different 64-byte cachelines within the sbuff
+Fig. 7. Encryption offload of an example TLS record smaller than 8KB and
+larger than 4KB to SmartDIMM. We use the same notations as explained in [66].                                        range.
+                                                                                                                        The pre-calculation of powers of H for the binary Galois
+                                                                                                                     Field of 2128 elements (GF Multiplier) starts as soon as the
+accesses. For instance, a CompCpy augmented with Compute                                                             sbuff is registered as an acceleration range. The powers of
+DMA support could transform data while an I/O device is                                                              H are stored in the Config Memory and are later read by
+DMAing data to or from SmartDIMM.                                                                                    the GHASH module to calculate the partial authentication tag.
+   Overall, SmartDIMM is well-suited for accelerating oper-                                                          The final tag should be stored in the trailer of the TLS record.
+ations involving memory-resident data and exhibiting poor                                                            On each rdCAS from the sbuff range, the TLS DSA reads
+cache behavior, such as streaming operations. The current                                                            the partial tag from the Scratchpad and XORs it with the
+incarnation of SmartDIMM provides an end-to-end near-                                                                output of the GHASH module before storing the result back
+memory acceleration framework compatible with unmodified,                                                            to the Scratchpad. The final value of tag will be stored in
+commodity hardware and software stacks. Introducing new                                                              the trailer after the entire sbuff is encrypted.
+DDR commands to allow SmartDIMM direct access to DRAM
+and expanding interfaces beyond the CompCpy API detailed                                                             B. Layer-5 (De)Compression Protocol
+in this work would broaden the potential application domains                                                            The implementation of the Deflate compression algorithm in
+for SmartDIMM.                                                                                                       SmartDIMM is a specialized adaptation of the fully pipelined
+                                                                                                                     hardware implementation as explained in [67]. SmartDIMM
+  V. TLS & C OMPRESSION O FFLOAD ON S MART DIMM                                                                      utilizes Config Memory to store candidates for matching
+   The CompCpy offload model imposes the following require-                                                          substrings. This Config Memory is designed as an 8-bank
+ments on the design of the DSA and its corresponding offload                                                         memory array, each equipped with eight read and write ports.
+software: Firstly, the latency of DSA should align with the time                                                     As described in prior work [67], deflate compression can be
+constraints of consecutive rdCAS and wrCAS commands to                                                               parallelized by executing the algorithm on consecutive bytes
+the same cacheline, to minimize notification overhead (§IV-D).                                                       within a contiguous parallelization window. We have configured
+Secondly, each CompCpy call must be stateless, with any nec-                                                         this window to 8 bytes. Although increasing the size of the
+essary context or state transmitted to the DSA by the CPU via                                                        parallelization window marginally improves the compression
+MMIO writes prior to the commencement of an offload. Thirdly,                                                        ratio and bandwidth, it also exponentially raises the memory
+the required state for each offload should be contained within                                                       requirements and the logic complexity of the Deflate DSA [68].
+a single Config Memory page. This section explains the                                                                  In each clock cycle, SmartDIMM compresses 64 bytes of
+process of offloading TLS (de/en)cryption and (de)compression                                                        data in a best-effort manner. This means that if bank conflicts
+to SmartDIMM, adhering to the aforementioned stipulations. It                                                        occur in the Config Memory, the candidate substrings from
+is important to note that our prototype of SmartDIMM is based                                                        the affected bank will be discarded. Additionally, as CompCpy
+on Samsung’s AxDIMM, which operates in a single channel                                                              primarily focuses on small-sized ULP message offloads, we
+mode. Consequently, in Sec.V-A and Sec.V-B, we presume                                                               have designed the Config Memory to accommodate a hash
+that 4KB of physical addresses are sequentially allocated to                                                         table covering a 4KB window. When a new substring candidate
+a single SmartDIMM. Sec.V-D discusses the effects of fine-                                                           is inserted and the hash table is full, the oldest substring
+grain memory channel interleaving on SmartDIMM’s offload                                                             gets replaced. Such design choices may slightly reduce the
+scheme.                                                                                                              compression ratio but are intended to simplify the design and
+                                                                                                                     guarantee deterministic latency for the Deflate DSA. Even
+A. Transport Layer Security (TLS) Protocol
+                                                                                                                     with a moderate compression ratio, the Deflate DSA in Smart-
+  The physical proximity of the the CPU to SmartDIMM                                                                 DIMM can significantly mitigate data movement overhead in
+enables a fine-grain division of operations between CPU                                                              transmission-intensive network applications, thereby saving on
+and SmartDIMM. Fig.7 illustrates the DSA architecture and                                                            DRAM, PCIe, and Ethernet bandwidth.
+the interactions between the CPU and SmartDIMM when
+C. Software Stack                                                                                                                        User Space                     Kernel Space
+                                                                             Ngnix                                                                    OpenSSL Library   SmartDIMM
+   Figure 8 illustrates the software stack that facilitates adaptive                             OpenSSL AES-GCM Engine
+                                                                                                                                         Driver
+TLS offloading on SmartDIMM. SmartDIMM includes a driver                                             SmartDIMM offload
+                                                                                                                                           init()
+                                                                                            yes                                        char device
+that initializes a character device and maps the physical memory                                          CompCpy
+
+
+
+
+                                                                                                                 EVP_Cipher_IFs()
+                                                                                                                                      memremap()
+space of SmartDIMM to kernel virtual addresses. These virtual
+
+
+
+
+                                                                                                                                    LLC Contention?
+                                                                                            SSL Read/Write API
+                                                                              OpenSSL API
+                                                                                                            vaddr
+                                                                                                                                       kernel vaddr
+addresses can then be allocated to userspace applications as                                                                range
+                                                                                                    SmartDIMM_MemAlloc                   mmap()
+                                                                                                                             user
+needed. In our implementation, the userspace library manually                                                               vaddr
+allocates and deallocates ranges of addresses on SmartDIMM
+from the driver. Ideally, SmartDIMM’s address space would                                   no
+                                                                                                         CPU onload
+
+be managed by the OS memory manager, and the allocated                                                                               Network Stack
+addresses would be utilized by the application to perform                                        Networking Subsystem
+                                                                                                                              write
+                                                                                                                              read
+CompCpy.
+   As depicted in Figure 8, we have modified the OpenSSL
+AES-GCM Cipher engine to selectively offload TLS to Smart- Fig. 8. Software stack for adaptive TLS offloading to SmartDIMM. Modifications
+                                                                     and additions to the default software stack are highlighted in blue.
+DIMM or process it on the CPU based on the level of LLC
+contention. LLC contention is assessed by frequently sampling
+the miss rate of the LLC, with the contention threshold set mapped to a single memory channel. This can be achieved by
+as a configurable parameter. Cache partitioning could affect operating SmartDIMM in single channel mode, flex channel
+this threshold, and service providers are advised to adjust it mode [72], or by utilizing a memory channel interleaving-aware
+according to their specific system configurations.                   memory mapping in the software stack [73, 74]. Hardware
+   Compression is made more complex by the fact that the schemes that enable information sharing between DIMMs
+compressed size is not predetermined. Consequently, we register across channels [75, 76] may also be employed in these
+the same number of pages for the destination buffer as for scenarios.
+the source buffer. To further streamline the software stack             SmartDIMM remains resilient to fine-grain memory channel
+and reduce the complexity of the Deflate DSA, we compress interleaving for size-preserving ULPs. The only additional
+exclusively at 4KB page granularity. This approach necessitates requirement is for each SmartDIMM to have its own copy
+multiple CompCpy calls for messages larger than 4KB, with of the configuration data, such as keys and IVs for TLS. We
+each compressed page being individually written to the TCP address this requirement by writing the configuration data to
+socket. Given that the maximum transmission unit size of TCP each SmartDIMM during the source buffer registration step.
+is smaller than 4KB, this design choice does not adversely
+affect the TCP layer’s performance.                                                            VI. M ETHODOLOGY
+   Although we have discussed TLS offloading within the                 To evaluate SmartDIMM, we take two approaches: an actual
+context of the userspace OpenSSL framework, the addition of FPGA implementation and emulation. For the actual FPGA
+in-kernel TLS (e.g., Linux kTLS [69]), allows SmartDIMM to implementation, we use AxDIMM [31], a DIMM-based near-
+perform offloading in kernel space as well.                          memory processing product from Samsung. We implement
+   The existing TCP ULP infrastructure [70] in the Linux SmartDIMM as explained in Sec.IV on the AxDIMM FPGA
+kernel facilitates the verification of TLS offloading prior to and integrate the DSA discussed in Sec.V to support TLS and
+copying received packets into userspace, offering an entry for compression offloads. We hypothesize that the performance of
+offloading to accelerators in addition to SmartNIC. Furthermore, TLS offload on SmartDIMM is equal to performing a CompCpy
+TCP ULP is invoked before and after the TCP layer during (without actual implementation of SmartDIMM in hardware)
+transmission and reception, respectively. This makes it suitable and commenting out the software functionalities to be offloaded.
+for SmartDIMM acceleration to be initiated before or after We validate this assumption using our AxDIMM prototype by
+the packet is transferred to the remaining network stack or showing that the TLS offload hardware can sustain the DDR
+userspace.                                                           line rate. Pismenny et al. [26] used a similar methodology for
+D. Memory Channel Interleaving                                       evaluating the performance of ULP offload on a SmartNIC.
+                                                                     We implement the complete software stack in our emulation
+   Multi-channel memory systems in modern servers typically methodology, including the SmartDIMM kernel driver to
+utilize fine-grain interleaving, with only 1-4 consecutive support userspace offloads, page registration in CompCpy, lock
+cachelines mapped to the same DIMM [71]. Such memory acquisition, and cache flushes. In our experimental setup, we
+channel interleaving results in internally fragmented ULP use two servers equipped with Intel Xeon Scalable Gold 6242
+messages for non-size preserving ULPs, potentially impairing CPUs, 6× DIMMs of 16 GB memory at 3200 MHz (96 GB)
+the performance of data transformations that depend on connected using NVIDIA/Mellanox BlueField-2 ConnectX-6
+the state generated from previously processed data (e.g., 100Gbe DPUs.
+LZ77 dictionary-based (de)compression used in the Deflate               We compare the performance of SmartDIMM against three
+algorithm). To mitigate this, 4KB OS pages corresponding configurations when running an Nginx [77] web server with
+to source and destination buffers for such ULPs can be
+                                         Writes         Reads                                                                                         4-ways (10MB)   8-ways (20MB)     12-ways (30MB)    16-ways (40MB)    20-ways (50MB)
+
+              8192 -                                                                                                                            2.0
+
+
+
+
+                                                                              Destination Buffer Range
+              7168 -
+
+
+
+
+                                                                                                             Scratchpad Memory Occupancy (MB)
+                                                                                                                                                1.5
+              6144 -
+
+              5120 -
+Page Number
+
+
+
+
+                                                                                                                                                1.0
+              4096 -
+                   -
+
+
+
+
+                                                                              Source Buffer Range
+              3072 -                                                                                                                            0.5
+
+              2048 -
+
+                                                                                                                                                0.0
+              1024 -            …
+                       Sbuff + 128                                                                                                                    0    64   128   191   255   319   383    446 510    574   638   701   765   829   893
+                        Sbuff + 64
+                             Sbuff                                                                                                                                                            Time (ms)
+                 0
+                          1          2   3              4         5   6   7
+                                             Relative Time (us)                                          Fig. 10. Scratchpad utilization for different LLC provisionings. In each
+                                                                                                         configuration shown, Scratchpad utilization reaches an equilibrium state
+Fig. 9. Memory traces collected from SmartDIMM when having 4 cores                                       in which writebacks from the LLC recycle pages in the Scratchpad, freeing
+concurrently offloading computation to memory. The read commands belong                                  space for new offloads. The equilibrium state is reach at a lower occupancy
+to the source addresses in the current CompCpy and write commands belong                                 when LLC is more contended.
+to self-recycle of destination buffer addresses accessed earlier.
+
+
+                                                                                Figure 10 illustrates the Scratchpad occupancy in MB
+ten threads: a CPU configuration that executes ULPs on the during the trace collection as shown in Fig.9. We employ Cache
+CPU2 , a QuickAssist configuration that offloads the ULP to an Allocation Technology (CAT) [81] to reduce the size of the
+Intel QuickAssist 8970 PCIe Adapter [44], and a SmartNIC LLC by limiting the number of ways utilized by CompCpy.
+configuration that offloads TLS to an NVIDIA ConnectX-6 As illustrated, Scratchpad utilization quickly stabilizes at
+SmartNIC [79]. Note that the SmartNIC configuration cannot an equilibrium after the start of the offload, where writebacks
+offload (de)compression because these operations are non- from the LLC recycle pages in the Scratchpad, thereby
+size preserving. We experimentally find 10 threads to be the freeing space for new offloads. As outlined in Sec.IV-B, Force-
+minimum number required to saturate the link with unencrypted Recycles become rare once this equilibrium is achieved, with
+HTTP responses. We therefore attribute any performance writebacks efficiently managing the self-recycle operations.
+degradation to TLS encryption operations performed by the                       As anticipated, reducing the size of the LLC results in
+design under test. The workload generator runs the wrk [80] a proportional decrease in Scratchpad occupancy due to
+traffic generator, maintaining 1024 persistent connections to increased LLC contention. For instance, with a contended
+make HTTP requests.                                                          50MB and 10MB LLC, the occupancy of the Scratchpad
+   Unless stated otherwise, we use the following configuration remains below 2MB, and 500KB, respectively.
+parameters for SmartDIMM: 8MB Scratchpad size, 8MB
+                                                                             B. Performance Comparison
+Config Memory, 4KB page size, and 12288 number of
+entries in the Translation Table (3-ary cuckoo hash                             Figure 11 shows the requests per second (RPS), CPU
+table with 3× more entries). In the experiments, we consider                 utilization,  and memory bandwidth utilization of an Nginx
+scenarios with high LLC contention (i.e., a large number of                  HTTP     server   providing web pages to clients over a secure
+connections and high network rates); otherwise, it is optimal                connection     (i.e., uses TLS), where TLS is executed on
+to run ULPs to the CPU.                                                      SmartNIC,    QuickAssist,  and SmartDIMM. All the data points
+                                                                             are normalized to the CPU configuration.
+                           VII. E VALUATION                                     As shown in the figure, SmartDIMM delivers 21.0% and
+A. Effectiveness of the Offload Model                                        35.8% higher RPS than the CPU configuration for TLS offload
+   Figure 9 presents the rdCAS and wrCAS traces collected of 4KB and 16KB message sizes, respectively. At the same
+from the SmartDIMM prototype when four cores concurrently time, SmartDIMM reduces the CPU and memory bandwidth
+execute CompCpy calls. Each red and green dot represents utilization of the server by 21.8% and 49.1% for 4KB TLS
+a 64-byte read or write request from/to DRAM, respectively. message offloading. Such reduction in the memory bandwidth
+Due to the sparsity of the addresses in each CompCpy call utilization is due to moving the computation to memory and
+(spaced 32MB apart), it is not immediately apparent that the preventing the cache thrashing caused by processing TLS on
+addresses are incrementally increasing. A magnified section of the CPU. SmartNIC and QuickAssist configurations both fail to
+the trace shows the monotonic address increase throughout a provide any RPS improvement for 4KB messages due to high
+CompCpy call.                                                                overhead for initializing the offload. For example, QuickAssist
+                                                                             fails to deliver comparable RPS to other configurations because
+2 CPU configuration uses Intel Advanced Encryption Standard New Instructions
+                                                                             the overhead of setting up a PCIe offload overshadows all the
+ (AES-NI) [78] to accelerate encryption                                      benefits of hardware acceleration for fine-grain kernel launches.
+Fig. 11. Performance of Nginx when executing TLS on different configurations
+with 4KB and 16KB message sizes. Higher is better for RPS and lower is better   Fig. 12. Performance of Nginx when executing compression on different
+for CPU and memory utilization. All the results are normalized to that of the   configurations with 4KB and 16KB message sizes. Higher is better for RPS and
+CPU configuration.                                                              lower is better for CPU and memory utilization. All the results are normalized
+                                                                                to that of the CPU configuration.
+
+
+The SmartNIC configuration does outperform the CPU baseline
+for 16KB message sizes as opposed to shorter 4KB messages.                      slowdown of Nginx’s RPS and the mcf workload from the
+We also note that even for a 64KB message size, SmartDIMM                       SPEC2017 benchmark suite [82] when co-running them on
+is capable of maintaining 11.9% higher RPS at 10.8% lower                       two separate cores (as a baseline we run Nginx and mcf on
+CPU utilization and 7.6% lower memory bandwidth utilization                     the server individually). We co-run 10 mcf instances with an
+than that of a SmartNIC.                                                        Nginx server utilizing 10 threads pinned to 10 separate physical
+   Figure 12 compares SmartDIMM performance with CPU                            cores. As shown, offloading TLS to SmartDIMM reduces the
+and QuickAssist for offloading compression. Since compression                   interference for both Nginx and mcf by 9.5% and 10.3%.
+is non-size preserving and cannot be autonomously offloaded                        Note that although SmartDIMM experiences 2.2 percentage
+to SmartNIC, we do not compare against a SmartNIC con-                          points higher slowdown for Nginx compared with SmartNIC,
+figuration. The RPS benefits of offloading compression to                       the absolute requests per second when co-running Nginx is
+hardware are higher than TLS offload, as the AES-NI instruc-                    still higher for SmartDIMM: 569609 vs. 377879. The higher
+tions significantly improve CPU performance for symmetric                       absolute requests per second for SmartDIMM results in slightly
+encryption. Offloading compression of 4KB and 16KB Nginx                        higher interference for mcf compared with the SmartNIC
+HTTP responses to SmartDIMM yields 6.09× and 11.28×                             configuration.
+higher RPS compared to CPU baseline while reducing the                          D. Area and Power
+CPU and memory bandwidth utilization by 88.9% and 23.6%,
+respectively. As expected, QuickAssist is unsuitable for fine-                     We use Xilinx Vivado 2019.2 Power analyzer [83] for
+grain offloading of small messages and does not provide RPS                     estimating the power of SmartDIMM. Our FPGA prototype
+improvements. It also increases memory and CPU utilization                      consumes 4.78 Watts of dynamic power when SmartDIMM
+due to high notification and memory copy overheads.                             is fully utilized, meaning that the DDR channel reaches its
+                                                                                full capacity. Our experimental results show less than 30% of
+C. Performance Isolation                                                        memory channel utilization when offloading TLS for different
+  In this subsection, we compare the performance of Smart-                      applications. On average, across all three benchmarks operating
+DIMM with other configurations when co-running secure Nginx                     at maximum sustainable load, SmartDIMM increases the power
+and a cache-intensive application. Table I compares the average                 consumption of AxDIMM by ∼0.92 Watts. Implementing the
+                                                                                TLS offload on SmartDIMM takes ∼21.8% of the FPGA
+                                                                                resources.
+Table I. Slow down of co-running scenario. The Nginx slowdown in each column
+is normalized to the solo run of the same configuration.
+                                                                                                          VIII. D ISCUSSION
+   Application     CPU      SmartNIC      QuickAssist     SmartDIMM                In the current landscape of ULP acceleration, SmartDIMM
+   Ngnix           15.8%       7.3%          28.7%             9.5%             demonstrates robust performance amidst contended LLC, main-
+   505.mcf         15.5%       8.7%          37.9%            10.3%             tains efficiency despite network packet losses, and adapts to
+             1                       1                                          on SmartNIC. Karandikar et al. [51] also designed an on-chip
+        8         2              8       2                                      accelerator for accelerating (de)serialization related to Google’s
+    7                 3      7               3                                  protobuf. Hu et al. [86] construct an asynchronous framework
+                                                  1   Contended LLC
+        6         4              6       4        2   Not contended LLC         for event-driven web services (e.g., Nginx) by creating an
+             5                    5               3   TCP Transport             OpenSSL engine that utilizes asynchronous communication
+            CPU              SmartDIMM                                          with Intel’s QuickAssist PCIe accelerators. Pismenny et al. [26]
+                                                  4   UDP Transport
+             1                    1
+                                                  5   Non-size preserving ULP   implement inline TLS encryption/decryption and NVMe-TCP
+        8         2           8      2
+                                                  6   Non-inc computable ULP    acceleration on Mellanox ConnectX6 NICs without offloading
+    7                 3      7               3
+                                                  7   Lossy/reorder network     layers 4 and below. Lazarev et al. [50] introduce a reconfig-
+        6         4              6      4                                       urable FPGA accelerator to offload the entire RPC stack using
+                                                  8   L4 Flexibility
+             5                     5                                            fast memory interconnects. SmartDIMM complements these
+                             Autonomous
+   SmartNIC+TOE                                                                 works by providing an alternative location to process ULPs
+                          SmartNIC Offload [28]
+                                                                                inside the memory, preventing cache thrashing at high loads,
+Fig. 13. Comparison of the current ULP processing design space. The relative    and enabling hardware offload for a larger range of ULPs.
+performance of each processing option is compared with respect to the
+following metrics: performance in the face of low or high LLC contention,       Near-memory processing. There are a myriad of prior works
+compatibility with underlying transport protocols (TCP and UDP), ability to     on various near-memory processing architectures [73, 75, 76,
+target diverse (non-size preserving and non-incrementally computable) ULPs,     87–97]. SmartDIMM is unique because it removes the need
+resistance to performance degradation when packets are lost or reordered,
+and the flexibility of the layer-4 transport protocol.                          for a synchronization mechanism between the CPU and near-
+                                                                                memory accelerator, does not require a separate memory
+                                                                                controller for the near-memory accelerator, and implements
+various underlying transport layer protocols. This performance                  an API to reuse the existing software stack and programming
+is depicted in Fig.13, where different ULP processing options                   models.
+are compared across various criteria.
+                                                                                              X. C ONCLUSION
+   We note that a SmartNIC offering autonomous ULP offload
+with an optimized (zero copy) software stack shares many             Restricting accelerator placement for ULPs to CPUs and
+benefits, particularly when the underlying transport layer,       SmartNICs      limits both the variety of ULPs that can be acceler-
+such as UDP, does not guarantee reliable delivery of ULP          ated  and  the  overall performance. Specifically, such placements
+messages and experiences minimal packet drops. However,           do  not  take   into  account the opportunity to accelerate ULPs
+previous SmartNICs that accelerate processing via TCP Offload     operating    on  top  of a stateful transport protocol, especially in
+Engines (TOEs) bypass out-of-order network stack processing       scenarios   with  high   cache contention. At high network rates, the
+by offloading both TCP/IP and ULP tasks to the SmartNIC.          frequent   DRAM      accesses    and SmartNIC-CPU synchronization
+As illustrated in Fig.13, this approach can limit optimizations   outweigh     the  benefits   of hardware   acceleration. In this work,
+at the transport layer software and efforts to address emerging   we  introduce     SmartDIMM,       an  architecture  and programming
+vulnerabilities [84, 85].                                         model     designed     for   accelerating   ULPs    near   the memory.
+   While the CPU provides the flexibility to offload any ULP      SmartDIMM        enables   accelerator  placement  on  the buffer device
+in conjunction with any software or network stack, it comes       of  commodity       DIMMs,      thereby   unleashing   the  potential to
+at the cost of increased LLC contention and limited on-chip       accelerate    ULPs    that   operate  on  stateful transport  protocols
+resources. This, in turn, adversely affects applications that     and   suffer  from   poor   cache  performance.    We  have  prototyped
+depend on ULP processing.                                         SmartDIMM using Samsung’s AxDIMM and evaluated its
+   ULP acceleration represents a dynamic and evolving design effectiveness with two important ULPs.
+space. Employing an accelerator requires system designers to                            ACKNOWLEDGMENTS
+carefully consider its placement, ensuring alignment with the
+application needs and network transport protocol characteristics.    This   work    was   supported in part by grants from National
+SmartDIMM represents an alternative option in the future of       Science    Foundation     (CCF-2239020 and DGE-1565570), Sam-
+compute-everywhere data centers.                                  sung’s   Open    Innovation     Contest, and ACE, one of the seven
+                                                                  centers in JUMP 2.0, a Semiconductor Research Corporation
+                     IX. R ELATED W ORK                           (SRC) program sponsored by DARPA. We thank NVIDIA
+Accelerating data transformations. Accelerating I/O-related       Academic      Hardware Grant Program and Ampere Computing
+datacenter taxes is becoming a priority for datacenter service    for their  hardware     donations. We also thank Ramesh Ganapam
+providers. This has sparked the development of hardware           for  his circuit   models    used in our evaluations.
+accelerators for ULPs and microservices accessible via RPCs.
+                                                                                                  A PPENDIX
+Previous works have evaluated different solutions for acceler-
+ating data transformations.                                       A. Abstract
+   Pourhabibi et al. [52, 53] designed hardware accelerators         This artifact appendix describes how to use the publicly
+for serialization frameworks like Google’s protobuf, proposing available scripts to reproduce the sensitivity analysis and
+solutions for accelerating data transformations on-chip and evaluations in Section 7 of this paper. We use a publicly
+available HTTP web server (Nginx), compression corpora,                   URL https://cloud.google.com/blog/products/networking/
+and software compression algorithms available online. Results             tls-1-3-is-now-on-by-default-for-google-cloud-services.
+reproduced will include web server and system performance             [4] Mark Slee, Aditya Agarwal, and Marc Kwiatkowski.
+for different accelerator and CPU configurations offloading               Thrift: Scalable cross-language services implementation.
+ULPs including compression and encryption.                                Facebook white paper, 5(8):127, 2007. URL https:
+                                                                          //thrift.apache.org/static/files/thrift-20070401.pdf.
+B. Artifact check-list (meta-information)
+                                                                      [5] Protocol buffers | google developers. https://developers.
+  • Algorithm: SmartDIMM                                                  google.com/protocol-buffers.
+  • Program: Nginx, SmartDIMM-compatible nginx compression
+    module (source provided)                                          [6] Cap’n proto. https://capnproto.org/.
+  • Compilation: gcc 8.4.0 (Ubuntu 8.4.0-3ubuntu2)                    [7] finagle-rpc. https://twitter.github.io/finagle/.
+  • Run-time environment: Tested on Ubuntu 20.04                      [8] zstd. https://github.com/facebook/zstd, 2022.
+  • Hardware: Intel c6250 Server                                      [9] brotli. https://github.com/google/brotli, 2022.
+  • Experiments: As described in Sec. VII-B.
+                                                                     [10] Svilen Kanev, Juan Pablo Darago, Kim Hazelwood,
+  • Publicly available?: https://github.com/architecture-research-
+    group/SmartDIMM_ArtifactEvaluation.git                                Parthasarathy Ranganathan, Tipp Moseley, Gu-Yeon Wei,
+  • Code licenses (if publicly available)?: MIT                           and David Brooks. Profiling a warehouse-scale computer.
+  • Archived (provide DOI)?: https://doi.org/10.5281/zenodo.              In 2015 ACM/IEEE 42nd Annual International Symposium
+    10278844                                                              on Computer Architecture (ISCA), pages 158–169, 2015.
+C. Description                                                            doi: 10.1145/2749469.2750392.
+                                                                     [11] Akshitha Sriraman and Abhishek Dhanotia. Accelerome-
+   1) How to access                                                       ter: Understanding Acceleration Opportunities for Data
+   See github link above.                                                 Center Overheads at Hyperscale. In Proceedings of the
+   2) Hardware dependencies                                               Twenty-Fifth International Conference on Architectural
+   Some experiments depend on access to two servers. They                 Support for Programming Languages and Operating Sys-
+can be multi-core servers allocated as r650 nodes available               tems, ASPLOS ’20, pages 733–750, New York, NY, USA,
+through cloudlab. This hardware is sufficient to reproduce CPU            March 2020. Association for Computing Machinery. ISBN
+and SmartNIC results.                                                     978-1-4503-7102-5. doi: 10.1145/3373376.3378450. URL
+   3) Software dependencies                                               https://doi.org/10.1145/3373376.3378450.
+   See github link above.                                            [12] Geonhwa Jeong, Bikash Sharma, Nick Terrell, Abhishek
+D. Installation                                                           Dhanotia, Zhiwei Zhao, Niket Agarwal, Arun Kejariwal,
+   Obtain the code and sub-modules from github and run                    and Tushar Krishna. Characterization of data compression
+corresponding fetch and run scripts. Instructions for each                in datacenters. In 2023 IEEE International Symposium on
+experiment are provided in each subdirectory of the repository.           Performance Analysis of Systems and Software (ISPASS),
+Scripts for running each experiment are provided as bash shell            pages 1–12, 2023. doi: 10.1109/ISPASS57527.2023.
+scripts.                                                                  00010.
+                                                                     [13] Sagar Karandikar, Aniruddha N. Udipi, Junsun Choi,
+E. Experiment workflow and expected results                               Joonho Whangbo, Jerry Zhao, Svilen Kanev, Edwin
+  Use build scripts (e.g., build.sh) to compile various nginx             Lim, Jyrki Alakuijala, Vrishab Madduri, Yakun Sophia
+versions, and acquire any required dependencies. Use shell                Shao, Borivoje Nikolic, Krste Asanovic, and Parthasarathy
+scripts (e.g., compressed_http_run.sh and tls_http_run.sh) to             Ranganathan. CDPU: Co-designing compression and
+generate needed server’s files files and reproduce results.               decompression processing units for hyperscale systems. In
+Normalize and plot them using gnuplot scripts. (Experiment-               Proceedings of the 50th Annual International Symposium
+specific instructions provided in the Github repository provided          on Computer Architecture, ISCA ’23, New York, NY,
+above).                                                                   USA, 2023. Association for Computing Machinery. ISBN
+                                                                          9798400700958. doi: 10.1145/3579371.3589074. URL
+                         R EFERENCES                                      https://doi.org/10.1145/3579371.3589074.
+ [1] Alex Guzman, Kyle Nekritz, and Subodh Iyengar. Deploy-          [14] Abraham Gonzalez, Aasheesh Kolli, Samira Khan, Sihang
+     ing tls 1.3 at scale with fizz, a performant open source             Liu, Vidushi Dadu, Sagar Karandikar, Jichuan Chang,
+     tls library. Facebook Engineering, August 2018. URL                  Krste Asanovic, and Parthasarathy Ranganathan. Pro-
+     https://engineering.fb.com/2018/08/06/security/fizz/.                filing hyperscale big data processing. In Proceedings
+ [2] Tim Anderson, Ken Beer, Min Hyun, and Mark Ryland.                   of the 50th Annual International Symposium on Com-
+     Encrypting data-at-rest and -in-transit. Amazon Web                  puter Architecture, ISCA ’23, New York, NY, USA,
+     Services, 2007. URL https://doi.org/10.6028/NIST.SP.800-             2023. Association for Computing Machinery. ISBN
+     38D. NIST Special Publication 800-38D.                               9798400700958. doi: 10.1145/3579371.3589082. URL
+ [3] Matt Silverlock and Gabriel Redner.             Bringing             https://doi.org/10.1145/3579371.3589082.
+     modern transport security to google cloud with                  [15] Keynote by Bill Dally (NVIDIA): Accelerator Clusters.
+     tls 1.3.       Technical report, Google, June 2020.                  https://www.youtube.com/watch?v=napEsaJ5hMU.
+[16] NVIDIA.           Nvidia bluefield-3 dpu datasheet.             Liss, Adam Morrison, and Dan Tsafrir. Autonomous nic
+     https://resources.nvidia.com/en-us-accelerated-                 offloads. In Proceedings of the 26th ACM International
+     networking-resource-library/datasheet-nvidia-                   Conference on Architectural Support for Programming
+     bluefield?lx=LbHvpR&topic=networking-cloud, 2023.               Languages and Operating Systems, ASPLOS 2021, page
+[17] J. Dastidar, D. Riddoch, J. Moore, S. Pope, and J. Wes-         18–35, New York, NY, USA, 2021. Association for
+     selkamper. The amd 400-g adaptive smartnic system on            Computing Machinery. ISBN 9781450383172. doi:
+     chip: A technology preview. IEEE Micro, 43(03):40–49,           10.1145/3445814.3446732. URL https://doi.org/10.1145/
+     may 2023. ISSN 1937-4143. doi: 10.1109/MM.2023.                 3445814.3446732.
+     3260186.                                                   [27] Jung-Sik Kim, Kyungwoo Nam, Chi Sung Oh, Han Gu
+[18] Data Processing Units (DPU) | Empowering 5G Car-                Sohn, Donghyuk Lee, Sooyoung Kim, Jong-Wook Park,
+     rier, Enterprise and Cloud Data Services - Marvell              Yongjun Kim, Mi-Jo Kim, Jin-Guk Kim, Hocheol Lee,
+     — marvell.com. https://www.marvell.com/products/data-           Jinhyoung Kwon, Dong Il Seo, Young-Hyun Jun, and
+     processing-units.html.                                          Kinam Kim. A 512 mb two-channel mobile dram
+[19] Broadcom Inc. | Connecting Everything — broad-                  (onedram) with shared memory array. IEEE Journal
+     com.com. https://www.broadcom.com/company/news/                 of Solid-State Circuits, 43(11):2381–2389, 2008. doi:
+     product-releases/53106.                                         10.1109/JSSC.2008.2004523.
+[20] Brian Will, Andrea Grandi, and Nicolas Salhuana. Intel®    [28] Donghyuk Lee, Lavanya Subramanian, Rachata
+     QuickAssist Technology OpenSSL-1.1.0: Performance.              Ausavarungnirun, Jongmoo Choi, and Onur Mutlu.
+     Technical report, Intel, 01 2017.                               Decoupled direct memory access: Isolating cpu and
+[21] AMD GZIP Compression & Decompression — xil-                     io traffic by leveraging a dual-data-port dram. In
+     inx.com. https://www.xilinx.com/products/acceleration-          2015 International Conference on Parallel Architecture
+     solutions/xilinx-gzip-compression-decompression.html.           and Compilation (PACT), pages 174–187, 2015. doi:
+[22] Ben Casey.         DirectCompress Accelerator Packs             10.1109/PACT.2015.51.
+     More into FlashArray//XL, March 2023. URL https:           [29] Benjamin Y. Cho, Yongkee Kwon, Sangkug Lym, and
+     //blog.purestorage.com/purely-technical/directcompress-         Mattan Erez. Near data acceleration with concurrent
+     accelerator-packs-more-data-into-flasharray-xl/.                host access. In Proceedings of the ACM/IEEE 47th
+[23] Bulent Abali, Bart Blaner, John Reilly, Matthias Klein,         Annual International Symposium on Computer Architec-
+     Ashutosh Mishra, Craig B. Agricola, Bedri Sendir, Alper         ture, ISCA ’20, page 818–831. IEEE Press, 2020. ISBN
+     Buyuktosunoglu, Christian Jacobi, William J. Starke,            9781728146614. doi: 10.1109/ISCA45697.2020.00072.
+     Haren Myneni, and Charlie Wang. Data compression                URL https://doi.org/10.1109/ISCA45697.2020.00072.
+     accelerator on ibm power9 and z15 processors. In           [30] Sukhan Lee, Shin-haeng Kang, Jaehoon Lee, Hyeonsu
+     Proceedings of the ACM/IEEE 47th Annual International           Kim, Eojin Lee, Seungwoo Seo, Hosang Yoon, Seungwon
+     Symposium on Computer Architecture, ISCA ’20, page              Lee, Kyounghwan Lim, Hyunsung Shin, Jinhyun Kim,
+     1–14. IEEE Press, 2020. ISBN 9781728146614. doi:                O Seongil, Anand Iyer, David Wang, Kyomin Sohn, and
+     10.1109/ISCA45697.2020.00012. URL https://doi.org/10.           Nam Sung Kim. Hardware architecture and software stack
+     1109/ISCA45697.2020.00012.                                      for pim based on commercial dram technology : Industrial
+[24] Nevine Nassif, Ashley O. Munch, Carleton L. Molnar,             product. In 2021 ACM/IEEE 48th Annual International
+     Gerald Pasdast, Sitaraman V. Lyer, Zibing Yang, Oscar           Symposium on Computer Architecture (ISCA), pages 43–
+     Mendoza, Mark Huddart, Srikrishnan Venkataraman,                56, 2021. doi: 10.1109/ISCA52012.2021.00013.
+     Sireesha Kandula, Rafi Marom, Alexandra M. Kern,           [31] Jin Hyun Kim, Shin-Haeng Kang, Sukhan Lee, Hyeonsu
+     Bill Bowhill, David R. Mulvihill, Srikanth Nimmagadda,          Kim, Yuhwan Ro, Seungwon Lee, David Wang, Jihyun
+     Varma Kalidindi, Jonathan Krause, Mohammad M. Haq,              Choi, Jinin So, YeonGon Cho, JoonHo Song, Jeonghyeon
+     Roopali Sharma, and Kevin Duda. Sapphire rapids:                Cho, Kyomin Sohn, and Nam Sung Kim. Aquabolt-xl
+     The next-generation intel xeon scalable processor. In           hbm2-pim, lpddr5-pim with in-memory processing, and
+     2022 IEEE International Solid- State Circuits Confer-           axdimm with acceleration buffer. IEEE Micro, 42(3):
+     ence (ISSCC), volume 65, pages 44–46, 2022. doi:                20–30, 2022. doi: 10.1109/MM.2022.3164651.
+     10.1109/ISSCC42614.2022.9731107.                           [32] Inc. OpenSSL Foundation. /docs/man1.1.1/man1/openssl-
+[25] Ilias Marinos, Robert N.M. Watson, Mark Handley, and            engine.html — openssl.org. https://www.openssl.org/docs/
+     Randall R. Stewart. Disk|crypt|net: Rethinking the stack        man1.1.1/man1/openssl-engine.html.
+     for high-performance video streaming. In Proceedings       [33] Eric Rescorla. The Transport Layer Security (TLS)
+     of the Conference of the ACM Special Interest Group on          Protocol Version 1.3. RFC 8446, August 2018. URL
+     Data Communication, SIGCOMM ’17, page 211–224,                  https://www.rfc-editor.org/info/rfc8446.
+     New York, NY, USA, 2017. Association for Computing         [34] Morris Dworkin (NIST). Recommendation for block
+     Machinery. ISBN 9781450346535. doi: 10.1145/3098822.            cipher modes of operation: Galois/Counter Mode (GCM)
+     3098844. URL https://doi.org/10.1145/3098822.3098844.           and Galois Message Authentication Code (GMAC). Tech-
+[26] Boris Pismenny, Haggai Eran, Aviad Yehezkel, Liran              nical Report NIST Special Publication 800-38D, U.S.
+     Department of Commerce, Washington, D.C., 2007.                    Charlie Tai, and Nam Sung Kim. Rambda: Rdma-driven
+[35] P. Deutsch. Deflate compressed data format specification           acceleration framework for memory-intensive µs-scale
+     version 1.3. https://www.rfc-editor.org/rfc/rfc1951.               datacenter applications. In 2023 IEEE International
+[36] Content-Encoding - HTTP | MDN — devel-                             Symposium on High-Performance Computer Architecture
+     oper.mozilla.org.         https://developer.mozilla.org/en-        (HPCA), pages 499–515, 2023. doi: 10.1109/HPCA56546.
+     US/docs/Web/HTTP/Headers/Content-Encoding.                         2023.10071127.
+     [Accessed 23-12-2023].                                        [49] Mohammad Alian and Nam Sung Kim. NetDIMM: Low-
+[37] J. Ziv and A. Lempel. A universal algorithm for sequential         latency near-memory network interface architecture. In
+     data compression. IEEE Transactions on Information                 Proceedings of the 52nd Annual IEEE/ACM International
+     Theory, 23(3):337–343, 1977. doi: 10.1109/TIT.1977.                Symposium on Microarchitecture, pages 699–711. ACM,
+     1055714.                                                           2019.
+[38] David A. Huffman. A method for the construction of            [50] Nikita Lazarev, Shaojie Xiang, Neil Adit, Zhiru Zhang,
+     minimum-redundancy codes. Proceedings of the IRE,                  and Christina Delimitrou. Dagger: Efficient and fast rpcs
+     40(9):1098–1101, 1952. doi: 10.1109/JRPROC.1952.                   in cloud microservices with near-memory reconfigurable
+     273898.                                                            nics. In Proceedings of the 26th ACM International
+[39] Intel data direct i/o technology (intel ddio): A                   Conference on Architectural Support for Programming
+     primer. https://www.intel.com/content/www/us/en/io/data-           Languages and Operating Systems, ASPLOS 2021, page
+     direct-i-o-technology-brief.html.                                  36–51, New York, NY, USA, 2021. Association for
+[40] ARM. Arm DynamIQ Shared Unit Technical Reference                   Computing Machinery. ISBN 9781450383172. doi:
+     Manual r3p0. https://developer.arm.com/documentation/              10.1145/3445814.3446696. URL https://doi.org/10.1145/
+     100453/0300/.                                                      3445814.3446696.
+[41] Amin Tootoonchian, Aurojit Panda, Chang Lan, Melvin           [51] Sagar Karandikar, Chris Leary, Chris Kennelly, Jerry
+     Walls, Katerina Argyraki, Sylvia Ratnasamy, and Scott              Zhao, Dinesh Parimi, Borivoje Nikolic, Krste Asanovic,
+     Shenker. ResQ: Enabling SLOs in network function                   and Parthasarathy Ranganathan. A hardware accelera-
+     virtualization. In 15th USENIX Symposium on Networked              tor for protocol buffers. In MICRO-54: 54th Annual
+     Systems Design and Implementation (NSDI 18), pages                 IEEE/ACM International Symposium on Microarchitec-
+     283–297, Renton, WA, April 2018. USENIX Association.               ture, MICRO ’21, page 462–478, New York, NY, USA,
+     ISBN 978-1-939133-01-4. URL https://www.usenix.org/                2021. Association for Computing Machinery. ISBN
+     conference/nsdi18/presentation/tootoonchian.                       9781450385572. doi: 10.1145/3466752.3480051. URL
+[42] Mohammad Alian, Siddharth Agarwal, Jongmin Shin,                   https://doi.org/10.1145/3466752.3480051.
+     Neel Patel, Yifan Yuan, Daehoon Kim, Ren Wang,                [52] Arash Pourhabibi, Mark Sutherland, Alexandros Daglis,
+     and Nam Sung Kim. Idio: Network-driven, inbound                    and Babak Falsafi. Cerebros: Evading the rpc tax in
+     network data orchestration on server processors. In                datacenters. In MICRO-54: 54th Annual IEEE/ACM Inter-
+     2022 55th IEEE/ACM International Symposium on Mi-                  national Symposium on Microarchitecture, MICRO ’21,
+     croarchitecture (MICRO), pages 480–493, 2022. doi:                 page 407–420, New York, NY, USA, 2021. Association
+     10.1109/MICRO56248.2022.00042.                                     for Computing Machinery. ISBN 9781450385572. doi:
+[43] Shay Gueron. Intel advanced encryption standard (aes)              10.1145/3466752.3480055. URL https://doi.org/10.1145/
+     new instructions set, 2010.                                        3466752.3480055.
+[44] Intel. Intel quickassist adapter 8970. URL https://www.       [53] Arash Pourhabibi, Siddharth Gupta, Hussein Kassir, Mark
+     intel.com/content/www/us/en/products/sku/125200/intel-             Sutherland, Zilu Tian, Mario Paulo Drumond, Babak
+     quickassist-adapter-8970/specifications.html.                      Falsafi, and Christoph Koch. Optimus prime: Accelerating
+[45] B. Kaliski J. Jonsson A. Rusch K. Moriarty, Ed. PKCS               data transformation in servers. In Proceedings of the
+     1: RSA Cryptography Specifications Version 2.2. RFC                Twenty-Fifth International Conference on Architectural
+     8017, November 2016. URL https://datatracker.ietf.org/             Support for Programming Languages and Operating
+     doc/html/rfc8017.                                                  Systems, ASPLOS ’20, page 1203–1216, New York, NY,
+[46] M. Salter D. McGrew, K. Igoe. Fundamental Elliptic                 USA, 2020. Association for Computing Machinery. ISBN
+     Curve Cryptography Algorithms. RFC 6090, February                  9781450371025. doi: 10.1145/3373376.3378501. URL
+     2011. URL https://datatracker.ietf.org/doc/html/rfc6090.           https://doi.org/10.1145/3373376.3378501.
+[47] Amirhossein Mirhosseini, Hossein Golestani, and               [54] Yifan Yuan, Mohammad Alian, Yipeng Wang, Ren
+     Thomas F. Wenisch. Hyperplane: A scalable low-latency              Wang, Ilia Kurakin, Charlie Tai, and Nam Sung Kim.
+     notification accelerator for software data planes. In 2020         Don’t forget the i/o when allocating your llc. In 2021
+     53rd Annual IEEE/ACM International Symposium on                    ACM/IEEE 48th Annual International Symposium on
+     Microarchitecture (MICRO), pages 852–867, 2020. doi:               Computer Architecture (ISCA), pages 112–125. IEEE,
+     10.1109/MICRO50266.2020.00074.                                     2021.
+[48] Yifan Yuan, Jinghan Huang, Yan Sun, Tianchen Wang,            [55] Minhu Wang, Mingwei Xu, and Jianping Wu. Un-
+     Jacob Nelson, Dan R. K. Ports, Yipeng Wang, Ren Wang,              derstanding I/O Direct Cache Access Performance for
+     End Host Networking. Proceedings of the ACM on              [66] Morris J Dworkin. Sp 800-38d. recommendation for
+     Measurement and Analysis of Computing Systems, 6(1):             block cipher modes of operation: Galois/counter mode
+     22:1–22:37, February 2022. doi: 10.1145/3508042. URL             (gcm) and gmac. Technical report, 2007. URL https:
+     https://dl.acm.org/doi/10.1145/3508042.                          //csrc.nist.gov/pubs/sp/800/38/d/final.
+[56] Donghun Lee, Jinin So, MINSEON AHN, Jong-                   [67] Jeremy Fowers, Joo-Young Kim, Doug Burger, and
+     Geon Lee, Jungmin Kim, Jeonghyeon Cho, Rebholz                   Scott Hauck. A scalable high-bandwidth architecture
+     Oliver, Vishnu Charan Thummala, Ravi shankar JV,                 for lossless compression on fpgas. In 2015 IEEE 23rd
+     Sachin Suresh Upadhya, Mohammed Ibrahim Khan, and                Annual International Symposium on Field-Programmable
+     Jin Hyun Kim. Improving in-memory database operations            Custom Computing Machines, pages 52–59, 2015. doi:
+     with acceleration dimm (axdimm). In Data Management              10.1109/FCCM.2015.46.
+     on New Hardware, DaMoN’22, New York, NY, USA,               [68] Weikang Qiao, Jieqiong Du, Zhenman Fang, Libo Wang,
+     2022. Association for Computing Machinery. ISBN                  Michael Lo, Mau-Chung Frank Chang, and Jason Cong.
+     9781450393782. doi: 10.1145/3533737.3535093. URL                 High-throughput lossless compression on tightly coupled
+     https://doi.org/10.1145/3533737.3535093.                         cpu-fpga platforms: (abstract only). In Proceedings
+[57] Xilinx. Ultrascale architecture-based fpgas memory ip            of the 2018 ACM/SIGDA International Symposium on
+     v1.4, 2022. URL https://www.xilinx.com/content/dam/              Field-Programmable Gate Arrays, FPGA ’18, page 291,
+     xilinx/support/documents/ip_documentation/ultrascale_            New York, NY, USA, 2018. Association for Computing
+     memory_ip/v1_4/pg150-ultrascale-memory-ip.pdf.                   Machinery. ISBN 9781450356145. doi: 10.1145/3174243.
+[58] R. N. Mahapatra and R. V.C. TCAM architecture for                3174987. URL https://doi.org/10.1145/3174243.3174987.
+     ip lookup using prefix properties. IEEE Micro, 24(02):      [69] Dave Watson. Ktls: Linux kernel transport layer security.
+     60–69, March 2004. ISSN 1937-4143. doi: 10.1109/MM.              Proposal by Facebook Engineer, 2016.
+     2004.1289292.                                               [70] ULP Framing for TCP. https://datatracker.ietf.org/doc/
+[59] Dimitris Fotakis, Rasmus Pagh, Peter Sanders, and Paul G.        draft-ietf-tsvwg-tcp-ulp-frame/, 2023.
+     Spirakis. Space efficient hash tables with worst case       [71] Peter Pessl, Daniel Gruss, Clémentine Maurice, Michael
+     constant access time. In Proceedings of the 20th Annual          Schwarz, and Stefan Mangard. DRAMA: Exploit-
+     Symposium on Theoretical Aspects of Computer Science,            ing DRAM addressing for cross-cpu attacks.            In
+     STACS ’03, page 271–282, Berlin, Heidelberg, 2003.               25th USENIX Security Symposium (USENIX Secu-
+     Springer-Verlag. ISBN 3540006230.                                rity 16), pages 565–581, Austin, TX, August 2016.
+[60] Dimitrios Skarlatos, Apostolos Kokolis, Tianyin Xu, and          USENIX Association.           ISBN 978-1-931971-32-4.
+     Josep Torrellas. Elastic Cuckoo Page Tables: Rethink-            URL https://www.usenix.org/conference/usenixsecurity16/
+     ing Virtual Memory Translation for Parallelism, page             technical-sessions/presentation/pessl.
+     1093–1108. Association for Computing Machinery, New         [72] Jim Reece published. DDR DRAM FAQs And Trou-
+     York, NY, USA, 2020. ISBN 9781450371025. URL                     bleshooting Guide, June 2015.           URL https://www.
+     https://doi.org/10.1145/3373376.3378493.                         tomshardware.com/reviews/ddr-dram-faq,4154.html.
+[61] JEDEC Standard: DDR4 SDRAM, 2012.                           [73] Mohammad Alian, Seung Won Min, Hadi Asgharimoghad-
+[62] Mengjia Yan, Read Sprabery, Bhargava Gopireddy,                  dam, Ashutosh Dhar, Dong Kai Wang, Thomas Roewer,
+     Christopher Fletcher, Roy Campbell, and Josep Torrellas.         Adam McPadden, Oliver O’Halloran, Deming Chen,
+     Attack directories, not caches: Side channel attacks in          Jinjun Xiong, et al. Application-transparent near-memory
+     a non-inclusive world. In 2019 IEEE Symposium on                 processing architecture with memory channel network. In
+     Security and Privacy (SP), pages 888–904, 2019. doi:             2018 51st Annual IEEE/ACM International Symposium
+     10.1109/SP.2019.00004.                                           on Microarchitecture (MICRO), pages 802–814. IEEE,
+[63] Alex Markuze, Adam Morrison, and Dan Tsafrir. True               2018.
+     iommu protection from dma attacks: When copy is             [74] Alexandar Devic, Siddhartha Balakrishna Rai, Anand
+     faster than zero copy. In Proceedings of the Twenty-             Sivasubramaniam, Ameen Akel, Sean Eilert, and Justin
+     First International Conference on Architectural Support          Eno. To pim or not for emerging general purpose
+     for Programming Languages and Operating Systems,                 processing in ddr memory systems. In Proceedings of
+     ASPLOS ’16, page 249–262, New York, NY, USA,                     the 49th Annual International Symposium on Computer
+     2016. Association for Computing Machinery. ISBN                  Architecture, ISCA ’22, page 231–244, New York, NY,
+     9781450340915. doi: 10.1145/2872362.2872379. URL                 USA, 2022. Association for Computing Machinery. ISBN
+     https://doi.org/10.1145/2872362.2872379.                         9781450386104. doi: 10.1145/3470496.3527431. URL
+[64] Jonathan Corbet. Zero-copy tcp receive. https://lwn.net/         https://doi.org/10.1145/3470496.3527431.
+     Articles/752188/.                                           [75] Weiyi Sun, Zhaoshi Li, Shouyi Yin, Shaojun Wei, and
+[65] Alex Markuze, Igor Golikov, and Chen Dar.                        Leibo Liu. Abc-dimm: alleviating the bottleneck of
+     Rethinking Zero-Copy Networking with MAIO. URL                   communication in dimm-based near-memory processing
+     https://netdevconf.info/0x15/session.html?Rethinking-            with inter-dimm broadcast. In 2021 ACM/IEEE 48th An-
+     Zero-Copy-Networking-with-MAIO.                                  nual International Symposium on Computer Architecture
+     (ISCA), pages 237–250. IEEE, 2021.                           [89] Youngeun Kwon, Yunjae Lee, and Minsoo Rhu. Tensor-
+[76] Zhe Zhou, Cong Li, Fan Yang, and Guangyu Sun. Dimm-               dimm: A practical near-memory processing architecture
+     link: Enabling efficient inter-dimm communication for             for embeddings and tensor operations in deep learning. In
+     near-memory processing. In 2023 IEEE International                Proceedings of the 52nd Annual IEEE/ACM International
+     Symposium on High-Performance Computer Architecture               Symposium on Microarchitecture, MICRO ’52, page
+     (HPCA), pages 302–316, 2023. doi: 10.1109/HPCA56546.              740–753, New York, NY, USA, 2019. Association for
+     2023.10071005.                                                    Computing Machinery. ISBN 9781450369381. doi:
+[77] Will Reese. Nginx: The high-performance web server and            10.1145/3352460.3358284. URL https://doi.org/10.1145/
+     reverse proxy. Linux J., 2008(173), sep 2008. ISSN 1075-          3352460.3358284.
+     3583. URL https://www.linuxjournal.com/article/10108.        [90] Gagandeep Singh, Juan Gómez-Luna, Giovanni Mariani,
+[78] Shay Gueron.              Intel advanced encryption               Geraldo F. Oliveira, Stefano Corda, Sander Stuijk, Onur
+     standard instructions (aes-ni), 2010.        URL https:           Mutlu, and Henk Corporaal. Napel: Near-memory com-
+     //www.intel.com/content/dam/doc/white-paper/advanced-             puting application performance prediction via ensemble
+     encryption-standard-new-instructions-set-paper.pdf.               learning. In 2019 56th ACM/IEEE Design Automation
+[79] Mellanox. Kernel transport layer security (ktls) offloads,        Conference (DAC), pages 1–6, 2019.
+     2020.                                                        [91] Amirali Boroumand, Saugata Ghose, Youngsok Kim,
+[80] wrk - a HTTP benchmarking tool. https://github.com/wg/            Rachata Ausavarungnirun, Eric Shiu, Rahul Thakur,
+     wrk, 2023. [].                                                    Daehyun Kim, Aki Kuusela, Allan Knies, Parthasarathy
+[81] Khang T Nguyen. Cache Allocation Technology in                    Ranganathan, and Onur Mutlu. Google Workloads for
+     Intel® Xeon® Processor. https://www.intel.com/content/            Consumer Devices: Mitigating Data Movement Bottle-
+     www/us/en/developer/articles/technical/introduction-to-           necks, page 316–331. Association for Computing Machin-
+     cache-allocation-technology.html.                                 ery, New York, NY, USA, 2018. ISBN 9781450349116.
+[82] Spec cpu® 2017. https://www.spec.org/cpu2017/.                    URL https://doi.org/10.1145/3173162.3173177.
+[83] Vivado Design Suite User Guide: Getting Started (UG910).     [92] Liu Ke, Udit Gupta, Benjamin Youngjae Cho, David
+     2021.                                                             Brooks, Vikas Chandra, Utku Diril, Amin Firoozshahian,
+[84] Jake Edge. The tcp sack panic, 2005. URL https://lwn.             Kim Hazelwood, Bill Jia, Hsien-Hsin S Lee, et al.
+     net/Articles/791409/.                                             Recnmp: Accelerating personalized recommendation with
+[85] CVE-2019-11478. Available from NIST, CVE-ID CVE-                  near-memory processing. In 2020 ACM/IEEE 47th An-
+     2019-11478., 3 2019. URL https://nvd.nist.gov/vuln/               nual International Symposium on Computer Architecture
+     detail/CVE-2019-11478.                                            (ISCA), pages 790–803. IEEE, 2020.
+[86] Xiaokang Hu, Changzheng Wei, Jian Li, Brian Will,            [93] Christina Giannoula, Nandita Vijaykumar, Nikela Pa-
+     Ping Yu, Lu Gong, and Haibing Guan. Qtls: High-                   padopoulou, Vasileios Karakostas, Ivan Fernandez, Juan
+     performance tls asynchronous offload framework with               Gómez-Luna, Lois Orosa, Nectarios Koziris, Georgios
+     intel® quickassist technology. In Proceedings of the              Goumas, and Onur Mutlu. Syncron: Efficient syn-
+     24th Symposium on Principles and Practice of Parallel             chronization support for near-data-processing architec-
+     Programming, PPoPP ’19, page 158–172, New York, NY,               tures. In 2021 IEEE International Symposium on High-
+     USA, 2019. Association for Computing Machinery. ISBN              Performance Computer Architecture (HPCA), pages 263–
+     9781450362252. doi: 10.1145/3293883.3295705. URL                  276. IEEE, 2021.
+     https://doi.org/10.1145/3293883.3295705.                     [94] Xinfeng Xie, Zheng Liang, Peng Gu, Abanti Basak, Lei
+[87] Amin Farmahini-Farahani, Jung Ho Ahn, Katherine                   Deng, Ling Liang, Xing Hu, and Yuan Xie. Spacea: Sparse
+     Morrow, and Nam Sung Kim. Nda: Near-dram accel-                   matrix vector multiplication on processing-in-memory
+     eration architecture leveraging commodity dram devices            accelerator. In 2021 IEEE International Symposium on
+     and standard memory modules. In 2015 IEEE 21st                    High-Performance Computer Architecture (HPCA), pages
+     International Symposium on High Performance Com-                  570–583. IEEE, 2021.
+     puter Architecture (HPCA), pages 283–295, 2015. doi:         [95] Gagandeep Singh, Mohammed Alser, Damla Senol Cali,
+     10.1109/HPCA.2015.7056040.                                        Dionysios Diamantopoulos, Juan Gómez-Luna, Henk
+[88] Jaeyoung Jang, Jun Heo, Yejin Lee, Jaeyeon Won,                   Corporaal, and Onur Mutlu. Fpga-based near-memory
+     Seonghak Kim, Sung Jun Jung, Hakbeom Jang, Tae Jun                acceleration of modern data-intensive applications. IEEE
+     Ham, and Jae W. Lee. Charon: Specialized near-                    Micro, 41(4):39–48, 2021.
+     memory processing architecture for clearing dead ob-         [96] Bahar Asgari, Ramyad Hadidi, Jiashen Cao, Sung-Kyu
+     jects in memory. In Proceedings of the 52nd Annual                Lim, Hyesoon Kim, et al. Fafnir: Accelerating sparse
+     IEEE/ACM International Symposium on Microarchitec-                gathering by using efficient near-memory intelligent
+     ture, MICRO ’52, page 726–739, New York, NY, USA,                 reduction. In 2021 IEEE International Symposium on
+     2019. Association for Computing Machinery. ISBN                   High-Performance Computer Architecture (HPCA), pages
+     9781450369381. doi: 10.1145/3352460.3358297. URL                  908–920. IEEE, 2021.
+     https://doi.org/10.1145/3352460.3358297.                     [97] Siying Feng, Xin He, Kuan-Yu Chen, Liu Ke, Xuan Zhang,
+David Blaauw, Trevor Mudge, and Ronald Dreslinski.      Architecture, ISCA ’22, page 245–258, New York, NY,
+Menda: A near-memory multi-way merge solution for       USA, 2022. Association for Computing Machinery. ISBN
+sparse transposition and dataflows. In Proceedings of   9781450386104. doi: 10.1145/3470496.3527432. URL
+the 49th Annual International Symposium on Computer     https://doi.org/10.1145/3470496.3527432.
+

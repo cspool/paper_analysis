@@ -1,12 +1,21 @@
 ---
 name: paper-knowledge
-description: Extract and maintain a layered academic terminology knowledge base from local AI systems, LLM inference, accelerator, compiler/runtime, serving, GPU kernel, or architecture papers. Use when the user provides a paper title, title number, filename, or workspace identifier and asks to learn knowledge, extract key terms, update knowledge_repo, or build Chinese knowledge-base entries.
+description: Extract and maintain a layered academic terminology knowledge base from local AI systems, LLM inference, accelerator, compiler/runtime, serving, GPU kernel, or architecture papers. Use when the user provides a paper title, title number, filename, or workspace identifier and asks to learn knowledge, extract key terms, update knowledge_repo, or build Chinese knowledge-base entries. Requires two user-provided path parameters: {{paper_dir}} (where PDF papers are located) and {{knowledge_dir}} (where knowledge base markdown files are written).
 ---
 # Paper Knowledge Base
 
+## Parameters
+
+调用本 skill 时，用户**必须**提供以下两个路径参数：
+
+| 参数 | 说明 | 示例 |
+|------|------|------|
+| `{{paper_dir}}` | 论文 PDF 所在目录 | `/data3/paper_analysis/papers/paper_2026` |
+| `{{knowledge_dir}}` | 知识库 Markdown 文件输出目录 | `/data3/paper_analysis/repo_2026/knowledge_repo` |
+
 ## Overview
 
-根据所给论文标题，在 `papers/paper_2026/` 目录中找到原文PDF。阅读论文背景、Preliminary、动机（baseline）和方法章节，提取关键学术术语，判断关键术语所处层次，并根据论文描述或联网搜索解释，输出到对应层次的知识库。
+根据所给论文标题，在用户提供的 `{{paper_dir}}` 目录中找到原文PDF。阅读论文背景、Preliminary、动机（baseline）和方法章节，提取关键学术术语，判断关键术语所处层次，并根据论文描述或联网搜索解释，输出到对应层次的知识库。
 
 某层次知识库中已有相同术语，则根据新描述，补充原有术语的知识。
 
@@ -16,7 +25,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ### 第一步：定位论文PDF
 
-1. 根据用户提供的论文标题、编号、文件名或标识符，在 `paper_2026/` 目录中搜索原始PDF。
+1. 根据用户提供的论文标题、编号、文件名或标识符，在 `{{paper_dir}}` 目录中搜索原始PDF。
 2. 搜索策略：使用 `rg --files`、标题片段、论文编号和可能的文件名变体进行匹配。
 3. 如果用户只给出编号，先通过 `paper_titles.md` 等本地标题列表进行映射。
 4. 优先使用可读全文，顺序为：配套提取的 `.txt`/`.md` > PDF文本提取 > 官方论文HTML > 其他本地笔记。不要仅依赖摘要或二手总结。
@@ -50,7 +59,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ### 第五步：更新知识库
 
-更新 `knowledge_repo/` 目录下对应的 Markdown 文件。如果文件不存在则创建。不覆盖无关内容。
+更新 `{{knowledge_dir}}` 目录下对应的 Markdown 文件。如果文件不存在则创建。不覆盖无关内容。
 
 如果某层次知识库中已有相同术语或明确别名，将新论文的解释**合并**到已有条目中，而非创建重复条目。将论文标题追加到 `涉及论文标题`。
 
@@ -66,7 +75,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ### 芯片设计
 
-输出到 `knowledge_repo/知识库_芯片设计.md`。
+输出到 `{{knowledge_dir}}/知识库_芯片设计.md`。
 
 涵盖范围：chiplet、NvLink、WSE 及同等层次的物理芯片组织和芯片级技术相关学术术语。
 
@@ -77,7 +86,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 ```md
 ## <术语名>
 
-术语是什么？通过联网搜索让回答具体和精准。
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
 <解释该术语本身是什么。>
 
 从芯片设计角度拆解术语，比如术语如何在芯片设计中发挥作用，给出术语在芯片设计中运转流程的具体例子。通过联网搜索让回答具体和精准。
@@ -92,7 +101,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ### 硬件架构
 
-输出到 `knowledge_repo/知识库_硬件架构.md`。
+输出到 `{{knowledge_dir}}/知识库_硬件架构.md`。
 
 涵盖范围：多GPU、XU+YU异构、GPU、PIM、加速器及同等层次的硬件平台和组成模块相关术语。
 
@@ -106,7 +115,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 术语解释
 <术语的简要解释。>
 
-术语是什么？通过联网搜索让回答具体和精准。
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
 <解释该术语本身是什么。>
 
 从硬件架构角度拆解术语，比如术语如何在硬件架构中发挥作用，给出术语在硬件架构中运转流程的具体例子。通过联网搜索让回答具体和精准。
@@ -121,7 +130,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ### kernel调度
 
-输出到 `knowledge_repo/知识库_kernel调度.md`。
+输出到 `{{knowledge_dir}}/知识库_kernel调度.md`。
 
 涵盖范围：Sparse kernel、Attn、激活量化/稀疏的实现、Tensor Parallel（各种类似Parallel）、算子对齐硬件架构的考虑要素、kernel pipeline设计（进行overlap）、各种kernel的GPU线程实现方法/PIM call实现方法/异构系统实现方法等同等层次的相关学术术语。
 
@@ -132,7 +141,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 ```md
 ## <术语名>
 
-术语是什么？通过联网搜索让回答具体和精准。
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
 <解释该术语本身是什么。>
 
 从kernel调度角度拆解术语，比如术语所在kernel调度的伪代码或具体计算过程，给出具体例子。通过联网搜索让回答具体和精准。
@@ -147,7 +156,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ### 编译框架
 
-输出到 `knowledge_repo/知识库_编译框架.md`。
+输出到 `{{knowledge_dir}}/知识库_编译框架.md`。
 
 涵盖范围：triton、sglang、pytorch 等框架知识及其内部组成的术语。整数线性规划、多面体、贪心、启发式等离线/在线算子、kernel优化方法等同等层次的相关学术术语。
 
@@ -158,7 +167,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 ```md
 ## <术语名>
 
-术语是什么？通过联网搜索让回答具体和精准。
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
 <解释该术语本身是什么。>
 
 从编译框架角度拆解术语，比如术语如何在编译框架中发挥作用，给出术语在编译框架中运转流程的具体例子。通过联网搜索让回答具体和精准。
@@ -173,7 +182,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ### 系统架构
 
-输出到 `knowledge_repo/知识库_系统架构.md`。
+输出到 `{{knowledge_dir}}/知识库_系统架构.md`。
 
 涵盖范围：vllm、xxServe、serverless 等框架，多请求负载的调度优化方法和概念等。请求拆分到layer、token等进行调度，动态调度请求，抢占式调度等。SM分区、动态调度SM、共享prefix、共享KVCache等。多请求调度对齐硬件架构的设计优化等同等层次的相关学术术语。
 
@@ -184,7 +193,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 ```md
 ## <术语名>
 
-术语是什么？通过联网搜索让回答具体和精准。
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
 <解释该术语本身是什么。>
 
 从系统架构角度拆解术语，比如术语如何在系统架构中发挥作用，给出术语在系统架构中运转流程的具体例子。通过联网搜索让回答具体和精准。
@@ -199,7 +208,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ### 算法pipeline
 
-输出到 `knowledge_repo/知识库_算法pipeline.md`。
+输出到 `{{knowledge_dir}}/知识库_算法pipeline.md`。
 
 涵盖范围：MoE、Transformer、VLM、LLM、DiT、LoRA、SFT、生成式推荐等模型推理的pipeline组成、流程。稀疏、压缩、量化、蒸馏、共享或近似权重/激活等加速模型推理的方式等同等层次的相关学术术语。
 
@@ -210,7 +219,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 ```md
 ## <术语名>
 
-术语是什么？通过联网搜索让回答具体和精准。
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
 <解释该术语本身是什么。>
 
 从算法pipeline角度拆解术语，比如术语所在pipeline的伪代码或具体计算过程，给出具体例子。通过联网搜索让回答具体和精准。
@@ -249,7 +258,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 完成前验证：
 
 - 每个更新的文件路径存在且包含新条目或合并条目。
-- 目标论文尽可能通过 `paper_2026/` 解析。
+- 目标论文尽可能通过 `{{paper_dir}}` 解析。
 - 每个术语包含其目标层次所需的字段。
 - 已有术语被合并而非重复。
 - 每个 `涉及论文标题` 包含当前论文标题。

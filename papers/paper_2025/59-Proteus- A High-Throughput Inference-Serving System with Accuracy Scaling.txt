@@ -1,0 +1,1362 @@
+Proteus: A High-Throughput Inference-Serving System
+               with Accuracy Scaling
+                 Sohaib Ahmad                                                Hui Guan                                        Brian D. Friedman
+    University of Massachusetts, Amherst                   University of Massachusetts, Amherst                               Nokia Bell Labs
+           sohaib@cs.umass.edu                                   huiguan@cs.umass.edu                              brian.friedman@nokia-bell-labs.com
+
+               Thomas Williams                                     Ramesh K. Sitaraman                                          Thomas Woo
+              Nokia Bell Labs                              University of Massachusetts, Amherst                                 Nokia Bell Labs
+         thomas.williams@nokia-bell-                              ramesh@cs.umass.edu                                   thomas.woo@nokia-bell-labs.com
+                  labs.com
+Abstract                                                                                   ACM Reference Format:
+Existing machine learning inference-serving systems largely                                Sohaib Ahmad, Hui Guan, Brian D. Friedman, Thomas Williams,
+                                                                                           Ramesh K. Sitaraman, and Thomas Woo. 2024. Proteus: A High-
+rely on hardware scaling by adding more devices or using
+                                                                                           Throughput Inference-Serving System with Accuracy Scaling. In
+more powerful accelerators to handle increasing query de-                                  29th ACM International Conference on Architectural Support for Pro-
+mands. However, hardware scaling might not be feasible for                                 gramming Languages and Operating Systems, Volume 1 (ASPLOS
+fixed-size edge clusters or private clouds due to their limited                            ’24), April 27-May 1, 2024, La Jolla, CA, USA. ACM, New York, NY,
+hardware resources. A viable alternate solution is accuracy                                USA, 17 pages. https://doi.org/10.1145/3617232.3624849
+scaling, which adapts the accuracy of ML models instead
+of hardware resources to handle varying query demands.                                     1    Introduction
+This work studies the design of a high-throughput inference-                               The growing popularity of machine learning (ML) has led to
+serving system with accuracy scaling that can meet through-                                the development of inference-serving systems1 , where cloud
+put requirements while maximizing accuracy. To achieve                                     providers execute pre-trained ML models on their infras-
+the goal, this work proposes to identify the right amount of                               tructure to provide fast and accurate responses to inference
+accuracy scaling by jointly optimizing three sub-problems:                                 queries. In such a system, the provider guarantees certain
+how to select model variants, how to place them on het-                                    service level objectives (SLOs) to users in terms of latency
+erogeneous devices, and how to assign query workloads                                      deadlines. Meanwhile, the provider wants to maximize their
+to each device. It also proposes a new adaptive batching                                   hardware utilization by increasing throughput in order to
+algorithm to handle variations in query arrival times and                                  serve as many queries as possible in a short amount of time.
+minimize SLO violations. Based on the proposed techniques,                                    Recent years have seen considerable interest in develop-
+we build an inference-serving system called Proteus and em-                                ing high-throughput inference-serving systems. Prior work
+pirically evaluate it on real-world and synthetic traces. We                               has focused on enhancing system throughput through tech-
+show that Proteus reduces accuracy drop by up to 3× and                                    niques such as multi-tenancy [28, 35], batching [8, 9, 36], and
+latency timeouts by 2-10× with respect to baseline schemes,                                low-level optimizations [14, 42, 46]. While these optimiza-
+while meeting throughput requirements.                                                     tions are effective, they primarily rely on hardware scaling,
+                                                                                           i.e., adding more devices or using more powerful accelera-
+CCS Concepts: • Computer systems organization →
+                                                                                           tors, to accommodate higher query demands (in terms of
+Cloud computing; Neural networks.
+                                                                                           queries per second or QPS). However, hardware scaling may
+Keywords: Inference serving, model serving, machine learn-                                 not be feasible for private clouds owned by enterprises or
+ing, autoscaling                                                                           edge clusters due to the limited availability of hardware re-
+                                                                                           sources. Purchasing and maintaining more devices to cater
+Permission to make digital or hard copies of all or part of this work for
+                                                                                           to peak demands can be expensive and cost-ineffective.
+personal or classroom use is granted without fee provided that copies
+are not made or distributed for profit or commercial advantage and that                       To address the limitations of hardware scaling, this pa-
+copies bear this notice and the full citation on the first page. Copyrights                per focuses on an orthogonal perspective, accuracy scaling,
+for components of this work owned by others than the author(s) must                        which adapts model accuracy instead of hardware resources
+be honored. Abstracting with credit is permitted. To copy otherwise, or                    to meet varying query demands. Accuracy scaling is moti-
+republish, to post on servers or to redistribute to lists, requires prior specific
+                                                                                           vated by the fact that ML models can offer varying degrees
+permission and/or a fee. Request permissions from permissions@acm.org.
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+                                                                                           of accuracy depending on the time spent computing the an-
+© 2024 Copyright held by the owner/author(s). Publication rights licensed                  swer. Less time spent on computation leads to less accurate
+to ACM.
+ACM ISBN 979-8-4007-0372-0/24/04. . . $15.00                                               1 Inference-serving systems have also been referred to as model-serving
+
+https://doi.org/10.1145/3617232.3624849                                                    systems in the literature.
+
+
+
+
+                                                                                     318
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                         S. Ahmad, H. Guan, B. D. Friedman, T. Willams, R. K. Sitaraman, T. Woo
+
+
+results but higher throughput. When the demand is high,                    derive the optimal resource allocation given a target query
+an inference-serving system can serve queries using less                   demand. Since the target query demand changes over time,
+accurate model variants to avoid SLO violations. Similarly,                it is necessary to keep adjusting the plan accordingly. Ideally,
+when the demand drops, it can serve queries using more ac-                 each query arrival could trigger the MILP solver; however, in
+curate model variants to improve accuracy. These different                 this case, solving the MILP problem would lie in the critical
+accuracy levels are provided by different variants of deep                 path of query execution, introducing significant run-time
+neural networks (DNNs), which can be created through ex-                   overhead. This motivates us to decouple the control path that
+isting compression techniques such as quantization [39] and                manages resources from the data path that serves queries. We
+pruning [6], or as part of the neural network architecture                 trigger the MILP solver in response to macro-scale changes
+design. The creation of these variants is complementary to                 in query demand over a period of time to ensure that the
+our work. Throughout the paper, we use the term “model                     system has sufficient capacity to serve incoming queries.
+variants” to refer to DNN models with varying accuracy and                 We then rely on per-device query execution to handle the
+performance profiles.                                                      micro-scale variations in the arrival times of queries.
+   In this paper, our goal is to build an inference-serving                    This raises the second challenge: how to adaptively batch
+system on a heterogeneous cluster via accuracy scaling such                queries on each device to handle variations in query arrival
+that the system can serve varying query demands with high                  times such that SLO violations are minimized? Query execu-
+system accuracy. System accuracy refers to the averaged ac-                tion on individual devices typically batches multiple infer-
+curacy of queries that are served by the system. We assume                 ence queries together to improve throughput. When queries
+that every query prefers the most accurate model variant if                arrive at a uniform rate, it is easy to determine a fixed batch
+resource permits, but is willing to accept lower accuracy in               size that can maximize throughput without incurring SLO
+exchange for timely response when resources are tight. This                violations. However, when there is variation in the query
+assumption is practical in many cases such as recommen-                    inter-arrival times, batching needs to be adaptive due to two
+dation systems and real-time applications where a timely                   reasons: (i) the number of queries arriving per second may
+response can be more critical than an accurate yet sluggish                change over time, requiring a different batch size, and (ii)
+response, or even worse, dropped requests [13, 23].                        delaying query execution slightly can improve throughput
+   To achieve this goal, we need to address two challenges                 and absorb micro-scale query arrival variations. We present
+raised by accuracy scaling when managing resources on an                   a non-work-conserving approach to adaptive batching that
+inference-serving system. The first challenge is to determine              can handle micro-scale query load fluctuations effectively
+the right amount of accuracy scaling to serve a target query               without requiring any changes to the underlying ML frame-
+demand with high system accuracy. The system can overshoot                 work. It can delay requests momentarily if it results in higher
+the query demand by hosting less accurate model variants                   throughput and dynamically determines suitable batch sizes
+but introduce unnecessary accuracy drops to end-users. On                  based on the queue status and query latency requirements.
+the other hand, if the system undershoots the target query                     Based on the proposed techniques, we build an inference-
+demand by hosting more accurate model variants, users will                 serving system called Proteus2 . We evaluate Proteus against
+experience SLO timeouts.                                                   three state-of-the-art inference-serving systems, INFaaS [35],
+   To address the first challenge, our key insight is that identi-         Sommelier [17], and Clipper [9], using query workloads de-
+fying the right amount of scaling requires jointly optimizing              rived from a real-world Twitter trace and synthetic traces.
+three sub-problems when allocating system resources. Miss-                 Our experiments show that compared to baselines that do not
+ing any of these sub-problems results in a sub-optimal solu-               scale accuracy, Proteus improves system throughput by 60%
+tion that leads to high SLO violations and/or high accuracy                and reduces SLO violations by 10× due to accuracy scaling;
+loss. The first sub-problem, model selection, aims to choose               and compared to baselines that also scale accuracy, Proteus
+the appropriate set of model variants and the number of                    minimizes accuracy drop by up to 3.2× and reduces SLO
+replicas for each model variant. As the accuracy-throughput                violations by up to 4.3× because of better resource allocation
+trade-off for a model variant varies across different device               and batching algorithms.
+types, the second sub-problem, model placement, determines                     Our contributions. We make the following key contri-
+the placement of each selected model variant on a particular               butions.
+device of a heterogeneous cluster. In addition, an inference-                    • We present a theoretical framework for resource man-
+serving system is usually shared by multiple applications,                         agement of an inference-serving system that exploits
+each corresponding to a query type. The last sub-problem                           accuracy scaling to ensure that the system throughput
+query assignment specifies the percentage of queries from                          is sufficient to meet the query demand while maximiz-
+each query type that can be assigned to a model variant                            ing system accuracy.
+hosted on a particular device.
+   Based on this insight, we formulate the problem using                   2 Proteus is named after a Greek god of the same name who had the ability
+
+a mixed integer linear programming (MILP) framework to                     to change shape and form to avoid capture by the enemy.
+
+
+
+
+                                                                     319
+Proteus: A High-Throughput Inference-Serving System with Accuracy Scaling                                                                            ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+                      85
+                                                   V100
+                                                                                    85
+                                                                                                      Pareto Frontier
+                                                                                                                                      A viable alternative in these cases is accuracy scaling,
+                      84                                                            84
+                                                   1080 Ti                                                                         which is motivated by the natural trade-off between through-
+
+
+
+
+                                                              System Accuracy (%)
+System Accuracy (%)
+
+
+
+
+                      83                           CPU                              83
+
+                      82                                                            82
+                                                                                                                                   put and accuracy of inference workloads. This trade-off exists
+                      81                                                            81                                             because models with lower accuracy are usually smaller neu-
+                      80                                                            80                                             ral networks, e.g., having a smaller number of parameters
+                      79                                                            79
+                                                                                                                                   and layers, etc., therefore requiring less computation, allow-
+                      78                                                            78
+
+                      77                                                            77
+                                                                                                                                   ing more requests to be served in a given amount of time,
+                      76                                                            76
+                                                                                      40   60   80   100   120   140   160
+                                                                                                                                   and providing higher throughput. Figure 1a shows the ac-
+                           0   10   20   30   40   50    60
+                       System Throughput Capacity (QPS)                             System Throughput Capacity (QPS)               curacy of EfficientNet variants [40] and their throughput in
+                                                                                                                                   queries per second (QPS) on three different types of devices.
+                                     (a)                                                         (b)
+                                                                                                                                   The batch size is set to one for simplicity of demonstration.
+Figure 1. Illustration on how different resource allocation
+                                                                                                                                   The figure shows that for a given device type, a model vari-
+configurations affect system throughput capacity and accu-
+                                                                                                                                   ant with lower accuracy can achieve higher throughput. An
+racy. Models are EfficientNet variants and batch size is one.
+                                                                                                                                   inference-serving system can replace hosted model variants
+(a) Accuracy-throughput trade-off on three different devices
+                                                                                                                                   with their less accurate counterparts in order to serve an
+for EfficientNet variants. (b) Accuracy-throughput trade-offs
+                                                                                                                                   increasing query load, and later switch to more accurate
+for all possible configurations with five EfficientNet variants
+                                                                                                                                   model variants once the query load returns to normal.
+and five devices.
+                                                                                                                                   2.2 Challenges and Opportunities
+                       • We propose a proactive adaptive batching algorithm                                                        Building an inference-serving system has two main chal-
+                         that can handle query load fluctuations effectively via a                                                 lenges as detailed below.
+                         non-work-conserving approach. The algorithm is easy
+                         to implement without requiring modifications to the                                                          Challenge 1: “Right” amount of accuracy scaling. The
+                         underlying ML framework and reduces SLO violations                                                        first challenge lies in determining the right amount of ac-
+                         by up to 4× compared to baselines.                                                                        curacy scaling to meet a target query demand. With tradi-
+                       • We design Proteus, a high-throughput inference-serving                                                    tional hardware scaling, an inference-serving system would
+                         system with accuracy scaling. Proteus decouples the                                                       provision the appropriate amount of hardware resources
+                         control and data paths of inference-serving to per-                                                       sufficient to meet a target query demand. Hardware under-
+                         form optimal resource allocation asynchronously from                                                      provisioning would lead to performance degradation while
+                         query serving. To the best of our knowledge, Proteus                                                      over-provisioning would introduce unnecessary hardware
+                         is the first system to study accuracy scaling in a cluster                                                costs. Similarly, with accuracy scaling, one can under-scale or
+                         setting.                                                                                                  over-scale. In one extreme case, the system can always host
+                       • We evaluate Proteus on a production system that is                                                        the most accurate model variants to maximize accuracy but
+                         currently used by actual users within a large enterprise                                                  will suffer from relatively low throughput and risk high SLO
+                         and perform trace-based simulations of the system. We                                                     violation rates. In another extreme, the system can always
+                         show that Proteus reduces the accuracy drop by up                                                         host the least accurate model variants to maximize through-
+                         to 3.2× and SLO violations by 2.8-10× compared to                                                         put, but will suffer from unnecessary accuracy drops. The
+                         state-of-the-art baselines while meeting throughput                                                       right amount of accuracy scaling means that the system hosts
+                         requirements. We also show that our simulation results                                                    the right set of model variants on the right devices and as-
+                         closely match the results from our production system.                                                     signs the right amount of queries to each device. Solving the
+                                                                                                                                   above resource allocation problem is complicated because
+2                          Motivation and Challenges                                                                               of the huge configuration space resulting from three factors:
+This section first explains the motivation for accuracy scaling                                                                    many model variants, heterogeneous devices, and many ap-
+and then elaborates on the main challenges to effectively                                                                          plications. Missing any factor would lead to a sub-optimal
+capitalize on accuracy scaling to build a high-throughput                                                                          allocation, as we show empirically in our evaluation.
+inference-serving system with minimal SLO violations.                                                                                 Factor 1: Many model variants. A query can be served by
+                                                                                                                                   many variants of the same model, resulting in a wide range
+2.1 Motivation                                                                                                                     of throughput and accuracy. Figure 1a demonstrates this
+Many existing inference-serving systems rely on scaling out                                                                        problem. Even if we consider a single device, e.g., NVIDIA
+to more devices or scaling up to faster devices to handle the                                                                      GTX 1080 Ti, five different selections of EfficientNet variants
+increasing query demands. However, in certain scenarios,                                                                           result in a 3.3× difference in throughput and around 8%
+such hardware scaling is not practical. For example, an edge                                                                       difference in accuracy. The problem becomes more difficult
+cloud-based serving system may have a limited number of                                                                            when we have a cluster of devices, resulting in an even wider
+devices available, and an enterprise may maintain a fixed-size                                                                     range of possibilities. With M model variants and N devices,
+cluster to serve internal users.                                                                                                   there are 𝑀 𝑁 possible configurations, each of them resulting
+
+
+
+                                                                                                                             320
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                     S. Ahmad, H. Guan, B. D. Friedman, T. Willams, R. K. Sitaraman, T. Woo
+
+
+in different system throughput and accuracy. Selecting the             separates the control path that manages resources from the
+right model variant for each of the devices depends on the             data path that serves queries (see Section 3).
+query demands on the system.                                              Challenge 2: Adaptive Batching. Decoupled resource
+   Factor 2: Heterogeneous devices. Modern computing clus-             allocation and query serving rely heavily on adaptive batch-
+ters typically consist of different types of hardware devices,         ing to handle micro-scale fluctuations in query arrival times.
+such as different types of CPUs and GPUs. This is due to               Batching multiple queries together can improve the through-
+the fact that enterprises typically upgrade their hardware             put of an inference-serving system. However, it can also
+incrementally, for example, adding newer and faster GPUs               increase the waiting time for queries since all queries that
+to their existing fleet of hardware as they become available,          are executed in a batch must finish processing before the
+instead of completely replacing old ones. As each model                results are returned to the user. If the batch size is increased
+variant has a different throughput profile across devices, the         beyond a certain point, requests will start to miss their la-
+configuration space becomes even larger. For a given selec-            tency SLOs. Since queries arrive non-uniformly, we need to
+tion of model variants, there are 𝑁 ! ways to place them on 𝑁          dynamically adjust batch sizes based on query arrival times
+different devices, leading to a much broader set of possibili-         to minimize SLO violations.
+ties for overall system throughput and accuracy. Figure 1b                Although adaptive batching is studied in prior work, we
+illustrates the system throughput capacity and accuracy for            find their approaches inefficient. Clipper [9] adapts its batch
+all possible mappings between 5 EfficientNet variants and              size reactively based on whether the current batch size causes
+5 devices. We assume that all devices serve the maximum                timeouts. Nexus [36] presents a proactive early dropping ap-
+number of queries feasible without SLO violations. Out of              proach but performs poorly when query load fluctuates due
+all 3125 possible configurations, we are only interested in            to its work-conserving approach. Lazy Batching [8] requires
+those at the Pareto frontier, due to the fact that for a given         significant changes to the underlying ML framework.
+throughput requirement, configurations at the Pareto fron-                Opportunities. We find that a non-work-conserving ap-
+tier yield the highest possible system accuracy compared               proach for adaptive batching is better than a work-conserving
+to other configurations. The results imply that identifying            approach in stabilizing the system when query inter-arrivals
+the right amount of accuracy scaling requires co-optimizing            are non-uniform. In a work-conserving approach, a worker
+model selection and model placement.                                   immediately executes the next batch of queries after the cur-
+   Factor 3: Many applications. The optimization problem is            rent batch finishes. This approach is adopted by Nexus and
+further complicated by the multi-tenant nature of inference-           demonstrated to suffer from low throughput and high SLO
+serving systems. An inference-serving system usually serves            violations on bursty workloads in our empirical evaluation
+queries from many applications, each corresponding to a                (Section 6.4). In contrast, a non-work-conserving approach
+particular query type. In this case, the model variants that           waits as long as possible to accumulate more queries before
+are selected for each query type and their mapping to devices          executing a batch. Although it may leave the device idle at
+further depend on how many and what kind of devices are                times if the load is low, we show that it improves system
+allocated to each query type. When the query demand for                throughput and reduces SLO violations. Moreover, we find
+any query type changes, the best resource allocation plan to           that a proactive approach to batch size adaptation incurs
+achieve the highest accuracy also changes.                             significantly fewer latency SLO timeouts than a reactive
+   Opportunities. The above challenge can be formulated as             approach, such as Clipper’s, as detailed in Section 6.4.
+three sub-problems for resource allocation: model selection,              We present a novel adaptive batching algorithm following
+model placement, and query assignment, that can be jointly             a proactive, non-work-conserving approach without requir-
+solved using mixed integer linear programming (MILP). We               ing modifications to the ML framework in Section 5.
+elaborate on the MILP formulation in Section 4. Solving the
+MILP problem takes time, while queries have strict latency             3    Overview of Proteus
+requirements. Triggering the MILP solvers on query arrivals            We present Proteus, a high-throughput inference-serving
+would place the resource allocation problem on the critical            system that leverages accuracy scaling to handle varying
+path of serving queries, adding a significant run-time over-           query demands. This section presents an overview of the
+head to queries’ response time. To avoid the problem, we de-           system architecture while Sections 4 and 5 will elaborate on
+couple resource allocation from query serving. Resources are           the core modules of Proteus.
+re-allocated when the macro-scale query demand changes to                 Figure 2 illustrates the overall system architecture of Pro-
+ensure that the system has enough throughput capacity to               teus. It has three major components: Controller, Load Bal-
+handle incoming queries. As it comes down to each device to            ancers, and Workers. These components are involved differ-
+serve individual queries, each device can handle non-uniform           ently in two types of interactions with the system.
+query arrivals with adaptive batching to avoid SLO violations.            The first type of interaction is for developers to regis-
+This motivates us to design an inference-serving system that           ter an application and its model variants. The pipeline is
+                                                                       marked with dotted arrows in Figure 2. After the controller
+
+
+
+                                                                 321
+Proteus: A High-Throughput Inference-Serving System with Accuracy Scaling                                                   ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+                Face Detection     Object Recognition                                                     query demand statistics from all load balancers, used to deter-
+Application
+
+
+
+
+                                                             Developer
+                      200ms                100ms                                                          mine when to re-allocate resources. If re-allocation is needed,
+                      deadline             deadline                                                       these statistics are used as inputs to the resource manager
+                                                                                                          to derive a new optimal resource allocation configuration.
+                                               Register                                                   Moreover, the resource manager also consults the model
+   User sends                      Query                                 1           4 Registered
+              1                  4 response app/model                                                     registry and model profiler to make re-allocation decisions,
+     query
+                                                                                                          in order to identify model variants that can meet demand
+                                                            Resource Manager                              with high accuracy. The model profiler is invoked every time
+Load Balancer
+
+
+
+
+                  Request Router           2
+                                               Controller    Model Registry                               new models are registered, as well as periodically to poll the
+                                                                                                          inference latency of currently hosted model variants run-
+                    Monitoring                                Model Profiler
+                     Daemon
+                                                                                                          ning on the workers, and stores the profiling information in
+                                                            Statistics Collector                          an in-memory key-value store, keyed by the 3-tuple (model
+                                                                                                          variant, device type, batch size) to ensure a 𝑂 (1) lookup time.
+                      2      3
+                                                                                                          Load Balancer. A load balancer receives inference queries
+                                                                             3
+                Adaptive Batching                                                                         from its designated application and responds to them with
+  Worker
+
+
+
+
+                                                                                                          model execution results. Load balancers for different reg-
+                Hardware Executor                                                                         istered applications could be distributed across multiple
+                                                                                 Control path
+                                                                                  Data path
+                                                                                                          machines to avoid network congestion. Each load balancer
+                                                                                                          includes two modules: (1) a request router that dispatches
+                                                                                                          queries to model variants hosted on worker machines based
+          Figure 2. System architecture of Proteus.                                                       on a query assignment policy, and (2) a monitoring daemon
+receives an application register command, it creates a new                                                that monitors query demands at runtime and reports the sta-
+load balancer for that application and sets up workers to                                                 tistics to the controller periodically. The query assignment
+serve queries from that application. Proteus will automati-                                               policy is determined by the controller. If the load balancer
+cally manage which model variant to use to serve each query                                               detects a burst of requests or overload on any of its work-
+and where to place the model variants. This model-less in-                                                ers, it calls the controller to re-allocate resources. There is
+terface is similar to the recent work, INFaaS [35]. Our core                                              one load balancer for each query type (i.e., application), and
+system design contribution lies in how resources are managed                                              usually multiple workers for each query type.
+when serving queries, i.e., the second type of interaction de-                                            Workers. Each worker executes its hosted model variant
+scribed next.                                                                                             to serve inference queries assigned by the request router. A
+   The second type of interaction is for registered applica-                                              worker includes two modules: (1) an adaptive batching mod-
+tions to send inference queries and receive query responses.                                              ule that dynamically determines the suitable batch size to im-
+The data path is marked with solid arrows in Figure 2. A                                                  prove throughput while meeting query latency constraints,
+query from a registered application is directly sent to the                                               and (2) a hardware executor that manages the deployment
+application’s assigned load balancer. The load balancer then                                              and execution of model variants.
+routes the query to an appropriate model variant that is                                                     We next explain the two core modules, the Resource Man-
+hosted on a worker machine for query execution. Proteus                                                   ager in Section 4 and Adaptive Batching in Section 5.
+responds to the application with the inference results. Since
+queries from each application are handled by its specific load                                            4   Resource Management
+balancer, Proteus avoids a single-point performance bottle-                                               The Resource Manager identifies the optimal model selec-
+neck when supporting many applications. The separation                                                    tion, model placement, and query assignment solution to
+of the controller and load balancer is a design choice that                                               meet a target query demand while maximizing system ac-
+makes Proteus more flexible and robust, allowing it to per-                                               curacy by solving an MILP optimization. Depending on the
+form resource allocation without being on the critical path                                               solution, it could terminate some instances of model vari-
+to inference-serving.                                                                                     ants currently hosted on devices and start instances of other
+Controller. The controller receives the registration of the                                               model variants. It also propagates a new query assignment
+application and model variants and confirms the registration                                              policy to the request routers. Under stable query demand
+status. It has four modules: (1) a resource manager that de-                                              conditions, the Resource Manager is invoked periodically.
+termines the resource allocation strategy including model                                                 However, if the demand changes rapidly in a short period of
+selection, placement, and query assignment when the query                                                 time, the monitoring daemon in the load balancers invokes
+demands change, (2) a model registry that handles applica-                                                the Resource Manager to respond to the burst.
+tion and model variant registration, (3) a model profiler that                                               Note that the Resource Manager responds to macro-scale
+profiles the performance of each model variant on differ-                                                 changes in the workload, measured by the incoming demand
+ent types of devices, and (4) a statistics collector that collects                                        in terms of QPS, whereas the adaptive batching, as explained
+
+
+
+                                                                                                    322
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                          S. Ahmad, H. Guan, B. D. Friedman, T. Willams, R. K. Sitaraman, T. Woo
+
+
+ Constants/subscripts:                                                         Serving Throughput: Let 𝑧𝑑,𝑞 be the number of queries per
+   𝑞 the 𝑞-th query type. Each type is a registered application.            second of query type 𝑞 served by the device 𝑑. System serving
+   𝑚 the 𝑚-th model variant for a query type                                throughput    is the number
+   𝑑 the 𝑑-th device                                                        Í Í                     Í of queries served by all devices:
+                                                                              𝑑 𝑞 𝑧𝑑,𝑞 . Note that 𝑞 𝑧𝑑,𝑞 cannot be larger than the total
+  𝐴𝑚 the accuracy of model variant 𝑚
+                                                                            number of queries assigned to device 𝑑 (Eq. 4) or the peak
+  𝐵𝑚,𝑞 true if model variant 𝑚 serves query type 𝑞; false other-
+        wise                                                                throughput capacity of that device (Eq. 5). Furthermore, we
+ 𝑃𝑑,𝑚,𝑞 the peak throughput capacity of model variant 𝑚 on de-              require that all incoming demand be served by the system
+        vice 𝑑 serving query type q                                         (Eq. 6). Let 𝑠𝑞 be the number of queries per second (QPS)
+ Inputs:                                                                    for the query type
+                                                                                             Í 𝑞. The total number of queries assigned
+   𝑠𝑞 throughput in QPS required for the query type 𝑞                       to device 𝑑 is: 𝑞 𝑦𝑑,𝑞 .𝑠𝑞 . Let 𝑃𝑑,𝑚,𝑞 be the peak throughput
+ Optimization variables:                                                    capacity of the model variant 𝑚 profiled on device 𝑑 for the
+  𝑥𝑑,𝑚 true if model variant 𝑚 is hosted on device 𝑑; false other-          query type 𝑞. The peak throughput of device 𝑑 for query
+                                                                                             Í
+        wise                                                                type 𝑞 is then 𝑚 𝑃𝑑,𝑚,𝑞 .𝑥𝑑,𝑚 . The serving throughput of a
+  𝑦𝑑,𝑞 percentage of queries of type 𝑞 routed to device 𝑑                   device 𝑑 follows three constraints:
+ Intermediate variables:                                                               ∑︁          ∑︁
+                                                                                            𝑧𝑑,𝑞 ≤    𝑦𝑑,𝑞 .𝑠𝑞                 ∀𝑑       (4)
+   𝑎𝑞 sum of accuracy of all queries of type 𝑞
+                                                                                         𝑞                 𝑞
+  𝑧𝑑,𝑞 number of queries served by device 𝑑 of query type 𝑞                                            ∑︁
+                                                                                             𝑧𝑑,𝑞 ≤            𝑃𝑑,𝑚,𝑞 .𝑥𝑑,𝑚      ∀𝑑, 𝑞          (5)
+         Table 1. Notation used for the optimization
+                                                                                                       𝑚
+                                                                                       ∑︁
+in Section 5, responds to micro-scale changes in terms of                                    𝑧𝑑,𝑞 = 𝑠𝑞                             ∀𝑞           (6)
+varying query inter-arrival times.                                                       𝑑
+The resource management problem. We now formulate                              Effective Accuracy (also called System Accuracy): For each
+the resource management problem with accuracy scaling                       model variantÍ𝑚, Í  the number of queries of query type 𝑞
+using MILP. The objective is to maximize accuracy while                     served by it is 𝑑 𝑞 𝑥𝑑,𝑚 .𝑧𝑑,𝑞 .𝑠𝑞 . Let 𝐴𝑚 be the accuracy of
+meeting a target serving throughput. We first explain two                   model variant 𝑚. Í We can Íget the accuracy of all queries of
+optimization variables collectively representing the resource               type 𝑞 as: 𝑎𝑞 = 𝑚 𝐴𝑚 .( 𝑑 𝑥𝑑,𝑚 .𝑧𝑑,𝑞 .𝑠𝑞 )). Effective
+                                                                                                                                Í accuracy
+allocation plan and then define the system serving through-                 is the average accuracy of all queries served as 𝑞 𝑎𝑞 .
+put and system accuracy based on the two variables. Lastly,                    MILP Formulation: The resource management problem
+we present the MILP formulation of the resource manage-                     identifies the optimal model selection and placement {𝑥𝑑,𝑚 }∗
+ment problem. Table 1 summarizes the notations.                             and theÍ  query assignment {𝑦𝑑,𝑞 }∗ to maximize effective ac-
+   Optimization Variables: Let {𝑥𝑑,𝑚 } be Boolean variables                 curacy 𝑞 𝑎𝑞 while reaching a target serving throughput
+indicating the model selection and placement policy, together
+                                                                            Í Í
+                                                                              𝑑 𝑞 𝑧𝑑,𝑞 high enough to serve the incoming queries {𝑠𝑞 }.
+called model allocation. 𝑥𝑑,𝑚 is True if model variant 𝑚 is                 The problem can be formulated as:
+hosted on the device 𝑑. Let {𝑦𝑑,𝑞 } be a query assignment                                        ∑︁
+plan where 𝑦𝑑,𝑞 ∈ [0, 1] indicates the percentage of queries                             max        𝑎𝑞 𝑠.𝑡 . Constraints Eqs. 1-6       (7)
+                                                                                     {𝑥𝑑,𝑚 },{𝑦𝑑,𝑞 }
+                                                                                                       𝑞
+of type 𝑞 routed to device 𝑑. Each query type corresponds
+                                                                            Solving the MILP. The Resource Manager solves the MILP
+to one registered application and can only be served by the
+                                                                            exactly to identify a global optimal model allocation and
+registered set of model variants.
+                                                                            query assignment policy. Note that the time overhead to
+   The two variables must meet three constraints. First, in
+                                                                            solve the MILP does not lie on the critical path of query
+this work, we consider that each device hosts at most one
+                                                                            serving as the MILP is called asynchronously. We provide
+model variant to avoid interference (Eq. 1). Second, the total
+                                                                            overhead details in Section 6.8. When solving the MILP, 𝑠𝑞
+ratio of queries for a given type routed to all devices can
+                                                                            is set to be the demand by default. However, if demand in-
+never be larger than one (Eq. 2). Third, a query assignment
+                                                                            creases beyond a certain point, even using the lowest ac-
+must ensure that the model variant hosted on a device sup-
+                                                                            curacy model variants for every query type might still not
+ports the assigned query type (Eq. 3). Let 𝐵𝑚,𝑞 be the Boolean
+                                                                            meet throughput demand. In this case, the MILP solver im-
+constant that denotes whether model variant 𝑚 can serve
+                                                                            mediately reports that the constraints are infeasible, and we
+query type 𝑞. We formalize
+                      ∑︁ the three constraints as follows:                  solve the MILP again by decreasing 𝑠𝑞 by a small value.
+                          𝑥𝑑,𝑚 ≤ 1                  ∀𝑑      (1)
+                           𝑚
+                                                                            Estimation of throughput capacity. Solving the MILP
+                           ∑︁                                               problem requires us to estimate each 𝑃𝑑,𝑚,𝑞 , the throughput
+                                𝑦𝑑,𝑞 ≤ 1              ∀𝑞        (2)         capacity of each model variant on a device for a query type.
+                            𝑑
+          ∑︁ ∑︁                          ∑︁                                 Increasing the batch size improves the throughput of a model
+                    𝐵𝑚,𝑞 .𝑥𝑑,𝑚 .𝑦𝑑,𝑞 =        𝑦𝑑,𝑞    ∀𝑞        (3)         variant but also increases the processing latency. So we first
+           𝑚    𝑑                        𝑑                                  estimate the maximum batch size that we can use for each
+
+
+
+                                                                      323
+Proteus: A High-Throughput Inference-Serving System with Accuracy Scaling                     ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+model variant without violating a query’s latency SLO and                                                               Tprocess(q+1)
+then profile the throughput capacity using that batch size.
+Specifically, [36] observes that to prevent latency timeouts,
+                                                                                  1    2        q               q+1     q+1
+the maximum inference latency for any model cannot ex-
+ceed half of its latency SLO since in the worst case, a query
+arriving just after a batch starts executing must be executed                                                  Tmax_wait(q+1)       Texp(1)
+with the next batch, so the response time for the query is at                         Figure 3. Adaptive batching in Proteus
+most twice the processing latency. Using this observation,
+we calculate the maximum batch size for each (𝑑, 𝑚, 𝑞) pair                 Case 1: We do not receive any query until 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 1).
+that meets the SLO requirement. Note that in addition to                    In this case we will start executing the current queries in
+latency constraints, the maximum batch size is also bounded                 the queue with a batch size of 𝑞 at 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 1), because
+by the memory constraint of each device, since larger batch                 if any query arrives after this time and we were to execute
+sizes require more memory. Hence, the maximum allowed                       with a batch size of 𝑞 + 1, the first query in the queue would
+batch size is the minimum of the following: (i) the maximum                 expire by the time the batch finishes processing.
+batch size that meets SLO, (ii) the maximum batch size that                 Case 2: We receive the 𝑞 + 1𝑠𝑡 query before 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 +
+fits in the memory of 𝑑.                                                    1). In this case, we calculate 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 2). Note that
+   We use the maximum allowed batch size of each (𝑑, 𝑚, 𝑞)                  𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 2) < 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 1) since 𝑇𝑝𝑟𝑜𝑐𝑒𝑠𝑠 (𝑞 + 2) >
+pair, along with the profiled latency of model variant 𝑚                    𝑇𝑝𝑟𝑜𝑐𝑒𝑠𝑠 (𝑞 + 1). If we are already past 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 2), that
+on device 𝑑 for query type 𝑞, to calculate the throughput                   means we cannot wait for the 𝑞 + 2𝑛𝑑 query; otherwise, our
+capacity 𝑃𝑑,𝑚,𝑞 of that pair.                                               first query will expire, so we execute with a batch size of
+                                                                            𝑞 + 1 which will not result in any timeouts since we execute
+                 Maximum allowed batch size for 𝑑, 𝑚, 𝑞                     before 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 1). If we are not past 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 2),
+      𝑃𝑑,𝑚,𝑞 =
+                      Profiled latency (seconds)                            then we wait to accumulate more queries in the queue and
+                                                                            repeat the same procedure with 𝑞 ′ = 𝑞 + 1.
+5    Adaptive Batching                                                         As we will see in Section 6.4, the proposed batching al-
+While the Resource Manager makes model allocation and                       gorithm outperforms re-active approaches, e.g., Clipper’s
+query assignment decisions based on a target serving through-               AIMD batching, and even proactive work-conserving ap-
+put, it is the responsibility of each device to serve queries               proaches, e.g., Nexus’s early drop batching.
+assigned to it without violating the latency constraints. Adap-             6     Evaluation
+tive batching dynamically determines the optimum batch
+                                                                            This section evaluates the efficacy of Proteus. We begin by
+size to use based on queue conditions to minimize SLO vio-
+                                                                            describing the experimental setup common to all experi-
+lations.
+                                                                            ments (Section 6.1). We provide an end-to-end quantitative
+   The Proteus adaptive batching algorithm is based on two
+                                                                            analysis on the performance of Proteus and baselines (Sec-
+key ideas. Firstly, it is a proactive algorithm: it ensures that no
+                                                                            tion 6.2). We also measure the responsiveness of each of
+queries in the queue timeout unnecessarily since we proac-
+                                                                            these approaches to bursty workloads (Section 6.3). We eval-
+tively start processing the queries just before the first query
+                                                                            uate Proteus’s adaptive batching algorithm individually to
+in the queue is in danger of violating its latency SLO. Sec-
+                                                                            Clipper and Nexus’s batching algorithm (Section 6.4). We
+ondly, it is non-work-conserving: it may leave the device idle
+                                                                            then perform an ablation study of Proteus to quantify the
+at times if this helps to accumulate more queries before start-
+                                                                            benefit of its individual components (Section 6.5). We also
+ing batched execution. This allows the algorithm to improve
+                                                                            report the effect of varying latency SLOs (Section 6.6) and the
+throughput as much as possible on a given device without
+                                                                            performance breakdown for different model families (Sec-
+violating latency SLOs. This also helps to smooth out non-
+                                                                            tion 6.7). Finally, we quantify the overheads of Proteus’s
+uniform query inter-arrivals in order to handle micro-scale
+                                                                            decision-making (Section 6.8).
+query demand variations.
+   Figure 3 illustrates the approach. Suppose that we have 𝑞                6.1   Experimental Setup
+queries in the queue and that the first query will expire at                6.1.1 Baselines. We select a spectrum of baselines ranging
+𝑇𝑒𝑥𝑝 (1). To process a batch of 𝑞+1 queries, time 𝑇𝑝𝑟𝑜𝑐𝑒𝑠𝑠 (𝑞+1)            from fully static (Clipper), to partially dynamic (Sommelier),
+is required. We define𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞+1) = 𝑇𝑒𝑥𝑝 (1)−𝑇𝑝𝑟𝑜𝑐𝑒𝑠𝑠 (𝑞+               to fully dynamic (INFaaS). We describe each of them below
+1), or in other words, the maximum time that we will wait for               and implement them in our simulator and cluster system.
+the 𝑞+1𝑠𝑡 query to arrive. If we have not reached𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞+              Clipper: Clipper is one of the fundamental works in inference-
+1) yet, we can wait for more queries to arrive in the queue                 serving, however, it does not dynamically place models in a
+since we are not in danger of violating any query’s latency                 heterogeneous cluster or perform any accuracy scaling. This
+SLO. While waiting until 𝑇𝑚𝑎𝑥_𝑤𝑎𝑖𝑡 (𝑞 + 1) to fill up the batch,            baseline pre-loads a static resource allocation at the start of
+there can be two possibilities:                                             the experiment. We extend Clipper to use our MILP to get this
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                                S. Ahmad, H. Guan, B. D. Friedman, T. Willams, R. K. Sitaraman, T. Woo
+
+
+        Feature      Clipper Sommelier INFaaS Proteus                              Model Family                   Model Variants
+    Model placement Static     Static Heuristic MILP                               ResNet (classification) [20]   18, 34, 50, 101, 152
+     Model selection Static Heuristic Heuristic MILP                               DenseNet (classification) [22] 121, 161, 169, 201
+    Accuracy scaling   No     Limited3  No4      Yes                               ResNest (classification) [47]  14, 26, 50, 269
+    Adaptive batching Yes       No       Yes     Yes                               EfficientNet (classification) [40]
+                                                                                                                  b0-b7
+                                                                                   MobileNet (classification) [21]1.0, 0.75, 0.5, 0.25
+    Table 2. Comparing Proteus features with baselines                             YOLOv5 (object detection) [25] n, s, m, l, x
+                                                                                                                  RoBERTa-base, large; [29],
+initial allocation. Since Clipper cannot scale, we implement                                                      ALBERT-base, large, xlarge,
+two versions, one that maximizes throughput by using the                          BERT (sentiment analysis) [11] xxlarge [26]; BERT-base, tiny,
+least accurate model variants: Clipper-HT (High Through-                                                          mini, small, medium, large
+put), and another that maximizes serving accuracy by us-                                                          [41]
+ing the most accurate model variants: Clipper-HA (High                            T5 (translation) [34]           small, base, large, 3b, 11b
+Accuracy). Clipper uses an additive-increase multiplicate-                        GPT-2 (question answering) [33] base, medium, large, xl
+decrease (AIMD) heuristic to perform adaptive batching.                                 Table 3. Model families and their variants used
+We first evaluate Clipper end-to-end with our system and
+                                                                                  6.1.2 Model Variants. Our inference-serving system sup-
+then separately evaluate its batching algorithm against ours
+                                                                                  ports queries belonging to different query types (i.e., ap-
+in Section 6.4. Note that Clipper is also representative of
+                                                                                  plications). We assume one query type corresponds to one
+other static inference-serving systems, such as TensorFlow-
+                                                                                  DNN family (e.g., ResNets). Each query type can be served
+Serving [32] and NVIDIA Triton Inference Server [5] since
+                                                                                  by different variants of the same family (e.g., ResNet-18 or
+none of these systems dynamically adapt the resource al-
+                                                                                  ResNet-34). Table 3 shows the model families and their re-
+location of model variants in a cluster and depend on the
+                                                                                  spective variants that we use in our experiments. We obtain
+application developer to handle it.
+                                                                                  the pre-trained computer vision model variants from the
+Sommelier: Sommelier can suggest alternate models to
+                                                                                  ONNX Model Zoo [4] and the GluonCV Model Zoo [16],
+meet throughput requirements for a single server device and
+                                                                                  and the NLP model variants from the HuggingFace repos-
+switch out a high accuracy model variant for a low accuracy
+                                                                                  itory [43]. All the models are converted to ONNX format
+variant when high throughput is needed. We refer to Somme-
+                                                                                  before usage. Since our models belong to a wide variety of
+lier as being partially dynamic as it only works with a single
+                                                                                  inference applications and their performance profiles vary
+device and model but does not perform resource allocation at
+                                                                                  significantly from one another, setting the same latency SLO
+the cluster level. Moreover, Sommelier does not include adap-
+                                                                                  for all of them is not practical. Therefore, we set latency
+tive batching by default as it is primarily a model repository
+                                                                                  SLOs similar to [35, 36]: for each model family, we profile its
+that can interface with an inference-serving system and is
+                                                                                  fastest model variant that can run on a CPU with the smallest
+not designed as an inference-serving system itself. Therefore
+                                                                                  batch size, and set the latency SLO of the model family to
+we extend it by using our adaptive batching algorithm and
+                                                                                  be 2× of its profiled latency. We explore the sensitivity of
+MILP to get its initial model placement.
+                                                                                  Proteus and the baselines to SLO in Section 6.6. Since the
+INFaaS: INFaaS is the most dynamic baseline we use as it
+                                                                                  accuracy of each application is measured using a different
+dynamically changes model selection and model placement.
+                                                                                  metric, we normalize the accuracy of each model variant by
+However, INFaaS does not perform accuracy scaling by de-
+                                                                                  the accuracy of the most accurate variant in its model family.
+fault, since it treats accuracy as a constraint to be met and
+                                                                                  This normalized accuracy varies from 80% to 100% for the
+minimizes the cost of running instances. In our setting, since
+                                                                                  variants listed in Table 3.
+the cost of the cluster is fixed, we tweak INFaaS slightly to
+use accuracy drop as its objective to minimize while using                        6.1.3 Workloads. We use a mix of real-world and syn-
+the cost of running instances as a constraint, i.e., it cannot                    thetic workloads to evaluate our system and the baselines.
+exceed the fixed size of the cluster. We call this baseline                          Real-world trace. Since there exists no public trace of a
+INFaaS-Accuracy, a version of INFaaS optimized for accuracy                       production inference-serving system to date, we use a public
+scaling. INFaaS-Accuracy minimizes accuracy drop using the                        trace from Twitter [1] collected over a month-long period.
+allocation strategy from INFaaS, thereby maximizing serving                       As noted by previous work [35], the trace is representative of
+accuracy and giving us a version of INFaaS directly com-                          workloads that an inference-serving system would expect to
+parable to Proteus. Note that INFaaS-Accuracy just swaps                          see since tweets are likely to be passed through many infer-
+accuracy and cost in INFaaS as its objective and constraint,                      ence pipelines before they are published. Moreover, the trace
+respectively.                                                                     also contains diurnal patterns and spikes that an inference-
+3 Sommelier can suggest alternate models for a single device but does not
+                                                                                  serving system is likely to see over its execution. Since the
+perform allocation at the cluster level.
+                                                                                  queries in the trace are aggregated at the granularity of sec-
+4 INFaaS does not perform accuracy scaling by default, however we tweak           onds, we use a Poisson process to determine inter-arrival
+it slightly to get a version of INFaaS that can scale accuracy.                   times for queries within each second. Like prior work [35],
+
+
+
+                                                                            325
+Proteus: A High-Throughput Inference-Serving System with Accuracy Scaling                                           ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+we use a Zipf distribution to divide requests across model                                             Demand                 INFaaS-Accuracy                                       Sommelier
+families with an 𝛼 value of 1.001. Finally, we speed up the                                            Clipper-HA             Clipper-HT                                            Proteus
+trace by a constant factor without modifying the shape of                                                                                                                     400
+
+
+
+
+                                                                                                                                                     Avg. Throughput
+                                                                                           1000
+
+
+
+
+                                                                            Throughput
+                                                                                                                                                                              300
+the trace, and we choose the constant factor such that the                                       800
+                                                                                                 600                                                                          200
+trace can overload our system to test its performance.                                           400
+                                                                                                                                                                              100
+   Synthetic traces. We generate synthetic traces to stress-test                                 200
+                                                                                                  0                                                                            0
+systems in response to burstiness, both at the macro-scale in
+                                                                                                 100                                                                          20
+
+
+
+
+                                                                                                                                                            Max. Acc. Drop
+order to evaluate resource allocation, and on the micro-scale
+
+
+
+
+                                                                                Effective Acc.
+                                                                                                 95                                                                           15
+to evaluate adaptive batching. We provide details for both in                                    90                                                                           10
+Sections 6.3 and 6.4 respectively.                                                               85
+                                                                                                                                                                               5
+                                                                                                 80
+6.1.4 Evaluation Metrics. We compare performance against                                                                                                                       0
+
+
+
+
+                                                                                                                                                        SLO Violation Ratio
+                                                                                                 500                                                                          0.4
+baselines using several metrics. (i) Throughput is the number
+
+
+
+
+                                                                                SLO Violations
+                                                                                                 400
+                                                                                                                                                                              0.3
+of queries per second served (QPS). (ii) Effective Accuracy is                                   300
+                                                                                                                                                                              0.2
+                                                                                                 200
+the averaged accuracy for all the queries successfully served                                                                                                                 0.1
+                                                                                                 100
+by the system. (iii) Maximum Accuracy Drop for an approach                                        0                                                                           0.0
+represents the maximum drop in its effective accuracy over                                              0     4      8       12       16   20   24                                   Algorithm
+                                                                                                                         Time (min)
+the entire trace. As the accuracy of all models is normal-
+ized as mentioned before, we measure the drop from 100%.                    Figure 4. End-to-end performance comparison. Proteus of-
+(iv) SLO Violation Ratio is the number of latency SLO viola-                fers the lowest accuracy drop amongst scaling approaches as
+tions divided by the total number of queries. Since effective               well as the lowest SLO violation ratio while meeting query de-
+accuracy measures accuracy only for the queries that are                    mand. Against the non-scaling approach, Proteus improves
+successfully served by the system, it needs to be looked at in              throughput by 60% while reducing SLO violations by 10×.
+conjunction with both throughput and SLO violation ratio
+to get the full picture of performance.                                     NVIDIA GeForce GTX 1080 Ti GPU workers, and 10 NVIDIA
+6.1.5 Implementation. We describe our simulator-based                       V100 GPU workers. We use Docker containers [31] to host
+and cluster-based implementations below.                                    the models in our cluster on top of Kubernetes. We extend
+Simulator-based Implementation. We implement Proteus                        Kubernetes with a resource optimizer plugin to implement
+in a simulator in ∼6000 lines of Python code. It uses an event              our Resource Manager which runs on one of the CPUs. Inside
+queue and a timer to record the arrival and processing of                   the Docker containers, we run the models using the ONNX
+inference queries. We use the average profiled latencies of                 runtime [10] with the CUDA execution provider for GPUs
+the model variants as the processing time for the queries. We               and the CPU execution provider for CPUs.
+show that the results from our simulator match closely with                    To solve our MILP in the simulator as well as the cluster-
+results from our cluster-based implementation, with a slight                based system, we use the Python interface for Gurobi [18].
+discrepancy mainly due to the variance in processing time of                We set the invocation period of the MILP to be 30 seconds
+queries when they run on the actual hardware accelerators                   as it works well for our evaluation.
+and the networking effects between the hosts. Our simulator
+code and workload traces are available on GitHub5 .                         6.2 End-to-End Performance Comparison
+Cluster-based Implementation. We implement Proteus                          We first show results from the end-to-end evaluation of Pro-
+on top of an enterprise inference-serving system to test its                teus and the baselines on our cluster testbed. Figure 4 shows
+performance and feasibility on real-world workloads and                     the timeseries graphs for demand and throughput, effective
+hardware accelerators. The system is used internally by the                 accuracy, and the SLO violations, as well as the averaged
+enterprise to serve inference queries for its employees who                 SLO violation ratios across the trace.
+use it for a wide variety of applications and use cases, rang-                 We see that Clipper performs the worst amongst all the
+ing from standard image classification and voice recognition                approaches. Even though Clipper-HA provides the highest
+models to complex pipelines for autonomous vehicles and                     effective accuracy as it never swaps out high accuracy models
+augmented reality. Note that while we use the software in-                  for low accuracy models, it suffers the highest number of
+frastructure and the hardware accelerators of the enterprise                SLO misses throughout the trace. Moreover, its throughput
+in our cluster-based implementation, we do not use any pro-                 also drops significantly at the diurnal peaks during the day.
+prietary models or workload traces.                                         For instance, during the first peak, its throughput drops to
+   Our inference-serving system consists of a cluster of 20                 half of the query demand. On the other hand, Clipper-HT has
+Intel(R) Xeon(R) Gold 6126 @ 2.60GHz CPU workers, 10                        significantly lower SLO violations and higher throughput
+                                                                            than Clipper-HA, though it comes at the cost of the lowest
+5 https://github.com/UMass-LIDS/Proteus                                     effective accuracy and the maximum accuracy drop (20%).
+
+
+
+                                                                      326
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                      S. Ahmad, H. Guan, B. D. Friedman, T. Willams, R. K. Sitaraman, T. Woo
+
+
+   Sommelier performs better than Clipper since it scales                                          Demand       INFaaS-Accuracy       Sommelier
+accuracy, but still suffers from a high accuracy drop (16%                                         Clipper-HA   Clipper-HT            Proteus
+at peak) due to its inability to perform model placement                               1200
+
+
+
+
+                                                                        Throughput
+dynamically. INFaaS achieves the lowest maximum accuracy                                     900
+drop across the baselines (13.7%) as it performs both dynamic                                600
+model selection and placement. However, since it uses a                                      300
+
+greedy heuristic to do so which is prone to get stuck in local                                0
+
+optima, it suffers from a significant drop in throughput and                                 100
+
+
+
+
+                                                                            Effective Acc.
+                                                                                             95
+increase in SLO violations around peak times. INFaaS has to
+                                                                                             90
+use a greedy heuristic because its resource allocation decision                              85
+must be made on a query’s arrival. Therefore, it needs a faster                              80
+solution than a MILP to identify a new allocation policy in                                  500
+
+
+
+
+                                                                            SLO Violations
+time. Proteus avoids this problem by removing MILP solvers                                   400
+                                                                                             300
+from the critical path of serving a query.                                                   200
+   We see that Proteus drops the least accuracy while closely                                100
+meeting query demands. Its maximum accuracy drop is 4.85%                                     0
+                                                                                                    0       4   8       12       16   20     24
+at the highest peak, which is 2.8× lower than INFaaS and                                                            Time (min)
+3.2× lower than Sommelier. We attribute this to its optimal
+resource allocation obtained from the MILP. It also experi-             Figure 5. Responsiveness to bursty workload for Proteus vs.
+ences the lowest number of SLO violations, 2.8× lower than              baselines. Proteus adjusts allocation after an initial spike in
+Sommelier, 4.3× lower than INFaaS, and more than 10× lower              SLO violations, but provides the lowest SLO violations and
+compared to Clipper. We attribute this to its adaptive batch-           accuracy drop once it re-allocates.
+ing algorithm. To understand the performance of Proteus’s               Resource Manager to adjust allocation, resulting in the SLO
+adaptive batching further, we do a deep dive in Section 6.4.            violations decreasing again as it performs accuracy scaling
+   The results from our simulator match the behavior of the             to meet this burst. Thus Proteus’s decoupling of resource
+cluster testbed very closely. In particular, we observe an              allocation from the critical path of inference-serving comes
+average difference of 0.12% and 0.82% between the simulator             at the cost of a slightly slower response to sudden changes in
+and the cluster testbed in terms of the effective accuracy and          workloads. Once INFaaS and Proteus adjust their respective
+system throughput respectively. We attribute the decrease               allocations in response to the burst, Proteus continues to
+in throughput to background traffic on the cluster, container           have significantly lower SLO violations and higher effective
+startup delays, and other background effects not captured by            accuracy.
+the simulator. We also report an average difference of 0.5%
+in the SLO violation ratios. We expect this to be due to the            6.4 Adaptive Batching
+variance in runtimes of queries from the profiled runtimes.             Proteus’s adaptive batching dynamically chooses batch sizes
+   Therefore, we show simulation-based experiments for the              based on the arrival time of queries and queue status on
+remaining subsections to perform a deep dive into these                 a device to minimize SLO violations. We compare it with
+results in a time and cost-efficient manner.                            Clipper’s AIMD batching and Nexus’s [36] early-drop batch-
+                                                                        ing in terms of SLO Violation Ratio. To separate the effect
+6.3 Bursty Workload                                                     of batching from resource allocation and query assignment,
+We now evaluate Proteus and the baselines on a synthetic                we implement each of these batching algorithms on top of
+macro-scale bursty workload to evaluate the responsiveness              Proteus in order to study them in isolation without other
+of resource allocation. We generate the trace by interleav-             free variables. Since the batching of INFaaS is tied with its
+ing periods of flat, low query demand with periods of high              resource allocation, it cannot be evaluated separately by im-
+query demand, having query inter-arrivals sampled through               plementing it on top of Proteus as a module. We study its
+a Poisson process to introduce macro-scale bursts. As we are            batching as part of its resource allocation as in Section 6.2.
+only interested in studying resource allocation in this ex-                We evaluate adaptive batching on three synthetic traces
+periment, we show timeseries plots in Figure 5 and skip the             with query inter-arrivals following uniform, Poisson, and
+summarized SLO violation chart in the interest of space.                Gamma (shape 0.05) distributions. The Gamma arrival trace
+   We note that INFaaS reacts the fastest to the burst in               has highly bursty query inter-arrivals, thus introducing micro-
+demand, due to the fact that its resource allocation lies on            scale bursts. We set the incoming load (QPS) to be the same
+the critical path to inference-serving, so it can detect this           throughout these traces as we are interested in how the batch-
+change sooner and change its allocation accordingly.                    ing algorithms react to query inter-arrivals, when resource
+   Proteus first incurs a small number of SLO violations when           allocation is unchanged. Note that burstiness in query inter-
+the burst starts. The increase in query demand triggers its             arrivals is different from the bursty workload in Figure 6.3,
+
+
+
+                                                                  327
+Proteus: A High-Throughput Inference-Serving System with Accuracy Scaling                                                      ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+                                          Proteus w/ Nexus    Proteus w/ Clipper                                    Demand                    Proteus w/o AB                                     Proteus w/o MP
+                          Proteus         Batching            Batching                                              Proteus w/o MS            Proteus w/o QA                                     Proteus
+  SLO Violation Ratio
+
+
+
+
+                        0.20                                                                            1500
+
+
+
+
+                                                                                                                                                                     Avg. Throughput
+                                                                                                                                                                                          500
+                                                                                                        1200
+
+
+
+
+                                                                                         Throughput
+                                                                                                                                                                                          400
+                        0.15                                                                                  900                                                                         300
+                                                                                                              600                                                                         200
+                        0.10
+                                                                                                              300                                                                         100
+                        0.05                                                                                   0                                                                                0
+
+                        0.00                                                                                  100                                                                               20
+
+
+
+
+                                                                                                                                                                               Max. Acc. Drop
+                                Uniform             Poisson       Gamma
+
+
+
+
+                                                                                             Effective Acc.
+                                                                                                              95                                                                                15
+
+Figure 6. Comparison of Nexus and Clipper batching with                                                       90                                                                                10
+
+Proteus. All do well on uniform traces, but Proteus reduces                                                   85                                                                                5
+
+SLO violations by 2-4× on Poisson and Gamma traces.                                                           80                                                                                0
+
+
+
+
+                                                                                                                                                                 SLO Violation Ratio
+                                                                                                              400                                                                      0.20
+where the overall demand is bursty but the query inter-
+
+
+
+
+                                                                                             SLO Violations
+                                                                                                              300                                                                      0.15
+arrivals have a Poisson distribution (macro-scale bursts).                                                    200                                                                      0.10
+   Figure 6 shows the SLO violation ratios using three batch-                                                 100                                                                      0.05
+ing approaches: (i) Proteus with its original adaptive batch-                                                  0                                                                       0.00
+ing, (ii) Proteus with Clipper’s AIMD batching, (iii) Proteus                                                       0     4     8        12       16   20   24                                       Algorithm
+                                                                                                                                     Time (min)
+with Nexus’s early-drop batching. We note that all batch-
+ing algorithms perform well with uniform arrivals as the                                 Figure 7. Proteus ablation study. Removing model selection
+optimal batch size remains same throughout the trace, thus                               increases SLO violations the most, while removing model
+no adaptive adjustment is required. We see that Nexus ex-                                placement degrades effective accuracy most.
+periences about 2-3× higher SLO violations on the Poisson                                and performs adaptive batching, but does not scale accuracy
+and Gamma traces. The difference in performance between                                  in response to workload changes. Since it does not drop any
+Proteus and Nexus batching is due to the work-conserving                                 accuracy, its effective accuracy stays at 100% throughout the
+nature of Nexus. Nexus dispatches an inference batch to each                             experiment, however, it experiences the largest overall SLO
+device as soon as the previous batch is finished. As the query                           violation ratio at 0.18, due to its inability to adapt to vary-
+inter-arrivals get more and more non-uniform, it is more                                 ing demand by scaling accuracy. Proteus w/o AB (Adaptive
+advantageous to wait for queries to arrive and a non-work-                               Batching) represents our approach while setting batch size
+conserving approach works better in that case, so Proteus’s                              statically to 1. This approach has the highest absolute num-
+adaptive batching outperforms that of Nexus.                                             ber of SLO violations during the peak as it is unable to batch
+   On the other hand, Clipper experiences 3.8-4× higher SLO                              a large number of queries together to increase throughput
+violations on the Poisson and Gamma traces. Though it is                                 while meeting SLO, however this decreases when demand
+very easy to implement as a simple heuristic in any system,                              is low since executing with a small batch at low loads does
+its simplicity comes at the price of poor performance. As                                not backlog the queues. Proteus w/o QA (Query Assignment)
+AIMD is reactive, it does consider the current queue length                              distributes queries uniformly to all devices that host the re-
+nor when any of the queries currently in the queue would                                 spective model variants, regardless of their serving capacity.
+expire. It keeps incrementally increasing batch size until it                            It also suffers from a high SLO violation ratio of 0.1.
+experiences latency timeouts, at which point it backs off                                   Overall, we note that with respect to SLO violations, re-
+multiplicatively. While this works for a uniform trace where                             moving model selection causes the highest degradation as
+the optimal batch size does not change over time, it does not                            the system is not able to scale accuracy to meet the increased
+work well for Poisson or Gamma (bursty) arrivals.                                        demand (and hence, is forced to drop queries), followed by
+6.5 Ablation Study                                                                       adaptive batching, query assignment, and then model place-
+                                                                                         ment. In terms of effective accuracy, removing model place-
+We present an ablation study of Proteus in Figure 7 to quan-
+                                                                                         ment causes the highest degradation, followed by adaptive
+tify the performance benefit of each of its components in
+                                                                                         batching, query assignment, and then model selection.
+isolation.
+   Proteus w/o MP (Model Placement) places the models on                                 6.6 Sensitivity to Latency SLO
+accelerators initially using the MILP, but does not change                               We now vary the latency SLO and study its effect on all ap-
+this placement over time. However, it can perform model                                  proaches, as shown in Figure 8. As mentioned before, our sys-
+selection to do accuracy scaling by changing model variants                              tem hosts models from diverse tasks that have significantly
+without moving them around. This baseline is the same as                                 different performance profiles from each other. Therefore,
+the Sommelier baseline in Section 6.2, which suffers from                                instead of setting the same latency SLO for all of them, we
+the largest maximum accuracy drop (16%). Proteus w/o MS                                  set the SLO for a query type to be a multiple of the profiled
+(Model Selection) represents a baseline that performs model                              runtime of fastest model variant that runs on a CPU with a
+placement and query assignment optimally using the MILP                                  batch size of 1. We vary this multiple from 1× to 3.5× with
+
+
+
+                                                                                   328
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                                                                                                                        S. Ahmad, H. Guan, B. D. Friedman, T. Willams, R. K. Sitaraman, T. Woo
+
+
+                                         INFaaS-Accuracy                                       Clipper-HA                                       Proteus                   Section 6.1. Since Proteus optimizes effective accuracy at the
+                                         Clipper-HT                                            Sommelier                                                                  system level, we note variations across model families. We
+Avg. Throughput (QPS)
+
+
+
+
+                        400                                                                                                         1.0                                   first observe that T5 experiences the highest variation across
+
+
+                                                          Max. Accuracy Drop
+                                                                               20
+
+
+
+
+                                                                                                              SLO Violation Ratio
+                        300                                                    15
+                                                                                                                                    0.8
+                                                                                                                                                                          time, which we attribute to the fact that it has a lower incom-
+                                                                                                                                    0.6
+                        200                                                    10
+                                                                                                                                                                          ing request rate compared to other model families, and hence
+                                                                                                                                    0.4
+
+                        100                                                     5
+                                                                                                                                                                          carries a lower weight in the overall system effective accu-
+                                                                                                                                    0.2
+
+                                                                                0
+                                                                                                                                                                          racy. We also observe that GPT-2 has the lowest variation
+                           0                                                                                                        0.0
+                                1x 1.5x 2x 2.5x 3x 3.5x                             1x 1.5x 2x 2.5x 3x 3.5x                               1x 1.5x 2x 2.5x 3x 3.5x         in effective accuracy since it is the most heavyweight model
+                                        SLO                                                 SLO                                                     SLO
+                                                                                                                                                                          and cannot fit into most accelerators, hence the system loads
+Figure 8. Effect of varying SLOs on Proteus and baselines.                                                                                                                it once in the accelerator with the highest amount of mem-
+                                                                                                                                                                          ory. In terms of SLO violations, we see relatively consistent
+                                              MobileNet                                        DenseNet                                         YOLOv5
+                                                                                                                                                                          behavior across model families, since adaptive batching is
+                                              T5                                               BERT                                             ResNest
+                                              EfficientNet                                     ResNet                                           GPT-2
+                                                                                                                                                                          responsible for minimizing SLO violations and it executes
+                        500
+                                                                                                                                                                          on a per-device level. We discuss the fairness implications
+                        400                                                                                                                                               of these results in Section 7.
+Throughput
+
+
+
+
+                        300
+                        200
+                        100
+                           0
+
+                        100
+Effective Acc.
+
+
+
+
+                           95                                                                                                                                             6.8 Decision Overhead
+                           90
+                                                                                                                                                                          We measure the overhead of Proteus in two ways: (i) over-
+                           85
+                                                                                                                                                                          head of the Request Router on the critical path of queries,
+                           80
+                           30
+                                                                                                                                                                          (ii) overhead of the Resource Manager. Since the Request
+                                                                                                                                                                          Router lies on the critical path for serving every query, it is
+          SLO Violations
+
+
+
+
+                           20
+                                                                                                                                                                          imperative that it should incur only a small delay to route
+                           10                                                                                                                                             the queries. Recall that the Request Router stores a routing
+                           0                                                                                                                                              table with an entry for each model variant as well as acceler-
+                                   0            4                               8             12              16                               20          24
+                                                                                         Time (min)
+                                                                                                                                                                          ator. We measure the latency of the Request Router to search
+                                                                                                                                                                          this table to be less than 1ms. Note that there is also a space
+Figure 9. Breakdown of Proteus performance w.r.t. model                                                                                                                   overhead of this routing table that is 𝑂 (𝐷 × 𝑀 × 𝑄) where
+families.                                                                                                                                                                 D is the number of server devices, M is the number of model
+an interval of 0.5 and study its effect using the real-world                                                                                                              variants, and Q is the number of query types.
+Twitter trace. To show results from a large number of ex-                                                                                                                     The overhead for solving the MILP inside the Resource
+periments, we show (i) averaged throughput across time,                                                                                                                   Manager is also important as we need to make allocation
+(ii) maximum accuracy drop across time, (iii) average SLO                                                                                                                 changes quickly in order to be able to adapt to fast workload
+violation ratio across time.                                                                                                                                              changes. We show how the runtime of the MILP scales with
+    Overall, Proteus consistently offers the lowest accuracy                                                                                                              respect to its input parameters in Figure 10. We show the
+drop across all baselines that perform scaling, and the lowest                                                                                                            increase in the average run-time when increasing one of our
+SLO violation ratios. As the SLO increases, the SLO violation                                                                                                             input parameters (𝑑, 𝑚, 𝑞) while keeping the other param-
+ratio decreases, and throughput increases for all baseline                                                                                                                eters constant. We also show the 95% confidence interval
+approaches. The maximum accuracy drop decreases for all                                                                                                                   for each value as an error bar. As our evaluation uses an
+approaches except Clipper as it does not dynamically scale                                                                                                                invocation period of 30 seconds for the MILP under stable
+accuracy and thus suffers from high SLO violations. Proteus                                                                                                               conditions, we show run-times up to 60 seconds since we
+can maintain the same high throughput and low SLO viola-                                                                                                                  observe that beyond this point, our workload changes sig-
+tion ratios across all values of SLO. Its maximum accuracy                                                                                                                nificantly and the time taken to solve the MILP makes it
+drop decreases as SLO values increase, since higher accuracy                                                                                                              infeasible to adapt to workload changes quickly, forcing the
+model variants with slower runtimes can meet larger SLOs.                                                                                                                 system to rely on heuristic solutions. We note that the MILP
+                                                                                                                                                                          can scale up to 160 devices, 450 model variants, or 17 query
+6.7 Performance Breakdown
+                                                                                                                                                                          types while being solvable in under 60 seconds.
+We now present a breakdown of the end-to-end performance                                                                                                                      In our case, we measure the average time to solve our
+of Proteus with respect to different model families on the                                                                                                                MILP to be 4.2 seconds. At this speed, the Resource Manager
+Twitter trace. Figure 9 shows that every model family ex-                                                                                                                 is able to change the resource allocation quickly without
+periences different throughput as the workload has a Zipf                                                                                                                 incurring any significant overhead on the system since it
+distribution with respect to model families as described in                                                                                                               does not lie on the critical path to inference.
+
+
+
+                                                                                                                                                                    329
+Proteus: A High-Throughput Inference-Serving System with Accuracy Scaling                                                                                ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+             70                                        70
+                                                       60
+                                                                                                70
+                                                                                                60
+                                                                                                                                       PRETZEL [27], Clockwork [14], DLIS [37], and INFless [45].
+             60
+                                                                                                                                       They aim to provide a unified abstraction to the user to
+Time (sec)
+
+
+
+
+                                          Time (sec)
+
+
+
+
+                                                                                   Time (sec)
+             50                                        50                                       50
+             40                                        40                                       40
+             30                                        30                                       30
+                                                                                                                                       hide details of the underlying ML frameworks, data pre-
+             20                                        20                                       20                                     processing, and performance optimization. Cocktail [15]
+             10                                        10                                       10
+
+              0                                         0                                        0                                     uses model ensembling to improve accuracy and meet la-
+                  0   40   80   120 160                      0   150   300   450                     0    3   6   9   12 15 18
+                      Devices (d)                           Model Variants (m)                           Query Types (q)
+                                                                                                                                       tency requirements at minimal cost. Some other work focuses
+                                                                                                                                       specifically on serving heterogeneous DNNs via GPU spatial
+Figure 10. Scalability of MILP with respect to input parame-                                                                           sharing [7, 12], dynamic model placement [38], computation
+ters (𝑑, 𝑚, 𝑞)                                                                                                                         merging [24], and adaptive scheduling [30]. However, none
+7                 Discussion                                                                                                           of these works perform accuracy scaling to improve system
+We now discuss the limitations of our work and potential                                                                               throughput for resource-constrained inference-serving.
+future work opportunities.                                                                                                                The closest works to Proteus are INFaaS [35, 44], Somme-
+   Varying Input Sizes. We consider models from a wide                                                                                 lier [17], and Tolerance Tiers [19]. INFaaS [35] presents a
+variety of domains in this work, such as computer vision and                                                                           model-less inference-serving system that leverages model
+natural language processing. While computer vision models                                                                              graph optimizers to generate model variants and automates
+typically have fixed-size inputs, many natural language mod-                                                                           selection of model variants for each query to minimize cost.
+els can have variable-size inputs and their throughput may                                                                             However, it assumes that all model variants generated can
+change depending on the size of input passed to the model for                                                                          meet the accuracy requirement and thus fails to simulta-
+inference. While our MILP does not consider variable input                                                                             neously optimize for effective accuracy. INFaaS also suffers
+sizes of queries when calculating the throughput of a model                                                                            from local optimum in model-to-device assignment due to its
+variant (𝑃𝑑,𝑚,𝑞 ), adaptive batching does take into account the                                                                        heuristic assignment algorithm. Sommelier [17] is a model
+real-time query execution. However, for the scope of this                                                                              repository that can interface with inference-serving systems
+work, we do not consider the effect of variable-size inputs                                                                            to suggest model variants with lower accuracy to handle pe-
+on inference-serving and leave it open for future work.                                                                                riods of high load. Tolerance Tiers [19] allows developers to
+   Fairness. We consider accuracy scaling at a system level                                                                            trade accuracy off for latency using programming APIs, but
+in this work. This can mean that despite most requests meet-                                                                           restricts an application to use only one accuracy tier statically
+ing the latency SLO and throughput requirements, some re-                                                                              throughout the inference-serving process instead of adapt-
+quests may experience better accuracy than others at times.                                                                            ing accuracy dynamically as a scaling approach. Further,
+This opens the door to fairness as an alternate objective for                                                                          it doesn’t consider the scenario of serving heterogeneous
+optimization in an inference-serving system. However, it is                                                                            DNNs on heterogeneous devices.
+not straightforward to optimize fairness simultaneously with
+accuracy. The system can improve fairness by reallocating                                                                              9   Conclusion
+resources from a query type experiencing a low degree of                                                                               We presented Proteus, a high-throughput inference-serving
+accuracy drop to a query type experiencing a higher degree                                                                             system that leverages accuracy scaling to handle query work-
+of accuracy drop; however, this would decrease overall effec-                                                                          load variations. We formulated the resource management in
+tive accuracy at the system level. Thus, there is a trade-off                                                                          Proteus as a mixed integer linear programming optimization
+between fairness and system-wide effective accuracy, which                                                                             to adapt to macro-scale variations, and solved it to guaran-
+remains an interesting direction to explore for future work.                                                                           tee the optimal solution. We also proposed a novel adaptive
+   Hardware Scaling. In this work, we present accuracy                                                                                 batching algorithm to improve throughput and absorb micro-
+scaling as an alternative to hardware scaling for resource-                                                                            scale variations. We evaluated Proteus on real-world work-
+constrained inference-serving systems. However, accuracy                                                                               load traces and showed that it outperforms state-of-the-art
+scaling can also work in tandem with hardware scaling for                                                                              baselines in reducing SLO violations and improving system
+systems that have the ability to add hardware resources.                                                                               throughput while dropping minimal accuracy.
+Since hardware scaling involves provisioning and starting
+new servers which takes time, accuracy scaling can be used
+on a finer-grained timescale to absorb sudden unexpected
+                                                                                                                                       Acknowledgments
+bursts of load by dropping accuracy for a short time while       We thank our shepherd, Peter Pietzuch, and the anonymous
+waiting for new servers to be allocated.                         reviewers for their helpful feedback. This material is based
+                                                                 upon work supported by the National Science Foundation un-
+8 Related Work                                                   der grants 1763617, 2106299, 2312396, 2220211, and 2224054.
+There has been much work recently on inference-serving sys-      Any opinions, findings, and conclusions or recommenda-
+tems. Representative production systems include TensorFlow-      tions expressed in this material are those of the authors and
+Serving [32], Amazon SageMaker [2], Triton Inference Server [5], do not necessarily reflect the views of the National Science
+and Azure ML [3]. Research prototypes include Clipper [9],       Foundation.
+
+
+
+                                                                                                                                 330
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                                      S. Ahmad, H. Guan, B. D. Friedman, T. Willams, R. K. Sitaraman, T. Woo
+
+
+References                                                                              [16] Jian Guo, He He, Tong He, Leonard Lausen, Mu Li, Haibin Lin, Xingjian
+ [1] 2018.     Twitter Streaming Traces.           https://archive.org/details/              Shi, Chenguang Wang, Junyuan Xie, Sheng Zha, et al. 2020. GluonCV
+     archiveteam-twitter-stream-2018-04.                                                     and GluonNLP: deep learning in computer vision and natural language
+ [2] 2020. Amazon SageMaker. Build, train, and deploy machine learning                       processing. J. Mach. Learn. Res. 21, 23 (2020), 1–7.
+     models at scale. https://aws.amazon.com/sagemaker/. Accessed:                      [17] Peizhen Guo, Bo Hu, and Wenjun Hu. 2022. Sommelier: Curating DNN
+     2021-06-23.                                                                             Models for the Masses. In Proceedings of the 2022 International Confer-
+ [3] 2022. Azure Machine Learning. https://azure.microsoft.com/en-us/                        ence on Management of Data (Philadelphia, PA, USA) (SIGMOD ’22).
+     services/machine-learning/.                                                             Association for Computing Machinery, New York, NY, USA, 1876–1890.
+ [4] 2022. The ONNX Model Zoo. https://github.com/onnx/models. Ac-                           https://doi.org/10.1145/3514221.3526173
+     cessed: 2022-06-06.                                                                [18] Gurobi Optimization, LLC. 2022. Gurobi Optimizer Reference Manual.
+ [5] 2022. Triton Inference Server. https://developer.nvidia.com/nvidia-                     https://www.gurobi.com
+     triton-inference-server.                                                           [19] Matthew Halpern, Behzad Boroujerdian, Todd W. Mummert, Evelyn
+ [6] Davis Blalock, Jose Javier Gonzalez Ortiz, Jonathan Frankle, and John                   Duesterwald, and Vijay Janapa Reddi. 2019. One Size Does Not Fit All:
+     Guttag. 2020. What is the State of Neural Network Pruning?. In Pro-                     Quantifying and Exposing the Accuracy-Latency Trade-off in Machine
+     ceedings of Machine Learning and Systems, I. Dhillon, D. Papailiopoulos,                Learning Cloud Service APIs via Tolerance Tiers. CoRR abs/1906.11307
+     and V. Sze (Eds.), Vol. 2. 129–146. https://proceedings.mlsys.org/paper_                (2019). arXiv:1906.11307 http://arxiv.org/abs/1906.11307
+     files/paper/2020/file/6c44dc73014d66ba49b28d483a8f8b0d-Paper.pdf                   [20] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep
+ [7] Seungbeom Choi, Sunho Lee, Yeonjae Kim, Jongse Park, Youngjin                           Residual Learning for Image Recognition. In 2016 IEEE Conference
+     Kwon, and Jaehyuk Huh. 2021. Multi-model Machine Learning In-                           on Computer Vision and Pattern Recognition (CVPR). 770–778. https:
+     ference Serving with GPU Spatial Partitioning. CoRR abs/2109.01611                      //doi.org/10.1109/CVPR.2016.90
+     (2021). arXiv:2109.01611 https://arxiv.org/abs/2109.01611                          [21] Andrew G. Howard, Menglong Zhu, Bo Chen, Dmitry Kalenichenko,
+ [8] Yujeong Choi, Yunseong Kim, and Minsoo Rhu. 2021. Lazy Batching:                        Weijun Wang, Tobias Weyand, Marco Andreetto, and Hartwig Adam.
+     An SLA-aware Batching System for Cloud Machine Learning Inference.                      2017. MobileNets: Efficient Convolutional Neural Networks for Mobile
+     In 2021 IEEE International Symposium on High-Performance Computer                       Vision Applications. CoRR abs/1704.04861 (2017). arXiv:1704.04861
+     Architecture (HPCA). 493–506. https://doi.org/10.1109/HPCA51647.                        http://arxiv.org/abs/1704.04861
+     2021.00049                                                                         [22] Gao Huang, Zhuang Liu, Laurens van der Maaten, and Kilian Q. Wein-
+ [9] Daniel Crankshaw, Xin Wang, Guilio Zhou, Michael J. Franklin,                           berger. 2017. Densely Connected Convolutional Networks. In Proceed-
+     Joseph E. Gonzalez, and Ion Stoica. 2017. Clipper: A Low-Latency                        ings of the IEEE Conference on Computer Vision and Pattern Recognition
+     Online Prediction Serving System. In 14th USENIX Symposium on                           (CVPR). 4700–4708.
+     Networked Systems Design and Implementation (NSDI 17). USENIX As-                  [23] Yanxiang Huang, Bin Cui, Wenyu Zhang, Jie Jiang, and Ying Xu.
+     sociation, Boston, MA, 613–627. https://www.usenix.org/conference/                      2015. TencentRec: Real-Time Stream Recommendation in Practice
+     nsdi17/technical-sessions/presentation/crankshaw                                        (SIGMOD ’15). Association for Computing Machinery, New York, NY,
+[10] ONNX Runtime developers. 2021.               ONNX Runtime.        https://              USA, 227–238. https://doi.org/10.1145/2723372.2742785
+     onnxruntime.ai/. Version: 1.8.1.                                                   [24] Joo Seong Jeong, Soojeong Kim, Gyeong-In Yu, Yunseong Lee, and
+[11] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.                       Byung-Gon Chun. 2020. Accelerating Multi-Model Inference by Merg-
+     2018. BERT: Pre-training of Deep Bidirectional Transformers for Lan-                    ing DNNs of Different Weights. arXiv preprint arXiv:2009.13062 (2020).
+     guage Understanding. CoRR abs/1810.04805 (2018). arXiv:1810.04805                  [25] Glenn Jocher, Ayush Chaurasia, Alex Stoken, Jirka Borovec,
+     http://arxiv.org/abs/1810.04805                                                         NanoCode012, Yonghye Kwon, Kalen Michael, TaoXie, Jiacong Fang,
+[12] Aditya Dhakal, Sameer G Kulkarni, and K. K. Ramakrishnan. 2020.                         imyhxy, Lorna, Zeng Yifu, Colin Wong, Abhiram V, Diego Montes,
+     GSLICE: Controlled Spatial Sharing of GPUs for a Scalable Inference                     Zhiqiang Wang, Cristi Fati, Jebastin Nadar, Laughing, UnglvKitDe, Vic-
+     Platform. In Proceedings of the 11th ACM Symposium on Cloud Com-                        tor Sonck, tkianai, yxNONG, Piotr Skalski, Adam Hogan, Dhruv Nair,
+     puting (Virtual Event, USA) (SoCC ’20). Association for Computing                       Max Strobel, and Mrinal Jain. 2022. ultralytics/yolov5: v7.0 - YOLOv5
+     Machinery, New York, NY, USA, 492–506. https://doi.org/10.1145/                         SOTA Realtime Instance Segmentation. https://doi.org/10.5281/zenodo.
+     3419111.3421284                                                                         7347926
+[13] Biyi Fang, Xiao Zeng, and Mi Zhang. 2018. NestDNN: Resource-Aware                  [26] Zhenzhong Lan, Mingda Chen, Sebastian Goodman, Kevin Gimpel,
+     Multi-Tenant On-Device Deep Learning for Continuous Mobile Vi-                          Piyush Sharma, and Radu Soricut. 2019. ALBERT: A Lite BERT
+     sion. In Proceedings of the 24th Annual International Conference on                     for Self-supervised Learning of Language Representations. CoRR
+     Mobile Computing and Networking (New Delhi, India) (MobiCom ’18).                       abs/1909.11942 (2019). arXiv:1909.11942 http://arxiv.org/abs/1909.
+     Association for Computing Machinery, New York, NY, USA, 115–127.                        11942
+     https://doi.org/10.1145/3241539.3241559                                            [27] Yunseong Lee, Alberto Scolari, Byung-Gon Chun, Marco Domenico
+[14] Arpan Gujarati, Reza Karimi, Safya Alzayat, Wei Hao, Antoine Kauf-                      Santambrogio, Markus Weimer, and Matteo Interlandi. 2018. PRET-
+     mann, Ymir Vigfusson, and Jonathan Mace. 2020. Serving DNNs like                        ZEL: Opening the Black Box of Machine Learning Prediction Serving
+     Clockwork: Performance Predictability from the Bottom Up. In 14th                       Systems. In 13th USENIX Symposium on Operating Systems Design and
+     USENIX Symposium on Operating Systems Design and Implementation                         Implementation (OSDI 18). USENIX Association, Carlsbad, CA, 611–626.
+     (OSDI 20). USENIX Association, 443–462. https://www.usenix.org/                         https://www.usenix.org/conference/osdi18/presentation/lee
+     conference/osdi20/presentation/gujarati                                            [28] Matthew LeMay, Shijian Li, and Tian Guo. 2020. PERSEUS: Char-
+[15] Jashwant Raj Gunasekaran, Cyan Subhra Mishra, Prashanth Thi-                            acterizing Performance and Cost of Multi-Tenant Serving for CNN
+     nakaran, Bikash Sharma, Mahmut Taylan Kandemir, and Chita R. Das.                       Models. In 2020 IEEE International Conference on Cloud Engineering
+     2022. Cocktail: A Multidimensional Optimization for Model Serv-                         (IC2E). 66–72. https://doi.org/10.1109/IC2E48712.2020.00014
+     ing in Cloud. In 19th USENIX Symposium on Networked Systems De-                    [29] Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Mandar Joshi, Danqi
+     sign and Implementation (NSDI 22). USENIX Association, Renton, WA,                      Chen, Omer Levy, Mike Lewis, Luke Zettlemoyer, and Veselin Stoyanov.
+     1041–1057. https://www.usenix.org/conference/nsdi22/presentation/                       2019. RoBERTa: A Robustly Optimized BERT Pretraining Approach.
+     gunasekaran                                                                             CoRR abs/1907.11692 (2019). arXiv:1907.11692 http://arxiv.org/abs/
+                                                                                             1907.11692
+
+
+
+
+                                                                                  331
+Proteus: A High-Throughput Inference-Serving System with Accuracy Scaling                                  ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+[30] Zihan Liu, Jingwen Leng, Zhihui Zhang, Quan Chen, Chao Li, and                        Clara Ma, Yacine Jernite, Julien Plu, Canwen Xu, Teven Le Scao, Syl-
+     Minyi Guo. 2022. VELTAIR: Towards High-Performance Multi-Tenant                       vain Gugger, Mariama Drame, Quentin Lhoest, and Alexander M. Rush.
+     Deep Learning Services via Adaptive Compilation and Scheduling. In                    2020. Transformers: State-of-the-Art Natural Language Processing.
+     Proceedings of the 27th ACM International Conference on Architectural                 In Proceedings of the 2020 Conference on Empirical Methods in Natural
+     Support for Programming Languages and Operating Systems (Lausanne,                    Language Processing: System Demonstrations. Association for Computa-
+     Switzerland) (ASPLOS ’22). Association for Computing Machinery,                       tional Linguistics, Online, 38–45. https://www.aclweb.org/anthology/
+     New York, NY, USA, 388–401. https://doi.org/10.1145/3503222.3507752                   2020.emnlp-demos.6
+[31] Dirk Merkel. 2014. Docker: lightweight linux containers for consistent           [44] Neeraja J. Yadwadkar, Francisco Romero, Qian Li, and Christos
+     development and deployment. Linux journal 2014, 239 (2014), 2.                        Kozyrakis. 2019. A Case for Managed and Model-Less Inference Serv-
+[32] Christopher Olston, Fangwei Li, Jeremiah Harmsen, Jordan Soyke, Kiril                 ing. In Proceedings of the Workshop on Hot Topics in Operating Systems
+     Gorovoy, Li Lao, Noah Fiedel, Sukriti Ramesh, and Vinu Rajashekhar.                   (Bertinoro, Italy) (HotOS ’19). Association for Computing Machinery,
+     2017. TensorFlow-Serving: Flexible, High-Performance ML Serving.                      New York, NY, USA, 184–191. https://doi.org/10.1145/3317550.3321443
+     In Workshop on ML Systems at NIPS 2017.                                          [45] Yanan Yang, Laiping Zhao, Yiming Li, Huanyu Zhang, Jie Li, Mingyang
+[33] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei,                      Zhao, Xingzhen Chen, and Keqiu Li. 2022. INFless: A Native Serverless
+     Ilya Sutskever, et al. 2019. Language models are unsupervised multitask               System for Low-Latency, High-Throughput Inference (ASPLOS ’22).
+     learners. OpenAI blog 1, 8 (2019), 9.                                                 Association for Computing Machinery, New York, NY, USA, 768–781.
+[34] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan                       https://doi.org/10.1145/3503222.3507709
+     Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J. Liu. 2020.              [46] Haojie Ye, Sanketh Vedula, Yuhan Chen, Yichen Yang, Alex Bronstein,
+     Exploring the Limits of Transfer Learning with a Unified Text-to-Text                 Ronald Dreslinski, Trevor Mudge, and Nishil Talati. 2023. GRACE:
+     Transformer. Journal of Machine Learning Research 21, 140 (2020),                     A Scalable Graph-Based Approach to Accelerating Recommendation
+     1–67. http://jmlr.org/papers/v21/20-074.html                                          Model Inference (ASPLOS 2023). Association for Computing Machinery,
+[35] Francisco Romero, Qian Li, Neeraja J. Yadwadkar, and Christos                         New York, NY, USA, 282–301. https://doi.org/10.1145/3582016.3582029
+     Kozyrakis. 2021. INFaaS: Automated Model-less Inference Serv-                    [47] Hang Zhang, Chongruo Wu, Zhongyue Zhang, Yi Zhu, Haibin Lin,
+     ing. In 2021 USENIX Annual Technical Conference (USENIX ATC 21).                      Zhi Zhang, Yue Sun, Tong He, Jonas Mueller, R. Manmatha, Mu Li,
+     USENIX Association, 397–411. https://www.usenix.org/conference/                       and Alexander Smola. 2022. ResNeSt: Split-Attention Networks. In
+     atc21/presentation/romero                                                             Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+[36] Haichen Shen, Lequn Chen, Yuchen Jin, Liangyu Zhao, Bingyu Kong,                      Recognition (CVPR) Workshops. 2736–2746.
+     Matthai Philipose, Arvind Krishnamurthy, and Ravi Sundaram. 2019.
+     Nexus: A GPU Cluster Engine for Accelerating DNN-Based Video
+     Analysis. In Proceedings of the 27th ACM Symposium on Operating
+     Systems Principles (Huntsville, Ontario, Canada) (SOSP ’19). Association
+     for Computing Machinery, New York, NY, USA, 322–337. https://doi.
+     org/10.1145/3341301.3359658
+[37] Jonathan Soifer, Jason Li, Mingqin Li, Jeffrey Zhu, Yingnan Li, Yuxiong
+     He, Elton Zheng, Adi Oltean, Maya Mosyak, Chris Barnes, Thomas Liu,
+     and Junhua Wang. 2019. Deep Learning Inference Service at Microsoft.
+     In 2019 USENIX Conference on Operational Machine Learning (OpML
+     19). USENIX Association, Santa Clara, CA, 15–17. https://www.usenix.
+     org/conference/opml19/presentation/soifer
+[38] Piyush Subedi, Jianwei Hao, In Kee Kim, and Lakshmish Ramaswamy.
+     2021. AI Multi-Tenancy on Edge: Concurrent Deep Learning Model
+     Executions and Dynamic Model Placements on Edge Devices. In 2021
+     IEEE 14th International Conference on Cloud Computing (CLOUD). 31–
+     42. https://doi.org/10.1109/CLOUD53861.2021.00016
+[39] Vivienne Sze, Yu-Hsin Chen, Tien-Ju Yang, and Joel S Emer. 2017.
+     Efficient processing of deep neural networks: A tutorial and survey.
+     Proc. IEEE 105, 12 (2017), 2295–2329.
+[40] Vivienne Sze, Yu-Hsin Chen, Tien-Ju Yang, and Joel S. Emer. 2017.
+     Efficient Processing of Deep Neural Networks: A Tutorial and Survey.
+     Proc. IEEE 105, 12 (2017), 2295–2329. https://doi.org/10.1109/JPROC.
+     2017.2761740
+[41] Iulia Turc, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.
+     2019. Well-Read Students Learn Better: The Impact of Student Ini-
+     tialization on Knowledge Distillation. CoRR abs/1908.08962 (2019).
+     arXiv:1908.08962 http://arxiv.org/abs/1908.08962
+[42] Mark Wilkening, Udit Gupta, Samuel Hsia, Caroline Trippel, Carole-
+     Jean Wu, David Brooks, and Gu-Yeon Wei. 2021. RecSSD: Near Data
+     Processing for Solid State Drive Based Recommendation Inference
+     (ASPLOS ’21). Association for Computing Machinery, New York, NY,
+     USA, 717–729. https://doi.org/10.1145/3445814.3446763
+[43] Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond,
+     Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Rémi Louf,
+     Morgan Funtowicz, Joe Davison, Sam Shleifer, Patrick von Platen,
+
+
+
+
+                                                                                332
+Proteus: A High-Throughput Inference-Serving System with Accuracy Scaling                         ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+A      Artifact Appendix for Proteus: A                                         language models for text translation, sentiment analysis, and
+       High-Throughput Inference-Serving                                        question answering. The complete list of all the DNN models
+       System with Accuracy Scaling                                             and their variants used is given in Table 3 in the paper.
+A.1 Abstract                                                                    A.4 Installation
+This artifact describes the complete workflow to setup the                      We provide two methods of installation:
+simulation experiments for Proteus. We describe how to
+                                                                                   1. Docker: In order to quickly evaluate Proteus, we pro-
+obtain the code, and then describe two methods to install the
+                                                                                      vide a Docker container with usage instructions at
+simulator. We explain how to run the experiments and the
+                                                                                      https://github.com/UMass-LIDS/Proteus/blob/main/DOCKER.
+expected results from simulation. Finally, we also publicize
+                                                                                      md. We recommend this method for artifact evaluation
+all the workload traces used in our paper.
+                                                                                      and quick testing as it does not require obtaining a
+A.2     Artifact check-list (meta-information)                                        Gurobi license. For any other use cases, please use the
+      • Algorithm: Combinatorial optimization using mixed inte-
+                                                                                      second method described below.
+        ger linear programming, adaptive batching.                                 2. Local installation: For extensive evaluation and gen-
+      • Hardware: Docker container for linux_amd64 platform                           eral simulator usage, we recommend locally installing
+        provided. Source code can be used on any hardware.                            Proteus and obtaining a Gurobi license. The instruc-
+      • Metrics: Throughput, inference accuracy, latency SLO vio-                     tions are provided at https://github.com/UMass-LIDS/
+        lations.                                                                      Proteus/blob/main/README.md.
+      • Output: Log files are output by the simulator which are then
+        used by the plotting scripts to generate graphs for results.            A.5 Experiment workflow
+      • Experiments: End-to-end evaluation of Proteus and base-                 The simulator requires a JSON configuration file as input to
+        lines as well as an evaluation of the responsiveness of Proteus
+                                                                                set up the experiment. We have provided several example
+        against baselines.
+      • How much disk space required (approximately)?: Docker
+                                                                                configuration files in the config folder of our GitHub repo.
+        container requires approximately 1.5GB of disk space.                   A configuration file describes the workload trace to use, the
+      • How much time is needed to prepare workflow (ap-                        resource allocation algorithm, the adaptive batching algo-
+        proximately)?: 15 minutes.                                              rithm, as well as any hyper-parameters (e.g., a 𝛽 value of
+      • How much time is needed to complete experiments                         1.05 for Proteus is used by default).
+        (approximately)?: 1-2 hours depending on hardware plat-                    Depending on the installation method used, the experi-
+        form.                                                                   ments can be run using either of the following set of instruc-
+      • Publicly available?: Yes. See below for access details.                 tions:
+A.3 Description                                                                    1. Docker: Follow instructions at https://github.com/
+                                                                                      UMass-LIDS/Proteus/blob/main/DOCKER.md.
+A.3.1 How to access. The simulator code and workload
+                                                                                   2. Local installation: Follow instructions at https://
+traces can be accessed at https://github.com/UMass-LIDS/
+                                                                                      github.com/UMass-LIDS/Proteus/blob/main/EXAMPLES.
+Proteus. It is also accessible at the following DOI: https:
+                                                                                      md.
+//doi.org/10.5281/zenodo.10428550.
+A.3.2     Hardware dependencies. None for the simulator.                        A.6 Evaluation and expected results
+                                                                                The simulator produces log files in the logs folder. These
+A.3.3 Software dependencies. We provide two installa-
+                                                                                log files contain snapshots of the system at regular intervals
+tion methods. The first method only requires Docker, while
+                                                                                containing not only aggregated information about user de-
+the second method requires the following:
+                                                                                mand, system capacity, requests served/dropped/late, and
+    • Gurobi optimization software                                              accuracy seen by the requests, but they also contain detailed
+    • A Gurobi license                                                          logs for all system events in logs/per_predictor.
+    • conda                                                                        These log files are then ingested by the plotting scripts
+    • A local installation of Python                                            provided in the plotting folder to generate two graphs: an
+A.3.4 Data sets. The artifact has two types of datasets:                        end-to-end evaluation of Proteus against the baselines on the
+                                                                                Twitter trace, similar to the one in Section 6.3, as well as an
+   1. A real-world Twitter workload dataset to test end-to-
+                                                                                evaluation of the responsiveness of Proteus vs. the baselines
+      end system performance.
+                                                                                on a bursty trace, as in Section 6.4.
+   2. Several synthetic workload datasets to test performance
+      of isolated components as described in the paper                          A.7 Experiment customization
+A.3.5 Models. A mix of computer vision models for image                         The experiments can be customized by editing the sample
+classification and object detection is used, as well as natural                 configuration files in the config folder.
+
+
+
+                                                                          333
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                  S. Ahmad, H. Guan, B. D. Friedman, T. Willams, R. K. Sitaraman, T. Woo
+
+
+   The following resource allocation algorithms can be used         A.8 Notes
+in the model_allocation field: ilp for Proteus, infaas_v2           Please refer to https://github.com/UMass-LIDS/Proteus for
+for INFaaS-Accuracy, clipper for Clipper, and sommelier             complete reference and instructions.
+for Sommelier.
+   The following batching algorithms can be used in the             A.9 Methodology
+batching field: accscale for Proteus adaptive batching,             Submission, reviewing and badging methodology:
+aimd for Clipper’s AIMD batching, and nexus for Nexus’s
+                                                                       • https://www.acm.org/publications/policies/artifact-review-
+batching algorithm.
+                                                                         badging
+                                                                       • http://cTuning.org/ae/submission-20201122.html
+                                                                       • http://cTuning.org/ae/reviewing-20201122.html
+
+
+
+
+                                                              334
+

@@ -1,0 +1,1390 @@
+  PIM-DL: Expanding the Applicability of Commodity
+         DRAM-PIMs for Deep Learning via
+         Algorithm-System Co-Optimization
+                       Cong Li                                               Zhe Zhou                                       Yang Wang∗
+          School of Integrated Circuits                          School of Integrated Circuits                           Microsoft Research
+               Peking University                                 School of Computer Science                                Beijing, China
+                 Beijing, China                                       Peking University                             yang.wang92@microsoft.com
+              leesou@pku.edu.cn                                         Beijing, China
+                                                                    zhou.zhe@pku.edu.cn
+
+                      Fan Yang                                               Ting Cao                                         Mao Yang
+              Nankai University                                        Microsoft Research                               Microsoft Research
+                Tianjin, China                                            Beijing, China                                  Beijing, China
+           yangf@nbjl.nankai.edu.cn                                 ting.cao@microsoft.com                            maoyang@microsoft.com
+
+                                                 Yun Liang                                          Guangyu Sun∗
+                                    School of Integrated Circuits                              School of Integrated Circuits
+                                          Peking University                                         Peking University
+                                Beijing Advanced Innovation Center                         Beijing Advanced Innovation Center
+                                       for Integrated Circuits                                    for Integrated Circuits
+                                            Beijing, China                                             Beijing, China
+                                        ericlyun@pku.edu.cn                                         gsun@pku.edu.cn
+
+Abstract                                                                                   the compute-heavy GEMM operations in linear layers with
+DRAM-based processing-in-memory (DRAM-PIM) has gain-                                       Lookup-Tables (LUTs). Such LUT-based neural networks
+ed commercial prominence in recent years. However, their                                   (LUT-NNs) substantially reduce multiplications in DNN in-
+integration for deep learning acceleration poses inherent                                  ference, rendering them suitable for efficient execution on
+challenges. Existing DRAM-PIMs are limited in computa-                                     DRAM-PIMs. To accurately convert DNNs into LUT-NNs
+tional capabilities, primarily applicable for element-wise and                             and achieve optimal inference serving performance, we first
+GEMV operators. Unfortunately, these operators contribute                                  introduce an enhanced LUT-NN (eLUT-NN) algorithm for
+only a small portion of the execution time in most DNN                                     model calibration, then we propose an Auto-Tuner capable of
+workloads. Current systems still necessitate powerful hosts                                optimizing the mapping parameters on diverse DRAM-PIM
+to handle a significant portion of compute-heavy operators.                                platforms. We evaluate PIM-DL on off-the-shelf UPMEM
+                                                                                           PIM-DIMM products and simulated HBM-PIM/AiM plat-
+   To expand the applicability of commodity DRAM-PIMs                                      forms across multiple contemporary DNN workloads. Com-
+in accelerating deep learning, we introduce a novel PIM-DL                                 pared with GEMM-based inference on DRAM-PIMs, PIM-DL
+framework. The philosophy behind PIM-DL is to replace                                      achieves 22.6×~37.1× speedup. Compared with CPU/GPU-
+                                                                                           based inference, PIM-DL achieves up to 3.54×/1.20× speedup.
+∗ Co-corresponding authors.
+                                                                                           CCS Concepts: • Computing methodologies → Machine
+Permission to make digital or hard copies of all or part of this work for                  learning.
+personal or classroom use is granted without fee provided that copies
+are not made or distributed for profit or commercial advantage and that                    Keywords: near-memory processing, machine learning
+copies bear this notice and the full citation on the first page. Copyrights
+                                                                                           ACM Reference Format:
+for components of this work owned by others than the author(s) must
+                                                                                           Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun
+be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific
+                                                                                           Liang, and Guangyu Sun. 2024. PIM-DL: Expanding the Applicabil-
+permission and/or a fee. Request permissions from permissions@acm.org.                     ity of Commodity DRAM-PIMs for Deep Learning via Algorithm-
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                                        System Co-Optimization. In 29th ACM International Conference on
+© 2024 Copyright held by the owner/author(s). Publication rights licensed                  Architectural Support for Programming Languages and Operating
+to ACM.                                                                                    Systems, Volume 2 (ASPLOS ’24), April 27-May 1, 2024, La Jolla, CA,
+ACM ISBN 979-8-4007-0385-0/24/04. . . $15.00                                               USA. ACM, New York, NY, USA, 18 pages. https://doi.org/10.1145/
+https://doi.org/10.1145/3620665.3640376                                                    3620665.3640376
+
+
+
+
+                                                                                     879
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                 Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+               Compute
+               Memory       Deep Learning Workloads                                 usually require more than 10 TOP/s of computational capac-
+               Operators                                                            ity to ensure sufficient throughput[47]. Therefore, DRAM-
+     MKL, CuBLAS              BLAS, PIM BLAS                    PIM-DL
+                                                                                    PIMs are extremely compute-bound and only applicable for
+                           ElmtWise                   ElmtWise
+    All                     GEMV                        GEMV                        memory-bound operators, such as ReLU [68], Residual [36],
+ Operators                                              AMM
+               GPU/CPU      GEMM
+                            Others
+                                        GPU/CPU
+                                                       Others       GPU/CPU
+                                                                                    Layer-norm [5] and Matrix-Vector Multiplication, etc [59].
+             CBO                      CBO                        CBO                   To compensate for the limited computational ability, ex-
+                                                                                    isting PIM-enabled systems (Figure 1-(b)) heavily rely on
+                                                                                    powerful hosts to handle compute-heavy GEMM operators.
+      CE        MBO            CE       MBO                CE        MBO
+         (a)                         (b)                       (c)                  Although this improves overall performance, it also leads to
+Compute-Centric System      PIM-Enabled System        Memory-Centric System         higher manufacturing costs. Moreover, due to the majority
+    (Traditional)            (Existing Solution)        (PIM-DL Solution)
+                                                                                    of computation still happening on the host processors, the
+Figure 1. Systems Comparison. CBO: Compute-Bound Oper-                              utilization of DRAM-PIMs becomes too low to motivate the
+ators, MBO: Memory-Bound Operators, CE: Cost-Efficiency.                            adoption of DRAM-PIMs in modern data-center systems.
+                                                                                       To extend the applicability of DRAM-PIMs for deep-learni-
+                                                                                    ng, we urgently require a PIM-friendly deep-learning para-
+1     Introduction                                                                  digm. In this context, the emerging LUT-NN (Lookup Table-
+In recent years, commodity DRAM-based processing-in-mem-                            based Neural Network) algorithm [84] becomes a promising
+ory products, exemplified by UPMEM’s PIM-DIMM [18],                                 solution. It substitutes GEMM in linear layers with table
+Samsung’s HBM-PIM [55], and SK-Hynix’s AiM [54], have                               lookups, avoiding extensive multiplications. However, there
+emerged to enhance DRAM bandwidth while minimizing the                              are three fundamental challenges hindering the application
+data-movement energy consumption. By incorporating pro-                             of LUT-NNs on DRAM-PIMs. First, existing LUT-NN algo-
+cessing units near memory banks, these DRAM-PIMs can of-                            rithms fail to provide satisfactory model accuracy when re-
+fer up to 8× higher memory bandwidth and facilitate the pro-                        placing all linear layers in a DNN with LUTs. Second, current
+cessing of various real-world applications such as in-memory                        deep learning frameworks do not support DRAM-PIMs as the
+databases [6–8, 48, 62], sparse tensor algebra [31], classic                        hardware backend. Third, due to the architectural limitations
+machine learning [34], and genome analysis [21, 58], etc.                           present in existing DRAM-PIMs, translating the advantages
+While DRAM-PIMs have found utility in deep learning appli-                          of LUT-NNs into actual speedup is also challenging.
+cations, their focus primarily lies in memory-intensive layers                         In this paper, we introduce the PIM-DL framework to
+such as element-wise and GEMV operators [13, 59]. Never-                            tackle these challenges. PIM-DL mainly focuses on the opti-
+theless, for typical DNN workloads, element-wise operators                          mization of Transformer-based DNNs [87], the de-facto ap-
+only contribute less than 15% of the end-to-end latency [23],                       proach in computer vision (CV) and neural language process-
+while GEMV operators are predominantly utilized in single-                          ing (NLP) areas. PIM-DL incorporates a LUT-NN conversion
+batch GPT/LSTM inference [13, 59]. For contemporary DNN                             front-end that transforms pre-trained DNNs to LUT-NNs
+serving scenarios in cloud, it is the GEMM operators within                         through calibration. The converted models can be efficiently
+linear layers that pose the main bottlenecks [23]. However,                         deployed on commodity DRAM-PIMs using a LUT-NN infer-
+none of these DRAM-PIM products have demonstrated the                               ence backend. To ensure model accuracy, we introduce the
+ability to efficiently handle GEMM operators in DNNs.                               enhanced LUT-NN (eLUT-NN) algorithm for efficient model
+   A primary limitation of DRAM-PIMs in deep-learning ac-                           calibration. Unlike baseline LUT-NN algorithms, eLUT-NN
+celeration is their restricted computational ability. As DRAM-                      can replace all layers with LUTs using only less than 1% of the
+PIMs implement compute units using the DRAM process,                                calibration dataset. To translate the computation reduction
+the transistors are 3× slower, and the logic density is sev-                        achieved by LUT-NNs into actual speedup on DRAM-PIMs,
+eral times lower compared to CMOS in the same technology                            we elaborate the hardware mapping of LUT-NN inference
+node [19]. Even worse, DRAM chips usually have fewer metal                          and quantitatively model the dataflow. Then, we develop
+layers, leading to a lower routing density at the same time.                        an auto-tuner to find the best mapping automatically. As
+Due to these technical constraints, DRAM-PIMs can hardly                            shown in Figure 1-(c), PIM-DL enables offloading most op-
+incorporate powerful compute units. Consequently, the peak                          erators to DRAM-PIMs and only requires a wimpy host for
+computational capacity of UPMEM PIM-DIMM is merely 43.8                             the small portion of the remaining operators. Compared to
+GOP/s per DIMM [33]. Samsung’s HBM-PIM [55] and SK                                  the PIM-enabled solution in Figure 1-(b), such a memory-
+hynix’s GDDR-PIM (AiM) [54] equip dedicated vector units                            centric system can potentially achieve higher cost-efficiency.
+to enhance their tensor-processing ability. HBM-PIM has                             To summarize, we have made the following contributions:
+about 2 TB/s of bandwidth but only 1.2 TFLOP/s of comput-
+ing capability per cube [55]. Similarly, using high-frequency                           • We propose PIM-DL, the first deep-learning frame-
+MAC units, SK-Hynix’s AiM reaches about 1 TFLOP/s per                                     work designed for commodity DRAM-PIMs using the
+chip. However, the GEMM operators widely used in DNNs                                     novel LUT-based deep-learning paradigm. (Section 4.1)
+
+
+
+                                                                              880
+PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning
+via Algorithm-System Co-Optimization                                                              ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+    • We propose an enhanced LUT-NN (eLUT-NN) algo-                                Table 1. Comparison of Commodity DRAM-PIMs
+      rithm for model calibration, which achieves much
+                                                                                    Product        PIM-DIMM [18]    HBM-PIM [55]       AiM [54]
+      higher model accuracy with 100× fewer calibration
+                                                                                   Technique            DDR4             HBM2           GDDR6
+      data. (Section 4.2)                                                          PIM Units          RISC Cores      FP16 MAC        BF16 MAC
+    • We design the mapping of LUT-NN on DRAM-PIMs                              Peak Bandwidth   80.4 GB/s per DIMM 2 TB/s per cube 1 TB/s per chip
+                                                                                Peak Throughput 43.8 GOP/s per DIMM   1.2 TFLOPS       1 TFLOPS
+      and quantitatively model the dataflow. An auto-tuning
+      framework is proposed to optimize the mapping on
+      different DRAM-PIM platforms. (Section 5)
+   We evaluate PIM-DL on the off-the-shelf UPMEM PIM-                          as illustrated in Figure 1-(b). When the workloads are not
+DIMM platform and simulated HBM-PIM/AiM platforms.                             PIM-friendly, a PIM-enabled system falls back to a tradi-
+Compared with GEMM-based inference on PIM-DIMM/HBM-                            tional compute-centric system shown in Figure 1-(a), but
+PIM/AiM, PIM-DL achieves up to 22.57×/37.06×/27.25× spee-                      with higher manufacturing costs.
+dup. Compared with CPU/GPU baselines, PIM-DL achieves                             To extend the applicability of commodity DRAM-PIMs for
+up to 3.54×/1.20× speedup. PIM-DL is open-sourced at https:                    deep learning, a possible direction is to make DNNs more
+//github.com/leesou/PIM-DL-ASPLOS.                                             PIM-friendly by reducing their computational requirements.
+                                                                               For instance, Prangon et al. [16] proposes to convert CNNs to
+2    Background & Motivation                                                   binary neural networks [66] to enable their deployment on
+2.1 Memory-Centric Computing with DRAM-PIMs                                    UPMEM’s PIM-DIMM. However, BNNs reduce computation
+                                                                               at the cost of greatly sacrificed model accuracy, which can
+To deal with the well-known "Memory-Wall" problem, re-                         hardly be applied to large models such as BERT [20] and
+searches have proposed DRAM-based in-memory process-                           ViT [22] models. Therefore, how to design a practical and
+ing architectures (DRAM-PIMs) over the past decades [2–                        PIM-friendly DNN algorithm is yet to be explored.
+4, 25, 27, 28, 35, 37, 38, 50, 52, 56, 60, 63, 75, 77, 80, 90, 91, 94,
+96, 101]. In recent few years, DRAM-PIMs have entered the
+commercialization phase, as demonstrated by various prod-
+                                                                               3   LUT-based Deep Learning Paradigm
+ucts listed in Table 1. Notably, UPMEM has introduced the                      Compute-heavy GEMM operations have been identified as
+first DDR4-PIM product named PIM-DIMM [18]. They place                         the primary bottleneck for DNN inference on commodity
+programmable RISC cores near every DRAM memory bank,                           DRAM-PIMs. Apparently, such a challenge is eliminated if
+resulting in a remarkable 8× increase in total bandwidth. Ad-                  we can substitute GEMM operators with lighter alternatives.
+ditionally, Samsung has proposed HBM-PIM products [55],                        In this context, the recently proposed LUT-NN algorithms
+designed to efficiently process memory-bound basic linear al-                  emerge as a promising solution [9, 84]. The key insight of
+gebra subprograms (BLAS) that do not benefit from on-chip                      LUT-NN is that for a given layer, the features of different
+cache, such as scalar-vector, vector-vector, and matrix-vector                 input activation matrices have block-wise semantic similar-
+operations. SK-Hynix has also developed their PIM product                      ity, allowing a few typical features, also named centroids, to
+named AiM, based on GDDR6 memory, which exhibits sig-                          approximate the original values. Accordingly, the GEMM
+nificant potential in accelerating LSTM models [54].                           between any inputs and the weight matrix can be converted
+                                                                               to the multiplication between centroids and the weight ma-
+2.2 Limited Computation Ability of DRAM-PIMs                                   trix. By getting the centroids in advance, the partial-sums
+Commodity DRAM-PIMs have exhibited outstanding per-                            between the centroids and the weight matrix can be pre-
+formance in accelerating a wide range of workloads [6–                         computed and stored in look-up tables (LUTs). During infer-
+8, 21, 31, 48, 58, 62]. Despite these achievements, their ap-                  ence, we just need to fetch and accumulate the pre-computed
+plication in deep learning remains an open challenge. Prior                    data in the LUTs according to the indices of the centroids
+efforts have employed HBM-PIM [59] and AiM [13] to offload                     closest to the inputs, as illustrated in Figure 2-(a). Such a
+specific types of operators, such as ReLU, Residual, Batch                     partial-sum reduction procedure can greatly reduce the com-
+Normalization, and GEMV. However, these element-wise                           putation overheads compared with GEMM operators. In the
+operators typically contribute only < 15% of the overall exe-                  following sub-sections, we will first elaborate on LUT-NN’s
+cution time [23]. Furthermore, while HBM-PIM and AiM can                       conversion and inference procedure. Then, we will analyze
+accelerate single-batch GPT/LSTM inference, which primar-                      the the affinity between LUT-NN and DRAM-PIMs.
+ily involves GEMV operators for linear layers, cloud-based
+scenarios often require batched inference [24, 29, 47, 81, 103]                3.1 LUT-NN Conversion
+and heavily rely on compute-heavy GEMM operators. Con-                         As shown in Figure 2-(b), LUT-NN conversion aims to trans-
+sequently, existing DRAM-PIM systems still depend on a                         form the original weight matrix (depicted as the green ma-
+powerful host to handle these computation-heavy parts in                       trix) into look-up tables (LUTs) and centroids, The centroids
+DNNs. We refer to these systems as PIM-enabled Systems,                        are organized into several codebooks. To achieve this, the
+
+
+
+                                                                         881
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                                                   Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+
+                         Input                                        𝐻𝐻                          Pre-Computed Look-up Tables                                                  𝐿𝐿𝑇𝑇0          𝐿𝐿𝑇𝑇1                  𝐿𝐿𝑇𝑇2                   𝐿𝐿𝑇𝑇3
+            Dist. Calc.
+                                   LUT-NN
+                                                                 Activation
+                     Centroids                 𝑀𝑀                Matrices                    𝐹𝐹
+                                                                                                                                                                      Activation Matrix                                                               
+                                 Indices                                                                                                 𝐻𝐻/𝑉𝑉                                                                              ⊕
+                                                                                                                                                                                                                                     𝑁𝑁
+                                                                                                                                                                      𝑁𝑁                             
+                  Look-up Tables                                              𝑉𝑉                                           Weight                                                                   ⊗                               
+                                                                                             ⊗                               Matrix                        𝐹𝐹                                                                                          𝐹𝐹
+                Reduce                              𝐶𝐶𝐶𝐶                                                                                                                                                 𝑎𝑎𝑎𝑎𝑎𝑎𝑎𝑎𝑎𝑎𝑎𝑎 = 3
+                   Output                                                                                                                                                                                     
+                                                                 Codebooks               𝑉𝑉                                                                                    Codebooks                                        Output
+            (a) LUT-NN Overview                                         (b) LUT-NN Conversion                                                                                          (c) LUT-NN Inference
+
+                                                                     Figure 2. LUT-NN-Based Deep Learning Paradigm
+
+                             Reduction                Add                   Multiplication                                                                      QKV        O       FFN1    FFN2          Bert-Base          Bert-Large             ViT-Huge
+
+
+
+
+                                                                                                              Reduction of FLOPs
+          0.6                                                                                           20×                                      1,000
+                                   CT=16                                      V=4                                                                                                            CPU Peak Throughput = 795.11 GOPS
+         0.45                                                                                           15×
+GFLOPS
+
+
+
+
+          0.3                                                                                           10×
+         0.15                                                                                           5×                                        100
+                                                                                                                                                                                                                                                        15
+
+
+
+
+                                                                                                                                          GOPS
+           0                                                                                            0×                                                                                                                                              12
+                    2         4            8   16           64         32           16            8                                                                                                                                                      9
+                                                                                                                                                   10
+                          Sub-vector Length                       Centroid Number                                                                                                                                                                        6
+                                                                                                                                                                                                                                                          3
+                                                                                                                                                                                                                                                          0
+                                                                                                                                                                                                  0.20      0.22     0.24      0.26        0.28        0.30
+Figure 3. Computation Reduction Analysis (𝑁 =𝐻 =𝐹 =1024).                                                                                           1
+                                                                                                                                                         0.1     0.204 0.288                  1                                                   10    15.16
+                                                                                                                                                                                    Arithmetic Intensity (GOPs/Byte)
+
+process starts by deriving codebooks through centroid clus-
+                                                                                                                                                          Figure 4. Roofline Analysis of LUT Kernels.
+tering on activation matrices (step ❶). Each 𝑀 ×𝐻 activation
+matrix, obtained by feeding calibration datasets into a DNN,
+is divided into 1 × 𝑉 sub-vectors along the 𝐻 dim, resulting                                                                             then compared with the codebook of the corresponding col-
+in 𝑉𝐻 columns in total. A codebook is then generated for each                                                                            umn to determine the centroid with the closest L2-distance.
+column, containing 𝐶𝑇 centroids (e.g., 𝐶𝑇 = 4 in the figure).                                                                            This distance estimation is achieved by performing inner-
+Each centroid is a 1 × 𝑉 vector, and its values are obtained                                                                             products between the tile and the codebook (Step ❹). The
+through K-means clustering of activation sub-vectors within                                                                              index of the best-match centroid is obtained as the argmin
+the same column and across activation matrices.                                                                                          value of the inner-product results (Step ❺). Based on this
+   Once the 𝑉𝐻 codebooks are obtained through clustering                                                                                 index, we retrieve a column of data from the indexed look-up
+on the calibration datasets, we proceed to generate the LUTs                                                                             table (Step ❻). For instance, in the figure, if 𝑎𝑟𝑔𝑚𝑖𝑛 = 3 and
+using the codebooks and weight matrix. The weight matrix                                                                                 the tile corresponds to the right-most column, then the right-
+with a shape of 𝐹 × 𝐻 is also split into 1 × 𝑉 sub-vectors                                                                               most 𝐹 × 1 vector is read from 𝐿𝑇3 . These closest-centroid
+along the 𝐻 dim, and inner-products are performed with the                                                                               searching and table look-up operations are repeated for each
+codebooks (step ❷). For example, in the figure, the first sub-                                                                           tile (Step ❹-❻). For each row of the activation matrix, the
+vectors of the two rightmost codebooks are multiplied with                                                                               searched 𝐹 × 1 vectors are accumulated to generate a col-
+the two rightmost columns in the weight matrix, respectively,                                                                            umn of final results (Step ❼). After processing all 𝑁 rows by
+which generates the 𝐹 ×2 results in the look-up table (step ❸).                                                                          repeating ❹-❼, the 𝐹 × 𝑁 results matrix is formed (Step ❽).
+Once all results are generated, it derives 𝐶𝑇 look-up tables,
+each with a shape of 𝐹 × 𝑉𝐻 . At this stage, we have successfully                                                                        3.3 Affinity Analysis of LUT-NNs on DRAM-PIMs
+converted the 𝐹 × 𝐻 weight matrix into several LUTs, which                                                                               LUT-NN based inference is suitable for DRAM-PIMs because
+can be used in inference together with the codebooks.                                                                                    of two reasons: First, it greatly reduces the computation
+                                                                                                                                         overhead. For GEMM with the input shape of 𝑁 × 𝐻 and
+3.2 LUT-NN Inference                                                                                                                     𝐻 × 𝐹 , we need to conduct 2 × 𝑁 × 𝐻 × 𝐹 operations, half of
+The LUT-NN inference procedure is depicted in Figure 2-                                                                                  which are multiply operations. For LUT-NN inference with
+(c). When given an input activation matrix with a shape of                                                                               𝐶𝑇 centroids in each codebook and the sub-vector length of
+𝑁 × 𝐻 , the conventional GEMM procedure performs matrix                                                                                  𝑉 , we need to conduct 3 × 𝑁 × 𝐻 × 𝐶𝑇 operations for index
+multiplication with the 𝐻 ×𝐹 weight matrix, resulting in a 𝑁 ×                                                                           calculation and 𝑁 × 𝐹 × 𝑉𝐻 for result accumulation. Specifi-
+𝐹 output matrix. Here, we demonstrate how an approximated                                                                                cally, LUT-NN inference only incurs 𝑁 × 𝐻 × 𝐶𝑇 multiplica-
+result matrix is obtained using the codebooks and look-up                                                                                tions for index calculation. Considering 𝐶𝑇 is much smaller
+tables derived from the LUT-NN conversion procedure.                                                                                     than 𝐹 , LUT-NN can greatly reduce the multiplications. In
+   Similar to the LUT-NN conversion process, the input acti-                                                                             Figure 3, we plot LUT-NN’s FLOP count as the bar graphs
+vation matrix is divided into several 1 × 𝑉 tiles. Each tile is                                                                          and use line graphs to illustrate LUT-NN’s FLOP reduction
+
+
+
+                                                                                                                                   882
+PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning
+via Algorithm-System Co-Optimization                                                                                            ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+                                                  PIM-DL Framework                                            operations, especially table lookups to PIMs and the others
+                          LUT-NN Converter                                      Auto-tuner
+                                                                                                              to the host processors. However, existing inference frame-
+ Target DNN               Forward           Backward
+                                Feed Forward
+                                                                            LUT-NN
+                                                                             Model
+                                                                                             Target
+                                                                                            Platform
+                                                                                                              works [1, 30, 44, 73, 76] do not support commodity DRAM-
+                                 Other Layers
+                                        …                                                                     PIMs, e.g., UPMEM’s PIM-DIMM, as the backend.
+                                   Feed Forward                                 Analytical Model
+                                                                                                              C3. Tuning the performance of LUT-NNs on DRAM-PIMs
+                                   Other Layers
+  Calibration                     Cross Entropy
+                                                               LUT-NN             Auto-tuning                 is challenging. While LUT-NNs offer promising benefits of
+     Data                                                       Model
+                 Reconstruction                                          Tuned Mapping Parameters
+                                                                                                              reduced computation, how to translate such an advantage
+                                    Model Loss
+                     Loss
+                                                                                           Parameters
+                                                                                                              into real speedup on DRAM-PIMs is still challenging. This
+                                          Codebooks, LUTs
+                                                    Inference Engine
+                                                                                                              difficulty arises due to the architectural limitations present
+                                                  PIM-DL Operator Library
+                                                                                                              in existing DRAM-PIMs, such as constrained host-PIM com-
+                                                                                                              munication and inter-PE communication [33]. As a result,
+   Target                          Host Library                             PIM Runtime
+  Platform                                                                                                    processing LUT-NNs on commodity DRAM-PIMs may yield
+                      MKL, OneDNN,…         CuBLAS, CuDNN, …     UPMEM        HBM-PIM           AiM
+                                                                                                              unsatisfactory performance without taking both algorithm
+                                                                                                              and hardware characters into consideration and properly
+                Figure 5. PIM-DL Framework Overview                                                           optimizing the hardware mapping.
+                                                                                                                 To overcome these challenges, we propose the PIM-DL
+                                                                                                              framework, which is introduced in the following sections.
+( 𝐹𝐹𝐿𝑂𝑃
+     𝐿𝑂𝑃𝐺𝐸𝑀𝑀
+        𝐿𝑈 𝑇 −𝑁 𝑁
+                  ). We can find that LUT-NN greatly reduces com-
+putation (3.66×-18.29×) compared with GEMM operations.                                                        4   PIM-DL Framework
+What’s more, multiplications (the green bar) only take up a
+tiny fraction of LUT-NN’s total operations (2.9%-14.3%).                                                      4.1 Framework Overview
+    Second, the memory-intensive nature inherent in the LUT-                                                  Figure 5 outlines the software stack of PIM-DL. To overcome
+NN inference makes it suitable for DRAM-PIMs. We conduct                                                      C1, we propose a novel LUT-NN Converter featured with an
+roofline analysis on LUT-NN based inference to reveal this                                                    enhanced LUT-NN calibration algorithm named eLUT-NN.
+characteristic. Specifically, we convert the fully-connected                                                  Compared to original LUT-NNs, eLUT-NN is able to replace
+(FC) layers in Bert-Base/Large [20] and ViT-Huge [22] to                                                      all linear layers in DNNs with LUTs and maintains high
+LUT-NN and evaluate their arithmetic intensity on dual-                                                       accuracy. To overcome C2, we develop an Inference Engine
+socket Intel Xeon 4210 CPUs by using Intel Advisor tool [40].                                                 which implements LUT-NN operators based on host and PIM
+We fuse the Q/K/V projection FC layers into one FC operator                                                   libraries. To overcome C3, we propose an Auto-Tuner, which
+and quantize all LUTs to INT8 datatype. The inference batch                                                   analyses the shapes of LUT-NN model and generates the
+size and sepuence length are set to 64 and 512, respectively.                                                 optimized LUT-NN mapping parameters on target hardware
+As illustrated in Figure 4, we can find that the arithmetic                                                   platforms. The tuned mapping parameters are fed into the
+intensity of all operators range from 0.204 to 0.288, all of                                                  inference engine for efficient LUT-NN serving.
+which fall in the memory-bound region of the CPU.
+                                                                                                              4.2 LUT-NN Converter
+3.4 Challenges of Adopting LUT-NNs                                                                            The LUT-NN Converter is used to convert a trained DNN
+Although LUT-NNs enable the deployment of DNN serv-                                                           model into LUT-NN by jointly calibrating the centroids and
+ing on DRAM-PIMs, we point out that three fundamental                                                         DNN weights with calibration datasets. As introduced in Sec-
+challenges hinder their application in practice:                                                              tion 3, LUT-NN’s clustering-based codebook generation may
+C1. Unsatisfactory accuracy of the existing LUT-NN con-                                                       result in approximation errors. Consequently, the previous
+version algorithm. The existing LUT-NN conversion algo-                                                       method [84] can only replace half of the feed-forward layers
+rithm falls short of guaranteeing satisfactory model accuracy.                                                to maintain accuracy. To deal with this dilemma, we propose
+Therefore, [9] only replaces the GEMM in the final classifier                                                 a calibration algorithm named eLUT-NN (enhanced LUT-
+layer of DNNs with a lookup table. Although [84] improves                                                     NN) that can correct the error with minor parameter updates.
+upon earlier works, it could still not replace every linear                                                   eLUT-NN introduces two new techniques for model calibra-
+operator. Specifically, [84] could only substitute GEMM in                                                    tion: Reconstruction Loss for computation approximation
+6 out of the 12 layers of the BERT-base model. If we aim                                                      and Straight Through Estimator for gradient propagation.
+to replace all layers with LUTs, the model’s accuracy will                                                    Reconstruction Loss for computation approximation:
+become unacceptably low for production environments.                                                          As illustrated in Figure 5, the reconstruction loss accumulates
+C2. Existing DL frameworks do not support DRAM-PIMs                                                           the errors in all replaced layers and constructs LUT-NN’s
+as the backend. To deploy converted LUT-NN models on                                                          calibration loss 𝐿 together with the original model loss:
+DRAM-PIMs, a deep-learning serving framework that sup-                                                                                         Õ
+ports both CPU/GPUs and DRAM-PIMs as the backend is                                                                     𝐿 = Model Loss + 𝛽            ||𝐴ˆ𝑙𝑊 − 𝐴𝑙𝑊 || 2        (1)
+necessary. The framework is expected to offload PIM-friendly                                                                                   𝑙 ∈𝐿
+
+
+
+
+                                                                                                        883
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA    Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+
+In Equation (1), 𝐴 represents the original activation matrix,                              Target Workload                Compound Operators           PIM Operators
+                                                                                                                          PIM Dependent Operators      Host Operators
+and 𝐴ˆ denotes the approximated matrix by replacing sub-                               Frontend Framework
+                                                                                                                                                    QKV Projection
+vectors with the nearest centroids, i.e., 𝐴ˆ𝑙 = 𝐻 (𝐴𝑙 ). Here                   Host Operators            PIM Operators
+                                                                                                                           Multi-Head                 Attention
+we use the function 𝐻 (·) to denote the closest-centroid-                                                                  Attention
+                                                                                          Backend Library                                            O Projection
+replacing operation. We define the computation error as L2                      Host Backend
+                                                                                                     PIM       PIM         Add & Norm
+                                                                                                    Kernel   Binary                                     FFN1
+distance to ensure the reconstruction loss’s differentiability,                  Host Library         PIM Runtime             FFNs
+and add a penalty term 𝛽 to balance the two loss terms.                                                                                                 GELU
+                                                                                 Host             PIM           DRAM-      Add & Norm                   FFN2
+   The reconstruction loss improves model accuracy and                         Processor         Driver          PIMs
+facilitates convergence in two main folds. First, it enables                 (a) Software Stack of PIM-DL Engine          (b) Case Study of Transformer
+direct gradient propagation. Unlike previous work [84] that
+updates centroids through layer-by-layer back-propagation,               Figure 6. PIM-DL Engine and a Case Study on Transformer.
+the reconstruction loss directly derives the centroid gradients.
+This approach can overcome the gradient vanishing problem,
+allowing for direct gradient updates to the centroids. Second,           PIM modules to execute workloads. (2) The PIM binary on
+introducing computation errors to the loss function enables              the PIM modules describes the offloaded workload. Both host
+the centroids to learn accurate representations of activations,          and PIM operators collaborate to implement the LUT-NN’s
+thus accelerating model’s convergence.                                   functions. The host processor also controls the PIM binaries’
+Straight Through Estimator for gradient propagation:                     execution via the PIM driver.
+Since the centroid clustering and table-lookup operators in                 Considering transformer has become the de-facto approach
+LUT-NN conversion are not continuously differentiable, we                in both the neural language processing (NLP) area [11, 20,
+use the Straight Through Estimator (STE) [93] to estimate                64, 78, 79, 92] and the computer vision (CV) area [12, 22,
+the gradients and enable back-propagation. Specifically, to              45, 65, 89, 95], PIM-DL currently mainly focuses on the op-
+differentiate through the closest-centroid-replacing function            timization of transformer-based models. As illustrated in
+𝐻 (·) and pass the error to a function 𝐹 that generates the              Figure 6-(b), among the basic operators in Transformer [87]
+inputs of a layer, we have the following chain rule:                     models, the QKV projection, Output (O) projection, FFN1,
+                                                                         and FFN2 are linear layers. They can be converted to LUTs
+           𝜕𝐿 𝜕𝐿 𝜕𝑦ˆ A𝜕𝐴ˆ 𝜕𝐴 STE 𝜕𝐿 𝜕𝑦ˆ 𝜕𝐴                               and offloaded to PIM modules. The attention operator is exe-
+              =    ·  · A ·  ≈      ·  ·                    (2)          cuted on the host operator, since it cannot be converted to
+           𝜕𝐹   𝜕𝑦ˆ 𝐴ˆ 𝜕𝐴
+                        A 𝐹      𝜕𝑦ˆ 𝐴ˆ 𝐹
+                                                                         LUTs but requires GEMM operations. The other operators
+Where 𝑦ˆ = 𝐴ˆ · 𝑊 represents the approximated output of                  like Add, Norm, GeLU are PIM-friendly element-wise oper-
+                                       𝐴ˆ                                ators. Their offloading choices depend on the functionality
+the layer. The STE algorithm assigns 𝜕𝜕𝐴  to identity to pass
+through the gradients and enable back-propagation. Com-                  supported by target PIM modules.
+pared to the Gumbel-Softmax based gradient-estimation used
+in previous work [84], our STE-based method ensures faster               5      Hardware Mapping and Optimization
+model convergence according to our experiments.                          As analyzed in Section 3.4, considering several architectural
+   Comprehensive evaluation results in Section 6 will demon-             limitations of DRAM-PIMs, it is still challenging to efficiently
+strate eLUT-NN’s two advantages over the baseline method:                deploy LUT-NNs on DRAM-PIMs. To optimize LUT-NN ker-
+A1. High data efficiency. Unlike the baseline method [84],               nels on different hardware platforms, we design the LUT-
+which demands 100% training set for model calibration, eLUT-             NN’s mapping strategy and propose the PIM-DL Auto-Tuner,
+NN only requires less than 1% of the pre-training dataset for            which can generate the best mapping parameters according
+calibration, and the model converges more quickly.                       to the input LUT-NN and the target hardware platform.
+A2. High model accuracy. With the proposed eLUT-NN al-                      In this section, we first present an architecture abstraction
+gorithm, the LUT-NN converter can replace all feed-forward               of commodity DRAM-PIM products. Subsequently, we delve
+layers of DNNs with LUTs with substantially higher accuracy              into a detailed analysis of LUT-NN’s mapping on the PIM ar-
+than the baseline LUT-NN method.                                         chitecture. Based on this analysis, we model the two essential
+                                                                         steps involved in PIM-based LUT-NN operations. We then
+4.3 PIM-DL Engine                                                        integrate these steps to establish the PIM-DL Auto-Tuner.
+As depicted in Figure 6-(a), PIM-DL engine comprises a fron-
+tend framework and a backend library. The frontend frame-                5.1 Abstraction of Commodity DRAM-PIMs
+work encompasses both host and PIM operators, which cover                As depicted in Figure 7, a DRAM-PIM system is usually com-
+various operators required by LUT-NNs. The host operators                posed of a host processor (e.g., CPU, GPU, FPGA) and multi-
+are implemented with high-performance tensor libraries on                ple PIM modules, which are connected to the host’s memory
+CPUs/GPUs [30, 41, 42, 69, 70]. The PIM operators contain                channels. In each PIM module, there are distributed compu-
+two components: (1) The PIM kernel on the host triggers                  tation nodes, which share the same external data bus. Each
+
+
+
+                                                                   884
+PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning
+via Algorithm-System Co-Optimization                                                                     ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+                                                                                          Table 2. Notations Used in PIM-DL Auto-Tuner
+
+
+
+
+                                                                    UPMEM
+                                             Mem.        Mem.
+                                                     …         
+…                                         …                                              Notation     Description
+                          PIM 0
+
+                                  PIM 1
+
+
+
+
+                                                                    HBM-PIM
+                     MC
+    MC
+
+
+
+
+                                               PE          PE
+           Host                                                                             𝑁         Input index’s row count
+         Processor                            PE          PE                               𝐶𝐵        Codebook number (𝐶𝐵 = 𝑉𝐻 )
+…                                         …
+                          PIM 0
+
+                                  PIM 1
+                                                      …                                               Centroid number
+    MC
+
+
+
+
+                     MC
+
+
+
+
+                                                                                            𝐶𝑇
+                                              Mem.       Mem.                              𝐹        Output feature length
+
+
+
+
+                                                                    AiM
+                                                                                          𝑋𝑠−𝑡𝑖𝑙𝑒     Tiling factor of 𝑋 in sub-LUT partition
+                                                                                          𝑋𝑚−𝑡𝑖𝑙𝑒     Tiling factor of 𝑋 in micro kernel
+                                                                                         𝑋𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒   Load factor of 𝑋 in non-static load schemes
+Figure 7. Architecture Abstraction of DRAM-PIM Products.
+                                                                                          𝐵𝑊𝑥ℎ𝑜𝑠𝑡     Host-PIM bandwidth when transferring tensor 𝑥
+                                                                                             𝑝𝑖𝑚
+                                                                                          𝐵𝑊𝑥         Local memory bandwidth when transferring tensor 𝑥
+                                                                                           #𝑃𝐸        PE number used during execution
+node contains a Processing Engine (PE) and local memory                                 𝑆𝑇𝑖𝑙𝑒𝑆𝑖𝑧𝑒𝑥    Sub-LUT tile size of tensor 𝑥 transferred to each PE
+banks. The PE can be either a general CPU core [18] or a spe-                           𝑀𝑇𝑖𝑙𝑒𝑆𝑖𝑧𝑒𝑥    On-chip tile size of tensor 𝑥 during kernel execution
+                                                                                         𝐿𝐶𝑜𝑢𝑛𝑡𝑥      Load count of tensor 𝑥 during kernel execution
+cialized computation engine [54, 55], and may also contain
+                                                                                         𝑆𝐶𝑜𝑢𝑛𝑡𝑥      Store count of tensor 𝑥 during kernel execution
+on-chip buffers or registers. Since PEs can conduct memory                               𝑅𝐶𝑜𝑢𝑛𝑡       Reduce count during kernel execution
+access concurrently, DRAM-PIMs can provide much higher
+bandwidth than compute-centric architectures.
+   Existing commodity DRAM-PIMs adopt the offloading-
+based execution model, i.e., operators in workloads are im-                         load balancing is crucial to minimize the overall execution
+plemented as PIM kernels, which are offloaded to PIMs for                           latency and improve resource utilization.
+execution. As notated in Figure 7, there are three steps to
+drive the PIM modules to execute the target workload: ❶ The                         5.2 LUT-NN’s Inference Dataflow on DRAM-PIMs
+host processor prepares the input data and sends them to the                        As introduced in Section 3.2, LUT-NN’s inference involves
+PIM modules. ❷ After input preparation, the host launches                           two operators: (1) The closest centroid search (CCS) operator
+the PIM kernel, which can be either a chunk of codes imple-                         (❹-❺ in Figure 2). It computes the distance between the acti-
+mented in PIM’s ISA [18] or a sequence of specified memory                          vation matrix and the centroids, then searches the centroids
+commands [55]. ❸ After all PEs finish kernel execution, the                         with the shortest distance to generate the index matrix. (2)
+host fetches the results from PIM modules. It is worth not-                         The table lookup (LUT) operator (❻-❼ in Figure 2). It re-
+ing that when deploying applications on DRAM-PIMs, we                               trieves the lookup table and accumulates the fetched data
+should consider the following architectural limitations:                            to derive output results. As illustrated in Figure 8-(a), when
+L1: Constrained Host-PIM communication. As shown in                                 executing LUT-NN on DRAM-PIMs, we offload the LUT oper-
+Figure 7, in each PIM module, the PEs collectively share a                          ator to PIM modules and assign the CCS operator to the host.
+common memory bus. For example, in UPMEM’s PIM-DIMM                                 We avoid processing CCS on PIM since CCS operators are
+architecture, each PE can access only an 8-bit data path,                           implemented via GEMM and not suitable for DRAM-PIMs.
+and a group of eight PEs in a rank forms a 64-bit data path.                           Another key problem is how to distribute the LUT tasks
+Consequently, the host must transfer data to all PEs in a rank                      to thousands of DRAM-PIM PEs to fully utilize the system’s
+simultaneously to fully utilize the bandwidth. Additionally,                        PIM bandwidth. There are two steps to execute LUT on PIM
+it has been demonstrated that broadcasting data from the                            architectures: Step-1: split the workload into sub-LUT work-
+host to PIMs yields the highest bandwidth, primarily due to                         loads, and send each sub-LUT workload to the corresponding
+the avoidance of cache miss at the host side [33].                                  PE. Step-2: launch the microkernel on each PE to compute
+L2: No direct inter-PE datapath. Due to the scarce on-chip                          the sub-LUT workloads concurrently. In the following sub-
+routing resources of DRAM-PIMs [19], no datapath is imple-                          sections, we will analyze the two steps first. For each step,
+mented on UPMEM’s PIM-DIMM and HBM-PIM for inter-PE                                 we will elaborate on the detailed execution dataflow and pro-
+communication. Therefore, PEs rely on host forwarding to                            pose the performance model used for PIM-DL Auto-Tuner.
+exchange data, which involves loading data from one PE to                           Then, we will put them together to construct the complete
+the host’s cache, then storing it to the destination PE. Con-                       design space of LUT-NN inference. The auto-tuner’s work-
+sidering the poor host-PIM communication ability, inter-PE                          flow is finally introduced to search the optimal parameters.
+communication can easily become the performance bottle-                             To facilitate understanding, we list the notations used in
+neck [102]. Therefore, we should avoid costly inter-PE com-                         the following sub-sections in Table 2. In these notations,
+munication when implementing kernels on DRAM-PIMs.                                  𝑁 , 𝐶𝐵, 𝐶𝑇 , 𝐹 specifies the LUT operator’s workload shape.
+L3: Load-balancing problem. Considering that the PIM                                𝑋𝑠−𝑡𝑖𝑙𝑒 , 𝑋𝑚−𝑡𝑖𝑙𝑒 , 𝑋𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 are the tiling factors of each tensor.
+                                                                                                  𝑝𝑖𝑚
+kernels will be distributed and executed in thousands of PEs,                       𝐵𝑊𝑥ℎ𝑜𝑠𝑡 , 𝐵𝑊𝑥 , #𝑃𝐸 are parameters related to the underly-
+the slowest PE determines the finish time. Therefore, efficient                     ing DRAM-PIM architecture. The other factors indicate the
+
+
+
+                                                                              885
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                                     Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+
+                                                                                                        𝐶𝐶𝐶𝐶 = 𝐻𝐻/𝑉𝑉                             𝐹𝐹                                                   𝐶𝐶𝐵𝐵𝑚𝑚−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡
+           𝐻𝐻    Closest Centroid Search
+                                                                                                             Tile 0    𝑁𝑁𝑠𝑠−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡         Tile      Tile                           𝑁𝑁𝑚𝑚−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡       Index
+                                                           Host                                                                                                      𝑁𝑁𝑠𝑠−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡                        MTile
+                                                                                                                                             (0,0)     (0,1)
+                                                                                                 𝑁𝑁                                   𝑁𝑁                                                                                                       𝑁𝑁𝑠𝑠−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡
+                         𝑁𝑁                                                                                                                  Tile      Tile
+                                                                                                             Tile 1
+                                             Output                 Index, LUT                                                               (1,0)     (1,1)
+                                                                                                        Index matrix                                 𝐹𝐹𝑠𝑠−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡   Output                                            𝐶𝐶𝐶𝐶             Index matrix
+    Activation matrix                  Group 0             PIM            Group 1                                            𝐶𝐶𝐶𝐶                                                                              𝐹𝐹𝑚𝑚−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡
+                                 Tile 0        Tile 0               Tile 1         Tile 1       LUT                                                                                          𝑁𝑁𝑚𝑚−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡
+                   𝑉𝑉                                                                                                                                                𝐹𝐹𝑠𝑠−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡
+                                                                                                                                                                                                                  Output
+                                               Tile 1                              Tile 1                                   Tile 0
+                                 Tile 0                             Tile 0                                                                                                                                        MTile
+                                                                                                  𝐹𝐹                                                                                                                                     𝑁𝑁𝑠𝑠−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡
+                        𝐶𝐶𝐶𝐶   Tile (0, 0)   Tile (0, 1)          Tile (1, 0)    Tile (1, 1)
+                                                                                                                            Tile 1
+                               PE(0, 0)       PE(0, 1)            PE(1, 0)       PE(1, 1)
+      Codebooks                                                                                                                                                                                                         𝐹𝐹𝑠𝑠−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡     Output
+                                                                                                         𝐶𝐶𝐶𝐶          Lookup table
+                                  (a) LUT-NN’s Operator Mapping and Sub-LUT Partition Scheme                                                                                                  (b) Micro Kernel Tiling Strategy
+
+
+                                                    Figure 8. Overview of LUT-NN’s Execution Dataflow.
+
+tile sizes or operation counts, which can be deduced from                                                     Analytical Model: After sub-LUT partition, we need to
+the aforementioned parameters.                                                                                send the index tiles and the LUT tiles to each PE before
+                                                                                                              launching the micro kernel. After PEs finishing execution,
+                                                                                                              we need to fetch the output results from them. The host-PIM
+5.2.1 Step-1: Sub-LUT Partition. According to the PIM                                                         communication dominates the processing cycles. Therefore,
+architecture abstraction discussed in Section 5.1, we propose                                                 assuming the latency of input sending, LUT sending, and
+the sub-LUT partition scheme as illustrated in Figure 8-(a).                                                  output fetching during the sub-LUT partition stage are de-
+In this scheme, the index matrix (outputs of the host-side                                                    noted as 𝑡𝑖𝑛𝑑𝑒𝑥
+                                                                                                                        𝑠𝑢𝑏 , 𝑡 𝑠𝑢𝑏 , 𝑡 𝑠𝑢𝑏
+                                                                                                                               𝑙𝑢𝑡 𝑜𝑢𝑡𝑝𝑢𝑡
+                                                                                                                                            , respectively, the sub-LUT parti-
+CCS operation, i.e., ❺ in Figure 2) and the LUTs are evenly                                                   tion overhead (𝑡𝑠𝑢𝑏−𝑙𝑢𝑡 ) can be estimated as:
+divided along the index row dim (𝑁 ) and the feature dim (𝐹 ),                                                                                          𝑠𝑢𝑏
+                                                                                                                                            𝑡𝑠𝑢𝑏−𝑙𝑢𝑡 = 𝑡𝑖𝑛𝑑𝑒𝑥    𝑠𝑢𝑏
+                                                                                                                                                              + 𝑡𝑙𝑢𝑡    𝑠𝑢𝑏
+                                                                                                                                                                     + 𝑡𝑜𝑢𝑡𝑝𝑢𝑡                                                                            (3)
+respectively, while the other dims remain untiled. In addition,
+the PIM PEs are logically distributed into multiple groups.                                                   In Equation (3), 𝑡𝑖𝑛𝑑𝑒𝑥
+                                                                                                                                𝑠𝑢𝑏 , 𝑡 𝑠𝑢𝑏 , and 𝑡 𝑠𝑢𝑏
+                                                                                                                                       𝑙𝑢𝑡         𝑜𝑢𝑡𝑝𝑢𝑡 can be estimated us-
+PEs in the 𝑖-𝑡ℎ PE group are responsible for calculating the                                                  ing the transfer size and the bandwidth. Since the transfer
+results of the 𝑖-𝑡ℎ index tile. The 𝑗-𝑡ℎ PE in each group is                                                  pattern affects the bandwidth [33], we use different notations
+responsible for conducting table lookups between its index                                                    to represent such divergence:
+tile and the 𝑗-𝑡ℎ LUT tile. Note that in Figure 8-(a), we use                                                                               𝑆𝑇𝑖𝑙𝑒𝑆𝑖𝑧𝑒𝑥 × #𝑃𝐸
+                                                                                                                         𝑡𝑥𝑠𝑢𝑏 =                                                     , 𝑥 ∈ {𝑖𝑛𝑑𝑒𝑥, 𝑙𝑢𝑡, 𝑜𝑢𝑡𝑝𝑢𝑡 }                                          (4)
+𝐶𝐵 to denote 𝑉𝐻 and transpose the 𝐶𝑇 and 𝐶𝐵 dims because                                                                                             𝐵𝑊𝑥ℎ𝑜𝑠𝑡
+each index fetches one of the 𝐶𝑇 pre-computed results.
+                                                                                                              Note that according to the partition scheme, each PE group
+   Such a partition scheme effectively avoids the limitations
+                                                                                                              holds a index matrix’s tile, and each PE in a group is assigned
+discussed above. For L1: On the one hand, PEs in the same
+                                                                                                              with a LUT table’s tile. Therefore, tiling factors in sub-LUT
+group share the same index tile, and the 𝑗-𝑡ℎ PEs in all groups
+                                                                                                              partition should follow the constraint:
+share the same LUT tile. Tile reuse can enhance the host-PIM
+                                                                                                                                                                        𝑁       𝐹
+communication bandwidth owing to its temporal locality.                                                                                              #𝑃𝐸 =                   ×                                                                            (5)
+                                                                                                                                                                      𝑁𝑠−𝑡𝑖𝑙𝑒 𝐹𝑠−𝑡𝑖𝑙𝑒
+On the other hand, the codebook dim (𝐶𝐵) is not split among
+PEs, thus ensuring PEs to compute complete results of dis-                                                    5.2.2 Step-2: Micro Kernel Execution. After sub-LUT
+tinct output tiles and avoiding the extra overhead of partial                                                 partition, the tile size of index matrix, lookup table, and
+sum reading and merging. For L2: The centroid dim (𝐶𝑇 ) is                                                    output result in each PE are (𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐶𝐵), (𝐶𝐵, 𝐶𝑇 , 𝐹𝑠−𝑡𝑖𝑙𝑒 ),
+not split among PEs, so that no inter-PE communication is                                                     and (𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 ), respectively. To fully utilize PIM PE’s
+required when retrieving the LUTs according to the indices.                                                   on-chip data buffer (e.g. 64KB on each PE in UPMEM PIM-
+For L3: Tiling tensors evenly ensures that each PE’s work-                                                    DIMM), we need to further tile these tensors. As illustrated
+load size is identical. Since all PEs execute the same micro                                                  in Figure 8-(b), we conduct tiling along (𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 , 𝐶𝐵)
+kernel, we can ensure the load balance among them.                                                            dims with tiling factors (𝑁𝑚−𝑡𝑖𝑙𝑒 , 𝐹𝑚−𝑡𝑖𝑙𝑒 , 𝐶𝐵𝑚−𝑡𝑖𝑙𝑒 ), respec-
+   In the example depicted in Figure 8-(a), we use four PEs                                                   tively. In this example, all tiling factors are set to 2. The PIM
+in total, which are evenly split into two groups. Accordingly,                                                PE loads one index micro kernel tile (MTile) and the corre-
+❶ the index matrix is split into two tiles (𝑁 = 8, and 𝑁𝑠−𝑡𝑖𝑙𝑒 =                                              sponding output MTile each time, then retrieves the LUTs to
+4), and the 𝑖-𝑡ℎ tile is broadcast to all PEs in the 𝑖-𝑡ℎ PE group                                            compute results. For each output MTile, we need to traverse
+(𝑖 = 0, 1). ❷ The LUT is split into two tiles (𝐹 = 8, and                                                     all index MTiles in the same 𝑁𝑚−𝑡𝑖𝑙𝑒 , so that we can reduce
+𝐹𝑠−𝑡𝑖𝑙𝑒 = 4), and the 𝑗-𝑡ℎ tile is broadcast to the 𝑗-𝑡ℎ PE in                                                data in all codebooks to get the complete results.
+each group ( 𝑗 = 0, 1). There are four output tiles, and the                                                  Analytical Model: The micro kernel’s latency (𝑡𝑚𝑖𝑐𝑟𝑜−𝑘𝑒𝑟𝑛𝑒𝑙 )
+𝑗-𝑡ℎ PE in the 𝑖-𝑡ℎ group computes output tile (𝑖, 𝑗)’s results.                                              is the sum of memory transfer latency (𝑡𝑡𝑟𝑎𝑛𝑠 𝑓 𝑒𝑟 ) and the LUT
+
+
+
+                                                                                                       886
+PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning
+via Algorithm-System Co-Optimization                                                                                               ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+                                                      𝐶𝐶𝐶𝐶
+                                                                                                               Algorithm 1: Auto-tuning Workflow
+                                                                       …               𝐹𝐹𝑚𝑚−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡          1 Input: Workload Size (𝑁 , 𝐶𝐵, 𝐶𝑇 , 𝐹 )
+𝐹𝐹𝑠𝑠−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡
+
+                                  
+                                                                        …                                      2 𝐶𝑜𝑠𝑡 = 𝑀𝑎𝑥𝑉 𝑎𝑙𝑢𝑒
+                                                                                                               3 𝑀𝑎𝑝𝑝𝑖𝑛𝑔𝑃𝑎𝑟𝑎𝑚𝑠 = { }
+
+                             𝐶𝐶𝐵𝐵𝑚𝑚−𝑡𝑡𝑡𝑡𝑡𝑡𝑡𝑡                                                                   4 for each legal (𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 ) do
+                                                                                𝐶𝐶𝐶𝐶
+                                                 Lookup table tile                                             5      // estimate sub-LUT partition overhead
+                                                                                                               6
+                                                                                                                                   𝑠𝑢𝑏 + 𝑡 𝑠𝑢𝑏 + 𝑡 𝑠𝑢𝑏
+                                                                                                                      𝑡𝑠𝑢𝑏−𝑙𝑢𝑡 = 𝑡𝑖𝑛𝑑𝑒𝑥      𝑙𝑢𝑡     𝑜𝑢𝑡𝑝𝑢𝑡
+                  Figure 9. Illustration of LUT Load Schemes.                                                  7      // search for the optimal micro-kernel
+                                                                                                               8
+                                                                                                                       ∗
+                                                                                                                      𝑡𝑚𝑖𝑐𝑟𝑜−𝑘𝑒𝑛𝑒𝑙   , 𝐾𝑒𝑟𝑛𝑒𝑙 ∗ =
+                                                                                                                        𝐾𝑒𝑟𝑛𝑒𝑙𝑆𝑒𝑎𝑟𝑐ℎ (𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 , 𝐶𝐵, 𝐶𝑇 )
+reduce latency (𝑡𝑟𝑒𝑑𝑢𝑐𝑒 ):                                                                                     9      // update the optimal parameters
+                                                                                                              10
+                                                                                                                                       ∗
+                                                                                                                      if 𝑡𝑠𝑢𝑏−𝑙𝑢𝑡 + 𝑡𝑚𝑖𝑐𝑟𝑜−𝑘𝑒𝑟𝑛𝑒𝑙    < 𝐶𝑜𝑠𝑡 then
+                             𝑡𝑚𝑖𝑐𝑟𝑜−𝑘𝑒𝑟𝑛𝑒𝑙 = 𝑡𝑡𝑟𝑎𝑛𝑠 𝑓 𝑒𝑟 + 𝑡𝑟𝑒𝑑𝑢𝑐𝑒                              (6)                                              ∗
+                                                                                                              11           𝐶𝑜𝑠𝑡 = 𝑡𝑠𝑢𝑏−𝑙𝑢𝑡 + 𝑡𝑚𝑖𝑐𝑟𝑜−𝑘𝑒𝑟𝑛𝑒𝑙
+The memory transfer latency (𝑡𝑡𝑟𝑎𝑛𝑠 𝑓 𝑒𝑟 ) is the sum of index                                                12            𝑀𝑎𝑝𝑝𝑖𝑛𝑔𝑃𝑎𝑟𝑎𝑚𝑠 = {𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 , 𝐾𝑒𝑟𝑛𝑒𝑙 ∗ }
+load latency (𝑡𝑖𝑛𝑑𝑒𝑥
+               𝑙𝑑    ), LUT table load latency (𝑡𝑙𝑢𝑡 𝑙𝑑 ), and the
+                                                                                                              13   return 𝐶𝑜𝑠𝑡 , 𝑀𝑎𝑝𝑝𝑖𝑛𝑔𝑃𝑎𝑟𝑎𝑚𝑠
+output result load-store latency (𝑡𝑜𝑢𝑡𝑝𝑢𝑡 , 𝑡𝑜𝑢𝑡𝑝𝑢𝑡 ):
+                                    𝑙𝑑       𝑠𝑡
+
+                                     𝑙𝑑       𝑙𝑑     𝑙𝑑        𝑠𝑡
+                      𝑡𝑡𝑟𝑎𝑛𝑠 𝑓 𝑒𝑟 = 𝑡𝑖𝑛𝑑𝑒𝑥 + 𝑡𝑙𝑢𝑡 + 𝑡𝑜𝑢𝑡𝑝𝑢𝑡 + 𝑡𝑜𝑢𝑡𝑝𝑢𝑡                           (7)
+We can profile the load/store latency of single tile first, and                                                   ❶ Static Load. When each PE’s LUT MTile size is smaller
+then use the load/store count induced from the tile traversal                                                 than the on-chip buffer size, we can place the whole LUT
+order to estimate the total latency:                                                                          on-chip statically. In this way, we can load the LUT once and
+                                                                                                              reuse it during the execution. We need to hold 𝐶𝐵𝑠−𝑡𝑖𝑙𝑒 ×
+                         𝐿𝐶𝑜𝑢𝑛𝑡𝑥 × 𝑀𝑇 𝑖𝑙𝑒𝑆𝑖𝑧𝑒𝑥
+                𝑡𝑥𝑙𝑑 =                         𝑝𝑖𝑚
+                                                              , 𝑥 ∈ {𝑖𝑛𝑝𝑢𝑡, 𝑙𝑢𝑡, 𝑜𝑢𝑡𝑝𝑢𝑡 }       (8)           𝐶𝑇 × 𝐹𝑠−𝑡𝑖𝑙𝑒 LUT elements in the on-chip buffer.
+                                       𝐵𝑊𝑥                                                                        ❷ Coarse-grain Load. Since each index selects the target
+                                  𝑆𝐶𝑜𝑢𝑛𝑡𝑥 × 𝑀𝑇 𝑖𝑙𝑒𝑆𝑖𝑧𝑒𝑥                                                       element from every 𝐶𝑇 candidates, we can load these 𝐶𝑇
+                         𝑡𝑥𝑠𝑡 =                                      , 𝑥 ∈ {𝑜𝑢𝑡𝑝𝑢𝑡 }            (9)
+                                                𝐵𝑊𝑥
+                                                     𝑝𝑖𝑚                                                      elements to the on-chip buffer and reuse them. In this way,
+Similarly, we can profile the latency of single reduce (𝑡𝑠𝑖𝑛𝑔𝑙𝑒                                               we load 𝐶𝐵𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 ×𝐶𝑇 ×𝐹𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 elements in the LUT each
+−𝑟𝑒𝑑𝑢𝑐𝑒 ) and use the total reduce count to estimate the total re-
+                                                                                                              time. In Figure 9, we set 𝐶𝐵𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 = 2 and 𝐹𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 = 1 for
+duce latency. 𝑡𝑠𝑖𝑛𝑔𝑙𝑒−𝑟𝑒𝑑𝑢𝑐𝑒 also changes with the underlying                                                 coarse-grain load scheme. These elements will be buffered
+DRAM-PIM architecture.                                                                                        till the corresponding codebooks have been reduced.
+                                                                                                                  ❸ Fine-grain Load. We can also load the LUT’s elements on-
+                             𝑡𝑟𝑒𝑑𝑢𝑐𝑒 = 𝑅𝐶𝑜𝑢𝑛𝑡 × 𝑡𝑠𝑖𝑛𝑔𝑙𝑒−𝑟𝑒𝑑𝑢𝑐𝑒                               (10)             demand. In this way, we load 𝐹𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 LUT values along the
+                                                                                                              feature dim when we process a new index. In Figure 9, we set
+5.3 PIM-DL Auto-Tuner                                                                                         𝐹𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 = 2 for fine-grain load scheme. Specifically, if the
+Search Space. PIM-DL auto-tuner utilizes four types of map-                                                   PE can issue multiple read requests in parallel, we will hold
+ping parameters involved in LUT-NN’s inference dataflow                                                       𝐹𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 LUT elements for each parallel slot. For example,
+discussed above to construct the search space:                                                                UPMEM’s PE contains multiple hardware threads [18], each
+P1. Sub-LUT Tiling Factors: The tiling factors, namely                                                        of which can issue independent memory requests. There-
+(𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 ), not only affect the tile sizes assigned to each                                         fore, we keep a buffer with 𝐹𝑙𝑜𝑎𝑑−𝑡𝑖𝑙𝑒 LUT elements for each
+PE, but also have influence on the communication pattern                                                      activated hardware thread.
+(i.e. PE group partition) of each tensor. We can exploit these                                                    Among these parameters, the micro kernel tiling factors,
+trade-offs by searching different sub-LUT tiling factors.                                                     tile traversal order, and LUT load scheme jointly construct
+P2. Micro Kernel Tiling Factors: The tile sizes of index                                                      the micro kernel’s mapping space.
+MTile and output MTile are (𝑁𝑚−𝑡𝑖𝑙𝑒 , 𝐶𝐵𝑚−𝑡𝑖𝑙𝑒 ) and (𝑁𝑚−𝑡𝑖𝑙𝑒 ,                                               Auto-Tuning Workflow: PIM-DL auto-tuner’s workflow is
+𝐹𝑚−𝑡𝑖𝑙𝑒 ). We can adjust (𝑁𝑚−𝑡𝑖𝑙𝑒 , 𝐹𝑚−𝑡𝑖𝑙𝑒 , 𝐶𝐵𝑚−𝑡𝑖𝑙𝑒 ) to find the                                          listed in Algorithm 1. Given the workload size (𝑁 , 𝐶𝐵, 𝐶𝑇 , 𝐹 ),
+optimal buffer allocation between the two MTiles.                                                             PIM-DL auto-tuner traverses all legal sub-LUT tiling factors.
+P3. Tile Traversal Order: Permuting the traversal order                                                       For each legal factor pair (𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 ), the auto-tuner first
+of the MTile factors (𝑁𝑚−𝑡𝑖𝑙𝑒 , 𝐹𝑚−𝑡𝑖𝑙𝑒 , 𝐶𝐵𝑚−𝑡𝑖𝑙𝑒 ) changes the                                              calculates 𝑡𝑠𝑢𝑏−𝑙𝑢𝑡 . Then, the auto-tuner searches the micro
+sequence of tile delivery, thus affecting the tile reuse pat-                                                 kernel’s mapping space and reports the parameters with the
+tern [74]. To exploit the effect of different reuse patterns, we                                                                              ∗
+                                                                                                              minimum execution latency 𝑡𝑚𝑖𝑐𝑟𝑜−𝑘𝑒𝑟𝑛𝑒𝑙        . The total execution
+add the tile traversal order to the search space.                                                             latency of current sub-LUT tiling strategy is the sum of
+P4. LUT load scheme: Since the LUT’s elements are fetched                                                                    ∗
+                                                                                                              𝑡𝑠𝑢𝑏−𝑙𝑢𝑡 and 𝑡𝑚𝑖𝑐𝑟𝑜−𝑘𝑒𝑟𝑛𝑒𝑙 . By comparing the total execution
+according to the input index, we can either load the LUT in                                                   latency, the auto-tuner generates the most efficient hardware
+bulk or on-demand. We include three LUT load schemes into                                                     mapping. For a given model, PIM-DL auto-tuner searches
+our design space, which are illustrated in Figure 9:                                                          for the optimal parameters of all LUT kernels offline. Given
+
+
+
+                                                                                                        887
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA    Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+
+       Table 3. Configuration of DRAM-PIM Platforms                                    Table 4. NLP Model Accuracy
+
+                                        Xeon 4210 CPU × 2                Model    Settings MNLI QQP QNLI SST-2 CoLA STS-B MRPC RTE Avg.
+                             Host                                                  Original 83.4 71.2 90.5 93.5 52.1 85.8  88.9 66.4 79.0
+                                       128GB DDR4 Memory
+    DDR4-PIM Platform                                                  BERT-base LUT-NN 35.5 63.2 50.6 49.3     0.0  1.36  31.6 52.7 35.5
+                                      UPMEM PIM-DIMM × 8
+                         DRAM-PIM                                                 eLUT-NN 79.9 69.6 87.4 92.4 51.2   83.2  87.1 64.7 76.9
+                                  1024 PEs, 64 GB DDR4 Memory                      Original 85.9 72.1 92.7 94.9 60.5 86.5  89.3 70.1 81.5
+                                        NVIDIA A2 GPU × 1              BERT-large LUT-NN 34.7 62.7 51.3 52.2    0.0  4.40  38.7 50.5 36.8
+                           Host
+    HBM-PIM Platform                  16 GB GDDR6 Memory                          eLUT-NN 82.1 71.0 90.2 93.1 56.8   86.7  86.1 68.4 79.3
+      (Simulated)                  Samsung HBM-PIM Cube × 4
+                         DRAM-PIM
+                                   512 PEs, 8 GB HBM2 Memory
+                                        NVIDIA A2 GPU × 1                             Table 5. Vision Model Accuracy
+                           Host
+      AiM Platform                    16 GB GDDR6 Memory
+       (Simulated)                   SK-Hynix AiM Chip × 16              Model Settings CIFAR-10 CIFAR-100 Model Settings CIFAR-10 CIFAR-100
+                         DRAM-PIM
+                                  512 PEs, 16 GB GDDR6 Memory                     Original 98.5     91.4            Original 99.5     94.55
+                                                                        ViT-base LUT-NN    10.1     1.07  ViT-huge LUT-NN    10.0      1.01
+                                                                                 eLUT-NN   96.3     89.1           eLUT-NN   97.8     91.32
+
+
+the input shape, each model need to be tuned only once,
+                                                                       transformer inference on a CPU server which equips dual-
+which only incurs little overhead (~1s/model on dual-socket
+                                                                       socket Intel Xeon Gold 5218 CPUs (8 channels, 512 GB DDR4
+Intel Xeon 4210 CPUs) compared with the latency of model
+                                                                       memory). The baselines adopt FP32/INT8 datatype, and the
+inference (tens of seconds/model on our UPMEM platform).
+                                                                       INT8 baselines are optimized with AVX/AVX2 intrinsics in
+                                                                       GGML. We compare the HBM-PIM/AiM based PIM-DL with
+6     Evaluation                                                       a DGX-1 workstation equipping 32GB NVIDIA V100 GPUs.
+6.1 Experiment Setup                                                   On the DGX station, we implement FP32-based model in-
+Models: For accuracy validation, we evaluate eLUT-NN on                ference with PyTorch [76]. Besides, we also compare the
+both NLP and CV tasks. Specifically, for NLP tasks, we eval-           HBM-PIM/AiM based PIM-DL with GEMM-based inference
+uate the popular BERT-base and BERT-large models [20]                  on these platforms. In these baselines, we offload all linear
+on the GLUE [88] benchmark dataset. For CV tasks, we                   layers to DRAM-PIMs, and implement other GPU-side op-
+evaluate ViT-base and ViT-huge [22] on the CIFAR-10 and                erators with PyTorch [76]. We adopt FP16 datatype on the
+CIFAR-100 [53] datasets. For throughput comparison, since              HBM-PIM platform and BF16 datatype on the AiM platform.
+the model size of BERT-base is identical to ViT-base, we eval-         In all baselines, we use the model architectures proposed in
+uate the BERT-base, BERT-large, and the ViT-huge models,               Bert/ViT papers [20, 22] without pruning/sparsification.
+whose hidden dim sizes are 768/1024/1280, respectively.
+Platforms: Our main experiments are conducted on a real                6.2 Model Accuracy
+DRAM-PIM platform, namely UPMEM PIM-DIMM [18]. The                     During calibration, all models are initialized using the pre-
+configuration details are presented in Table 3. This platform          trained model weights, and the centroids are initialized ran-
+equips dual-socket Intel Xeon 4210 CPUs. Each socket des-              domly. We set the sub-vector length and the centroid number
+ignates two channels for conventional DDR4 DIMMs and                   to 2 and 16, and set the reconstruction loss penalty term 𝛽
+two channels for UPMEM PIM-DIMMs. Each of the 8 PIM-                   to 1e-3 for BERT models, 1e-4 for ViT models. The learning
+DIMMs contains two ranks, and each rank equips 64 PEs. The             rate is 1e-5 for BERT-large and 5e-5 for other models. The
+host operators are implemented with C++/OpenMP [14] and                tokens used in LUT-NN calibration are randomly sampled
+GGML tensor library [30], which leverages AVX intrinsics               from the datasets using the dataloader provided by Pytorch.
+to accelerate inference on x86 CPUs. The PIM operators are                Table 4 and 5 presents the accuracy results. We can find
+implemented with the UPMEM SDK [86] (Version 2021.3.0).                that even though the original LUT-NN algorithm consumes
+   Given that Samsung’s HBM-PIM and SK-Hynix’s AiM                     the whole training set, it still has great accuracy degrada-
+have not been available yet, our evaluation of PIM-DL on               tion (90.44%/44.10% average drop on CV/NLP tasks) when
+these potential platforms is conducted through simulation.             all linear layers are replaced. eLUT-NN models reach con-
+We use the simulator officially released by Samsung [71]               vergence after no more than 100k iterations and consume
+and extend it to support AiM’s functionality. An NVIDIA                only ~0.78% of tokens in the training set. Besides, eLUT-NN
+A2 GPU serves as the host for the two PIM products. We                 greatly enhances the accuracy compared with the baseline
+implement the host operators with Pytorch [76] and conduct             LUT-NN (88.09%/41.95% average improvement on CV/NLP
+simulations to estimate the PIM operators’ performance.                tasks) and also achieves accuracy close to the original models
+Baselines: We compare eLUT-NN with the baseline LUT-                   (2.36%/2.25% average drop on CV/NLP tasks).
+NN [84] in term of accuracy. Both algorithms adopt full-layer
+replacement. The original model accuracy is obtained from              6.3 End-to-end Performance
+BERT and ViT papers [20, 22]. For throughput evaluation,               Throughput: We first compare DDR4-PIM based PIM-DL’s
+we compare PIM-DL on DDR4-PIM with GGML [30]-based                     performance against the CPU server. For BERT-base and
+
+
+
+                                                                 888
+PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning
+via Algorithm-System Co-Optimization                                                                                                                                                       ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+                             Latency           FP32        INT8                            V=2/CT=16               V=4/CT=16       PIM                                        LUT          CCS        Other                           QKV      O      FFN1     FFN2
+                 6                                             20                             6                                                                      1                                                         3
+
+
+
+
+                                                                    Latency/Layer (s)
+
+
+
+
+                                                                                                                                                                                                               Norm. Speedup
+                                                                                 Energy Efficiency
+Norm. Speedup
+
+
+
+
+                         38.47         68.04      105.88                                                                                                           0.8
+
+
+
+
+                                                                                                                                                   Latency Ratio
+                4.5                                           15                                     4.5                                                                                                                       2
+                                                                                                                                                                   0.6
+                 3                                            10                                      3
+                                                                                                                                                                   0.4                                                         1
+                1.5                                           5                                      1.5                                                           0.2
+                 0                                            0                                       0                                                              0                                                         0
+                       Bert Base Bert Large       ViT Huge                                                 Bert Base Bert Large   ViT Huge                                Bert Base    Bert Large   ViT Huge                       Bert Base   Bert Large    ViT Huge
+                             (a) Throughput                                                                   (b) Energy Efficiency                                      (a) Inference Latency Breakdown                             (b) Layer-wise Comparison
+
+
+                      Figure 10. End-to-end performance comparison.                                                                                                                   Figure 11. Performance analysis.
+
+
+                                                                                                                                                   6.4 Performance Analysis
+BERT-large, we set the sequence length to 512 and the batch
+size to 64. For ViT-huge model, we set the shape of an input                                                                                       Latency Breakdown: To better understand the performance
+image to 224×224×3, and the batch size is 128. Under a patch                                                                                       improvement of PIM-DL, we first breakdown the latency of
+size of 14×14, ViT-huge’s sequence length is 257. We pad                                                                                           PIM-DL into LUT operator’s latency, CCS operator’s latency,
+the sequence length to 264 to evenly partition the workload                                                                                        and other operators’ latency. As depicted in Figure 11-(a),
+among PIM PEs. Considering UPMEM’s low FP32 computa-                                                                                               LUT-NN inference takes up 73.73% ~ 79.39% of total latency.
+tion capacity, we conduct INT8 quantization on the LUTs,                                                                                           Specifically, the LUT operator’s latency takes up 69.88%
+which reports ≤ 0.1% accuracy drop. On the CPU server,                                                                                             ~ 76.10% of LUT-NN inference latency, and thus takes up
+we evaluate the inference performance with FP32/INT8 data                                                                                          51.52% ~ 60.41% of total latency. Such results demonstrate
+precision. For PIM-DL’s inference, we set CT=16 and V=2 or                                                                                         that PIM-DL can offload much more portion of deep learn-
+4. We also evaluate the performance by offloading all linear                                                                                       ing workloads than existing PIM-enabled systems, which
+layers without LUT-NN conversion.                                                                                                                  considerably improves DRAM-PIM’s utilization.
+   As Figure 10-(a) shows, we plot the speedup as bar graphs                                                                                       Layer-wise Performance Comparison: We further anal-
+and use line graphs to illustrate the inference latency (record-                                                                                   yse the speedup of each linear layer with the replacement of
+ed in second). Compared with FP32/INT8 inference on CPU                                                                                            LUT-NN. We compare their performance between LUT-NN
+server, PIM-DL achieves 2.05×/1.14× geomean speedup un-                                                                                            inference (V=4/CT=16) and GEMM-based INT8 inference on
+der the V=2/CT=16 setting and further achieves 3.07×/1.71×                                                                                         the CPU server. As depicted in Figure 11-(b), these layers
+geomean speedup under the V=4/CT=16 setting. Besides,                                                                                              can bring 1.81× geomean speedup in total, and each of them
+compared with the model inference performance on PIM ar-                                                                                           can gain 1.61×, 0.99×, 1.78×, and 2.38× geomean speedup, re-
+chitecture, PIM-DL achieves 12.61×/18.91× geomean speedup                                                                                          spectively. FFN2 gains the highest performance improvement
+under the two settings, respectively. PIM-DL successfully                                                                                          because it has the largest inner dim in GEMM operations.
+enables deep learning on UPMEM’s commodity PIM-DIMMs                                                                                               For QKV projection and FFN1, we can also gain better per-
+and brings considerable performance improvement.                                                                                                   formance because they have large output feature dims. Even
+Energy Efficiency: We compare the energy consumption                                                                                               for the smallest O projection, PIM-DL’s performance is also
+(in Joules) of DDR4-PIM based PIM-DL agsinst the baselines                                                                                         comparable to the CPU server’s performance.
+on the CPU server. We adopt Intel RAPL [43] to measure the
+CPU’s energy. We adopt the power provided by dpu-diag                                                                                              6.5 Sensitivity Analysis
+tool in UPMEM SDK [86] for PIM-DIMM’s energy estima-                                                                                               To explore the scalability of DDR4-PIM based PIM-DL, we
+tion, which reports ~13.92W/DIMM@350MHz. It is the static                                                                                          conduct sensitivity analysis and change four parameters:
+power of both the PIM cores and the PIM banks. Consider-                                                                                           sub-vector length (V), centroid number (CT), batch size, and
+ing PIM-DIMMs do not use dynamic voltage and frequency                                                                                             hidden dim. By default, we set V=4, CT=16, sequence length
+scaling (DVFS), this static power is close to PIM-DIMM’s dy-                                                                                       to 512, and batch size to 64 for all models. All results are
+namic power. Besides, this power is also in alignment with                                                                                         normalized to CPU server’s INT8 inference performance.
+the power officially released by UPMEM [19]. The mem-                                                                                              Sub-vector Length: As depicted in Figure 12-(a), when the
+ory access energy between the CPU and the PIM-DIMMs is                                                                                             sub-vector length is larger, we can gain better performance
+measured using the MSR_DRAM_ENERGY_STATUS regis-                                                                                                   because larger sub-vector length decreases codebook num-
+ter provided by Intel RAPL following Intel’s manual [39]. As                                                                                       ber, thus shrinking the LUTs’ size. However, the performance
+illustrated in Figure 10-(b), all results are normalized to FP32                                                                                   improvement tends to coverage because UPMEM product’s
+CPU baseline. Compared with FP32/INT8 inference on the                                                                                             bandwidth decreases when transfer size shrinks [33].
+CPU server, PIM-DL achieves 2.95×/1.65× (V=2/CT=16) and                                                                                            Centroid Number: In Figure 12-(b), we can find that when
+4.42×/2.46× (V=4/K=16) higher energy efficiency (geomean).                                                                                         centroid number shrinks, we can gain better performance
+Compared with PIM-based original model inference, PIM-                                                                                             because the LUTs’ memory footprints decrease. Similar to
+DL achieves 11.16× (V=2/CT=16) and 16.74× (V=4/CT=16)                                                                                              sub-vector length, the performance improvement has slight
+higher energy efficiency (geomean).                                                                                                                tendency to converge with centroid number decreasing.
+
+
+
+                                                                                                                                             889
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA                                                                                     Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+                           Bert Base        Bert Large        ViT Huge                                         Bert Base       Bert Large        ViT Huge                                          Bert Base     Bert Large        ViT Huge
+
+
+
+
+                                                                         Norm. Speedup
+
+
+
+
+                                                                                                                                                            Norm. Speedup
+                                                                                           2.5                                                                                                                                                                4
+
+
+
+
+                                                                                                                                                                                                                                              Norm. Speedup
+  Norm. Speedup
+
+
+                    3                                                                                                                                                         2
+                  2.5                                                                        2                                                                              1.5                                                                               3
+                    2                                                                      1.5                                                                                1                                                                               2
+                  1.5                                                                        1                                                                              0.5                                                                               1
+                    1                                                                      0.5                                                                                0                                                                               0
+                           2       4          8          16     32                                             128       64        32       16      8                                              8       16     32          64    128                                        1024     2048     2560   4096    5120
+                            (a) Sub-vector Length                                                                (b) Centroid Number                                                                       (c) Batch Size                                                              (d) Hidden Dim
+
+                                                                                          Figure 12. Sensitivity analysis of different parameters.
+
+                        Illegal Mapping                       Best Mapping in Real Performance                                                          Best Mapping in PIM-DL Auto-Tuner                                                               Worst Mapping in Real Performance
+                                   1.02 ×                                                                                                                                                                                                                                                      1.04×
+
+                  2.5                                                                                    2.5                                                                                                                                                                  2.5                               1.91×
+  Norm. Speedup
+
+
+
+
+                                                                                                                                                                                                                                                              Norm. Speedup
+                                                                                                                                                                                             2.5
+                                                                                         Norm. Speedup
+
+
+
+
+                                                                                                                                                                             Norm. Speedup
+                  2                               1.88×                                                                                                                                                                   1.01×                                               2
+                                                                                                         2                                                                                   2
+                  1.5                                                                                    1.5                                                                                                                                                                  1.5
+                                                                                                                                                                                             1.5
+                                                                                                                 1.06×
+                   1                                                                                      1                1.29×                                                             1                  1.74×                                                         1
+                  0.5                                                                                    0.5                                                                                                                                                                  0.5
+                                                                                                                                                                                             0.5
+
+
+                                                                                                                                                                                                                                                                                                        S-tile (N, F)
+              (a) Coarse-grain LUT Load                                                                       (b) Fine-grain LUT Load                                                                  (c) Static LUT Load                                                          (d) Global Optimal
+
+                                                                     Figure 13. Illustration of LUT-NN inference’s mapping space.
+
+Batch Size: As Figure 12-(c) shows, when the batch size is                                                                                                                  the given workload shape. PE’s DRAM bandwidth does not
+small, the CPU server outperforms PIM-DL. That is because                                                                                                                   saturate and increases rapidly under such a low 𝐹𝑚−𝑡𝑖𝑙𝑒 .
+when executing small kernels on UPMEM PIM-DIMMs, the                                                                                                                        Tile Traversal Order: From Figure 13-(d), we can infer that
+poor host-PIM communication bandwidth becomes the main                                                                                                                      changing the tile traversal order brings little performance
+bottleneck [31, 33, 48]. When the PIM kernel becomes larger,                                                                                                                divergence. That is because due to the wimpy computation
+such issue will be alleviated.                                                                                                                                              capacity of PEs in UPMEM’s product, the accumulation la-
+Hidden Dim: We also exploit the performance when chang-                                                                                                                     tency takes up most of the micro kernel’s execution latency,
+ing the hidden dim size. We select several commonly used                                                                                                                    which diminishes the benefit of exploiting on-chip data reuse.
+hidden dim sizes from [99] and illustrate the results in Fig-                                                                                                               LUT Load Scheme: As illustrated in Figure 13-(a)~(b), ad-
+ure 12-(d). PIM-DL achieves 2.44× geomean speedup against                                                                                                                   justing load tile sizes can bring considerable performance gap.
+the CPU server. Specifically, when the hidden dim size comes                                                                                                                That is because the offsets of on-chip tiles are also computed
+to 4096, PIM-DL gains much better performance because                                                                                                                       by the PE. Since the on-chip buffer’s bandwidth is related to
+CPU server has poorer scalability than PIM-DL.                                                                                                                              the instruction number [33], we need to set moderate load
+                                                                                                                                                                            tile sizes to fully utilize the on-chip buffer’s bandwidth.
+6.6 Mapping Space Visualization                                                                                                                                             Auto-Tuner Analysis: As illustrated in Figure 13, the pa-
+To visualize LUT-NN’s mapping space on UPMEM’s PIM-                                                                                                                         rameters provided by PIM-DL Auto-Tuner bring ≤6% per-
+DIMM, we take BERT-large’s FFN1 layer as a case study.                                                                                                                      formance degradation. Besides, the average error of perfor-
+The workload shape (𝑁 , 𝐶𝐵, 𝐶𝑇 , 𝐹 ) is (32768, 256, 16, 4096),                                                                                                             mance estimation is 3.44%, and the max error is 13.73%. The
+and we set (𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 ) to (16384, 8) for static LUT load                                                                                                           PIM-DL auto-tuner can help us to automatically find a near-
+scheme, and (512, 256) for the other LUT load schemes. As                                                                                                                   optimal parameter for given workloads.
+shown in Figure 13, we illustrate the neighborhood of the
+best mapping parameters under three LUT load schemes                                                                                                                        6.7 PIM-DL on HBM-PIM and AiM
+and depict the global optimal parameters when changing                                                                                                                      Apart from UPMEM PIM-DIMM, we also evaluate PIM-DL
+sub-LUT tiling factors and tile traversal order.                                                                                                                            on HBM-PIM/AiM products via simulation. We set the trans-
+Sub-LUT Tiling Factors: As depicted in Figure 13-(d), chang-                                                                                                                former’s sequence length to 128, and adjust the batch size
+ing (𝑁𝑠−𝑡𝑖𝑙𝑒 , 𝐹𝑠−𝑡𝑖𝑙𝑒 ) can bring up to 1.91× performance gap.                                                                                                             from 1 to 8. The hidden dims are selected from [99]. We
+That is because when 𝑁𝑠−𝑡𝑖𝑙𝑒 or 𝐹𝑠−𝑡𝑖𝑙𝑒 is large, the skew of                                                                                                               assume PIM instructions carry the LUT indices and drive the
+tile size leads to higher host-PIM communication overhead.                                                                                                                  execution of PEs during PIM-DL’s inference.
+Micro Kernel Tile Size: For coarse-grain or fine-grain LUT                                                                                                                     We first compare the performance between PIM-DL and
+load schemes, the average performance gap brought by chang-                                                                                                                 the normal DNN inference on the two products. As depicted
+ing micro kernel tile sizes is 1.04×. However, for static LUT                                                                                                               in Figure 14, PIM-DL achieves 23.94×/19.06× geomean speed-
+load scheme, changing micro kernel tile sizes can bring up                                                                                                                  up on HBM-PIM/AiM, respectively. When the batch size
+to 1.74× performance gap. That is because under the static                                                                                                                  increases, PIM-DL’s performance gain increases by up to
+scheme, 𝐹𝑚−𝑡𝑖𝑙𝑒 is bounded by 𝐹𝑠−𝑡𝑖𝑙𝑒 : To hold the LUTs on                                                                                                                 2.23×, because larger batch sizes are unfriendly to the two
+PE’s on-chip buffer, we can only set 𝐹𝑠−𝑡𝑖𝑙𝑒 to at most 8 under                                                                                                             products. On the other hand, when the hidden dim increases,
+
+
+
+                                                                                                                                                        890
+PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning
+via Algorithm-System Co-Optimization                                                                                                                 ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+                              Batch Size=1    Batch Size=2    Batch Size=4      Batch Size=8                                               Batch Size=1    Batch Size=2    Batch Size=4       Batch Size=8
+                40                                                                                                          1.6
+                                                                                                                                                                                             AiM
+
+
+
+
+                                                                                                            Norm. Speedup
+                                                                             AiM                                                                  HBM-PIM
+Norm. Speedup
+
+
+
+
+                                     HBM-PIM                                                                                1.2
+                30
+                20                                                                                                          0.8
+                10                                                                                                          0.4
+                 0                                                                                                           0
+                       1024        2048      2560     4096     1024      2048      2560        4096                                 1024        2048      2560     4096     1024      2048         2560      4096
+                                                    Hidden Dim Length                                                                                            Hidden Dim Length
+
+
+Figure 14. Normal PIM-based DNN inference VS. PIM-DL.                                                                              Figure 15. GPU-based inference VS. PIM-DL.
+
+
+the speedup of PIM-DL against the baselines slightly shrinks.                                               proposes efficient synchronization support on HMC for data
+This is because HBM-PIM and AiM’s dataflow is optimized                                                     intensive applications. (2) DRAM-PIMs built with Dual-Inline
+for processing matrices with flat shapes.                                                                   Memory Modules (DIMMs). For example, TensorDIMM [57]
+   We also compare PIM-DL on the two products with a V100                                                   and RecNMP [51] accelerate recommendation systems with
+GPU baseline running FP32 models. As illustrated in Fig-                                                    near-memory tensor reduction. DIMM-Link [102] presents a
+ure 15, AiM-based PIM-DL outperform NVIDIA V100 GPU                                                         full-stack design to enhance the inter-DIMM communication
+by up to 1.20×, while HBM-PIM-based PIM-DL can only                                                         performance for generic DIMM-NMP architectures.
+achieve 39% of V100’s performance (geomean). That is be-                                                       In recent few years, DRAM-PIMs have entered the com-
+cause the huge computation capacity gap between V100 GPU                                                    mercialization phase. UPMEM has proposed PIM-DIMM [18],
+(130 TFLOPS) and HBM-PIM (4.8 TFLOPS). For AiM, since                                                       which equips RISC cores near DRAM banks. Samsung and
+the computation capacity is much higher than HBM-PIM                                                        SK-Hynix have introduced HBM-PIM [55]/AiM [54] to accel-
+(16 TFLOPS), PIM-DL can provide comparable performance                                                      erate memory-bound operators in deep learning applications.
+against inference on the V100 GPU.                                                                          Although there are various proposals customizing real-world
+                                                                                                            applications on commodity DRAM-PIMs [6–8, 16, 21, 31, 34,
+7                    Discussion and Future Work                                                             48, 49, 58, 62, 72], none of them can efficiently process main-
+Finally, we list some architecture implications which can                                                   stream DNNs such as transformers. To our best knowledge,
+further improve PIM-DL’s performance on DRAM-PIMs.                                                          PIM-DL is the first full-stack framework that expands DRAM-
+Adder-only PIM Design: As discussed in Section 3.3, LUT-                                                    PIMs’ applicability under deep learning scenarios. Unlike
+NN removes all multiplications in the PIM-side LUT opera-                                                   previous proposals implementing LUT-based operations in
+tors. Therefore, we can equip adder-only PEs in DRAM-PIMs.                                                  DRAM circuits [17, 26, 82, 83, 100], we adopt LUTs in the
+Considering adders have much lower hardware overhead                                                        algorithm level, ensuring PIM-DL’s efficient deployment on
+than multipliers [46], we can equip much more adders under                                                  real-world DRAM-PIM products. Although TransPimLib [72]
+the same area/power constraints. PIM-DL on such adder-                                                      implements LUT-based transcendental functions on UPMEM
+only DRAM-PIMs will achieve much higher performance.                                                        PIM-DIMMs, it cannot be directly used to accelerate GEMM.
+On-chip Buffer Management Support: PIM-PE’s on-chip                                                         PIM-DL and provides algorithmic innovation to maintain
+buffer cannot support to exploit data reuse because of the se-                                              the model accuracy when substituting GEMM to LUT-NN
+vere overhead to implement caching mechanism [85]. There-                                                   and contains efficient mapping & auto-tuning strategies to
+fore, we only adopt three simple LUT load schemes Since the                                                 boost the performance of model inference.
+LUT access depends on the distribution of centroid indices,
+which may skew to several "hot" items, exploiting data reuse                                                9                     Conclusion
+with better support of on-chip buffer management can bring                                                  This paper proposes PIM-DL, the first full-stack framework
+better performance to PIM-DL.                                                                               to expand the applicability of commodity DRAM-PIMs for
+                                                                                                            deep learning. We adopt the eLUT-NN algorithm for model
+8                    Related Work                                                                           calibration and design the PIM-based inference backend,
+DRAM-PIMs have been proposed for many years to address                                                      including the PIM-DL Engine and the Auto-Tuner. Com-
+the "Memory-Wall" problem. Many academic proposals uti-                                                     pared with GEMM-based inference on DRAM-PIMs, PIM-DL
+lize DRAM-PIMs to accelerate data-intensive applications in                                                 achieves 22.6×~37.1× speedup. Compared with inference on
+scenarios like graph processing [2, 15, 67, 97, 104], machine                                               CPU/GPU, PIM-DL achieves up to 3.54×/1.20× speedup.
+learning [3, 28, 37, 50, 52, 56, 60, 61, 63, 75, 80, 90, 94, 101], and
+general-purpose applications [4, 10, 25, 27, 32, 35, 38, 91, 96].                                           Acknowledgments
+They can be categorized into two major types: (1) DRAM-                                                     We thank all the reviewers and our shepherd for their valu-
+PIMs built with die-stacking memories, e.g., Hybrid Memory                                                  able comments. We also thank Yiqi Chen for his help on proof
+Cube (HMC). For example, GraphP [98] and GraphQ [104]                                                       reading. This work is supported by NSF China (62032001)
+adopts HMC to accelerate graph processing. SynCron [32]                                                     and 111 Project (B18001).
+
+
+
+                                                                                                      891
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA      Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+
+A      Artifact Appendix                                                our server runs on Ubuntu 18.04.6 LTS (GNU/Linux 4.15.0-
+A.1 Abstract                                                            184-generic x86_64).
+This artifact contains the source code of PIM-DL, including
+                                                                        A.4 Installation
+the implementation of model calibration, auto-tuner, and the
+inference engine. In addition, this artifact provides config            Installation instructions are provided in the asplos24-ae
+files and scripts to reproduce the key experimental results             folder. Please check asplos24-ae/README.md for more de-
+reported in the paper.                                                  tails.
+
+                                                                        A.5 Experiment workflow
+A.2     Artifact check-list (meta-information)
+      • Algorithm: LUT-based neural network (LUT-NN).                   Experiment scripts are provided in the asplos24-ae folder.
+      • Program: Python3, C, C++.                                       Please check asplos24-ae/README.md for more details.
+      • Compilation: The compiler provided in UPMEM SDK (Ver-
+        sion 2021.3.0), which is based on clang 10.0.0.                 A.6 Evaluation and expected results
+      • Run-time environment: The system is developed and tested        After finishing execution, all plotted results are saved in
+        in Ubuntu 18.04.6 LTS (GNU/Linux 4.15.0-184-generic x86_64).    the asplos24-ae/results folder. These results should be
+      • Hardware: The experiments were run on a machine with            in correspondence with Figure 10, 11, 12, and 13. Note that
+        Intel Xeon 4210 CPU (dual-socket), 128 GB memory, and
+                                                                        the results might be slightly different from that in the pa-
+        8 UPMEM PIM-DIMMs (8GB/DIMM, DPU running at 350
+        MHz).
+                                                                        per due to the runtime perturbation, but the trends should
+      • Execution: Make sure no other workloads are running on          be similar. Please check asplos24-ae/README.md for more
+        the system during the experiment.                               information on result validation.
+      • Metrics: Normalized speedup and energy efficiency.
+      • Output: The resulting figures shown in paper for key exper-     References
+        iments.                                                           [1] Martín Abadi, Ashish Agarwal, Paul Barham, Eugene Brevdo, Zhifeng
+      • Experiments: Scripts are included in the asplos24-ae folder.          Chen, Craig Citro, Greg S Corrado, Andy Davis, Jeffrey Dean,
+        Detailed instructions are provided in asplos24-ae/README.md.          Matthieu Devin, et al. Tensorflow: Large-scale machine learning on
+      • How much disk space required (approximately)?: About                  heterogeneous distributed systems. arXiv preprint arXiv:1603.04467,
+        1GB.                                                                  2016.
+      • How much time is needed to prepare workflow (ap-                  [2] Junwhan Ahn, Sungpack Hong, Sungjoo Yoo, Onur Mutlu, and Kiy-
+        proximately)?: About 10 minutes.                                      oung Choi. A scalable processing-in-memory accelerator for parallel
+      • How much time is needed to complete experiments                       graph processing. In Proceedings of the 42nd Annual International
+                                                                              Symposium on Computer Architecture, pages 105–117, 2015.
+        (approximately)?: About 3 hours.
+                                                                          [3] Bahar Asgari, Ramyad Hadidi, Jiashen Cao, Sung-Kyu Lim, Hyesoon
+      • Publicly available?: Yes. Github link: https://github.com/
+                                                                              Kim, et al. Fafnir: Accelerating sparse gathering by using efficient
+        leesou/PIM-DL-ASPLOS.                                                 near-memory intelligent reduction. In 2021 IEEE International Sym-
+      • Code licenses (if publicly available)?: MIT License.                  posium on High-Performance Computer Architecture (HPCA), pages
+      • Archived (provide DOI)?: Yes. DOI link: https://doi.org/10.           908–920. IEEE, 2021.
+        5281/zenodo.10531532                                              [4] Hadi Asghari-Moghaddam, Young Hoon Son, Jung Ho Ahn, and
+                                                                              Nam Sung Kim. Chameleon: Versatile and practical near-dram accel-
+                                                                              eration architecture for large memory systems. In 2016 49th annual
+A.3 Description                                                               IEEE/ACM international symposium on Microarchitecture (MICRO),
+A.3.1 How to access. For AE reviewers, considering it                         pages 1–13. IEEE, 2016.
+might be difficult to prepare a server equipped with UPMEM                [5] Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E Hinton. Layer
+                                                                              normalization. arXiv preprint arXiv:1607.06450, 2016.
+PIM-DIMMs, we provide ssh access to our server. For others                [6] Alexander Baumstark, Muhammad Attahir Jibril, and Kai-Uwe Sattler.
+who want to reproduce these experiments, we provide the                       Accelerating large table scan using processing-in-memory technology.
+open-sourced project on Github (Link: https://github.com/                     BTW 2023, 2023.
+leesou/PIM-DL-ASPLOS), but the following dependencies                     [7] Alexander Baumstark, Muhammad Attahir Jibril, and Kai-Uwe Sattler.
+should be satisfied.                                                          Processing-in-memory for databases: Query processing and data
+                                                                              transfer. In Proceedings of the 19th International Workshop on Data
+                                                                              Management on New Hardware, pages 107–111, 2023.
+A.3.2 Hardware dependencies. All experiments are run                      [8] Arthur Bernhardt, Andreas Koch, and Ilia Petrov. pimdb: From main-
+on a machine with Intel Xeon 4210 CPU (dual-socket), 128                      memory dbms to processing-in-memory dbms-engines on intelligent
+GB memory, and 8 UPMEM PIM-DIMMs (8GB/DIMM, DPU                               memories. In Proceedings of the 19th International Workshop on Data
+running at 350 MHz).                                                          Management on New Hardware, pages 44–52, 2023.
+                                                                          [9] Davis W. Blalock and John V. Guttag. Multiplying matrices without
+                                                                              multiplying. In Marina Meila and Tong Zhang, editors, Proceedings
+A.3.3 Software dependencies. To use UPMEM PIM-DIM-                            of the 38th International Conference on Machine Learning, ICML 2021,
+Ms, UPMEM’s SDK toolchain needs to be installed on the                        18-24 July 2021, Virtual Event, volume 139 of Proceedings of Machine
+server. The SDK version on our server is 2021.3.0. Besides,                   Learning Research, pages 992–1004. PMLR, 2021.
+
+
+
+
+                                                                  892
+PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning
+via Algorithm-System Co-Optimization                                                                    ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+ [10] Amirali Boroumand, Saugata Ghose, Minesh Patel, Hasan Hassan,                 [25] Amin Farmahini-Farahani, Jung Ho Ahn, Katherine Morrow, and
+      Brandon Lucia, Rachata Ausavarungnirun, Kevin Hsieh, Nastaran Ha-                  Nam Sung Kim. Nda: Near-dram acceleration architecture leveraging
+      jinazar, Krishna T Malladi, Hongzhong Zheng, et al. Conda: Efficient               commodity dram devices and standard memory modules. In 2015
+      cache coherence support for near-data accelerators. In Proceedings                 IEEE 21st International Symposium on High Performance Computer
+      of the 46th International Symposium on Computer Architecture, pages                Architecture (HPCA), pages 283–295. IEEE, 2015.
+      629–642, 2019.                                                                [26] João Dinis Ferreira, Gabriel Falcao, Juan Gómez-Luna, Mohammed
+ [11] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D                     Alser, Lois Orosa, Mohammad Sadrosadati, Jeremie S Kim, Geraldo F
+      Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam,                       Oliveira, Taha Shahroodi, Anant Nori, et al. pluto: Enabling mas-
+      Girish Sastry, Amanda Askell, et al. Language models are few-shot                  sively parallel computation in dram via lookup tables. In 2022 55th
+      learners. Advances in neural information processing systems, 33:1877–              IEEE/ACM International Symposium on Microarchitecture (MICRO),
+      1901, 2020.                                                                        pages 900–919. IEEE, 2022.
+ [12] Nicolas Carion, Francisco Massa, Gabriel Synnaeve, Nicolas Usunier,           [27] Mingyu Gao, Grant Ayers, and Christos Kozyrakis. Practical near-data
+      Alexander Kirillov, and Sergey Zagoruyko. End-to-end object detec-                 processing for in-memory analytics frameworks. In 2015 International
+      tion with transformers. In European conference on computer vision,                 Conference on Parallel Architecture and Compilation (PACT), pages
+      pages 213–229. Springer, 2020.                                                     113–124. IEEE, 2015.
+ [13] Jason Cong, Zhenman Fang, Michael Gill, Farnoosh Javadi, and Glenn            [28] Mingyu Gao, Jing Pu, Xuan Yang, Mark Horowitz, and Christos
+      Reinman. AIM: accelerating computational genomics through scal-                    Kozyrakis. Tetris: Scalable and efficient neural network acceleration
+      able and noninvasive accelerator-interposed memory. In Proceedings                 with 3d memory. In Proceedings of the Twenty-Second International
+      of the International Symposium on Memory Systems, MEMSYS 2017,                     Conference on Architectural Support for Programming Languages and
+      Alexandria, VA, USA, October 02 - 05, 2017, pages 3–14. ACM, 2017.                 Operating Systems, pages 751–764, 2017.
+ [14] Leonardo Dagum and Ramesh Menon. Openmp: an industry standard                 [29] Pin Gao, Lingfan Yu, Yongwei Wu, and Jinyang Li. Low latency rnn
+      api for shared-memory programming. IEEE computational science                      inference with cellular batching. In Proceedings of the Thirteenth
+      and engineering, 5(1):46–55, 1998.                                                 EuroSys Conference, pages 1–15, 2018.
+ [15] Guohao Dai, Tianhao Huang, Yuze Chi, Jishen Zhao, Guangyu Sun,                [30] Georgi Gerganov. Ggml tensor library for machine learning. https:
+      Yongpan Liu, Yu Wang, Yuan Xie, and Huazhong Yang. Graphh: A                       //github.com/ggerganov/ggml.
+      processing-in-memory architecture for large-scale graph processing.           [31] Christina Giannoula, Ivan Fernandez, Juan Gómez-Luna, Nectarios
+      IEEE Transactions on Computer-Aided Design of Integrated Circuits                  Koziris, Georgios Goumas, and Onur Mutlu. Towards efficient sparse
+      and Systems, 38(4):640–653, 2018.                                                  matrix vector multiplication on real processing-in-memory architec-
+ [16] Prangon Das, Purab Ranjan Sutradhar, Mark Indovina, Sai                            tures. ACM SIGMETRICS Performance Evaluation Review, 50(1):33–34,
+      Manoj Pudukotai Dinakarrao, and Amlan Ganguly. Implementation                      2022.
+      and evaluation of deep neural networks in commercially available              [32] Christina Giannoula, Nandita Vijaykumar, Nikela Papadopoulou,
+      processing in memory hardware. In 2022 IEEE 35th International                     Vasileios Karakostas, Ivan Fernandez, Juan Gómez-Luna, Lois Orosa,
+      System-on-Chip Conference (SOCC), pages 1–6, 2022.                                 Nectarios Koziris, Georgios Goumas, and Onur Mutlu. Syncron: Effi-
+ [17] Quan Deng, Youtao Zhang, Minxuan Zhang, and Jun Yang. Lacc:                        cient synchronization support for near-data-processing architectures.
+      Exploiting lookup table-based fast and accurate vector multiplication              In 2021 IEEE International Symposium on High-Performance Computer
+      in dram-based cnn accelerator. In Proceedings of the 56th Annual                   Architecture (HPCA), pages 263–276. IEEE, 2021.
+      Design Automation Conference 2019, pages 1–6, 2019.                           [33] Juan Gómez-Luna, Izzat El Hajj, Ivan Fernandez, Christina Gian-
+ [18] Fabrice Devaux. The true processing in memory accelerator. In 2019                 noula, Geraldo F Oliveira, and Onur Mutlu. Benchmarking a new
+      IEEE Hot Chips 31 Symposium (HCS), pages 1–24. IEEE Computer                       paradigm: An experimental analysis of a real processing-in-memory
+      Society, 2019.                                                                     architecture. arXiv preprint arXiv:2105.03814, 2021.
+ [19] Fabrice Devaux. The true processing in memory accelerator. In 2019            [34] Juan Gómez-Luria, Yuxin Guo, Sylvan Brocard, Julien Legriel, Remy
+      IEEE Hot Chips 31 Symposium (HCS), pages 1–24. IEEE Computer                       Cimadomo, Geraldo F Oliveira, Gagandeep Singh, and Onur Mutlu.
+      Society, 2019.                                                                     Machine learning training on a real processing-in-memory system.
+ [20] Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.                  In 2022 IEEE Computer Society Annual Symposium on VLSI (ISVLSI),
+      Bert: Pre-training of deep bidirectional transformers for language                 pages 292–295. IEEE, 2022.
+      understanding. arXiv preprint arXiv:1810.04805, 2018.                         [35] Peng Gu, Xinfeng Xie, Yufei Ding, Guoyang Chen, Weifeng Zhang,
+ [21] Safaa Diab, Amir Nassereldine, Mohammed Alser, Juan Gómez Luna,                    Dimin Niu, and Yuan Xie. ipim: Programmable in-memory image pro-
+      Onur Mutlu, and Izzat El Hajj. A framework for high-throughput                     cessing accelerator using near-bank architecture. In 2020 ACM/IEEE
+      sequence alignment using real processing-in-memory systems. Bioin-                 47th Annual International Symposium on Computer Architecture (ISCA),
+      formatics, 39(5):btad155, 2023.                                                    pages 804–817. IEEE, 2020.
+ [22] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weis-             [36] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep
+      senborn, Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani,                       residual learning for image recognition. In 2016 IEEE Conference on
+      Matthias Minderer, Georg Heigold, Sylvain Gelly, Jakob Uszkoreit,                  Computer Vision and Pattern Recognition, CVPR, pages 770–778. IEEE
+      and Neil Houlsby. An image is worth 16x16 words: Transformers for                  Computer Society, 2016.
+      image recognition at scale. In International Conference on Learning           [37] Byungchul Hong, Yeonju Ro, and John Kim. Multi-dimensional paral-
+      Representations, 2021.                                                             lel training of winograd layer on memory-centric architecture. In 2018
+ [23] Jiarui Fang, Yang Yu, Chengduo Zhao, and Jie Zhou. Turbotrans-                     51st Annual IEEE/ACM International Symposium on Microarchitecture
+      formers: an efficient gpu serving system for transformer models. In                (MICRO), pages 682–695. IEEE, 2018.
+      Proceedings of the 26th ACM SIGPLAN Symposium on Principles and               [38] Kevin Hsieh, Eiman Ebrahimi, Gwangsun Kim, Niladrish Chatterjee,
+      Practice of Parallel Programming, pages 389–402, 2021.                             Mike O’Connor, Nandita Vijaykumar, Onur Mutlu, and Stephen W
+ [24] Jiarui Fang, Yang Yu, Chengduo Zhao, and Jie Zhou. Turbotrans-                     Keckler. Transparent offloading and mapping (tom) enabling
+      formers: an efficient gpu serving system for transformer models. In                programmer-transparent near-data processing in gpu systems. ACM
+      Proceedings of the 26th ACM SIGPLAN Symposium on Principles and                    SIGARCH Computer Architecture News, 44(3):204–216, 2016.
+      Practice of Parallel Programming, pages 389–402, 2021.
+
+
+
+
+                                                                              893
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA              Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+
+ [39] Intel. Intel 64 and ia-32 architectures software developer manual             [55] Young-Cheon Kwon, Suk Han Lee, Jaehoon Lee, Sang-Hyuk Kwon, Je-
+      volume 3b. https://www.intel.com/content/www/us/en/developer/                      Min Ryu, Jong-Pil Son, Seongil O, Hak-soo Yu, Haesuk Lee, Soo Young
+      articles/technical/intel-sdm.html.                                                 Kim, Youngmin Cho, Jin Guk Kim, Jongyoon Choi, Hyunsung Shin,
+ [40] Intel. Intel advisor. https://www.intel.cn/content/www/cn/zh/                      Jin Kim, BengSeng Phuah, HyoungMin Kim, Myeong Jun Song, Ahn
+      developer/tools/oneapi/advisor.html#gs.2g5qlq.                                     Choi, Daeho Kim, Sooyoung Kim, Eun-Bong Kim, David Wang, Shin-
+ [41] Intel. Intel oneapi math kernel library (mkl). https://www.intel.com/              haeng Kang, Yuhwan Ro, Seungwoo Seo, Joon-Ho Song, Jaeyoun
+      content/www/us/en/developer/tools/oneapi/onemkl.html.                              Youn, Kyomin Sohn, and Nam Sung Kim. 25.4 A 20nm 6gb function-
+ [42] Intel. oneapi deep neural network library. https://github.com/oneapi-              in-memory dram, based on HBM2 with a 1.2tflops programmable
+      src/oneDNN.                                                                        computing unit using bank-level parallelism, for machine learning ap-
+ [43] Intel. Rapl power meter. https://www.intel.com/content/www/us/en/                  plications. In IEEE International Solid-State Circuits Conference, ISSCC
+      developer/articles/technical/software-security-guidance/advisory-                  2021, San Francisco, CA, USA, February 13-22, 2021, pages 350–352.
+      guidance/running-average-power-limit-energy-reporting.html.                        IEEE, 2021.
+ [44] Yangqing Jia, Evan Shelhamer, Jeff Donahue, Sergey Karayev,                   [56] Youngeun Kwon, Yunjae Lee, and Minsoo Rhu. Tensordimm: A prac-
+      Jonathan Long, Ross Girshick, Sergio Guadarrama, and Trevor Dar-                   tical near-memory processing architecture for embeddings and ten-
+      rell. Caffe: Convolutional architecture for fast feature embedding.                sor operations in deep learning. In Proceedings of the 52nd Annual
+      arXiv preprint arXiv:1408.5093, 2014.                                              IEEE/ACM International Symposium on Microarchitecture, pages 740–
+ [45] Yifan Jiang, Shiyu Chang, and Zhangyang Wang. Transgan: Two                        753, 2019.
+      pure transformers can make one strong gan, and that can scale up.             [57] Youngeun Kwon, Yunjae Lee, and Minsoo Rhu. Tensordimm: A prac-
+      Advances in Neural Information Processing Systems, 34:14745–14758,                 tical near-memory processing architecture for embeddings and ten-
+      2021.                                                                              sor operations in deep learning. In Proceedings of the 52nd Annual
+ [46] Norman P Jouppi, Doe Hyun Yoon, Matthew Ashcraft, Mark Gottscho,                   IEEE/ACM International Symposium on Microarchitecture, pages 740–
+      Thomas B Jablin, George Kurian, James Laudon, Sheng Li, Peter                      753, 2019.
+      Ma, Xiaoyu Ma, et al. Ten lessons from three generations shaped               [58] Dominique Lavenier, Remy Cimadomo, and Romaric Jodin. Vari-
+      google’s tpuv4i: Industrial product. In 2021 ACM/IEEE 48th Annual                  ant calling parallelization on processor-in-memory architecture. In
+      International Symposium on Computer Architecture (ISCA), pages 1–14.               2020 IEEE International Conference on Bioinformatics and Biomedicine
+      IEEE, 2021.                                                                        (BIBM), pages 204–207. IEEE, 2020.
+ [47] Norman P Jouppi, Cliff Young, Nishant Patil, David Patterson, Gaurav          [59] Sukhan Lee, Shin-haeng Kang, Jaehoon Lee, Hyeonsu Kim, Eojin
+      Agrawal, Raminder Bajwa, Sarah Bates, Suresh Bhatia, Nan Boden,                    Lee, Seungwoo Seo, Hosang Yoon, Seungwon Lee, Kyounghwan Lim,
+      Al Borchers, et al. In-datacenter performance analysis of a tensor                 Hyunsung Shin, et al. Hardware architecture and software stack for
+      processing unit. In Proceedings of the 44th annual international sym-              pim based on commercial dram technology: Industrial product. In
+      posium on computer architecture, pages 1–12, 2017.                                 2021 ACM/IEEE 48th Annual International Symposium on Computer
+ [48] Hongbo Kang, Yiwei Zhao, Guy E Blelloch, Laxman Dhulipala,                         Architecture (ISCA), pages 43–56. IEEE, 2021.
+      Yan Gu, Charles McGuffey, and Phillip B Gibbons. Pim-tree: A                  [60] Young Sik Lee and Tae Hee Han. Task parallelism-aware deep
+      skew-resistant index for processing-in-memory. arXiv preprint                      neural network scheduling on multiple hybrid memory cube-based
+      arXiv:2211.10516, 2022.                                                            processing-in-memory. IEEE Access, 9:68561–68572, 2021.
+ [49] Hongbo Kang, Yiwei Zhao, Guy E Blelloch, Laxman Dhulipala, Yan                [61] Cong Li, Zhe Zhou, Xingchen Li, Guangyu Sun, and Dimin Niu. Nm-
+      Gu, Charles McGuffey, and Phillip B Gibbons. Pim-trie: A skew-                     explorer: An efficient exploration framework for dimm-based near-
+      resistant trie for processing-in-memory. In Proceedings of the 35th                memory tensor reduction. In 2023 60th ACM/IEEE Design Automation
+      ACM Symposium on Parallelism in Algorithms and Architectures, pages                Conference (DAC), pages 1–6. IEEE, 2023.
+      1–14, 2023.                                                                   [62] Chaemin Lim, Suhyun Lee, Jinwoo Choi, Jounghoo Lee, Seongyeon
+ [50] Liu Ke, Udit Gupta, Benjamin Youngjae Cho, David Brooks, Vikas                     Park, Hanjun Kim, Jinho Lee, and Youngsok Kim. Design and analysis
+      Chandra, Utku Diril, Amin Firoozshahian, Kim Hazelwood, Bill Jia,                  of a processing-in-dimm join algorithm: A case study with upmem
+      Hsien-Hsin S Lee, et al. Recnmp: Accelerating personalized recom-                  dimms. Proceedings of the ACM on Management of Data, 1(2):1–27,
+      mendation with near-memory processing. In 2020 ACM/IEEE 47th                       2023.
+      Annual International Symposium on Computer Architecture (ISCA),               [63] Liu Liu, Jilan Lin, Zheng Qu, Yufei Ding, and Yuan Xie. Enmc: Extreme
+      pages 790–803. IEEE, 2020.                                                         near-memory classification via approximate screening. In MICRO-54:
+ [51] Liu Ke, Udit Gupta, Benjamin Youngjae Cho, David Brooks, Vikas                     54th Annual IEEE/ACM International Symposium on Microarchitecture,
+      Chandra, Utku Diril, Amin Firoozshahian, Kim Hazelwood, Bill Jia,                  pages 1309–1322, 2021.
+      Hsien-Hsin S Lee, et al. Recnmp: Accelerating personalized recom-             [64] Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Mandar Joshi, Danqi
+      mendation with near-memory processing. In 2020 ACM/IEEE 47th                       Chen, Omer Levy, Mike Lewis, Luke Zettlemoyer, and Veselin Stoy-
+      Annual International Symposium on Computer Architecture (ISCA),                    anov. Roberta: A robustly optimized bert pretraining approach. arXiv
+      pages 790–803. IEEE, 2020.                                                         preprint arXiv:1907.11692, 2019.
+ [52] Duckhwan Kim, Taesik Na, Sudhakar Yalamanchili, and Saibal                    [65] Ze Liu, Yutong Lin, Yue Cao, Han Hu, Yixuan Wei, Zheng Zhang,
+      Mukhopadhyay. Deeptrain: A programmable embedded platform for                      Stephen Lin, and Baining Guo. Swin transformer: Hierarchical vision
+      training deep neural networks. IEEE Transactions on Computer-Aided                 transformer using shifted windows. In Proceedings of the IEEE/CVF
+      Design of Integrated Circuits and Systems, 37(11):2360–2370, 2018.                 international conference on computer vision, pages 10012–10022, 2021.
+ [53] Alex Krizhevsky, Geoffrey Hinton, et al. Learning multiple layers of          [66] Bradley McDanel, Surat Teerapittayanon, and H. T. Kung. Embedded
+      features from tiny images. 2009.                                                   binarized neural networks. CoRR, abs/1709.02260, 2017.
+ [54] Yongkee Kwon, Kornijcuk Vladimir, Nahsung Kim, Woojae Shin,                   [67] Lifeng Nai, Ramyad Hadidi, Jaewoong Sim, Hyojong Kim, Pranith
+      Jongsoon Won, Minkyu Lee, Hyunha Joo, Haerang Choi, Guhyun                         Kumar, and Hyesoon Kim. Graphpim: Enabling instruction-level pim
+      Kim, Byeongju An, et al. System architecture and software stack for                offloading in graph computing frameworks. In 2017 IEEE International
+      gddr6-aim. In 2022 IEEE Hot Chips 34 Symposium (HCS), pages 1–25.                  symposium on high performance computer architecture (HPCA), pages
+      IEEE, 2022.                                                                        457–468. IEEE, 2017.
+
+
+
+
+                                                                              894
+PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning
+via Algorithm-System Co-Optimization                                                                      ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA
+
+
+ [68] Vinod Nair and Geoffrey E Hinton. Rectified linear units improve                     MobiCom ’23: The 29th Annual International Conference on Mobile
+      restricted boltzmann machines. In Proceedings of the 27th international              Computing and Networking, Madrid, Spain, October 2 - 6, 2023. ACM,
+      conference on machine learning (ICML-10), pages 807–814, 2010.                       2023.
+ [69] Nvidia. Cublas. https://developer.nvidia.com/cublas.                            [85] UPMEM. Upmem pim-dimm runtime library. https://sdk.upmem.
+ [70] Nvidia. Cudnn. https://developer.nvidia.com/cudnn.                                   com/2023.1.0/202_RTL.html.
+ [71] Samsung Advanced Institute of Technology. Pimsimulator. https:                  [86] UPMEM. Upmem software development kit (sdk). https://sdk.upmem.
+      //github.com/SAITPublic/PIMSimulator.                                                com/.
+ [72] Geraldo F Oliveira, Juan Gómez-Luna, Mohammad Sadrosadati, Yuxin                [87] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion
+      Guo, and Onur Mutlu. Transpimlib: Efficient transcendental func-                     Jones, Aidan N Gomez, Ł ukasz Kaiser, and Illia Polosukhin. Attention
+      tions for processing-in-memory systems. In 2023 IEEE International                   is all you need. In I. Guyon, U. Von Luxburg, S. Bengio, H. Wallach,
+      Symposium on Performance Analysis of Systems and Software (ISPASS),                  R. Fergus, S. Vishwanathan, and R. Garnett, editors, Advances in
+      pages 235–247. IEEE, 2023.                                                           Neural Information Processing Systems, volume 30. Curran Associates,
+ [73] Open Neural Network Exchange (ONNX). https://github.com/onnx/                        Inc., 2017.
+      onnx.                                                                           [88] Alex Wang, Amanpreet Singh, Julian Michael, Felix Hill, Omer Levy,
+ [74] Angshuman Parashar, Priyanka Raina, Yakun Sophia Shao, Yu-Hsin                       and Samuel R Bowman. Glue: A multi-task benchmark and anal-
+      Chen, Victor A Ying, Anurag Mukkara, Rangharajan Venkatesan,                         ysis platform for natural language understanding. arXiv preprint
+      Brucek Khailany, Stephen W Keckler, and Joel Emer. Timeloop: A                       arXiv:1804.07461, 2018.
+      systematic approach to dnn accelerator evaluation. In 2019 IEEE inter-          [89] Wenhai Wang, Enze Xie, Xiang Li, Deng-Ping Fan, Kaitao Song, Ding
+      national symposium on performance analysis of systems and software                   Liang, Tong Lu, Ping Luo, and Ling Shao. Pyramid vision transformer:
+      (ISPASS), pages 304–315. IEEE, 2019.                                                 A versatile backbone for dense prediction without convolutions. In
+ [75] Jaehyun Park, Byeongho Kim, Sungmin Yun, Eojin Lee, Minsoo Rhu,                      Proceedings of the IEEE/CVF international conference on computer vi-
+      and Jung Ho Ahn. Trim: Enhancing processor-memory interfaces                         sion, pages 568–578, 2021.
+      with scalable tensor reduction in memory. In MICRO-54: 54th Annual              [90] Yi Wang, Weixuan Chen, Jing Yang, and Tao Li. Towards memory-
+      IEEE/ACM International Symposium on Microarchitecture, pages 268–                    efficient allocation of cnns on processing-in-memory architecture.
+      281, 2021.                                                                           IEEE Transactions on Parallel and Distributed Systems, 29(6):1428–1441,
+ [76] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James                           2018.
+      Bradbury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia                   [91] Xinfeng Xie, Zheng Liang, Peng Gu, Abanti Basak, Lei Deng, Ling
+      Gimelshein, Luca Antiga, et al. Pytorch: An imperative style, high-                  Liang, Xing Hu, and Yuan Xie. Spacea: Sparse matrix vector mul-
+      performance deep learning library. Advances in neural information                    tiplication on processing-in-memory accelerator. In 2021 IEEE In-
+      processing systems, 32, 2019.                                                        ternational Symposium on High-Performance Computer Architecture
+ [77] D. Patterson, T. Anderson, N. Cardwell, R. Fromm, K. Keeton,                         (HPCA), pages 570–583. IEEE, 2021.
+      C. Kozyrakis, R. Thomas, and K. Yelick. A case for intelligent ram.             [92] Zhilin Yang, Zihang Dai, Yiming Yang, Jaime Carbonell, Russ R
+      IEEE Micro, 17(2):34–44, 1997.                                                       Salakhutdinov, and Quoc V Le. Xlnet: Generalized autoregressive pre-
+ [78] Alec Radford, Jeffrey Wu, Rewon Child, David Luan, Dario Amodei,                     training for language understanding. Advances in neural information
+      Ilya Sutskever, et al. Language models are unsupervised multitask                    processing systems, 32, 2019.
+      learners. OpenAI blog, 1(8):9, 2019.                                            [93] Penghang Yin, Jiancheng Lyu, Shuai Zhang, Stanley J. Osher, Yingy-
+ [79] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan                      ong Qi, and Jack Xin. Understanding straight-through estimator in
+      Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. Explor-                 training activation quantized neural nets. In 7th International Confer-
+      ing the limits of transfer learning with a unified text-to-text trans-               ence on Learning Representations, ICLR 2019, New Orleans, LA, USA,
+      former. The Journal of Machine Learning Research, 21(1):5485–5551,                   May 6-9, 2019. OpenReview.net, 2019.
+      2020.                                                                           [94] Shouyi Yin, Shibin Tang, Xinhan Lin, Peng Ouyang, Fengbin Tu,
+ [80] Fabian Schuiki, Michael Schaffner, Frank K Gürkaynak, and Luca                       Jishen Zhao, Cong Xu, Shuangcheng Li, Yuan Xie, ShaoJun Wei, et al.
+      Benini. A scalable near-memory architecture for training deep neu-                   Parana: A parallel neural architecture considering thermal problem
+      ral networks on large in-memory datasets. IEEE Transactions on                       of 3d stacked memory. IEEE Transactions on Parallel and Distributed
+      Computers, 68(4):484–497, 2018.                                                      Systems, 30(1):146–160, 2018.
+ [81] Haichen Shen, Lequn Chen, Yuchen Jin, Liangyu Zhao, Bingyu Kong,                [95] Li Yuan, Yunpeng Chen, Tao Wang, Weihao Yu, Yujun Shi, Zi-Hang
+      Matthai Philipose, Arvind Krishnamurthy, and Ravi Sundaram. Nexus:                   Jiang, Francis EH Tay, Jiashi Feng, and Shuicheng Yan. Tokens-to-
+      A gpu cluster engine for accelerating dnn-based video analysis. In Pro-              token vit: Training vision transformers from scratch on imagenet.
+      ceedings of the 27th ACM Symposium on Operating Systems Principles,                  In Proceedings of the IEEE/CVF international conference on computer
+      pages 322–337, 2019.                                                                 vision, pages 558–567, 2021.
+ [82] Purab Ranjan Sutradhar, Sathwika Bavikadi, Mark Connolly, Savanku-              [96] Dongping Zhang, Nuwan Jayasena, Alexander Lyashevsky, Joseph L
+      mar Prajapati, Mark A Indovina, Sai Manoj Pudukotai Dinakarrao,                      Greathouse, Lifan Xu, and Michael Ignatowski. Top-pim: Throughput-
+      and Amlan Ganguly. Look-up-table based processing-in-memory                          oriented programmable processing in memory. In Proceedings of
+      architecture with programmable precision-scaling for deep learning                   the 23rd international symposium on High-performance parallel and
+      applications. IEEE Transactions on Parallel and Distributed Systems,                 distributed computing, pages 85–98, 2014.
+      33(2):263–275, 2021.                                                            [97] Mingxing Zhang, Youwei Zhuo, Chao Wang, Mingyu Gao, Yongwei
+ [83] Purab Ranjan Sutradhar, Mark Connolly, Sathwika Bavikadi, Sai                        Wu, Kang Chen, Christos Kozyrakis, and Xuehai Qian. Graphp: Re-
+      Manoj Pudukotai Dinakarrao, Mark A Indovina, and Amlan Gan-                          ducing communication for pim-based graph processing with efficient
+      guly. ppim: A programmable processor-in-memory architecture with                     data partition. In 2018 IEEE International Symposium on High Perfor-
+      precision-scaling for deep learning. IEEE Computer Architecture Let-                 mance Computer Architecture (HPCA), pages 544–557. IEEE, 2018.
+      ters, 19(2):118–121, 2020.                                                      [98] Mingxing Zhang, Youwei Zhuo, Chao Wang, Mingyu Gao, Yongwei
+ [84] Xiaohu Tang, Yang Wang, Ting Cao, Li Lyna Zhang, Qi Chen, Deng                       Wu, Kang Chen, Christos Kozyrakis, and Xuehai Qian. Graphp: Re-
+      Cai, Yunxin Liu, and Mao Yang. Lut-nn: Empower efficient neural                      ducing communication for pim-based graph processing with efficient
+      network inference with centroid learning and table lookup. In ACM
+
+
+
+
+                                                                                895
+ASPLOS ’24, April 27-May 1, 2024, La Jolla, CA, USA               Cong Li, Zhe Zhou, Yang Wang, Fan Yang, Ting Cao, Mao Yang, Yun Liang, Guangyu Sun
+
+
+      data partition. In 2018 IEEE International Symposium on High Perfor-                 54–68, 2022.
+      mance Computer Architecture (HPCA), pages 544–557. IEEE, 2018.                 [102] Zhe Zhou, Cong Li, Fan Yang, and Guangyu Sun. Dimm-link: Enabling
+ [99] Susan Zhang, Stephen Roller, Naman Goyal, Mikel Artetxe, Moya                        efficient inter-dimm communication for near-memory processing. In
+      Chen, Shuohui Chen, Christopher Dewan, Mona Diab, Xian Li, Xi Vic-                   2023 IEEE International Symposium on High-Performance Computer
+      toria Lin, et al. Opt: Open pre-trained transformer language models.                 Architecture (HPCA), pages 302–316, 2023.
+      arXiv preprint arXiv:2205.01068, 2022.                                         [103] Zhe Zhou, Xuechao Wei, Jiejing Zhang, and Guangyu Sun. PetS: A
+[100] Ranyang Zhou, Arman Roohi, Durga Misra, and Shaahin Angizi.                          unified framework for Parameter-Efficient transformers serving. In
+      Red-lut: Reconfigurable in-dram luts enabling massive parallel com-                  2022 USENIX Annual Technical Conference (USENIX ATC 22), pages
+      putation. In Proceedings of the 41st IEEE/ACM International Conference               489–504, Carlsbad, CA, July 2022. USENIX Association.
+      on Computer-Aided Design, pages 1–8, 2022.                                     [104] Youwei Zhuo, Chao Wang, Mingxing Zhang, Rui Wang, Dimin Niu,
+[101] Zhe Zhou, Cong Li, Xuechao Wei, Xiaoyang Wang, and Guangyu Sun.                      Yanzhi Wang, and Xuehai Qian. Graphq: Scalable pim-based graph
+      Gnnear: Accelerating full-batch training of graph neural networks                    processing. In Proceedings of the 52nd Annual IEEE/ACM International
+      with near-memory processing. In Proceedings of the International                     Symposium on Microarchitecture, pages 712–725, 2019.
+      Conference on Parallel Architectures and Compilation Techniques, pages
+
+
+
+
+                                                                               896
+

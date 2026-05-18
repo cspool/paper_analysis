@@ -13,7 +13,7 @@ from datetime import datetime
 
 ROOT = Path("/data3/paper_analysis").resolve()
 
-TITLE_FILE = ROOT / "papers" / "paper_selected_titles.md"
+TITLE_FILE = ROOT / "papers" / "paper_titles_2025.md"
 
 LOG_DIR = ROOT / "outputs" / "logs"
 STATUS_DIR = ROOT / "outputs" / "status"
@@ -26,6 +26,12 @@ STOP_ON_FAILURE = False
 #   某篇论文失败后停止，不继续下一篇。
 # False:
 #   某篇论文失败后记录状态，继续下一篇。
+
+# 路径参数 —— 传递给 paper-experiment-idea 和 paper-knowledge skill
+PAPER_DIR = ROOT / "papers" / "paper_2025"
+EXPERIMENT_DIR = ROOT / "repo_2025" / "experiment_repo"
+IDEA_DIR = ROOT / "repo_2025" / "idea_repo"
+KNOWLEDGE_DIR = ROOT / "repo_2025" / "knowledge_repo"
 
 MODEL_NAME = None
 # 如果你的 deepseekv4pro 已经在 Claude Code 环境中配置好，这里保持 None。
@@ -302,22 +308,29 @@ def make_prompt(index, total, title):
 论文标题：
 {title}
 
+路径参数（调用 skill 时必须传入）：
+
+- paper_dir: {PAPER_DIR}
+- experiment_dir: {EXPERIMENT_DIR}
+- idea_dir: {IDEA_DIR}
+- knowledge_dir: {KNOWLEDGE_DIR}
+
 请在当前这一个 Claude Code context 中，严格按顺序执行下面两个 skill：
 
 第一步：
-/paper-experiment-idea "{title}"
+调用 paper-experiment-idea skill，传入以下参数：paper_dir={PAPER_DIR}、experiment_dir={EXPERIMENT_DIR}、idea_dir={IDEA_DIR}，论文标题为 "{title}"
 
 第二步：
-/paper-knowledge "{title}"
+调用 paper-knowledge skill，传入以下参数：paper_dir={PAPER_DIR}、knowledge_dir={KNOWLEDGE_DIR}，论文标题为 "{title}"
 
 硬性要求：
 1. 每篇论文只使用这一个 context。
-2. 必须先完整执行 /paper-experiment-idea。
-3. 等 /paper-experiment-idea 完成后，才执行 /paper-knowledge。
+2. 必须先完整执行 paper-experiment-idea。
+3. 等 paper-experiment-idea 完成后，才执行 paper-knowledge。
 4. 不要并行执行两个 skill。
 5. 不要为两个 skill 额外指定输出格式、输出文件、分析维度或额外约束。
 6. 两个 skill 的输出规则已经在 skill 内部定义，严格遵守 skill 自身要求即可。
-7. 当前 prompt 只负责指定论文标题、调用顺序和状态记录。
+7. 当前 prompt 只负责指定论文标题、调用顺序、路径参数和状态记录。
 8. 不要读取或引用其他论文的分析结果。
 9. 如果第一步失败，不要继续第二步。
 10. 最后请只在终端输出一个状态块，用于调度器记录执行状态。
