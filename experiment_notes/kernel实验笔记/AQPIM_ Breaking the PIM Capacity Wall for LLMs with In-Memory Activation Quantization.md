@@ -1,0 +1,14 @@
+## AQPIM: Breaking the PIM Capacity Wall for LLMs with In-Memory Activation Quantization
+
+- 属于kernel调度/运行时计算的实现是什么？实验比较什么？
+  提出PQ-based attention kernel，在HBM-PIM上实现从GEMV到lookup+summation的运行时计算调度。核心kernel调度设计：(1) PQ-based attention kernel：将传统qK^T GEMV操作分解为query subvector splitting→BankPE query×codebook ATNK (inner product matrix计算)→BufferPE index lookup+softmax (SFM)→BankPE ATNV (attention reconstruction)，避免explicit dequantization，仅使用现有FP16 MAC units；(2) BankPE/BufferPE双PE runtime调度：BankPE（近bank, 高带宽, 面积受限）执行non-data-intensive操作 DC/ATNK/ATNV (ADD/MUL/SUM units)，BufferPE（buffer die, 低带宽, 面积充裕）执行data-intensive操作 CA/SFM (MIN/DIV/EXP units)，减少跨bank数据传输；(3) Intra-row indirection kernel：通过GRF中存储的lookup indices重定向到column decoder，直接从row buffer stream相应inner product values到BufferPE或GRF，单次row activation完成所有lookup；(4) Page-aware windowed clustering的kernel优化：限制每个window内512 centroids=512 inner product values，保证完整fit在1KB HBM row buffer (FP16)，每个window仅1次DRAM row activation即可完成所有indirect lookup；(5) Sequence-by-sequence pipelining：GPU生成每sequence的qkv并立即offload给PIM后继续处理下一sequence，隐藏GPU-PIM sequential processing的idling；(6) Head-wise + subvector-wise data mapping：每attention head映射到独立HBM stack（无跨HBM传输），每subvector映射到独立bank（无跨bank传输）。实验比较decoding per-step latency（图12），对比GPU baseline/AttAcc!/PQCache/SKVQ/SnapKV在4个sequence lengths (4096/8192/16384/32768)下的性能。AQPIM在S_len=32768达到最高8.33× speedup vs GPU baseline。
+
+- 后端平台是什么，配置是什么。
+  HBM-PIM架构：基于HBM3集成的PIM，3D-stacked DRAM dies通过TSV互联。BankPE位于DRAM bank旁（1KB row buffer per bank，高内部带宽，面积受限），BufferPE位于HBM buffer die（低带宽但面积充裕）。H100 GPU作为host processor。配置：1×H100 GPU core + 5×16GB HBM（GPU+HBMs），PIM系统将4×16GB HBM替换为4×16GB HBM-PIM用于KV cache存储，剩余HBM存储model parameters。
+
+- 评估性能的软件/脚本是什么。修改了什么。
+  构建customized GPU-PIM simulator，基于AttAcc! simulator ([55] https://github.com/scale-attacc-kr/attacc-sim) 和Ramulator2 ([20] https://github.com/CMU-SAFARI/ramulator2) 修改。输入：system configuration, model details, input configurations；输出：execution time和energy consumption。Timing和energy consumption基于AttAcc!的synthesis results。Added intra-row indirection logic area: 0.0565mm² per HBM (仅0.43% of BankPE area of HBM3 implementing AttAcc!)。PIM commands (PIM_SET_CONFIG/PIM_MAC_AB/PIM_SFM/PIM_RET/PIM_MV_BA/PIM_MV_BF/PIM_RD/PIM_WR/PIM_ACT_AB)通过标准HBM command path发出。
+
+- 开源情况。评估软件/脚本如何使用？基于开源文档和论文，使用例子解释。
+  AQPIM代码未直接开源。构建的simulator基于开源Ramulator2和AttAcc! simulator。使用例子：simulator接受system configuration (H100 GPU specs, HBM-PIM bank组织, BankPE/BufferPE microarchitecture参数)、model details (Mistral-7B layer数/head数/hidden dim/FFN dim)、input configurations (batch_size=16, input_length 4096-32768, output_length 128-1024)，输出timing breakdown (d_pq/d_attn/d_fc/d_comm/d_etc)和energy breakdown per decoding step。PE area/energy no new synthesis, reuse AttAcc! results; intra-row indirection synthesized with same PDK [9] as AttAcc! scaled to DRAM die density。
+

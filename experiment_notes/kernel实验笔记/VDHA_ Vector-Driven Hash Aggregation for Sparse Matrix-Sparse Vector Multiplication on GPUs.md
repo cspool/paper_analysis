@@ -1,0 +1,17 @@
+## VDHA: Vector-Driven Hash Aggregation for Sparse Matrix-Sparse Vector Multiplication on GPUs
+
+- 属于kernel调度/运行时计算的实现是什么？实验比较什么？
+  提出VDHA（Vector-Driven Hash Aggregation），面向GPU的weighted SpMSpV kernel，核心设计：(1) Shared-memory hash aggregation：每个CTA维护私有shared-memory hash table（2048-entry，4B key+4B value），将partial product (row_idx, mat_val⊗vec_val)插入hash table做local accumulation。使用modulo hash (idx%table_size) + linear probing with fixed stride（(h+C)%table_size）降低冲突，probe次数超过FALLBACK_ITER阈值后fallback到global atomicAdd。(2) Short/long-column decomposition with reordering：按列长LEN_THRES=128分为short/long column，long column按SPLIT_SIZE=256切分为segment→按segment首非零row index排序（metadata排序非数据排序，O(S log S) cost）增强跨列locality→short column直接block-mapped。(3) Fetch-compute-writeback pipeline：将传统fetch→writeback两阶段重构为三阶段pipeline，使用double buffering通过cp.async异步fetch下一tile的同时对当前tile做hash aggregation，重叠hash计算与global memory访问延时，hash computation cost从16.7%降至12.3%，stall ratio从>45%降至~15%。(4) 轻量级预测模型：基于matrix structural features (num_rows, num_nnzs, bandwidth index B, variance index V, vector sparsity)训练decision tree classifier判断VDHA是否有利，91.3% accuracy（F1 score），结合fallback到BlockAtomic或best-of-7可将SuiteSparse geomean speedup从1.13×提升至1.16×（fallback atomic）或1.22×（best-of-7）。实验比较：在Konect/LAW (>100 web graphs) 和 SuiteSparse (>200 scientific matrices，均≥5M NNZ)上，对比7个baseline（cuSPARSE row-major SpMV、NaiveSpMSpV/HolaSpMSpV row-major SpMSpV with value validation、BlockSort/GlobalSort/BlockAtomic/GlobalAtomic column-major SpMSpV），4个vector sparsity (0.01/0.05/0.10/0.20)。VDHA实现Konect/LAW geomean 1.41× speedup (max 3.42×), SuiteSparse geomean 1.13× speedup (max 2.55×)。消融实验：hash only=0.689×, hash+split=0.947×, hash+split+reorder=1.000× normalized performance。
+
+- 后端平台是什么，配置是什么。
+  NVIDIA A100 GPU (40GB HBM2e memory, peak bandwidth 1555 GB/s, SM80)，AMD EPYC 7742 CPU。编译：CUDA nvcc 12.5，-O3优化。
+
+- 评估性能的软件/脚本是什么。修改了什么。
+  自研CUDA kernel实现VDHA。baseline包括：cuSPARSE (row-major SpMV)、NaiveSpMSpV和HolaSpMSpV（基于NaiveSpMV[30]和HolaSpMV[31]开源代码添加bitmask value-validation实现row-major SpMSpV）、BlockSort/GlobalSort/BlockAtomic/GlobalAtomic（基于Adaptive SpMSpV[20]实现4种column-major kernel：BlockSort/GlobalSort采用sort-reduce避免atomics、BlockAtomic/GlobalAtomic采用atomic write-back、Block级按列分组/Global级按nonzero均匀分配）。所有kernel在同一软件和硬件环境下执行保证公平性。使用efficient performance metric（efficient NNZ/runtime，efficient NNZ=matrix NNZ×vector sparsity）评估性能。NVIDIA Nsight Compute用于profiling warp stall cycles和memory throughput。
+
+- 开源情况。评估软件/脚本如何使用？基于开源文档和论文，使用例子解释。
+  开源：论文未明确提供开源链接（PPoPP'26发表，可能pending release）。kernel使用流程：
+  1. 预处理阶段：矩阵以CSC格式存储→Vector Processing扫描input vector识别active columns→按LEN_THRES=128分类short/long columns→long columns按SPLIT_SIZE=256切分为segments→segments按首非零row index排序增强locality→所有segments block-mapped分配CTAs
+  2. Launch CUDA kernel：每个CTA含256 threads（8 warps），维护2048-entry shared-memory hash table（16KB），使用double buffering。Fetch stage通过cp.async异步加载当前segment indices/values到shared memory buffer→Compute stage执行hash aggregation：modulo hash计算起始位置→atomicCAS+linear probing插入(key,val)→更新hash table value→超过FALLBACK_ITER阈值的更新fallback到global atomicAdd→Writeback stage：hash table接近满时按bucket order flush到global memory（coalesced writes）
+  3. 以it-2004 matrix（41.2M rows, 1.15B NNZ, vector sparsity=0.1, A100）为例：Vector Processing识别active columns→long columns (>128 NNZ)切分为256-NNZ segments→segments按首row index重排序→每个CTA处理一个segment在shared memory hash table局部聚合→flush时hash table bucket order提供partial order减少global atomic conflicts→fetch-compute-writeback pipeline重叠memory access与hash computation
+
