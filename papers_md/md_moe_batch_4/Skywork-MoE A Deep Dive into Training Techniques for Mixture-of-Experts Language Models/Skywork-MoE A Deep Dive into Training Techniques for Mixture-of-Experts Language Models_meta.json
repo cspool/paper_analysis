@@ -1,0 +1,1271 @@
+{
+  "table_of_contents": [
+    {
+      "title": "Skywork-MoE: A Deep Dive into Training Techniques for\nMixture-of-Experts Language Models",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          98.9453125,
+          76.8818359375
+        ],
+        [
+          496.0698547363281,
+          76.8818359375
+        ],
+        [
+          496.0698547363281,
+          107.952392578125
+        ],
+        [
+          98.9453125,
+          107.952392578125
+        ]
+      ]
+    },
+    {
+      "title": "Abstract",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          153.65625,
+          214.2001953125
+        ],
+        [
+          205.64059448242188,
+          214.2001953125
+        ],
+        [
+          205.64059448242188,
+          226.2916259765625
+        ],
+        [
+          153.65625,
+          226.2916259765625
+        ]
+      ]
+    },
+    {
+      "title": "1 Introduction",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          70.42578125,
+          573.0174560546875
+        ],
+        [
+          164.94146728515625,
+          573.0174560546875
+        ],
+        [
+          164.94146728515625,
+          584.97265625
+        ],
+        [
+          70.42578125,
+          584.97265625
+        ]
+      ]
+    },
+    {
+      "title": "2 Preliminaries",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          69.84375,
+          150.0634765625
+        ],
+        [
+          168.89168765743074,
+          149.9554764024933
+        ],
+        [
+          168.89168765743074,
+          160.45235975066785
+        ],
+        [
+          69.84375,
+          161.20213713268032
+        ]
+      ]
+    },
+    {
+      "title": "2.1 MoE for Transformers",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          69.80856423173803,
+          247.501953125
+        ],
+        [
+          220.6851385390428,
+          247.501953125
+        ],
+        [
+          220.6851385390428,
+          258.67319679430096
+        ],
+        [
+          69.80856423173803,
+          258.67319679430096
+        ]
+      ]
+    },
+    {
+      "title": "2.2 Auxiliary Loss",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          304.40234375,
+          224.8896484375
+        ],
+        [
+          413.5969773299748,
+          224.8896484375
+        ],
+        [
+          413.5969773299748,
+          235.5791015625
+        ],
+        [
+          304.40234375,
+          235.5791015625
+        ]
+      ]
+    },
+    {
+      "title": "3 Upcycling vs. From Scratch",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          70.42578125,
+          184.5986328125
+        ],
+        [
+          255.51171875,
+          184.5986328125
+        ],
+        [
+          255.51171875,
+          196.878662109375
+        ],
+        [
+          70.42578125,
+          196.878662109375
+        ]
+      ]
+    },
+    {
+      "title": "3.1 Costs and Budgets",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          68.970703125,
+          323.82196044921875
+        ],
+        [
+          201.6988067626953,
+          323.82196044921875
+        ],
+        [
+          201.6988067626953,
+          334.7310485839844
+        ],
+        [
+          68.970703125,
+          334.7310485839844
+        ]
+      ]
+    },
+    {
+      "title": "3.2 Experiment Results",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          306.14202880859375,
+          136.69091796875
+        ],
+        [
+          443.216796875,
+          136.69091796875
+        ],
+        [
+          443.216796875,
+          147.60003662109375
+        ],
+        [
+          306.14202880859375,
+          147.60003662109375
+        ]
+      ]
+    },
+    {
+      "title": "3.3 Rules of Thumb for Upcycling",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          69.84375,
+          659.8040961709706
+        ],
+        [
+          265.7229219143577,
+          659.8040961709706
+        ],
+        [
+          265.7229219143577,
+          670.3009795191451
+        ],
+        [
+          69.84375,
+          670.3009795191451
+        ]
+      ]
+    },
+    {
+      "title": "4 Training Techniques",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          69.84375,
+          244.6240234375
+        ],
+        [
+          209.43873596191406,
+          244.6240234375
+        ],
+        [
+          209.43873596191406,
+          256.71466064453125
+        ],
+        [
+          69.84375,
+          256.71466064453125
+        ]
+      ]
+    },
+    {
+      "title": "4.1 Gating Logit Normalization",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          69.84375,
+          267.6474609375
+        ],
+        [
+          250.51707458496094,
+          267.6474609375
+        ],
+        [
+          250.51707458496094,
+          278.97808837890625
+        ],
+        [
+          69.84375,
+          278.97808837890625
+        ]
+      ]
+    },
+    {
+      "title": "4.2 Adaptive Auxiliary Loss\nCoefficients",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          69.84375,
+          165.275390625
+        ],
+        [
+          231.94458438287154,
+          165.275390625
+        ],
+        [
+          231.94458438287154,
+          188.94390026714157
+        ],
+        [
+          69.84375,
+          188.94390026714157
+        ]
+      ]
+    },
+    {
+      "title": "5 Skywork-MoE",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          304.693359375,
+          698.7925200356188
+        ],
+        [
+          410.5944584382871,
+          698.7925200356188
+        ],
+        [
+          410.5944584382871,
+          710.0391807658059
+        ],
+        [
+          304.693359375,
+          710.0391807658059
+        ]
+      ]
+    },
+    {
+      "title": "6 Conclusion",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          304.7556675062972,
+          494.10329474621545
+        ],
+        [
+          391.8287153652393,
+          494.10329474621545
+        ],
+        [
+          391.8287153652393,
+          504.60017809439
+        ],
+        [
+          304.7556675062972,
+          504.60017809439
+        ]
+      ]
+    },
+    {
+      "title": "References",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          70.134765625,
+          72.359375
+        ],
+        [
+          133.72645568847656,
+          72.359375
+        ],
+        [
+          133.72645568847656,
+          84.55865478515625
+        ],
+        [
+          70.134765625,
+          84.55865478515625
+        ]
+      ]
+    },
+    {
+      "title": "A Skywork-MoE Architecture",
+      "heading_level": null,
+      "page_id": 9,
+      "polygon": [
+        [
+          304.984375,
+          629.3684539794922
+        ],
+        [
+          491.2922058105469,
+          629.3684539794922
+        ],
+        [
+          491.2922058105469,
+          641.3236541748047
+        ],
+        [
+          304.984375,
+          641.3236541748047
+        ]
+      ]
+    },
+    {
+      "title": "B Infrastructure",
+      "heading_level": null,
+      "page_id": 10,
+      "polygon": [
+        [
+          70.716796875,
+          285.11846923828125
+        ],
+        [
+          176.17933654785156,
+          285.11846923828125
+        ],
+        [
+          176.17933654785156,
+          297.07366943359375
+        ],
+        [
+          70.716796875,
+          297.07366943359375
+        ]
+      ]
+    },
+    {
+      "title": "B.1 Expert Data Parallel (EDP)",
+      "heading_level": null,
+      "page_id": 10,
+      "polygon": [
+        [
+          70.42578125,
+          422.64453125
+        ],
+        [
+          255.81887817382812,
+          422.64453125
+        ],
+        [
+          255.81887817382812,
+          433.5860900878906
+        ],
+        [
+          70.42578125,
+          433.5860900878906
+        ]
+      ]
+    },
+    {
+      "title": "B.2 Unbalanced Pipeline Parallellism",
+      "heading_level": null,
+      "page_id": 10,
+      "polygon": [
+        [
+          306.14202880859375,
+          487.8779602050781
+        ],
+        [
+          517.2222290039062,
+          487.8779602050781
+        ],
+        [
+          517.2222290039062,
+          498.78704833984375
+        ],
+        [
+          306.14202880859375,
+          498.78704833984375
+        ]
+      ]
+    },
+    {
+      "title": "B.3 Training Efficiency",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          70.134765625,
+          315.0889892578125
+        ],
+        [
+          204.0333709716797,
+          315.0889892578125
+        ],
+        [
+          204.0333709716797,
+          326.0283203125
+        ],
+        [
+          70.134765625,
+          326.0283203125
+        ]
+      ]
+    },
+    {
+      "title": "C Negative Results",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          70.716796875,
+          600.6650390625
+        ],
+        [
+          193.525390625,
+          600.6650390625
+        ],
+        [
+          193.525390625,
+          612.6246795654297
+        ],
+        [
+          70.716796875,
+          612.6246795654297
+        ]
+      ]
+    },
+    {
+      "title": "C.1 Scaling Expert Learning Rate",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          70.42578125,
+          622.7950134277344
+        ],
+        [
+          264.82421875,
+          622.7950134277344
+        ],
+        [
+          264.82421875,
+          633.7041015625
+        ],
+        [
+          70.42578125,
+          633.7041015625
+        ]
+      ]
+    },
+    {
+      "title": "C.2 Expert Specialization Training for Upcycling",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          304.7556675062972,
+          309.5830078125
+        ],
+        [
+          523.9395465994962,
+          309.5830078125
+        ],
+        [
+          523.9395465994962,
+          335.0732421875
+        ],
+        [
+          304.7556675062972,
+          335.0732421875
+        ]
+      ]
+    }
+  ],
+  "page_stats": [
+    {
+      "page_id": 0,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          227
+        ],
+        [
+          "Line",
+          91
+        ],
+        [
+          "Text",
+          6
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 1,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          115
+        ],
+        [
+          "Span",
+          95
+        ],
+        [
+          "Text",
+          14
+        ],
+        [
+          "Equation",
+          5
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Reference",
+          3
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 2,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          234
+        ],
+        [
+          "Line",
+          95
+        ],
+        [
+          "Text",
+          10
+        ],
+        [
+          "ListItem",
+          5
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "ListGroup",
+          2
+        ],
+        [
+          "Equation",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 3,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          136
+        ],
+        [
+          "Span",
+          64
+        ],
+        [
+          "Text",
+          5
+        ],
+        [
+          "ListItem",
+          2
+        ],
+        [
+          "Reference",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 4,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          356
+        ],
+        [
+          "Line",
+          103
+        ],
+        [
+          "Text",
+          6
+        ],
+        [
+          "ListItem",
+          2
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "Equation",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 5,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          110
+        ],
+        [
+          "Span",
+          69
+        ],
+        [
+          "Text",
+          12
+        ],
+        [
+          "Equation",
+          4
+        ],
+        [
+          "ListItem",
+          3
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 6,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          235
+        ],
+        [
+          "Line",
+          75
+        ],
+        [
+          "Text",
+          6
+        ],
+        [
+          "Reference",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 7,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "TableCell",
+          108
+        ],
+        [
+          "Line",
+          93
+        ],
+        [
+          "Span",
+          25
+        ],
+        [
+          "Text",
+          3
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "TableGroup",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 8,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          241
+        ],
+        [
+          "Line",
+          113
+        ],
+        [
+          "ListItem",
+          18
+        ],
+        [
+          "Reference",
+          18
+        ],
+        [
+          "ListGroup",
+          2
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 9,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          251
+        ],
+        [
+          "Line",
+          103
+        ],
+        [
+          "Text",
+          22
+        ],
+        [
+          "Reference",
+          21
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 10,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          296
+        ],
+        [
+          "Line",
+          83
+        ],
+        [
+          "TableCell",
+          22
+        ],
+        [
+          "Text",
+          4
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "ListItem",
+          2
+        ],
+        [
+          "Reference",
+          2
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "TableGroup",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 11,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          207
+        ],
+        [
+          "Line",
+          73
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "ListItem",
+          3
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 12,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          120
+        ],
+        [
+          "Span",
+          53
+        ],
+        [
+          "Text",
+          5
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "FigureGroup",
+          2
+        ],
+        [
+          "Reference",
+          2
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 13,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          97
+        ],
+        [
+          "Line",
+          24
+        ],
+        [
+          "Text",
+          2
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    }
+  ],
+  "debug_data_path": "debug_data/Skywork-MoE A Deep Dive into Training Techniques for Mixture-of-Experts Language Models"
+}

@@ -1,0 +1,1382 @@
+{
+  "table_of_contents": [
+    {
+      "title": "NACL: A General and Effective KV Cache Eviction Framework for LLMs at Inference Time",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          69.80856423173803,
+          69.4814453125
+        ],
+        [
+          526.191435768262,
+          69.4814453125
+        ],
+        [
+          526.191435768262,
+          97.47105966162066
+        ],
+        [
+          69.80856423173803,
+          97.47105966162066
+        ]
+      ]
+    },
+    {
+      "title": "Abstract",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          156.13098236775818,
+          212.5556640625
+        ],
+        [
+          203.42065491183877,
+          212.5556640625
+        ],
+        [
+          203.42065491183877,
+          223.43365983971503
+        ],
+        [
+          156.857421875,
+          224.1834372217275
+        ]
+      ]
+    },
+    {
+      "title": "1 Introduction",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          69.80856423173803,
+          656.5791015625
+        ],
+        [
+          154.62972292191435,
+          656.5791015625
+        ],
+        [
+          154.62972292191435,
+          666.5520926090828
+        ],
+        [
+          69.80856423173803,
+          666.5520926090828
+        ]
+      ]
+    },
+    {
+      "title": "2 Related Work",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          304.693359375,
+          426.03814697265625
+        ],
+        [
+          395.232177734375,
+          426.03814697265625
+        ],
+        [
+          395.232177734375,
+          437.99334716796875
+        ],
+        [
+          304.693359375,
+          437.99334716796875
+        ]
+      ]
+    },
+    {
+      "title": "ence bottleneck caused by KV cache, particularly\nfor long content input. A series of methods (Zhang\net al., 2023; Ge et al., 2023; Liu et al., 2023c; Oren\net al., 2024) explored the sparsity among Trans-\nformer's attention block, then evicted unnecessary\ntokens from KV Cache for efficient inference. For\ninstance, H2O (Zhang et al., 2023) retained a bal-\nance of recent and heavy hitter tokens with the\nhighest accumulated attention scores throughout\nthe sequence. Scissorhands (Liu et al., 2023c) se-\nquentially predicted the potentially pivotal tokens\nwith the attention score above average within a his-\ntory window. Some method (Ge et al., 2023) further\napplied costly eviction policy selection for better",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          305.7490234375,
+          477.2491149902344
+        ],
+        [
+          526.73828125,
+          477.2491149902344
+        ],
+        [
+          526.73828125,
+          664.4584808349609
+        ],
+        [
+          305.7490234375,
+          664.4584808349609
+        ]
+      ]
+    },
+    {
+      "title": "3 Problem Formulation",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          70.716796875,
+          630.2666015625
+        ],
+        [
+          200.4181360201511,
+          630.2666015625
+        ],
+        [
+          200.4181360201511,
+          641.059661620659
+        ],
+        [
+          70.716796875,
+          641.059661620659
+        ]
+      ]
+    },
+    {
+      "title": "4 Observation",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          70.134765625,
+          232.2900390625
+        ],
+        [
+          152.3778337531486,
+          232.2900390625
+        ],
+        [
+          152.3778337531486,
+          242.1780943900267
+        ],
+        [
+          70.134765625,
+          242.1780943900267
+        ]
+      ]
+    },
+    {
+      "title": "Rethinking Attention Scores to Retain Pivotal",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          69.05793450881612,
+          544.7509765625
+        ],
+        [
+          290.4937027707808,
+          544.7509765625
+        ],
+        [
+          290.4937027707808,
+          555.5850400712377
+        ],
+        [
+          69.05793450881612,
+          555.5850400712377
+        ]
+      ]
+    },
+    {
+      "title": "5 NACL",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          302.365234375,
+          270.525390625
+        ],
+        [
+          357.2997481108312,
+          270.525390625
+        ],
+        [
+          357.2997481108312,
+          281.16651825467494
+        ],
+        [
+          302.365234375,
+          281.16651825467494
+        ]
+      ]
+    },
+    {
+      "title": "5.1 Eviction based on Proxy Tokens",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          303.8203125,
+          356.86328125
+        ],
+        [
+          480.40302267002517,
+          356.86328125
+        ],
+        [
+          480.40302267002517,
+          366.73046875
+        ],
+        [
+          303.8203125,
+          366.73046875
+        ]
+      ]
+    },
+    {
+      "title": "5.2 Eviction based on Random Possibility Sampling",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          69.26171875,
+          609.298828125
+        ],
+        [
+          271.727959697733,
+          609.298828125
+        ],
+        [
+          271.727959697733,
+          633.966796875
+        ],
+        [
+          69.26171875,
+          633.966796875
+        ]
+      ]
+    },
+    {
+      "title": "6 Experiments",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          304.7556675062972,
+          669.5512021371327
+        ],
+        [
+          390.32745591939545,
+          669.5512021371327
+        ],
+        [
+          390.32745591939545,
+          680.0480854853072
+        ],
+        [
+          304.7556675062972,
+          680.0480854853072
+        ]
+      ]
+    },
+    {
+      "title": "6.1 Setup",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          304.7556675062972,
+          691.2947462154942
+        ],
+        [
+          358.05037783375315,
+          691.2947462154942
+        ],
+        [
+          358.05037783375315,
+          701.8037109375
+        ],
+        [
+          304.7556675062972,
+          701.8037109375
+        ]
+      ]
+    },
+    {
+      "title": "Algorithm 1 NACL Algorithm",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          68.970703125,
+          283.4158504007124
+        ],
+        [
+          207.17380352644835,
+          283.4158504007124
+        ],
+        [
+          207.17380352644835,
+          294.7822265625
+        ],
+        [
+          68.970703125,
+          294.7822265625
+        ]
+      ]
+    },
+    {
+      "title": "6.2 Result",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          69.05793450881612,
+          263.9216384683882
+        ],
+        [
+          126.1057934508816,
+          263.9216384683882
+        ],
+        [
+          126.1057934508816,
+          272.9189670525378
+        ],
+        [
+          69.05793450881612,
+          272.9189670525378
+        ]
+      ]
+    },
+    {
+      "title": "6.3 Ablation Studies",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          304.7556675062972,
+          244.212890625
+        ],
+        [
+          409.0931989924433,
+          244.212890625
+        ],
+        [
+          409.0931989924433,
+          253.4247551202137
+        ],
+        [
+          304.7556675062972,
+          253.4247551202137
+        ]
+      ]
+    },
+    {
+      "title": "The Effect of Proxy-Tokens Eviction",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          303.23828125,
+          261.48046875
+        ],
+        [
+          526.191435768262,
+          261.48046875
+        ],
+        [
+          526.191435768262,
+          271.4194122885129
+        ],
+        [
+          303.23828125,
+          271.4194122885129
+        ]
+      ]
+    },
+    {
+      "title": "6.4 Analysis",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          304.7556675062972,
+          467.86108637577917
+        ],
+        [
+          371.5617128463476,
+          467.86108637577917
+        ],
+        [
+          371.5617128463476,
+          478.1474609375
+        ],
+        [
+          304.7556675062972,
+          478.1474609375
+        ]
+      ]
+    },
+    {
+      "title": "Interpretable Analysis of Eviction Results",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          304.7556675062972,
+          654.5556544968833
+        ],
+        [
+          526.9420654911838,
+          654.5556544968833
+        ],
+        [
+          526.9420654911838,
+          665.6240234375
+        ],
+        [
+          304.7556675062972,
+          665.6240234375
+        ]
+      ]
+    },
+    {
+      "title": "7 Conclusion",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          68.388671875,
+          254.080078125
+        ],
+        [
+          145.93270874023438,
+          254.080078125
+        ],
+        [
+          145.93270874023438,
+          266.4913330078125
+        ],
+        [
+          68.388671875,
+          266.4913330078125
+        ]
+      ]
+    },
+    {
+      "title": "Limitations",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          69.552734375,
+          544.7509765625
+        ],
+        [
+          129.98446655273438,
+          544.7509765625
+        ],
+        [
+          129.98446655273438,
+          556.8943481445312
+        ],
+        [
+          69.552734375,
+          556.8943481445312
+        ]
+      ]
+    },
+    {
+      "title": "Ethics Statement",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          306.1419982910156,
+          72.359375
+        ],
+        [
+          392.80523681640625,
+          72.359375
+        ],
+        [
+          392.80523681640625,
+          84.71441650390625
+        ],
+        [
+          306.1419982910156,
+          84.71441650390625
+        ]
+      ]
+    },
+    {
+      "title": "Acknowledgments",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          304.40234375,
+          367.2371826171875
+        ],
+        [
+          399.66754150390625,
+          367.2371826171875
+        ],
+        [
+          399.66754150390625,
+          379.1923828125
+        ],
+        [
+          304.40234375,
+          379.1923828125
+        ]
+      ]
+    },
+    {
+      "title": "References",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          305.275390625,
+          606.4531555175781
+        ],
+        [
+          361.6858825683594,
+          606.4531555175781
+        ],
+        [
+          361.6858825683594,
+          618.4083557128906
+        ],
+        [
+          305.275390625,
+          618.4083557128906
+        ]
+      ]
+    },
+    {
+      "title": "A Appendix",
+      "heading_level": null,
+      "page_id": 10,
+      "polygon": [
+        [
+          304.111328125,
+          270.525390625
+        ],
+        [
+          377.5667506297229,
+          270.525390625
+        ],
+        [
+          377.5667506297229,
+          282.037109375
+        ],
+        [
+          304.111328125,
+          282.037109375
+        ]
+      ]
+    },
+    {
+      "title": "A.1 Sparsity in Attention Cache",
+      "heading_level": null,
+      "page_id": 10,
+      "polygon": [
+        [
+          305.56640625,
+          290.6708984375
+        ],
+        [
+          463.13853904282115,
+          290.6708984375
+        ],
+        [
+          463.13853904282115,
+          302.16028495102404
+        ],
+        [
+          305.56640625,
+          302.16028495102404
+        ]
+      ]
+    },
+    {
+      "title": "A.2 Attention Score Function in Eviction",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          69.05793450881612,
+          617.1103515625
+        ],
+        [
+          269.4760705289672,
+          617.1103515625
+        ],
+        [
+          269.4760705289672,
+          629.0632235084595
+        ],
+        [
+          69.05793450881612,
+          629.0632235084595
+        ]
+      ]
+    },
+    {
+      "title": "A.3 The Influence of Proxy Token Locations on NACL's Proxy Eviction Strategy",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          304.40234375,
+          72.7705078125
+        ],
+        [
+          520.1863979848866,
+          72.7705078125
+        ],
+        [
+          520.1863979848866,
+          96.72128227960819
+        ],
+        [
+          304.40234375,
+          96.72128227960819
+        ]
+      ]
+    },
+    {
+      "title": "A.4 Why NACL ues Random Eviction?",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          303.23828125,
+          504.87109375
+        ],
+        [
+          496.1662468513854,
+          504.87109375
+        ],
+        [
+          496.1662468513854,
+          515.0970614425645
+        ],
+        [
+          303.23828125,
+          515.0970614425645
+        ]
+      ]
+    },
+    {
+      "title": "A.5 Algorithmic Complexity Analysis",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          70.42578125,
+          245.03515625
+        ],
+        [
+          253.18359375,
+          245.03515625
+        ],
+        [
+          253.18359375,
+          257.01806640625
+        ],
+        [
+          70.42578125,
+          257.01806640625
+        ]
+      ]
+    },
+    {
+      "title": "A.6 Hyperparameters",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          70.42578125,
+          586.1400756835938
+        ],
+        [
+          181.01171875,
+          586.1400756835938
+        ],
+        [
+          181.01171875,
+          597.0491638183594
+        ],
+        [
+          70.42578125,
+          597.0491638183594
+        ]
+      ]
+    },
+    {
+      "title": "A.7 Reduce Attention Scores with\nFlashAttention-2",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          69.84375,
+          653.2900390625
+        ],
+        [
+          235.4952392578125,
+          653.2900390625
+        ],
+        [
+          235.4952392578125,
+          679.3211517333984
+        ],
+        [
+          69.84375,
+          679.3211517333984
+        ]
+      ]
+    },
+    {
+      "title": "Algorithm 2 Reduce Attention Scores with FlashAttention-2",
+      "heading_level": null,
+      "page_id": 13,
+      "polygon": [
+        [
+          92.32745591939546,
+          404.1300089047195
+        ],
+        [
+          364.05541561712846,
+          404.1300089047195
+        ],
+        [
+          364.05541561712846,
+          416.126447016919
+        ],
+        [
+          92.32745591939546,
+          416.126447016919
+        ]
+      ]
+    }
+  ],
+  "page_stats": [
+    {
+      "page_id": 0,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          100
+        ],
+        [
+          "Span",
+          56
+        ],
+        [
+          "Text",
+          7
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Footnote",
+          2
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "Picture",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PictureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 1,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          362
+        ],
+        [
+          "Line",
+          101
+        ],
+        [
+          "Text",
+          11
+        ],
+        [
+          "SectionHeader",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 2,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          104
+        ],
+        [
+          "Span",
+          100
+        ],
+        [
+          "Text",
+          11
+        ],
+        [
+          "Equation",
+          2
+        ],
+        [
+          "SectionHeader",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 3,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          98
+        ],
+        [
+          "Span",
+          63
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "SectionHeader",
+          4
+        ],
+        [
+          "Reference",
+          3
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "Equation",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 4,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          90
+        ],
+        [
+          "Span",
+          46
+        ],
+        [
+          "Text",
+          9
+        ],
+        [
+          "Equation",
+          3
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 5,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Span",
+          128
+        ],
+        [
+          "Line",
+          110
+        ],
+        [
+          "TableCell",
+          77
+        ],
+        [
+          "ListItem",
+          4
+        ],
+        [
+          "Text",
+          3
+        ],
+        [
+          "Reference",
+          2
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "Code",
+          1
+        ],
+        [
+          "TableGroup",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 6,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          115
+        ],
+        [
+          "Span",
+          59
+        ],
+        [
+          "Text",
+          7
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 7,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "TableCell",
+          161
+        ],
+        [
+          "Line",
+          77
+        ],
+        [
+          "Span",
+          11
+        ],
+        [
+          "Text",
+          6
+        ],
+        [
+          "Caption",
+          3
+        ],
+        [
+          "Reference",
+          3
+        ],
+        [
+          "Table",
+          2
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "TableGroup",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 8,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          269
+        ],
+        [
+          "Line",
+          97
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "SectionHeader",
+          5
+        ],
+        [
+          "Reference",
+          3
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 9,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          268
+        ],
+        [
+          "Line",
+          106
+        ],
+        [
+          "ListItem",
+          25
+        ],
+        [
+          "Reference",
+          25
+        ],
+        [
+          "ListGroup",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 10,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          128
+        ],
+        [
+          "Span",
+          68
+        ],
+        [
+          "Text",
+          19
+        ],
+        [
+          "Reference",
+          15
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "Equation",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 11,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          144
+        ],
+        [
+          "Span",
+          40
+        ],
+        [
+          "Reference",
+          6
+        ],
+        [
+          "Figure",
+          5
+        ],
+        [
+          "Caption",
+          5
+        ],
+        [
+          "FigureGroup",
+          5
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Text",
+          3
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 12,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          213
+        ],
+        [
+          "Line",
+          69
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 13,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Span",
+          93
+        ],
+        [
+          "Line",
+          30
+        ],
+        [
+          "TableCell",
+          20
+        ],
+        [
+          "Reference",
+          2
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "Code",
+          1
+        ],
+        [
+          "TableGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    }
+  ],
+  "debug_data_path": "debug_data/NACL: A General and Effective KV Cache Eviction Framework for LLMs at Inference Time"
+}

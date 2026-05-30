@@ -1,0 +1,1835 @@
+{
+  "table_of_contents": [
+    {
+      "title": "Making MoE-based LLM Inference Resilient with TARRAGON",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          113.5546875,
+          114.4539794921875
+        ],
+        [
+          497.30743408203125,
+          114.4539794921875
+        ],
+        [
+          497.30743408203125,
+          128.8001708984375
+        ],
+        [
+          113.5546875,
+          128.8001708984375
+        ]
+      ]
+    },
+    {
+      "title": "Abstract",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          151.20703125,
+          252.52734375
+        ],
+        [
+          196.30331420898438,
+          252.52734375
+        ],
+        [
+          196.30331420898438,
+          264.74237060546875
+        ],
+        [
+          151.20703125,
+          264.74237060546875
+        ]
+      ]
+    },
+    {
+      "title": "1 Introduction",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          53.7890625,
+          613.7981414794922
+        ],
+        [
+          136.8136749267578,
+          613.7981414794922
+        ],
+        [
+          136.8136749267578,
+          625.7533416748047
+        ],
+        [
+          53.7890625,
+          625.7533416748047
+        ]
+      ]
+    },
+    {
+      "title": "Alternative: Decoupled attention and expert computation.",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          316.16015625,
+          664.3828125
+        ],
+        [
+          559.7880249023438,
+          664.3828125
+        ],
+        [
+          559.7880249023438,
+          678.3046875
+        ],
+        [
+          316.16015625,
+          678.3046875
+        ]
+      ]
+    },
+    {
+      "title": "Contributions. This paper makes the following contributions:",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          317.8799743652344,
+          489.71343994140625
+        ],
+        [
+          559.4415283203125,
+          489.71343994140625
+        ],
+        [
+          559.4415283203125,
+          499.6760559082031
+        ],
+        [
+          317.8799743652344,
+          499.6760559082031
+        ]
+      ]
+    },
+    {
+      "title": "2 Background and Motivation",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          53.19140625,
+          274.5
+        ],
+        [
+          216.0,
+          274.5
+        ],
+        [
+          216.0,
+          285.75
+        ],
+        [
+          53.19140625,
+          285.75
+        ]
+      ]
+    },
+    {
+      "title": "2.1 Basics of MoE Inference",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          52.5,
+          294.29296875
+        ],
+        [
+          206.25,
+          294.29296875
+        ],
+        [
+          206.25,
+          303.75
+        ],
+        [
+          52.5,
+          303.75
+        ]
+      ]
+    },
+    {
+      "title": "2.2 Anatomy of Coarse-Grained Failures",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          51.99609375,
+          327.55078125
+        ],
+        [
+          271.5,
+          327.55078125
+        ],
+        [
+          271.5,
+          337.60546875
+        ],
+        [
+          51.99609375,
+          337.60546875
+        ]
+      ]
+    },
+    {
+      "title": "2.2.1 Layer-wise synchronized execution",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          52.5,
+          421.5
+        ],
+        [
+          232.5,
+          421.5
+        ],
+        [
+          232.5,
+          431.19140625
+        ],
+        [
+          52.5,
+          431.19140625
+        ]
+      ]
+    },
+    {
+      "title": "2.2.2 Case studies and quantifying recovery overheads",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          316.5,
+          260.25
+        ],
+        [
+          555.75,
+          260.25
+        ],
+        [
+          555.75,
+          269.25
+        ],
+        [
+          316.5,
+          269.25
+        ]
+      ]
+    },
+    {
+      "title": "2.2.3 Takeaways",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          317.8799743652344,
+          372.7115173339844
+        ],
+        [
+          394.3529052734375,
+          372.7115173339844
+        ],
+        [
+          394.3529052734375,
+          382.6741027832031
+        ],
+        [
+          317.8799743652344,
+          382.6741027832031
+        ]
+      ]
+    },
+    {
+      "title": "3 Overview of TARRAGON",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          316.16015625,
+          616.7801513671875
+        ],
+        [
+          460.9762268066406,
+          616.7801513671875
+        ],
+        [
+          460.9762268066406,
+          628.7353515625
+        ],
+        [
+          316.16015625,
+          628.7353515625
+        ]
+      ]
+    },
+    {
+      "title": "3.1 High-level Approach",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          315.861328125,
+          635.3701477050781
+        ],
+        [
+          450.5707702636719,
+          635.3701477050781
+        ],
+        [
+          450.5707702636719,
+          647.3253479003906
+        ],
+        [
+          315.861328125,
+          647.3253479003906
+        ]
+      ]
+    },
+    {
+      "title": "3.2 TARRAGON Architecture",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          52.5,
+          636.15234375
+        ],
+        [
+          210.0,
+          636.15234375
+        ],
+        [
+          210.0,
+          647.25
+        ],
+        [
+          52.5,
+          647.25
+        ]
+      ]
+    },
+    {
+      "title": "3.3 Failure Model",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          316.458984375,
+          293.90625
+        ],
+        [
+          417.75,
+          293.90625
+        ],
+        [
+          417.75,
+          303.1875
+        ],
+        [
+          316.458984375,
+          303.1875
+        ]
+      ]
+    },
+    {
+      "title": "4 Datapath for Fine-grained Failure Domains",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          317.35546875,
+          554.25
+        ],
+        [
+          558.75,
+          554.25
+        ],
+        [
+          558.75,
+          564.75
+        ],
+        [
+          317.35546875,
+          564.75
+        ]
+      ]
+    },
+    {
+      "title": "4.1 Control and Data Planes",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          315.5625,
+          685.5
+        ],
+        [
+          471.75,
+          685.5
+        ],
+        [
+          471.75,
+          694.5
+        ],
+        [
+          315.5625,
+          694.5
+        ]
+      ]
+    },
+    {
+      "title": "4.2 Reconfigurable Forwarding Engine",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          52.59375,
+          181.7578125
+        ],
+        [
+          261.267333984375,
+          181.7578125
+        ],
+        [
+          261.267333984375,
+          194.3004150390625
+        ],
+        [
+          52.59375,
+          194.3004150390625
+        ]
+      ]
+    },
+    {
+      "title": "5 Worker Failure Management",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          314.96484375,
+          71.9296875
+        ],
+        [
+          485.025634765625,
+          71.9296875
+        ],
+        [
+          485.025634765625,
+          84.7423095703125
+        ],
+        [
+          314.96484375,
+          84.7423095703125
+        ]
+      ]
+    },
+    {
+      "title": "5.1 How Does AW Tolerate EW Failures?",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          317.8799743652344,
+          226.94708251953125
+        ],
+        [
+          536.4090576171875,
+          226.94708251953125
+        ],
+        [
+          536.4090576171875,
+          238.90228271484375
+        ],
+        [
+          317.8799743652344,
+          238.90228271484375
+        ]
+      ]
+    },
+    {
+      "title": "5.2 How Does EW Tolerate AW Failures?",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          316.16015625,
+          472.18359375
+        ],
+        [
+          536.4091186523438,
+          472.18359375
+        ],
+        [
+          536.4091186523438,
+          485.3143615722656
+        ],
+        [
+          316.16015625,
+          485.3143615722656
+        ]
+      ]
+    },
+    {
+      "title": "5.3 Fast Expert Recovery via Shadow Experts",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          53.7890625,
+          71.9296875
+        ],
+        [
+          294.75,
+          71.9296875
+        ],
+        [
+          294.75,
+          82.7578125
+        ],
+        [
+          53.7890625,
+          82.7578125
+        ]
+      ]
+    },
+    {
+      "title": "5.4 New Worker Provisioning",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          52.5,
+          423.75
+        ],
+        [
+          214.5,
+          423.75
+        ],
+        [
+          214.5,
+          435.05859375
+        ],
+        [
+          52.5,
+          435.05859375
+        ]
+      ]
+    },
+    {
+      "title": "6 KV Cache State Management",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          316.7578125,
+          384.0
+        ],
+        [
+          489.0,
+          384.0
+        ],
+        [
+          489.0,
+          395.61328125
+        ],
+        [
+          316.7578125,
+          395.61328125
+        ]
+      ]
+    },
+    {
+      "title": "6.1 KV Cache Checkpointing",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          317.35546875,
+          402.75
+        ],
+        [
+          476.33203125,
+          402.75
+        ],
+        [
+          476.33203125,
+          413.015625
+        ],
+        [
+          317.35546875,
+          413.015625
+        ]
+      ]
+    },
+    {
+      "title": "6.2 Request-Level KV Cache Restoration",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          52.5,
+          437.25
+        ],
+        [
+          273.0,
+          437.25
+        ],
+        [
+          273.0,
+          447.75
+        ],
+        [
+          52.5,
+          447.75
+        ]
+      ]
+    },
+    {
+      "title": "7 Evaluation",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          316.16015625,
+          72.0
+        ],
+        [
+          391.5,
+          72.0
+        ],
+        [
+          391.5,
+          81.75
+        ],
+        [
+          316.16015625,
+          81.75
+        ]
+      ]
+    },
+    {
+      "title": "7.1 Experimental Setup",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          316.5,
+          428.87109375
+        ],
+        [
+          447.75,
+          428.87109375
+        ],
+        [
+          447.75,
+          439.5
+        ],
+        [
+          316.5,
+          439.5
+        ]
+      ]
+    },
+    {
+      "title": "7.2 End-to-End Failover Behavior",
+      "heading_level": null,
+      "page_id": 9,
+      "polygon": [
+        [
+          53.7890625,
+          406.5
+        ],
+        [
+          235.5,
+          406.5
+        ],
+        [
+          235.5,
+          417.0
+        ],
+        [
+          53.7890625,
+          417.0
+        ]
+      ]
+    },
+    {
+      "title": "7.3 Is There a Cost to Failure Resiliency?",
+      "heading_level": null,
+      "page_id": 9,
+      "polygon": [
+        [
+          317.953125,
+          499.640625
+        ],
+        [
+          536.25,
+          499.640625
+        ],
+        [
+          536.25,
+          510.75
+        ],
+        [
+          317.953125,
+          510.75
+        ]
+      ]
+    },
+    {
+      "title": "7.4 KV cache Checkpointing and Restoration",
+      "heading_level": null,
+      "page_id": 10,
+      "polygon": [
+        [
+          316.16015625,
+          322.5234375
+        ],
+        [
+          558.75,
+          322.5234375
+        ],
+        [
+          558.75,
+          333.75
+        ],
+        [
+          316.16015625,
+          333.75
+        ]
+      ]
+    },
+    {
+      "title": "8 Related Work",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          316.458984375,
+          222.0
+        ],
+        [
+          408.0,
+          222.0
+        ],
+        [
+          408.0,
+          231.75
+        ],
+        [
+          316.458984375,
+          231.75
+        ]
+      ]
+    },
+    {
+      "title": "9 Conclusion",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          315.5625,
+          620.68359375
+        ],
+        [
+          393.0,
+          620.68359375
+        ],
+        [
+          393.0,
+          632.25
+        ],
+        [
+          315.5625,
+          632.25
+        ]
+      ]
+    },
+    {
+      "title": "References",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          53.19140625,
+          174.21417236328125
+        ],
+        [
+          109.54386138916016,
+          174.21417236328125
+        ],
+        [
+          109.54386138916016,
+          186.16937255859375
+        ],
+        [
+          53.19140625,
+          186.16937255859375
+        ]
+      ]
+    },
+    {
+      "title": "A Failure Propagation in Monolithic and Decoupled Deployments",
+      "heading_level": null,
+      "page_id": 15,
+      "polygon": [
+        [
+          52.5,
+          72.75
+        ],
+        [
+          296.25,
+          72.75
+        ],
+        [
+          296.25,
+          98.2265625
+        ],
+        [
+          52.5,
+          98.2265625
+        ]
+      ]
+    },
+    {
+      "title": "A.1 Case study I: monolithic deployment mode",
+      "heading_level": null,
+      "page_id": 15,
+      "polygon": [
+        [
+          53.19140625,
+          111.0
+        ],
+        [
+          294.75,
+          111.0
+        ],
+        [
+          294.75,
+          122.203125
+        ],
+        [
+          53.19140625,
+          122.203125
+        ]
+      ]
+    },
+    {
+      "title": "A.2 Case study II: decoupled deployment mode",
+      "heading_level": null,
+      "page_id": 15,
+      "polygon": [
+        [
+          52.5,
+          313.62890625
+        ],
+        [
+          294.75,
+          313.5
+        ],
+        [
+          294.75,
+          337.5
+        ],
+        [
+          52.5,
+          337.5
+        ]
+      ]
+    },
+    {
+      "title": "B Expert Batch Size",
+      "heading_level": null,
+      "page_id": 15,
+      "polygon": [
+        [
+          53.490234375,
+          652.5
+        ],
+        [
+          165.75,
+          652.5
+        ],
+        [
+          165.75,
+          663.609375
+        ],
+        [
+          53.490234375,
+          663.609375
+        ]
+      ]
+    },
+    {
+      "title": "C Checkpointing Overhead Analysis",
+      "heading_level": null,
+      "page_id": 15,
+      "polygon": [
+        [
+          316.16015625,
+          386.25
+        ],
+        [
+          513.75,
+          386.25
+        ],
+        [
+          513.75,
+          398.70703125
+        ],
+        [
+          316.16015625,
+          398.70703125
+        ]
+      ]
+    },
+    {
+      "title": "D Inactive Shadow Experts During Normal Execution",
+      "heading_level": null,
+      "page_id": 15,
+      "polygon": [
+        [
+          313.76953125,
+          651.0
+        ],
+        [
+          558.75,
+          651.0
+        ],
+        [
+          558.75,
+          674.25
+        ],
+        [
+          313.76953125,
+          674.25
+        ]
+      ]
+    },
+    {
+      "title": "E Implementation of Lightweight Failure Detection",
+      "heading_level": null,
+      "page_id": 16,
+      "polygon": [
+        [
+          53.7890625,
+          311.25
+        ],
+        [
+          296.25,
+          311.25
+        ],
+        [
+          296.25,
+          335.28515625
+        ],
+        [
+          53.7890625,
+          335.28515625
+        ]
+      ]
+    },
+    {
+      "title": "F Ablation Study",
+      "heading_level": null,
+      "page_id": 16,
+      "polygon": [
+        [
+          52.5,
+          544.5
+        ],
+        [
+          150.75,
+          544.5
+        ],
+        [
+          150.75,
+          555.71484375
+        ],
+        [
+          52.5,
+          555.71484375
+        ]
+      ]
+    }
+  ],
+  "page_stats": [
+    {
+      "page_id": 0,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          236
+        ],
+        [
+          "Line",
+          88
+        ],
+        [
+          "Text",
+          12
+        ],
+        [
+          "SectionHeader",
+          4
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 1,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          331
+        ],
+        [
+          "Line",
+          106
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "ListItem",
+          4
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 2,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          151
+        ],
+        [
+          "Span",
+          41
+        ],
+        [
+          "Text",
+          10
+        ],
+        [
+          "Reference",
+          4
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "FigureGroup",
+          2
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 3,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          159
+        ],
+        [
+          "Span",
+          62
+        ],
+        [
+          "Text",
+          9
+        ],
+        [
+          "Reference",
+          4
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 4,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          563
+        ],
+        [
+          "Line",
+          140
+        ],
+        [
+          "TableCell",
+          18
+        ],
+        [
+          "Text",
+          11
+        ],
+        [
+          "Reference",
+          5
+        ],
+        [
+          "Equation",
+          4
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "ListItem",
+          3
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "TableGroup",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 5,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          127
+        ],
+        [
+          "Span",
+          75
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "SectionHeader",
+          4
+        ],
+        [
+          "Reference",
+          3
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 6,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          301
+        ],
+        [
+          "Line",
+          111
+        ],
+        [
+          "Text",
+          10
+        ],
+        [
+          "Reference",
+          5
+        ],
+        [
+          "SectionHeader",
+          4
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "Footnote",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 7,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          127
+        ],
+        [
+          "Span",
+          29
+        ],
+        [
+          "Text",
+          11
+        ],
+        [
+          "SectionHeader",
+          4
+        ],
+        [
+          "Reference",
+          4
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 8,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          123
+        ],
+        [
+          "Span",
+          29
+        ],
+        [
+          "Text",
+          12
+        ],
+        [
+          "ListItem",
+          4
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Reference",
+          3
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "ListGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 9,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          126
+        ],
+        [
+          "Span",
+          40
+        ],
+        [
+          "Text",
+          6
+        ],
+        [
+          "Reference",
+          3
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 10,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          179
+        ],
+        [
+          "Span",
+          41
+        ],
+        [
+          "Text",
+          11
+        ],
+        [
+          "Reference",
+          3
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "FigureGroup",
+          2
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 11,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          146
+        ],
+        [
+          "Span",
+          45
+        ],
+        [
+          "Text",
+          10
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ],
+        [
+          "Reference",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 12,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          258
+        ],
+        [
+          "Line",
+          98
+        ],
+        [
+          "ListItem",
+          17
+        ],
+        [
+          "Reference",
+          17
+        ],
+        [
+          "ListGroup",
+          2
+        ],
+        [
+          "Text",
+          1
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 13,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          244
+        ],
+        [
+          "Line",
+          100
+        ],
+        [
+          "ListItem",
+          16
+        ],
+        [
+          "Reference",
+          14
+        ],
+        [
+          "ListGroup",
+          2
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 14,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          197
+        ],
+        [
+          "Line",
+          78
+        ],
+        [
+          "ListItem",
+          15
+        ],
+        [
+          "Reference",
+          15
+        ],
+        [
+          "ListGroup",
+          2
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 15,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          121
+        ],
+        [
+          "Span",
+          56
+        ],
+        [
+          "Text",
+          10
+        ],
+        [
+          "SectionHeader",
+          6
+        ],
+        [
+          "Reference",
+          4
+        ],
+        [
+          "Equation",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 16,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          87
+        ],
+        [
+          "Span",
+          12
+        ],
+        [
+          "Text",
+          5
+        ],
+        [
+          "Reference",
+          4
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "FigureGroup",
+          2
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    }
+  ],
+  "debug_data_path": "debug_data/Making MoE-based LLM Inference Resilient with Tarragon"
+}
