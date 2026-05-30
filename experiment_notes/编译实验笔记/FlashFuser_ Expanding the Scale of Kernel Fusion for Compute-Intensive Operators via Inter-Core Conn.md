@@ -1,23 +1,62 @@
 ## FlashFuser: Expanding the Scale of Kernel Fusion for Compute-Intensive Operators via Inter-Core Connection
 
 - 属于编译框架的实现是什么？实验比较什么？
-  提出FlashFuser，首个利用现代GPU inter-core Distributed Shared Memory (DSM)进行compute-intensive operator chain kernel fusion的编译框架。核心实现：(1) dsm_comm原语抽象：定义dsm_all_exchange（cluster内沿K维accumulation）、dsm_shuffle（shuffle group内交换中间tensor切片）、dsm_reduce_scatter（cluster内scatter-reduce）、inter_cluster_reduce（基于Hopper TMA cp.reduce.async.bulk跨cluster原子reduce）和dsm_mul四种primitive，统一编码cluster-level SM划分和inter-SM dataflow。通过clsshuffle=clsl/clsk和clsreduce=clsn/clsshuffle两个派生变量精确描述shuffle/reduce的group配置。(2) Dataflow Analyzer：将loop schedule、tile size、resource mapping扩展到register/SMEM/DSM/global memory层次化空间。对复用tensor采用贪心spilling策略——优先放到最高层缓存，容量不足时逐层spill到更低层级（reg→SMEM→DSM→global），计算每层数据搬移量。DSM带宽随cluster size变化（越大cluster带宽越低延迟越高），dataflow分析考虑这一特性。(3) Fusion Search Engine：前端Python engine枚举LoopSchedule（MNKL/MNLK/MLNK等顺序+spatial/temporal partition）、TilingSize（block-level tile+cluster-level tile）和ResourceMapping，调用Dataflow Analyzer得每配置数据搬移量，用C_l=V_l(T_l)/B_l的minimax优化cost model和5条pruning rules（Rule1硬件aware可整除tile；Rule2 cluster size≤16乘积约束；Rule3 activation约束accumulation dim必须innermost loop；Rule4 dependency约束L dim不能spatial；Rule5 memory capacity limit）过滤搜索空间。GPT-6.7B时搜索空间从2.75×10^13 prune至1.15×10^6。Top-K(K=11)候选传给hardware profiling选最优kernel。Backend基于CUTLASS扩展prologue/mainloop/epilogue结构生成CUDA code，dsm_comm通过TMA+mbarrier many-to-many synchronization实现。实验比较：GEMM chain上vs BOLT/Chimera/Relay/TASO/TensorRT/PyTorch平均5.4×/4.6×/4.7×/3.4×/2.4×/3.1× speedup；convolution chain上平均6.3×/6.4×/5.6×/4.3×/3.3×/3.9× speedup；Gated FFN上额外vs Mirage/PipeThreader；SGLang端到端平均1.32× speedup（含大模型Llama3-70B/Qwen2.5-14B/32B时1.16×-1.24×）。Ablation：All(SE+DA+DC) 3.29× vs DC+DA(random) 2.11× vs DA(仅SMEM/global) 1.52× vs no-fusion baseline。Nsight Compute显示平均减少58% global memory access。
+  FlashFuser 是一个基于 NVIDIA CUTLASS 的代码生成编译框架，利用 H100 GPU 的 Distributed Shared Memory（DSM，即 inter-core connection）扩展 kernel fusion 的可融合算子规模。核心实现包括三部分：(1) dsm_comm primitive——形式化 cluster 级别数据交换模式（shuffle、reduce、multiply），为 DSM-based fusion plan 提供统一表示；(2) Dataflow Analyzer——将 loop scheduling、tile selection、resource mapping 推广到 reg→SMEM→DSM 三级存储层次，通过贪心 spill 策略量化跨层数据搬移量；(3) Fusion Search Engine——使用解析 cost model（minimax formulation: min max C_l = V_l/B_l）和 5 条 pruning 规则（Divisible Tile Sizes, Cluster Size Constraint, Activation Constraint, Dependency Constraint, Memory Capacity Limit）从约 2.75×10^13 的搜索空间中高效探索最优 execution plan。前端为 Python-based search engine，后端为基于 CUTLASS 的 CUDA code generator。搜索离线进行，运行时通过 binning+table lookup 适应动态变化的 M 维度。
+  实验比较：(1) GEMM chains（10 种配置 from DLRM/GPT/OPT/BERT/Performer）vs PyTorch+torch.compile、TensorRT、TVM/Relay、TASO、BOLT、Chimera；(2) Convolution chains（8 种配置 from ResNet）vs 同样 baselines；(3) Gated FFNs（8 种配置 from Llama/Qwen 系列）vs 同样 baselines；(4) 端到端推理（基于 SGLang）vs SGLang default；(5) Ablation study——全系统 vs DC+DA vs DA only；(6) Cost model validation 和 Top-K 分析；(7) dsm_comm primitive bandwidth/utilization 测试；(8) 搜索时间 vs Brute-Force；(9) 大模型（Llama3-70B, Qwen2.5-14B/32B）端到端 speedup。
 
 - 硬件平台是什么，配置是什么。
-  NVIDIA H100 SXM GPU（Hopper架构）。主机双路Intel Xeon Platinum 8468（96 cores, 2.10GHz）。软件栈：CUDA 12.4, PyTorch 2.6, TVM 0.9, Triton 3.2, Nsight Compute 2025.2.0。
+  NVIDIA H100 GPU (SXM)，双路 Intel Xeon Platinum 8468 CPU (96 cores, 2.10GHz)。软件栈：CUDA 12.4, PyTorch 2.6, TVM 0.9, Triton 3.2, Nsight Compute 2025.2.0。端到端评估基于 SGLang。
 
 - 开源编译框架是什么。修改了什么。
-  基于NVIDIA CUTLASS构建代码生成框架。未修改CUTLASS本身，在其之上新增：(a) dsm_comm primitive实现——SHUFFLE使用TMA数据移动+mbarrier实现ring communication；MUL和REDUCE使用TMA+mbarrier实现cluster内collective操作；inter-cluster reduce使用TMA cp.reduce.async.bulk。(b) 扩展CUTLASS kernel结构：prologue初始化DSM semaphore，mainloop插入DSM mul/shuffle操作（生产者accumulation完成→DSM mul/exchange；消费者accumulation循环→DSM shuffle ring communication），epilogue执行DSM scatter-reduce+inter-cluster reduce后写global memory。(c) Python前端search engine——枚举loop schedule/tile/cluster配置→Dataflow Analyzer分析→pruning+cost model筛选→top-K profiling。(d) Runtime kernel selection：通过binning/table lookup针对inference时动态变化的M维度选择预编译kernel（N/K/L固定）。
+  基于 CUTLASS（https://github.com/NVIDIA/cutlass）的代码生成框架。修改包括：(1) 前端 search engine——Python 实现，枚举 LoopSchedule、TilingSize、ResourceMapping 组合，调用 Dataflow Analyzer 量化数据搬移，使用 cost model + 5 条 pruning 规则过滤候选；(2) 后端 code generator——扩展 CUTLASS kernel 结构（prologue-mainloop-epilogue），在 prologue 中初始化 DSM semaphore，在 mainloop 中注入 dsm_comm 操作（dsm_all_exchange, dsm_shuffle, dsm_reduce_scatter），在 epilogue 中执行 hierarchical reduction；(3) dsm_comm 实现——基于 TMA（Tensor Memory Accelerator）进行数据搬移，使用 mbarrier intrinsic 实现 many-to-many 同步（区别于 CUTLASS 原生的 all-to-one cluster-sync），支持 ring communication for SHUFFLE；(4) inter-cluster reduction 使用 TMA cp.reduce.async.bulk 指令进行跨 cluster 原子归约。论文未明确声明独立开源仓库（2025年12月 arXiv）。
 
-- 开源情况。编译框架如何使用？作用是什么？基于开源文档和论文，使用例子解释。
-  论文未明确提供开源仓库链接。基于CUTLASS构建，使用流程：
-  1. 输入：DNN子图描述（GEMM chain/conv chain/Gated FFN的维度参数M/N/K/L）→search engine枚举loop schedule和tile配置
-  2. dsm_comm primitive声明：根据模型类型选择Standard FFN或Gated FFN communication pattern——定义cluster size(clsm,clsn,clsk,clsl)和block tile(blkm,blkn,blkk,blkl)参数
-  3. Dataflow Analyzer分析：对每配置计算loop schedule指定执行顺序→GetFootprint确定单tile访问量→I/O tensors计算global memory搬运量→reused tensors贪心分配到reg→SMEM→DSM→global层次→计算DSM traffic和总data movement
-  4. Cost model+pruning：C_l=V_l/B_l计算每层搬移成本→minimax优化避免单一层成为瓶颈→5条pruning rules过滤→保留top-11 candidates
-  5. Backend code gen：CUTLASS模板+dsm_comm primitive代码→编译为CUDA kernel→H100实测选最优
-  6. Runtime：针对不同M值预编译多版本kernel→inference时查表选择对应kernel
-  7. 例如GPT-6.7B FFN (M=128, N=16384, K=4096, L=4096)：cluster size=(2,4,2,4)→GEMM0沿K=2 partition→dsm_all_exchange聚合C tile→GEMM1 dsm_shuffle交换C切片→Store phase dsm_reduce_scatter+inter_cluster_reduce产生E→全程中间tensor不写global memory
+- 开源情况。基于开源文档和论文，使用例子解释编译框架如何使用？作用是什么？至少具体到编译框架输入到输出的全过程。
+  论文未提供独立开源仓库链接。FlashFuser 基于开源 CUTLASS 构建，编译框架使用流程：
 
-FlashFuser编译器的作用：通过将DSM纳入编译器的自动搜索、分析和代码生成，突破传统单SM SMEM约227KB的融合限制，使原本因中间结果过大而无法融合的compute-intensive operator chain（如LLM FFN/conv block）可以fusion，减少global memory round-trip，实现kernel级3.3×-4.1× speedup和端到端1.24× speedup。
+  1. **输入**：高层 DNN model description（DNN graph g），device information d（H100 的 memory hierarchy: reg capacity, SMEM capacity 227KB/SM, DSM bandwidth per cluster size, L2/global bandwidth），Top-K count k=11。输入 graph 描述 GEMM chain 的维度 (M, N, K, L) 或 Gated FFN 的 branch 结构。
+  2. **搜索空间枚举（Search Engine）**：
+     - Loop Schedule：4 个独立维度 {M,N,K,L} 划分为 Spatial (parallel across SMs) 和 Temporal (sequential within SM)，共 41 种组合
+     - Tile Size：cluster-level tile（5^4 种 cluster config，每个维度选自 {1,2,4,8,16}）+ block-level tile（以 MMA tile 16×16×16 为最小单位，从 problem size 除以 MMA tile 的倍数中选择）
+     - Resource Mapping：默认 DSM 为 lowest-level cache
+     - 初始搜索空间约 2.75×10^13 种可能
+  3. **Pruning（5 条规则顺序应用）**：
+     - Rule 1 (Divisible Tile): tile size 需整除 problem size 维度（from MC-Fuser [55]）
+     - Rule 2 (Cluster Size): 每 GEMM 的 cluster dims product ≤ 16（H100 hardware limit），连续 GEMM 的 cluster dims 必须相同
+     - Rule 3 (Activation): 前序 GEMM 的 accumulation dim 必须在最内层循环（保证 partial sum 完整可用于 activation）
+     - Rule 4 (Dependency): L 维度不能设为 spatial（否则不同 spatial tile 的中间 C 无法直接通信）
+     - Rule 5 (Memory Capacity): tensor 不能超过其可 spill 的最低级 cache 容量
+     - Pruning 后约 1.15×10^6 个候选（GPT-6.7B），总缩减率 >99.99%
+  4. **Dataflow Analyzer 评估（Algorithm 1）**：对每个 pruned candidate (s, t, r)：
+     - 对每个 tensor 计算 Data Footprint (DF)
+     - Input/Output tensors：沿 reversed(s) 迭代相关维度，计算 global memory data movement volume
+     - Reused tensors：贪心从 reg→SMEM→DSM 逐级放置，计算每级 data movement volume
+     - 输出 D_V (total data movement volume across all levels) 和 final plan p_final
+  5. **Cost Model 排序**：对每个 candidate，计算 bottleneck cost C = max_l (V_l / B_l)，选择 min max C 的 Top-K candidates（K=11 时 accuracy≈100% of optimal）
+  6. **硬件 Profiling**：Top-K candidates 经后端生成 CUDA kernel → 在 H100 上实测 → 选最优
+  7. **代码生成（Back-End）**：
+     - Prologue：初始化 DSM semaphore (mbarrier)
+     - Mainloop：注入 dsm_comm 操作——GEMM0 后 dsm_all_exchange（AllReduce accumulation）→ GEMM1 中 dsm_shuffle（ring communication 交换 C tile）→ Store phase dsm_scatter_reduce（hierarchical intra-cluster + inter-cluster reduction）
+     - Epilogue：通过 TMA cp.reduce.async.bulk 执行跨 cluster atomic reduction，存储最终 output
+     - 生成 CUDA code 嵌入 CUTLASS kernel 模板
+  8. **运行时 kernel 选择**：由于 FFN/conv 场景中只有 M 维度动态变化（N,K,L 固定），搜索离线完成，运行时通过 binning + table lookup 根据 M 选择预编译 kernel
+  9. **输出**：高性能 fused CUDA kernel，在 GEMM chains 上平均 3.1× over PyTorch，4.1× over SOTA compilers (Chimera)；端到端 SGLang 上 1.24× speedup；全局显存访问减少 58%。
 
+- 属于编译框架的实现是什么？实验比较什么？
+  AccelOpt 是一个自改进 LLM agentic 系统，通过 Planner-Executor-Summarizer 三代理工作流 + beam search + optimization memory，自动探索 NKI kernel 优化空间，在不依赖人工优化知识的前提下将 baseline kernel 迭代优化为更高效的 kernel。实验比较：(1) AccelOpt vs Claude Sonnet 4 重复采样，(2) beam search vs 重复采样，(3) beam search + optimization memory vs beam search only，(4) Reflexion-style baseline，(5) 不同 executor/planner 模型和 memory 配置的 cost-benefit 分析。
+
+- 硬件平台是什么，配置是什么。
+  Amazon Trainium 1 (trn1.32xlarge EC2) 和 Trainium 2 (trn2.48xlarge EC2)。Trainium 1 单核: PeakBW 440.2 GB/s, PeakMM 23.75 TFLOPS, PeakVec 286.8 GFLOPS。Trainium 2 单核: PeakBW 640.0 GB/s, PeakMM 19.75 TFLOPS, PeakVec 550.0 GFLOPS。
+
+- 开源编译框架是什么。修改了什么。
+  Neuron Compiler（AWS 官方编译器）将 NKI kernel 编译为 Trainium 可执行代码。AccelOpt 不修改 Neuron Compiler 本身，而是通过 agentic workflow 自动生成优化的 NKI kernel 源码。Agent 系统使用 Neuron Profile 获取性能反馈，以 Roofline 模型计算 peak throughput percentage 作为评估指标。
+
+- 开源情况。基于开源文档和论文，使用例子解释编译框架如何使用？作用是什么？至少具体到编译框架输入到输出的全过程。
+  开源地址: https://github.com/zhang677/AccelOpt
+  使用流程:
+  1. 输入：baseline NKI kernel（由 Neuron Compiler 生成或人工编写的 NKI 源码）+ operator 问题描述 + profiling 信息
+  2. Planner agent：分析 profile 识别性能瓶颈（如低 HFU、高 memory write），提出 1-step 优化计划（如 "Hoist LHS Transpose Out of Reduction Loop"）。每轮每个 candidate kernel 生成 N 个 plan。
+  3. Executor agent：将优化计划转化为可执行的 NKI kernel 代码（每个 plan 尝试 K 次），应用 loop transformation、tiling、memory layout 变更等。
+  4. Profiling Service：分布式 profiling 服务在 Trainium 硬件上运行生成的 kernel，测量 latency、HBM 读写、engine utilization 等指标，验证正确性。
+  5. Summarizer agent：从 slow-fast kernel pairs 中提炼通用优化策略（如 "Loop Invariant Code Motion"），生成 experience item 存入 optimization memory。
+  6. Beam Search 选择 Top-B kernels 进入下一轮迭代。T=16 轮后输出最优 kernel。
+  输出：优化后的 NKI kernel 源码，在 NKIBench 14 个 kernel 上平均 peak throughput 从 49% 提升到 61% (Trainium 1)。

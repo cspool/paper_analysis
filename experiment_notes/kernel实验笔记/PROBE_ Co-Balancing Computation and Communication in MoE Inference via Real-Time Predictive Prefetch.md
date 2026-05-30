@@ -1,0 +1,11 @@
+## PROBE: Co-Balancing Computation and Communication in MoE Inference via Real-Time Predictive Prefetching
+
+- 属于kernel调度/运行时计算的实现是什么？实验比较什么？
+  - 实现：PROBE 的 kernel 调度涉及多类运行时计算 kernel：(1) 单SM CUDA kernel 实现的 Greedy Balance-Optimal Planning Solver——串行迭代更新，hard cap kmax=16 次迭代，运行在单个 SM 上与 MoE Compute 重叠；(2) 自定义 Triton kernel 实现的 remote P2P put 操作——受控 SM occupancy 下发 expert weights 到目标 rank 的 replicated-expert buffer；(3) NVSHMEM-based 全局 All-Gather——聚合 per-rank 预测结果；(4) Lookahead Predictor MLP inference kernel——轻量级前向推理；(5) Phase-Locked Co-Scheduling 的分裂相位传输——在 MoE Compute 期间启动 P2P 传输，All-to-All Combine 前暂停以释放带宽，Combine 后恢复直到下一层 Attention 完成。
+  - 实验比较：与 SGLang（无冗余 expert）和 DeepSeek-EPLB（统计式 2 冗余 slot）对比。在 GPU timeline 微操作级别通过 Figure 10 展示 Predict/Plan/Prefetch/Update 各阶段如何被完全隐藏在 Dispatch/MoE Compute/Attention 等关键阶段之后。比较指标：IR 从 2.13→1.09，Max/Avg 计算延迟比从 2.27→1.18，Combine 阶段的同步等待消除。
+- 后端平台是什么，配置是什么。
+  - 8×NVIDIA H800-141GB，NVSwitch 900 GB/s。CUDA 12.9、PyTorch 2.9、NCCL 2.27.3、NVSHMEM 3.3.20。DeepEP (normal mode) 作为 All-to-All 通信后端。
+- 评估性能的软件/脚本是什么。修改了什么。
+  - 基于 SGLang 框架的端到端推理评估。在 SGLang 基础上集成了 DeepEP 通信库、NVSHMEM symmetric memory 管理、自定义 CUDA/Triton kernel。评估了：(a) Prefill latency (TTFT) scaling——不同总输入 token 数（16K-64K GPT-OSS / 32K-128K Qwen3-MoE）；(b) Decoding throughput-latency Pareto——per-rank batch 512-1536，前 500 decoding steps；(c) Robustness stress test——Code→Chinese 突然语义切换；(d) Predictor 精度——per-layer Top-K Accuracy、Top-Half-K Hit-Rate、2×Top-K Recall；(e) Timeline breakdown——NVIDIA Nsight / 自定义 profiling 工具捕获各阶段的微操作延迟。
+- 开源情况。基于开源文档和论文，使用例子解释评估软件/脚本如何使用？至少具体到评估软件的评估原理和kernel输入到性能输出的全过程。
+  - 论文未明确说明开源。评估原理：在 SGLang 推理引擎中，每个 decoding step 的 MoE 层执行流程为——(1) Predict phase: Lookahead Predictor MLP 读取上一层的 hidden state tensor [B, H]，输出预测 logits [B, num_experts]，通过 All-Gather 聚合全局预测 n̂；(2) Plan phase: 单SM Solver 以预测 n̂ 和当前 placement P' 为输入，在 ≤16 次迭代内输出 Δ_r^{in}/Δ_r^{out}（需复制/驱逐的 expert 集合）和 token assignment A；(3) Prefetch phase: Triton P2P kernel 以 Δ_r^{in} expert indices 为输入，从源 rank 读取 |Δ| × W bytes 的权重 tensor，写入目标 rank 的 NVSHMEM buffer；(4) Execute phase: 下一层按更新后的 A 进行 token dispatch 和 Grouped GEMM 计算。性能输出：通过 GPU timeline 验证 Predict(MLP+All-Gather) ⊂ Dispatch latency、Plan(≤16 iter single-SM) ⊂ MoE Compute、Prefetch(split-phase) ⊂ MoE Compute + Attention 的全重叠，确保零关键路径开销。

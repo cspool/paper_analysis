@@ -1,0 +1,101 @@
+## PreMoE: Proactive Inference for Efficient Mixture-of-Experts
+
+- baseline方法是什么？
+  - Baseline 是现有 MoE 模型的静态全量部署方案和基于统计的 Expert 剪枝方法。两类典型 baseline：(1) 全量部署——所有 N_r 个 expert 常驻内存，仅随 token routing 激活 K 个（通常 K≪N_r，如 DeepSeek-R1 仅激活 8/256），导致大量 expert 参数占用内存却极少被使用；(2) 统计剪枝方法——基于 activation frequency（激活次数）、all-logits 平均值、或 activated-logits（仅对激活 expert 的 logit 求平均）来排名 expert 重要性并剪枝。SEER-MoE 使用 local/global 变体的统计指标；EASY-EP 使用 few-shot demonstrations 识别相关 expert。
+  - 全栈执行例子（Baseline: Full DeepSeek-R1-671B, Ascend 910B2-64GB）：
+    - **算法层**：MoE router 对输入 token x 计算 logits s(x) ∈ R^{256}，softmax 后 Top-8 选择激活 expert。全量 256 experts × 58 layers 的 FFN weights 必须全部常驻 NPU HBM。Frequency-based pruning: 在校准集上统计每个 expert 被 Top-K 选中的次数，按频次排序，保留 Top-M。缺陷——Frequency 将"频繁但弱"的 generalist expert（激活数千次但几乎从不成为 top-1）排入高位，同时丢弃"稀少但关键"的 specialist expert（激活少但每次激活都是决定性 top-1 选择）。
+    - **系统框架层**：vLLM/SGLang 等标准 serving 框架加载完整模型 checkpoint (670.92B params, BF16 ~1.3TB)，所有 expert 常驻。每次 MoE layer forward: router → gather selected expert weights → all-to-all communication → expert FFN → reduce。无 expert 选择优化——所有 expert 均等占用内存和通信资源。
+    - **编译框架层**：论文未明确说明。
+    - **Kernel调度层**：MoE layer 的 all-to-all dispatch + expert GEMM kernel。每个 MoE layer 执行 256 个 expert 的 GEMM（仅 K=8 个被实际激活计算，其余 idle）。Ascend 910B2 NPU 上 latency 115.35ms/tok at 256 experts/layer。
+    - **硬件架构层**：64×Ascend 910B2-64GB NPU。每个 NPU 64GB HBM 需容纳 expert shards。全量部署需 64 NPUs，参数 670.92B。缺陷：(1) 内存浪费——大量 expert 在特定领域极少被激活却占据 HBM；(2) 通信浪费——all-to-all 通信涉及所有 expert shard 所在 NPU，即使大部分不参与计算；(3) 静态部署无法利用领域特化——同一模型服务数学和代码两类负载时无法自适应调整 expert 集合。
+  - Baseline 核心缺陷根因：传统 MoE 部署采用"反应式"范式——模型被完整加载后再由 router 动态选择 expert。这种范式无法利用 MoE 的核心优势（领域相关稀疏激活），因为 expert 效用评估缺乏高质量的预测信号。Frequency 等粗粒度统计混淆了"频繁但低效用"的 generalist 和"稀少但高价值"的 specialist，导致高稀疏度下性能崩溃。
+
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  - 论文提出 PreMoE，通过 Predicted Expert Utility (PEU) 实现"主动编译"范式——部署前基于校准集提取领域计算 pattern，提前确定最小高性能 expert 子集，仅编译加载所需 expert。核心设计：(1) TopK 过滤缩小候选池；(2) 自适应阈值过滤去除低置信度激活；(3) Logit 变换 f(s)=max(s, sigmoid(s)) 解决 0-vs-negative 问题。
+  - 全栈执行例子（PreMoE, DeepSeek-R1-671B, Ascend 910B2-64GB）：
+    - **算法层（解决"粗粒度统计无法区分 expert 角色"的缺陷）**：
+      - PEU 计算 pipeline: 对校准集 X_T 中每个 token x，router 计算 s(x) ∈ R^{256} → TopK_8 过滤保留 top-8 logit expert → local softmax p_i(x) → 仅保留 p_i(x)≥r_l 的 expert → f(s) = max(s, sigmoid(s)) 变换 logit → 跨 token 平均得 PEU_i^T。
+      - 自适应阈值 r_l = E_x[max_i p_i^l(x)] 逐层计算，自动适配每层 activation 分布——避免固定阈值在不同层/领域的非鲁棒性。
+      - 结果：PEU 将"频繁 but 低效用"的 generalist (Freq rank top-63 but PEU rank 252-256) 排到尾部，将"稀少 but 关键"的 specialist (Freq rank tail but PEU rank 51-148) 提升到高位。
+      - 对比 baseline：Frequency 在 DeepSeek-R1 50% sparsity 下造成 25.58 点平均 drop，PreMoE 反而提升 1.01 点。
+    - **系统框架层（解决"静态全量部署浪费内存"的缺陷）**：
+      - 主动编译——校准后仅将 PEU Top-M expert weights 加载到 NPU HBM。完整模型 (670.92B) 从未加载到内存。
+      - 50% sparsity (128/256 experts/layer)：参数降至 343.96B，NPUs 从 64 降至 32（2× fewer），throughput 从 52.01 升至 64.02 tok/s（+23%）。
+      - 75% sparsity (64/256 experts/layer)：参数降至 180.49B，NPUs 降至 16（4× fewer），throughput 升至 81.97 tok/s（+58%）。
+    - **编译框架层**：论文未明确说明。
+    - **Kernel调度层**：kernel 执行不变（同一 MoE GEMM + all-to-all）。差别：(a) 参与 all-to-all 的 expert 数量从 256 降至 128 或 64，all-to-all 通信量减半；(b) 仅需 dispatch 到的 NPU 数从 64 降至 32 或 16，减少通信跳数和拥塞；(c) 每 NPU 的 expert shard 大小减半，GEMM kernel 的 memory footprint 减半。
+    - **硬件架构层**：同一 Ascend 910B2-64GB 集群。核心变化：baseline 下 64 NPU 承载 670.92B 参数，大量 expert 在其不活跃的领域中闲置；PreMoE 下按领域 pattern 仅部署最小 expert 集合，闲置 expert 不再占用 HBM。latency 从 115.35 降至 93.72 ms/tok (50% sparsity)。
+  - 解决 Baseline 缺陷的方式总结：
+    1. **针对"粗粒度统计混淆 expert 角色"**：PEU 通过高置信度过滤 + logit 变换从 router logits 提取决定性偏好信号，从而区分 generalist（频繁激活 but 很少 top-1）和 specialist（稀少激活 but 经常 top-1）。相比 Frequency 的 25.58 点平均 drop，PreMoE 在 50% sparsity 下反超全量模型。
+    2. **针对"静态全量部署浪费资源"**：主动编译范式仅在部署时加载 PEU 选中的 expert，实现 50% sparsity 时 2× NPU 减少、23% throughput 提升、近无损准确率。
+    3. **针对"缺乏领域自适应能力"**：PEU pattern 是领域特定的（Math/Science/Code pattern 在 Top-2 experts 仅 4-16% 重叠），可实现 single-domain specialist（极致 in-domain 效率）或 multi-domain generalist（平衡跨域能力）。
+
+- baseline方法是什么？
+  - Baseline 是 cross-layer expert prediction——使用前一层的 hidden state 或 gate 输出来预测当前层的 expert 选择。以 FATE (Fang et al., 2025) 为代表性 baseline：从前一层 activations 预测当前层 experts，prediction accuracy 78.79%（DeepSeek-V2-Lite）。其他 baseline 包括 DuoServe-MoE（layer-level predictor，54-67% top-2 accuracy）、SP-MoE（speculative decoding 场景，70% accuracy）、HOB-BIT（cache-based，55% hit rate）。Baseline 三个核心缺陷：(1) 跨层预测不准——前一层信息经过 attention 变换后与当前层 expert selection 的关联性减弱；(2) 第一层无法 prefetch——没有"前一层"，bootstrap problem 导致前几层 accuracy 显著降低（AdapMoE 专门为此设计 mitigation）；(3) 架构复杂——跨层 predictor 需要跨层通信、state buffering、inter-layer coordination，增加系统复杂度。
+  - 全栈执行例子（Baseline: FATE cross-layer prediction, DeepSeek-V2-Lite on V100-32GB）：
+    - **算法层**：FATE 从 layer l-1 的输出 activations 预测 layer l 的 expert selection——使用前一层 hidden state h_{l-1} 通过 predictor 网络输出 expert scores。预测器基于跨层信息外推（extrapolation），accuracy 贡献 78.8%（FATE 还使用 cache+confidence threshold 达到 97.2% combined hit rate）。
+    - **系统框架层**：跨层 predictor 需要维护前一层输出的 buffer，在 layer l-1 完成后、layer l 开始前执行预测。predictor 与当前层 pipeline 无天然并行窗口——预测必须在拿到前一层结果后进行，无法与 attention 重叠。
+    - **编译框架层**：论文未明确说明。
+    - **Kernel调度层**：cross-layer prediction 时序: layer l-1 expert computation → collect activations → predictor inference → expert prefetch for layer l → layer l attention + expert routing。预测结果到实际使用之间存在 attention computation 的延迟窗口，但跨层信息本身陈旧（经过了一层 attention 变换）。
+    - **硬件架构层**：V100-SXM2-32GB GPU。Expert loading from disk: 48.1ms (6 experts, 99MB)，from memory: 9.5ms。Baseline 缺陷：(a) 第一层无前一层信息，bootstrap 准确率极低；(b) 跨层信息衰减导致整体 accuracy 仅 78.8%；(c) cross-layer predictor 不能与 layer l 的 attention 重叠执行，增加 latency 或减少 prefetch 窗口。
+
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  - 论文提出 pre-attention same-layer expert prediction——在同一层内、attention 之前使用 pre-attention normalization 后的 hidden state 预测该层的 expert selection。核心 insight：(1) softmax 和 layer normalization 是 ranking-preserving 的，因此可以用简单的线性函数近似 expert selection 的 ranking；(2) pre-attention weights 比前一层输出包含更"新鲜"的信息——temporal proximity 更高，直接捕捉 token representation 到 expert routing 的映射。方法通过轻量 2-layer predictor + ranking-aware loss 实现。
+  - 全栈执行例子（Pre-Attention Prediction, DeepSeek-V2-Lite on A100-80GB）：
+    - **算法层（解决 cross-layer 不准的缺陷）**：
+      - Pre-attention hidden state X 经过 layer l 的 RMSNorm 后 fork——一份送入 self-attention，一份送入 predictor。
+      - Predictor: s = W_2 @ SiLU(W_1 @ X)，W_1 ∈ R^{2048×d}，W_2 ∈ R^{E×2048}（仅 2 层线性，~4M 参数/层，远小于 standalone network）。
+      - Ranking-aware loss: L = L_WBCE + 0.3·L_ranking。L_WBCE 对 top-10 experts 赋权 3.0，top 11-30 赋权 1.5，其余 0.5——针对三阶段 affinity score 分布（top few high → middle flat → bottom sharp drop）设计。L_ranking 为 pairwise margin ranking loss 保证 top experts 相对顺序。
+      - 结果：93.03% exact-match accuracy（DeepSeek-V2-Lite），比 FATE 提升 15 个百分点。
+      - **对比 baseline**：same-layer 信息比 cross-layer 更新鲜；ranking-aware loss 比 FATE 的通用 predictor 更精确匹配 MoE routing 的 Top-K selection 本质。
+    - **系统框架层（解决第一层 bootstrap 和跨层复杂度的缺陷）**：
+      - 每层维护独立 predictor f_l——第一层也有自己的 predictor，使用 embedding 后的 pre-attention X 预测，无需前一层信息。
+      - Predictor 与 self-attention 并行执行——pre-attention norm 后 CPU clone X → CPU predictor (0.15ms) 与 GPU self-attention (0.74-1.13ms) + post-attention norm (0.08-0.13ms) 并行。总可用 prefetch 窗口 0.82-1.26ms，足以从 memory prefetch 1-2 个 experts (0.7-1.6ms each)。
+      - 无需跨层 state buffer、inter-layer communication——同层独立操作，系统复杂度显著降低。
+      - 三种部署策略：cloud（over-provision, load 10 vs 6 experts, 98.65% hit rate）、standard（93.03% exact-match）、edge（top-1 only, 98.85% accuracy）。
+      - **对比 baseline**：baseline 第一层无 predictor，FATE 第一二层 accuracy 显著低于其他层。论文方法所有层 accuracy 均匀（Table 4 直接展示第一层 accuracy，与其他层相似或更好）。
+    - **编译框架层**：论文未明确说明。
+    - **Kernel调度层（解决 predictor overhead 和 prefetch 时序的缺陷）**：
+      - 预测 latency 0.15ms（CPU），<10% pre-MLP pipeline，可被 attention 完全覆盖。
+      - 93.03% tokens 实现 zero expert loading latency——expert 在 attention 期间预取就绪。
+      - Expected loading time: (1-0.9303)×9.5 = 0.66ms/token (V100)，vs FATE (1-0.7879)×9.5 = 2.01ms/token。1000-token 会话节省 569-1352ms。
+      - Best-case pipeline (Fig.8b): attention 期间并行预取 experts → expert selection 直接命中 → 无额外 latency。
+      - Worst-case pipeline (Fig.8c): 预测错误时，6.97% miss rate，紧急从 disk load (5.6-8.3ms/expert)，但与 expert computation (6.2-10.3ms) 部分重叠。
+      - **对比 baseline**：baseline predictor latency 不可被隐藏（需等前一层完成后串行执行），论文方法 predictor 与 attention 天然并行，prefetch 窗口更大。
+    - **硬件架构层**：
+      - 适配 GPU 异构内存层次：expert 可在 GPU memory (4.0ms/6 experts on A100-80GB)、system memory (8.5-9.5ms)、或 disk (33.5-49.8ms) 之间分级存储。预测精度越高，越能用更快的 memory tier。
+      - CPU predictor 推理：CPU 执行预测不占用 GPU SM，GPU 可专注 attention + expert computation。
+
+- baseline方法是什么？
+  - Baseline 是 Megatron-DeepSpeed 框架提供的全量 checkpointing 方法——每个 checkpoint 保存所有模型状态：包括全部 N 个 experts 的 weights 和 optimizer states（占总 checkpoint 体积约 86%）、非 expert 部分的 weights 和 optimizer states（约 13%），以及 epoch/iteration 数和 RNG state 等辅助状态（<1%）。对于 MoE 模型，expert 部分的 optimizer states 是最大的单一部分（以 GPT-350M-16E 为例，experts 占 checkpoint 总体积 74%）。在 ZeRO-2 DP + EP 的混合并行策略下，baseline 的 sharding 策略存在显著局限性：非 expert 状态仅由 EP-Group-0 的 Rank0 保存，expert 状态仅由 EP-Group-0 的 ranks 保存——未能利用全部并行 ranks 的带宽和存储能力。
+  - 全栈执行例子（Baseline: Megatron-DeepSpeed full checkpointing, GPT-350M-16E, ZeRO-2 DP=16 + EP=16/8, A800×8/16）：
+    - **算法层**：每次 checkpoint 触发时，全体模型状态的 tensor 从 GPU memory 读取——包括所有 MoE layer 的 expert FFN weight（P_e 个参数，每个 B_w bytes）和对应 optimizer states（每个 B_o bytes，通常 B_o = 2B_w 因 Adam 需 momentum + variance）。无任何选择性保存策略——所有 experts 同等对待。
+    - **系统框架层**：Megatron-DeepSpeed 的 checkpointing 模块执行两阶段流程——Phase 1 (GPU-to-CPU snapshot)：所有 DP rank 同步将模型 state tensor 从 GPU memory 通过 PCIe 复制到 pinned CPU memory；Phase 2 (CPU-to-Storage persist)：序列化 CPU memory 中的 tensor 并通过网络写入分布式文件系统。Baseline 的同步 checkpointing 在这两阶段都会阻塞训练进程。异步 checkpointing 版本（Base-Async）可让 GPU-to-CPU snapshot 与下一迭代的 forward+backward 重叠，但 snapshot 必须在 weight update 前完成，否则产生 checkpoint stall。
+    - **编译框架层**：论文未明确说明。
+    - **Kernel调度层**：ZeRO-2 DP 已将 optimizer states 按 DP degree 分片分布在各 rank 上，但 baseline checkpointing 未充分利用此分片——仅 EP-Group-0 执行 checkpoint 写操作。bottleneck rank 的 GPU→CPU 复制时间决定整体 checkpoint 时长。在 Case1 (1 node/8 GPU) 中，baseline snapshot 时长（约 1.7s）超出 F&B 时间（约 1.3s），导致每次 checkpoint 都会触发 stall（blocking），直接延长训练时间。Case3 类似。
+    - **硬件架构层**：A800 SXM4 80GB GPU，GPU-to-CPU PCIe 带宽约 1 GB/s。以 GPT-350M-16E 为例，单 rank 需传输约 350M params × (2 + 12) bytes ≈ 5GB 数据（含模型参数 + optimizer states），约需 5s。在 60-node×8-GPU 集群上，所有 ranks 从分布式文件系统写入 checkpoint，对存储造成显著 IO 压力。Baseline 核心缺陷：(a) checkpoint 数据量大——MoE 模型因数十个 expert FFN 导致 checkpoint 体积远超同计算量的 dense 模型；(b) sharding 效率低——未利用全部 EP groups 的带宽；(c) snapshot 与 F&B 重叠不足——MoE 的 F&B 时间不随 expert 数量成比例增加，但 checkpoint 数据量随 expert 数线性增长，snapshot 无法被 F&B 完全覆盖导致 stall。
+
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  - 论文提出 MoC-System（Mixture-of-Checkpoint System），通过 algorithm-system co-design 的 PEC（Partial Experts Checkpointing）机制在 checkpoint 时仅选择性保存 K_pec 个 expert，大幅降低 checkpoint 数据量；配合 Fully Sharded Checkpointing 充分利用全部 DP ranks 和 EP groups 的带宽；以及 Two-Level Checkpointing Management（snapshot-PEC + persist-PEC + triple buffering）实现两级异步管理。每个设计直接对应解决 baseline 的特定缺陷。
+  - 全栈执行例子（MoC-System, GPT-350M-16E, ZeRO-2 DP=16 + EP=16, K_snapshot=4, K_persist=1, A800×16）：
+    - **算法层（PEC 机制——解决 checkpoint 数据量过大的缺陷）**：
+      - PEC 在每次 checkpoint 时仅保存 K_pec 个 expert 的 weights + optimizer states（而非全部 N 个），非 expert 部分完整保存。Checkpoint size 从 C_full ≈ (P_ne + P_e) · (B_w + B_o) 降至 C_pec ≈ (P_ne + K_pec/N · P_e) · (B_w + B_o)。以 GPT-350M-16E 为例，K_pec=1 时 checkpoint 总量降至 baseline 的 42.3%（即减少 57.7%），expert optimizer states 部分从 74% 降至约 5%（1/16）。
+      - 量化精度的 PLT 指标：PLT = (1/N_moe) Σ_i Σ_j L_{i,j} / (T_i · TopK_i)。实验证明 PLT < 3.75% 时 validation loss 与非故障 case 可比（delta < 0.005）。
+      - Sequential Selection：交错轮转选择策略——checkpoint_iteration c 时，MoE layer l 保存 expert[l+c : l+c+K_pec] mod N，保证各 EP rank 的 workload 均衡且 PLT 可控。
+      - Dynamic-K：当累积故障导致 PLT 逼近 3.75% 阈值时，K_pec 自动翻倍（如 1→2→4→...→N），将额外故障的精度风险控制在阈值内。
+      - **对比 baseline**：baseline 保存全部 N 个 experts（K_pec=N），PEC 仅保存 1~4 个——在 K_pec=1 时 checkpoint 体积缩减至 baseline 的 42%。
+    - **系统框架层（Fully Sharded Checkpointing——解决 sharding 效率低的缺陷）**：
+      - Expert Part Equal Sharding：将每个 expert 按参数切分，由不同 EP group 的对应 rank 分担保存（而非仅 EP-Group-0）。以 expert 为最小切分单位，EP-Group-0 Rank0 保存 Expert0 的前半，EP-Group-1 Rank2 保存 Expert0 的后半。
+      - Non-Expert Part Equal Sharding：以 layer（如 Attention、FFN）为最小单位，在所有 DP ranks 之间均匀分配非 expert 部分的保存任务。
+      - Adaptive Sharding for PEC：当 (K_pec · N_moe) mod D_ep ≠ 0 导致部分 rank 保存更多 experts 时，用贪心算法将非 expert shards 优先分配给负载最轻的 rank。例如 K_pec=1, N_moe=12, D_ep=8 时，"Rank0" 需保存 2 个 experts 而其他 rank 仅保存 1 个——adaptive sharding 将更小的非 expert layer 分给 Rank0。
+      - 理想负载公式：C_rank ≈ (P_ne + P_e)·B_o/D_ep + P_ne·B_w/D_dp + P_e·B_w/D_ep。
+      - **对比 baseline**：baseline 仅用 EP-Group-0 保存，bottleneck rank workload 高且不均衡；fully sharded 将 bottleneck workload 减少 12%-29%（full saving）和 22%-29%（PEC saving），adaptive sharding 额外减少 3.7%-6.1%。
+    - **编译框架层**：论文未明确说明。
+    - **Kernel调度层（Two-Level Checkpointing Management——解决 snapshot 无法被 F&B 完全重叠的缺陷）**：
+      - Snapshot-PEC 配置 K_snapshot≥K_persist（如 K_snapshot=4, K_persist=1）——GPU→CPU 时传输更多 experts（利用 PCIe 高带宽），CPU→Storage 时仅持久化最少 experts（利用持久存储的高可靠性）。
+      - Triple Buffering：三个异步 buffer（snapshot/persist/recovery）状态机——snapshot buffer 完成 GPU→CPU 后自动转 persist buffer → CPU→Storage → 转 recovery buffer。第三 buffer 保证 snapshot 和 persist 可并行，且总有恢复用 buffer 可用。
+      - 异步线程：每个训练进程内的独立线程触发 snapshot，与下一迭代的 F&B 完全重叠。仅当 snapshot 未在 F&B 完成前结束才导致 stall。
+      - Two-Level Recovery：故障后，未故障节点直接从 CPU memory snapshot 恢复 K_snapshot 个 experts（比持久存储中的 K_persist 个更近期），有效降低 PLT。
+      - **对比 baseline**：baseline 的 O_save 在 Case1/Case3 中无法被 F&B 完全覆盖（snapshot 时长 > F&B 时长）→ checkpoint stall；MoC-Async 通过 K_snapshot=4 将 snapshot 数据量减至原来的 4/16 = 25%，snapshot 时长缩短使完全重叠成为可能。实际结果：O_save 减少 98.2%-98.9%（Case1-3），每迭代加速 3.25×-5.12×（vs baseline blocking），I_ckpt 减半（Case2 中从 2.3 降至 1.2）。
+    - **硬件架构层**：利用 GPU→CPU PCIe 的高带宽（快于网络到存储）做 snapshot 级保留更多 experts，利用 CPU memory 作为 intermediate buffer 减少 PLT。Scaling 模拟（ASTRA-SIM）显示：在 ≤1024 GPU 时 MoC-Async 优于 Base-Async（因 snapshot 更长无法重叠）；H100 场景下即使 1024 GPU 也无法重叠 Base-Async 的 snapshot；序列长度和模型大小实验证明 MoC-Async 在所有场景下均保持效率优势。
+    - **算法层额外贡献（Fine-tuning 和下游任务反直觉收益）**：PEC 恢复后的模型在下游 8 个任务上平均 accuracy 提升 0.62%-1.08%（vs baseline full checkpointing），其中 BoolQ 提升高达 6.97%。假设 state loss 可能作为 dropout 变体防止过拟合。Fine-tuning 实验中，冻结全部 expert 参数仍可达 full fine-tuning 的 98.8% accuracy（61.16%→63.32% vs 64.09%），验证了 expert 参数对更新次数不敏感的观察——这是 PEC 可行的算法基础。

@@ -1,6 +1,6 @@
 ---
 name: paper-knowledge
-description: Extract and maintain a layered academic terminology knowledge base from local AI systems, LLM inference, accelerator, compiler/runtime, serving, GPU kernel, or architecture papers. Use when the user provides a paper title, title number, filename, or workspace identifier and asks to learn knowledge, extract key terms, update knowledge_repo, or build Chinese knowledge-base entries. Requires two user-provided path parameters: {{paper_dir}} (where PDF papers are located) and {{knowledge_dir}} (where knowledge base markdown files are written).
+description: Extract and maintain a layered academic terminology knowledge base from local AI systems, LLM inference, accelerator, compiler/runtime, serving, GPU kernel, or architecture papers. Use when the user provides a paper title, title number, filename, or workspace identifier and asks to learn knowledge, extract key terms, update knowledge_repo, or build Chinese knowledge-base entries. Requires two user-provided path parameters: {{paper_dir}} (where paper Markdown and images are located) and {{knowledge_dir}} (where knowledge base markdown files are written).
 ---
 # Paper Knowledge Base
 
@@ -10,12 +10,12 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
-| `{{paper_dir}}` | 论文 PDF 所在目录 | `/data3/paper_analysis/papers/paper_2026` |
+| `{{paper_dir}}` | 论文 Markdown（`<标题>.md`）所在目录 | `/data3/paper_analysis/papers/paper_2026` |
 | `{{knowledge_dir}}` | 知识库 Markdown 文件输出目录 | `/data3/paper_analysis/repo_2026/knowledge_repo` |
 
 ## Overview
 
-根据所给论文标题，在用户提供的 `{{paper_dir}}` 目录中找到原文PDF。阅读论文背景、Preliminary、动机（baseline）和方法章节，提取关键学术术语，判断关键术语所处层次，并根据论文描述或联网搜索解释，输出到对应层次的知识库。
+`{{paper_dir}}` 目录中已包含待处理论文的 `<标题>.md`（Markdown 格式全文）。直接读取 `.md` 全文，阅读论文背景、Preliminary、动机（baseline）和方法章节，提取关键学术术语，判断关键术语所处层次，并根据论文描述或联网搜索解释，输出到对应层次的知识库。
 
 某层次知识库中已有相同术语，则根据新描述，补充原有术语的知识。
 
@@ -23,12 +23,11 @@ description: Extract and maintain a layered academic terminology knowledge base 
 
 ## Workflow
 
-### 第一步：定位论文PDF
+### 第一步：读取论文 Markdown
 
-1. 根据用户提供的论文标题、编号、文件名或标识符，在 `{{paper_dir}}` 目录中搜索原始PDF。
-2. 搜索策略：使用 `rg --files`、标题片段、论文编号和可能的文件名变体进行匹配。
-3. 如果用户只给出编号，先通过 `paper_titles.md` 等本地标题列表进行映射。
-4. 优先使用可读全文，顺序为：配套提取的 `.txt`/`.md` > PDF文本提取 > 官方论文HTML > 其他本地笔记。不要仅依赖摘要或二手总结。
+1. 根据用户提供的论文标题、编号、文件名或标识符，在 `{{paper_dir}}` 目录中找到对应的 `<标题>.md` 文件。
+2. 读取 `<标题>.md` 全文作为论文正文。
+3. 搜索策略：使用 `ls` 列出目录内容，按标题片段、论文编号或文件名变体匹配 `.md` 。不要仅依赖摘要或二手总结。
 
 ### 第二步：阅读论文关键章节
 
@@ -52,6 +51,11 @@ description: Extract and maintain a layered academic terminology knowledge base 
 - 术语的一般实现方式和使用方式
 
 结合论文描述和联网搜索，让解释具体、精准。
+
+对每个提取的术语，执行以下子任务：
+
+1. **调用 `/obsidian-keyword-explain`**：以该术语作为输入调用 `/obsidian-keyword-explain`，将返回结果作为当前术语的补充上下文，帮助完善术语的解释、层次拆解和实现说明。
+2. **阻塞条件**：当前步骤的所有术语均完成 `/obsidian-keyword-explain` 调用并将结果纳入上下文之前，不得进入第四步。
 
 ### 第四步：术语分层
 
@@ -258,7 +262,7 @@ description: Extract and maintain a layered academic terminology knowledge base 
 完成前验证：
 
 - 每个更新的文件路径存在且包含新条目或合并条目。
-- 目标论文尽可能通过 `{{paper_dir}}` 解析。
+- 目标论文尽可能通过 `{{paper_dir}}` 中的 `.md` 文件解析。
 - 每个术语包含其目标层次所需的字段。
 - 已有术语被合并而非重复。
 - 每个 `涉及论文标题` 包含当前论文标题。

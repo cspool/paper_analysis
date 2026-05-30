@@ -58,7 +58,7 @@
 	  - (2) SLO-customized selection：coding copilot（TPOT SLO最紧）优先获高prob节点，累计≥3 expected accepted tokens达SLO目标；chatbot获中等节点（≥1 token）；summarization仅获最低需求节点；
 	  - (3) throughput-optimized selection：剩余budget全局最高prob节点分配；
 	  - (4) target LLM tree-based verification并行验证所有请求selected trees。
-	==每个request生成beam，batch请求构造draft tree。==
+	==每个请求用beam-search，每个请求构造draft tree（预测多个draft分支）。按照预算约束和SLO-ddl分配验证预算。==
   - 系统框架/Serving层：FlexFlow Serve + SLO-customized scheduler。
 	  - Request manager维护per-request latency/token/SLO状态。
 	  - FlashInfer batched prefill kernel改造用于speculation+verification。

@@ -1,13 +1,26 @@
 ## AIMS: A Cost-Efficient Framework for LLM-based Agent Deployment in Cloud-Edge Hybrid Environments
 
 - baseline方法是什么？
-  Baseline有两个层次：(1) HybridLLM [8]：使用classifier对每个subtask独立判定走SLM或LLM，subtask之间无依赖感知、无位置感知。每次路由决策仅考虑当前subtask的内容特征，忽略subtask在agent reasoning workflow中的阶段（early/mid/late）和subtask间的因果链（前一个subtask的SLM输出可能导致后续subtask偏离LLM路径）；(2) Minions [31]：confidence-based routing，SLM先尝试执行每个subtask，用average log-probability衡量uncertainty，低置信度时escalate到云LLM。同样逐subtask独立决策，不建模subtask依赖和位置效应。两个baseline的共同缺陷：将AI agent的subtask序列视为彼此独立的单次请求集合，忽略agent workflow中subtask间的强依赖关系和cascading effect——一个早期subtask的错误路由可能改变后续整个subtask链。
+  Baseline有两个层次：
+- (1) HybridLLM [8]：使用classifier对每个subtask独立判定走SLM或LLM，subtask之间无依赖感知、无位置感知。每次路由决策仅考虑当前subtask的内容特征，忽略subtask在agent reasoning workflow中的阶段（early/mid/late）和subtask间的因果链（前一个subtask的SLM输出可能导致后续subtask偏离LLM路径）；
+
+- (2) Minions [31]：confidence-based routing，SLM先尝试执行每个subtask，用average log-probability衡量uncertainty，低置信度时escalate到云LLM。同样逐subtask独立决策，不建模subtask依赖和位置效应。
+
+- 两个baseline的共同缺陷：==baseline-classifer决策subtask路由到SLM或者LLM，建模假设将AI agent的subtask序列视为彼此独立的单次请求集合，忽略agent workflow中subtask间的强依赖关系和cascading effect==——一个早期subtask的错误路由可能改变后续整个subtask链。
 
   全栈执行例子（以HotpotQA "maternal grandfather of Titanic director"请求 + HybridLLM + Qwen3-4B/GPT-5 + RTX 5090为例）：
-  - 算法层/Serving层：AutoGen agent生成subtask ST1="Identify Titanic director"→HybridLLM classifier判定ST1简单→路由到Qwen3-4B SLM→SLM输出"James Cameron"（正确）。但ST1的SLM执行导致agent state与LLM路径产生微小差异→ST2="Find James Cameron's mother"→SLM可能输出"Shirley Lowe"但遗漏full name细节→ST3="Find Shirley Lowe's father"因缺少中间名而搜索到错误人物。HybridLLM的classifier在每个subtask独立评估时可能都判定"简单"，但累积状态偏移（early divergence accumulation）最终导致最终答案错误。HybridLLM在HotpotQA上accuracy仅76.35%，SLM usage 68.40%，对后期subtask（late-stage）的LLM→SLM切换导致精度损失高达9.53%（vs early-stage仅5.25%），但classifier因无位置感知而对所有stage一视同仁。
+  - 算法层/Serving层：
+  - AutoGen agent生成subtask ST1="Identify Titanic director"→HybridLLM classifier判定ST1简单→路由到Qwen3-4B SLM→SLM输出"James Cameron"（正确）。
+
+  - 但ST1的SLM执行导致agent state与LLM路径产生微小差异→ST2="Find James Cameron's mother"→SLM可能输出"Shirley Lowe"但遗漏full name细节→ST3="Find Shirley Lowe's father"因缺少中间名而搜索到错误人物。
+
+  - HybridLLM的classifier在每个subtask独立评估时可能都判定"简单"，但累积状态偏移（early divergence accumulation）最终导致最终答案错误。HybridLLM在HotpotQA上accuracy仅76.35%，SLM usage 68.40%，对后期subtask（late-stage）的LLM→SLM切换导致精度损失高达9.53%（vs early-stage仅5.25%），但==classifier因无位置感知而对所有stage一视同仁。忽略subtask在全局所处的stage==
+
   - 编译框架层：论文未明确说明（llama.cpp默认编译路径）。
   - kernel调度层：论文未明确说明（使用llama.cpp默认CUDA kernel）。
-  - 硬件架构层：NVIDIA RTX 5090（本地SLM执行），云端LLM API（GPT-5/Claude Sonnet 4），无定制硬件。
+
+  - 硬件架构层：==NVIDIA RTX 5090（本地SLM执行），云端LLM API==（GPT-5/Claude Sonnet 4），无定制硬件。
+
 
 - 论文方法是什么？如何对应解决Baseline的缺陷？
   **方法概述**：AIMS提出Adaptive Iteration-level Model Selector，将AI agent的subtask调度从"独立per-subtask routing"升级为"position-aware、dependency-aware的workflow-level routing"。五个核心组件：User Request Classifier（全请求级过滤）、Subtask Similarity Evaluator（subtask级fast-path）、S-L Similarity Evaluator（SLM-LLM距离预测回退路径）、Convergence Detector（未来收敛点搜索）、Subtask Decomposer（复杂subtask分解为SLM友好粒度）。所有estimator基于offline profiling数据用ModernBERT/Qwen3-0.6B + LoRA fine-tune（2小时/A100），在线推理仅需2GB VRAM。
@@ -30,7 +43,16 @@
   → 方法（URC request-level pre-filter）：AIMS在subtask routing之前先用URC判断整请求能否直接走SLM。若全请求输出similarity>0.7则跳过所有subtask routing。实验：w/o URC的SLM usage下降13.40%（from 83.58% to 70.18%），accuracy仅微降0.80%，说明URC在不牺牲精度前提下批量捕获简单请求的SLM机会。
 
   **论文方法全栈执行例子（HotpotQA "maternal grandfather of Titanic director" + AIMS + Qwen3-4B/GPT-5 + RTX 5090）**：
-  - 算法层/Serving层（AIMS routing pipeline）：URC预测request similarity<0.7→进入subtask routing。ST1="Identify Titanic director"→SSE预测next subtask similarity→κ(1)=0.62（宽松）→SLM执行ST1，输出"James Cameron"。ST2="Find director's mother"→SSE similarity<κ(2)=0.64→SLE predict d=1（SLM多需1步可达LLM对应）→SP_SLM predicted ST3 vs SP_LLM predicted ST2 similarity>κ→SLM执行ST2→SLM自动生成ST2.5="Search James Cameron biography for mother's name"（S-L distance的额外subtask）。ST3="Confirm maternal grandfather"→SSE/SLE均失败→CD迭代搜索：SP_SLM/SP_LLM forward predict 3步→第3对similarity>0.7→收敛点在第3个future subtask→SLM执行ST3及后续2步。ST6（新生成的final confirmation）→SSE/SLE/CD全失败→SD分解为"Search Shirley Lowe's father"+"Extract father's full name"+"Find birth/death dates"+"Confirm maternal grandfather"→4个子subtask全部通过SSE→SLM整组执行。最终accuracy 90.75%、SLM usage 81.85%。
+  - 算法层/Serving层（AIMS routing pipeline）：
+==论文提出各种策略和机制探索尽可能让task留在SLM，SSE+stage-aware threshold作为classifer。SLE评估多步SLM能平替LLM的task。CD评估LLM在未来H步内是否可能用SLM平替。SD将当前subtask拆的更简单后重新SSE评估。==
+  - URC预测request similarity<0.7→进入subtask routing。ST1="Identify Titanic director"→SSE预测next subtask similarity→κ(1)=0.62（宽松）→SLM执行ST1，输出"James Cameron"。
+  - 
+  - ST2="Find director's mother"→SSE similarity<κ(2)=0.64→SLE predict d=1（SLM多需1步可达LLM对应）→SP_SLM predicted ST3 vs SP_LLM predicted ST2 similarity>κ→SLM执行ST2→SLM自动生成ST2.5="Search James Cameron biography for mother's name"（S-L distance的额外subtask）。
+  - 
+  - ST3="Confirm maternal grandfather"→SSE/SLE均失败→CD迭代搜索：SP_SLM/SP_LLM forward predict 3步→第3对similarity>0.7→收敛点在第3个future subtask→SLM执行ST3及后续2步。
+  - 
+  - ST6（新生成的final confirmation）→SSE/SLE/CD全失败→SD分解为"Search Shirley Lowe's father"+"Extract father's full name"+"Find birth/death dates"+"Confirm maternal grandfather"→4个子subtask全部通过SSE→SLM整组执行。最终accuracy 90.75%、SLM usage 81.85%。
+- 
   - 编译框架层：论文未明确说明（llama.cpp默认编译，estimator PyTorch + LoRA fine-tune）。
   - kernel调度层：论文未明确说明（llama.cpp默认CUDA kernel，无定制kernel）。
   - 硬件架构层：NVIDIA RTX 5090 GPU本地运行Qwen3-4B（4-6GB VRAM），云端GPT-5 API。Estimator推理约2GB VRAM additional。调度决策overhead占总时间3-7%。网络hop latency平均0.58s。Cloud cost 0.17× vs All-LLM（83% savings）。

@@ -1,0 +1,10 @@
+## MoE-Prism: Disentangling Monolithic Experts for Elastic MoE Services via Model-System Co-Designs
+
+- 属于Serving调度的实现是什么？实验比较什么？
+  - 实现：MoE-Prism 的 Online Scheduling Engine，基于一次性的 offline benchmark 构建轻量级性能模型 C(k_active)，将激活 sub-expert 数量映射到延迟和内存开销。包含两种调度策略：
+    1. **Quality-Constrained Throughput Scheduler（云端吞吐最大化）**：维护 M 个虚拟队列（M=可能的 k_active 数量），每个请求根据 k_min 加入所有满足质量需求的虚拟队列。调度器对各队列计算效用函数 U_m = Σ tokens(R_i) / C(|Q_m|, m)，选择效用最高的队列发射批次。两个硬触发器防饥饿：Batch Full（队列满 B_max）和 Timeout（请求等待超 T_max）。每当从 Q_m 发射批次时，所有批次内请求从所有虚拟队列中原子移除。
+    2. **Latency-Optimized Offloading Manager（内存受限设备延迟最小化）**：VRAM Cache Manager 将 GPU VRAM 作为 sub-expert 缓存（LRU 策略），CPU RAM 作为持久存储。Generation Step Orchestrator 逐 token 循环：运行 router 确定所需 sub-expert 集合 S_req(t) → 查询 VRAM cache 得到 miss set S_miss(t) → 异步 CPU→GPU 传输 S_miss(t) → 计算。每步延迟 L(t) = Latency_IO(S_miss) + Latency_compute(S_req)。细粒度 sub-expert 使 I/O 从加载整个 monolithic expert 变为按需只传输所需 sub-expert。
+  - 实验比较：与 FullBatch（静态批处理直到 B_max 才发射）和 FIFO（动态非阻塞，先到先服务）两种基线调度器对比。评估指标包括 TTFT（首 token 延迟）、TPOT（每输出 token 延迟）、吞吐量（req/s）、端到端延迟。三个负载等级（low/medium/high），请求到达服从 Poisson 分布，实验时长 300 秒。Offloading 实验在 RTX 4080 (16GB) 和 RTX 4090 (24GB) 上测试。
+- 硬件平台是什么，配置是什么：NVIDIA H800 GPU（云端调度），RTX 4080 16GB / RTX 4090 24GB（offloading 实验）。软件环境：PyTorch 2.7.0, CUDA 12.6。
+- 开源Serving框架是什么。修改了什么：基于 vLLM 0.9.1 修改，增加了自定义 gating logic 以支持 MoE-Prism 的 proxy gating 和 fine-grained sub-expert 选择。具体修改包括：(1) 修改 MoE layer 的路由逻辑，将原始 top-k expert 选择替换为 fine-grained sub-expert 的 gate neuron proxy 评分机制；(2) 修改 expert 加载/卸载逻辑，支持 sub-expert 粒度的 CPU-GPU 数据传输和 VRAM 缓存管理。
+- 开源情况：论文未明确说明开源链接。基于论文描述，Serving 框架使用流程：(1) 部署前执行一次 benchmark，对每种 k_active 值测量延迟/内存，构建查找表 C(k_active)；(2) 加载 refactored model（含 sub-expert 权重和 gate neuron 索引）；(3) 云端场景：请求到达→按 k_min 分配到所有符合条件的虚拟队列→计算各队列效用 U_m→选择效用最高队列或触发硬触发器→发射批次→vLLM 推理→返回结果；(4) Offloading 场景：VRAM cache 初始装载热点 sub-expert→解码循环中 router 输出 S_req(t)→miss=不在 cache 的子 expert→异步 CPU→GPU 传输→GPU 计算→LRU 更新 cache→生成下一个 token。吞吐实验中 MoE-Prism 在 Deepseek 上比 FIFO+原模型提升 19.9% 吞吐（13→15.59 req/s），在 OLMoE 上提升 14.9%（15.57→17.89 req/s）。Offloading 实验中端到端延迟降低约 10%。

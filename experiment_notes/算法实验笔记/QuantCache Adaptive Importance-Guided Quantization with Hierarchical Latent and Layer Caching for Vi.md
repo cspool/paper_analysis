@@ -1,0 +1,25 @@
+## QuantCache Adaptive Importance-Guided Quantization with Hierarchical Latent and Layer Caching for Video Generation
+
+- 属于算法pipeline的实现是什么？实验比较什么？
+  - 实现：QuantCache 是一个针对 Diffusion Transformers (DiTs) 视频生成的 training-free 联合优化推理加速框架，包含三层算法 pipeline：(1) **Hierarchical Latent Caching (HLC)**：基于 inter-step feature divergence 自适应决定缓存刷新策略。对每个 timestep t 和 layer l，计算 timestep-wise feature divergence score D_t^(l) = ||p_t^(l) - p_{t-k}^(l)||_1 / k · ||∇_t m_t^(l)||（p_t^(l) 为 layer l 在 timestep t 的激活，k 为上次缓存步，∇_t m_t^(l) 为帧间梯度），根据 D_t^(l) 与阈值 δ_1、δ_2 的关系分三档决定缓存刷新间隔 τ_t^(l) ∈ {τ_max, τ_mid, τ_min}；(2) **Adaptive Importance-Guided Quantization (AIGQ)**：权重量化方面，通过评估每层的 numerical error、perceptual distortion 和 temporal dynamics 计算 sensitivity，在总 bit-width 预算 B_total 约束下迭代分配 precision（Σ_l B(l) ≤ B_total），并引入 channel-balancing mechanism（scaling 修正静态 imbalance + rotation 修正动态 timestep 变化）减少量化 outlier；激活量化方面，提出 timestep-wise content-adaptive bit allocation function bit-width(t) ∈ {Bit_max, Bit_mid, Bit_min}，基于 timestep 冗余度 D_t 自适应调节激活精度；(3) **Structural Redundancy-Aware Pruning (SRAP)**：在线计算相邻层 feature 的 cosine similarity S_t^(l,l+1) = ⟨p_t^(l), p_t^(l+1)⟩ / (||p_t^(l)|| ||p_t^(l+1)||)，当 S > τ_high 时完全跳过 layer l+1 的计算，当 τ_low ≤ S ≤ τ_high 时以概率 P_base 剪枝，当 S < τ_low 时不剪枝。同时 track 累积 feature variation V_t = Σ||p_t - p_{t-i}||_1 动态调整剪枝概率：V_t 低时增加剪枝（精细 refine 阶段），V_t 高时减少剪枝（剧烈变化阶段）。三层联合优化：HLC 消除跨 timestep 冗余计算，AIGQ 按 feature sensitivity 动态降精度，SRAP 在同一 timestep 内剪枝冗余层。伪代码：每个 timestep t → 计算 D_t^(l) → HLC 决定是否刷新缓存 τ_t^(l) → AIGQ 按 bit-width(t) 量化权重/激活 → 计算 S_t^(l,l+1) → SRAP 决定是否跳过 layer l+1 → 仅对非缓存/非剪枝层执行 full compute。
+  - 实验比较：(a) VBench 质量对比：QuantCache W8A8/W4A6 vs Open-Sora FP16, Q-diffusion, Q-DiT, PTQ4DiT, SmoothQuant, Quarot, ViDiT-Q 在 8 维度（Motion Smoothness, BG Consistency, Subject Consistency, Aesthetic Quality, Imaging Quality, Dynamic Degree, Scene Consistency, Overall Consistency）；(b) CLIP+DOVER 质量对比：CLIPSIM, CLIP-Temp, VQA-Aesthetic, VQA-Technical 四项指标；(c) Ablation study: Baseline(无优化) vs +HLC vs +HLC+AIGQ vs +HLC+AIGQ+SRAP 各组件贡献（speedup 从 1.00× → 4.12× → 6.33× → 6.72×）；(d) Speedup 对比：QuantCache vs Open-Sora, T-Gate, PAB, ViDiT-Q, AdaCache-slow, AdaCache-fast（1.00×∼2.24× vs 6.72×）。
+
+- 硬件平台是什么，配置是什么。
+  - 单张 NVIDIA A800-80GB GPU，CUDA 12.1。开发了 optimized GEMM CUDA kernels，通过 kernel fusion 将量化过程与 rotation transformations 及 intermediate feature caching 融合。
+
+- 模型是什么。数据集和bench分别是什么。
+  - 模型：Open-Sora 1.2（DiT-based video generation model），生成 64-frame, 512×512 resolution 视频，100 timesteps（denoising steps）。
+  - Benchmarks：(1) VBench benchmark suite（8 个评估维度：Motion Smoothness, Background Consistency, Subject Consistency, Aesthetic Quality, Imaging Quality, Dynamic Degree, Scene Consistency, Overall Consistency）；(2) CLIP 指标（CLIPSIM, CLIP-Temp，衡量 text-video alignment 和 temporal semantic consistency）；(3) DOVER 视频质量评估（VQA-Aesthetic, VQA-Technical）。
+  - Baseline 方法：Q-diffusion (ICCV 2023), Q-DiT (2024), PTQ4DiT (NeurIPS 2025), SmoothQuant (ICML 2023), Quarot (NeurIPS 2024), ViDiT-Q (ICLR 2025), T-Gate (TMLR 2025), PAB (2024), AdaCache (2024)。
+  - Quantization scheme：uniform min-max quantization，per-channel weight quantization + dynamic per-layer activation quantization（激活量化参数 online 计算）。混合精度权重量化 offline 确定（small calibration dataset）。
+
+- 开源情况。基于开源文档和论文，使用例子解释，解释算法pipeline，至少具体到伪代码或张量计算。
+  - 开源：https://github.com/JunyiWuCode/QuantCache（论文声明 code and models will be available）
+  - 算法 pipeline 张量计算流程（以 Open-Sora 1.2, W4A6 + HLC + SRAP 为例）：
+    1. **初始化/Calibration**：加载 Open-Sora 1.2 预训练权重（FP16）→ 用 small calibration dataset 前向传播 → 记录每层 weight sensitivity（numerical error + perceptual distortion + temporal dynamics）→ offline 确定混合精度 bit-width 分配：关键层（高 sensitivity）→ Bit_max (e.g. 8-bit)，次要层 → Bit_mid (e.g. 6-bit)，冗余层 → Bit_min (e.g. 4-bit)。同时记录 channel-balancing scaling factors（offline 融合到前层权重）。
+    2. **Per-timestep 推理循环**（共 100 timesteps，以 timestep t 为例）：
+       - Step 1 — HLC 决策：计算 D_t^(l) = ||p_t^(l) - p_{t-k}^(l)||_1 / k · ||∇_t m_t^(l)|| → 如果 D_t^(l) < δ_1 且上次缓存未过期(τ_t^(l)=τ_max) → 直接复用 cached feature，跳过 layer l 的完整计算。如果 D_t^(l) ≥ δ_2 → τ_t^(l) = τ_min（频繁刷新）。
+       - Step 2 — AIGQ 量化（对非缓存层）：计算 timestep 冗余度 D_t（从 D_t^(l) 聚合）→ 确定激活 bit-width: D_t ≥ θ_2 → Bit_min (aggressive quant)；θ_1 ≤ D_t < θ_2 → Bit_mid；D_t < θ_1 → Bit_max。Weights: W̄ = clamp(round(W / s_W) + z_W, 0, 2^b_W - 1)（per-channel）。Activations: X̄ = clamp(round(X / s_X) + z_X, 0, 2^b_X - 1)（dynamic per-layer, online compute s_X = (max(X) - min(X))/(2^b_X - 1)）。Channel balancing: X_balanced = R @ (S ⊙ X)（S 为 scaling 修正矩阵，R 为 rotation 矩阵）。
+       - Step 3 — Transformer block 计算：对每个 layer l（STA = Spatial-Temporal Attention, CA = Cross-Attention, FFN = Feed-Forward Network）→ 加载量化权重 W̄^(l) 和量化激活 X̄^(l) → 执行低精度 GEMM → dequant 输出。
+       - Step 4 — SRAP 剪枝（同 timestep 内）：计算相邻层 cosine similarity S_t^(l,l+1) = ⟨p_t^(l), p_t^(l+1)⟩ / (||p_t^(l)|| · ||p_t^(l+1)||) → 如果 S > τ_high → 跳过 layer l+1（feature copy forward）。同时计算 V_t = Σ ||p_t - p_{t-i}||_1 → V_t < δ_low（精细 refine）→ 增加剪枝概率；V_t > δ_high（剧烈变化）→ 减少剪枝。
+    3. **去噪输出**：经上述优化后的 DiT 前向计算 → 输出预测噪声 ε_θ(x_t, t) → 更新 x_{t-1} → 循环至 t=0 → VAE decoder 生成视频帧。

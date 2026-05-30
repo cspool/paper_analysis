@@ -1,0 +1,22 @@
+## Sub-MoE: Efficient Mixture-of-Expert LLMs Compression via Subspace Expert Merging
+
+- baseline方法是什么？
+  Baseline 方法包括两类：(1) **Expert Pruning**——Frequency-prune（按 router activation frequency 剪掉低频 expert）、Output-prune（剪掉输出范数最小的 expert）、NAEE（最小化 pruning error）、MoE-I²（遗传搜索）、SEER-MoE（regularization-based fine-tuning）；(2) **Expert Merging**——MC-SMoE（合并 routing policy 相似的 expert）、HC-SMoE（hierarchical clustering 合并）、EEP（进化搜索优化融合矩阵）。所有现有 merging 方法的共同缺陷：使用简单的加权平均（W_merged = Σ α_i W^(i)）直接合并 expert 权重，但由于 MoE 的 routing 机制故意训练出参数空间高度发散的 expert（inter-expert cosine similarity 仅 0.1~0.3），直接合并会引发 catastrophic parameter conflicts，导致性能严重退化。MC-SMoE 和 HC-SMoE 在 50% expert reduction 时性能退化严重（如 Mixtral-8→4 时 HC-SMoE 平均准确率仅 0.51 vs 原始 0.67），MC-SMoE 甚至完全崩溃（PPL > 854）。
+  全栈执行例子（Baseline: HC-SMoE on Mixtral-8×7B → 4×7B，8× H800）：
+  - **算法pipeline层**：对 8 个 expert 做 hierarchical clustering（基于权重的 cosine distance），将 8 个 expert 分成 4 组 → 每组内 expert 权重做 simple averaging：W_merged = (1/|Q|) Σ W_i → 4 个合并后的 expert 替换原 8 个。输入 token x → Router top-2 选择 2 个 merged expert → FFN 计算。由于原 expert 的权重空间高度不同（W_i 中同一位置的参数可能代表完全不同的特征方向），simple averaging 相当于对不同坐标系的向量直接相加，导致合并后的 W_merged 失去所有 expert 的 specialized knowledge。合并后 WikiText-2 PPL 从 3.98 升至 9.88，MMLU 从 0.67 降至 0.39。
+  - **系统框架层**：Transformers / vLLM 推理框架，加载原始 checkpoint 或压缩后 checkpoint，forward 过程中 router 做 top-k expert selection，选中的 expert FFN 逐层执行 up-proj → SiLU → gate-proj → down-proj。压缩后模型参数量从 46.7B 降至 24.2B，GFLOPs 从 2989 降至 1546。
+  - **编译框架/kernel调度/硬件架构层**：论文未明确说明。NVIDIA H800 GPU（80GB × 8），标准 GEMM kernel 执行 expert 计算。
+  Baseline 的核心缺陷：参数冲突问题——MoE 中不同 expert 被 router 训练出高度专业化的参数空间（inter-expert similarity 0.1~0.3），而现有 merging 方法（加权平均、clustering averaging）对不同坐标系的参数直接求和，破坏了每个 expert 的专业化知识。此外，post-merging fine-tuning（如 D²-MoE 的 delta compensation）虽然能部分恢复性能，但计算开销大，削弱了 merging 的效率优势。
+
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  论文方法（Sub-MoE）通过**子空间对齐**解决参数冲突：(1) **Adaptive Expert Clustering**——基于 expert 输出的 cosine similarity（而非参数相似度）用 K-means 对 expert 分组，确保同组 expert 功能一致；(2) **Subspace Expert Merging**——对同组 expert 权重拼接后做联合 SVD，提取共享 U-matrix（正交基）作为共同坐标系，仅在 V 矩阵上做 frequency-weighted merging，利用 Σ 保留重要维度。核心思想：将不同坐标系中的 expert 投影到共享子空间（U），在同一坐标系下合并 V，避免参数冲突。
+  全栈执行例子（Sub-MoE on Mixtral-8×7B → 6×7B，8× H800）：
+  - **算法pipeline层**：(a) Calibration: 从 WikiText-2 采样 128 条 × 2048 token → forward pass 收集每个 expert 的输出 Y_i（而非权重），计算 pairwise cosine similarity Sim(E_i, E_j) = mean(cos(Y_i(x), Y_j(x)))。(b) Adaptive Clustering: 2-layer K-means（16 experts per group）聚类 → 将功能相似的 expert 分入同组。Multi-layer adaptive allocation 在目标压缩比下自动确定每层 k 值。(c) Union SVD: 对同组 expert 的权重垂直拼接 → W_cat = [W^(1); W^(2); ...] ∈ R^{O×nI} → SVD(W_cat) = U Σ [V^(1); ...; V^(n)]^T → U ∈ R^{O×r} 为共享正交基（语义："共同坐标系"），Σ 为重要性权重，V^(i) 为每个 expert 在该坐标系中的坐标。(d) Frequency-based V-Merging: 统计每个 expert 的 router activation frequency f(V_i) = Σ 1[i ∈ top-k(G(x))] / |X| → V_merged = Σ f(V_i)·V_i / Σ f(V_i)（高频 expert 贡献更大）。(e) Reconstruction: W_merged = U Σ V_merged^T ∈ R^{O×I} → 替换组内所有 expert。若需 intra-expert compression（Sub-MoE†），则用输入激活的 whitening matrix S_i 对权重重加权（W'_i = W_i S_i），再做 truncated SVD 截断 Σ 中最小的奇异值，控制 U 和 V 的秩。
+  - **系统框架层**：PyTorch + Transformers 加载模型 checkpoint → CPU/GPU 上执行聚类和合并（纯后处理，无需 GPU training）→ 输出压缩后的 checkpoint。合并操作的计算瓶颈在 SVD（O(min(O, nI)² · max(O, nI))），但仅执行一次，与模型大小相比开销可忽略。压缩后模型在 Transformers/vLLM 上推理：router top-k expert selection 不变，选中的 merged expert 的 FFN 正常执行。若合并为 6 个 expert，模型从 46.7B → ~31.4B params，GFLOPs 从 2989 → ~2319。
+  - **编译框架/kernel调度/硬件架构层**：论文未明确说明。NVIDIA H800 GPU（80GB × 8）。推理时使用标准 PyTorch GEMM kernel，无定制 kernel 优化。论文提供运行时吞吐数据：Sub-MoE† 在 30% intra-expert 压缩下可达 1.38× 吞吐加速（87.7→120.9 tok/s）。
+  方法 vs Baseline 对比核心差异：
+  - **子空间对齐 vs 直接平均**：Union SVD 将 expert 从各自参数空间投影到共享坐标系（U），消除坐标系不一致导致的参数冲突 → Mixtral-8→6：WikiText-2 PPL 5.16 vs HC-SMoE 5.92（↓12.8%），Mixtral-8→4：average accuracy 0.58 vs HC-SMoE 0.51（↑13.7%）
+  - **功能聚类 vs 参数聚类**：基于 expert 输出的 cosine similarity 聚类（而非权重 cosine distance），捕捉功能行为而非参数结构的相似性 → 相比 random clustering 提升 accuracy 0.60→0.64
+  - **Frequency-weighted merging vs uniform averaging**：高激活频率的 expert 处理更多常见模式，在合并中赋予更大权重保留其功能 → 相比 average merging 提升 accuracy 0.62→0.64
+  - **零额外训练 vs post-merging fine-tuning**：Sub-MoE 完全不需要 retraining、fine-tuning 或 searching → 对比 D²-MoE（需要 delta compensation fine-tuning），Sub-MoE†+FT 在 ARC-e 上超出 6%、WinoGrande 超 5%、ARC-c 超 6%
+  - **方法局限性**：依赖 calibration 数据集进行 clustering 和 merging（论文声明 future work 探索 data-free 方式）；仅针对 expert merging 而非 weight compression；SVD 在大规模 MoE（如 Qwen3-128 experts）上的计算开销需进一步评估

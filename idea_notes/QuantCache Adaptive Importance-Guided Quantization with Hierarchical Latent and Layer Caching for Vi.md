@@ -1,0 +1,19 @@
+## QuantCache Adaptive Importance-Guided Quantization with Hierarchical Latent and Layer Caching for Video Generation
+
+- baseline方法是什么？
+  - Baseline 方法：(a) **Open-Sora 1.2**（FP16, 无优化）：DiT-based video generation，100 timesteps denoising，生成 512×512×64 frames 视频耗时 130s on A800-80GB；(b) **现有量化方法**（ViDiT-Q, SmoothQuant, Q-DiT, PTQ4DiT, Quarot, Q-diffusion）：均为 static uniform quantization——固定 bit-width（W8A8 或 W4A8）应用于所有 layers 和所有 timesteps，不区分 layer importance 和 timestep redundancy；(c) **现有缓存方法**（AdaCache, Δ-DiT, T-Gate, PAB, DeepCache）：使用预定义的 static cache schedule（固定缓存间隔），不根据 content-dependent feature divergence 动态调整；(d) **现有剪枝方法**：static layer pruning（预定义固定子集剪枝），不根据运行时 feature similarity 动态调整。Baseline 的核心缺陷：(1) **静态量化**：uniform bit-width 对所有 layer 和 timestep 一视同仁，导致关键层/关键 timestep 精度不足、冗余层/冗余 timestep 计算资源浪费；(2) **静态缓存**：固定间隔缓存不考虑帧间内容变化速度——静态背景也应频繁刷新，剧烈运动场景也按固定间隔缓存导致质量下降；(3) **单技术孤立**：量化、缓存、剪枝各自独立应用，未联合优化，总加速比受限于单一维度（如 ViDiT-Q 仅 1.71×，AdaCache-fast 仅 2.24×）；(4) **DiT 架构适配不足**：DiT 缺乏 U-Net 的 skip connections，传统 feature map caching（如 DeepCache）效果差。
+  - Baseline 在模型推理全栈的执行例子（以 Open-Sora FP16 + ViDiT-Q W8A8 为例）：
+    - **算法pipeline**：Open-Sora 1.2 FP16 权重 → ViDiT-Q per-tensor/per-channel W8A8 uniform quantization → 所有 100 timesteps 用固定 8-bit 精度 → 所有 DiT blocks（STA + CA + FFN）每步完整执行 → VAE decoder 生成视频。
+    - **系统框架**：论文未明确说明 Serving 框架。
+    - **编译框架**：论文未明确说明。
+    - **kernel调度**：标准 INT8 GEMM CUDA kernel，无 kernel fusion，无 caching。量化、GEMM、dequant 各为独立 kernel launch。ViDiT-Q 1.71× speedup on A800-80GB。
+    - **硬件架构**：NVIDIA A800-80GB GPU (Ampere)。生成 512×512×64f 视频 130s（Open-Sora FP16 baseline）。
+
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  - 论文方法：QuantCache = HLC + AIGQ + SRAP 三层联合优化。解决 Baseline 缺陷的方式：(1) **HLC 动态缓存替代静态缓存**：通过 inter-step feature divergence D_t^(l) = ||p_t^(l)-p_{t-k}^(l)||_1/k · ||∇_t m_t^(l)|| 实时评估内容变化速度，分三档自适应刷新（τ_max/τ_mid/τ_min）。变化小的帧（如静态背景）→ 长间隔缓存（τ_max）；变化大的帧（如场景切换）→ 频繁刷新（τ_min）。解决 AdaCache 等静态调度的内容无关性问题，单独 HLC 即实现 4.12× speedup；(2) **AIGQ 动态量化替代 uniform quantization**：权重层面，先离线评估每层 sensitivity（numerical error + perceptual distortion + temporal dynamics），在总预算 B_total 约束下迭代分配 bit-width（Σ B(l) ≤ B_total），关键层（精细纹理/运动连续性相关）多分配精度，冗余层少分配。激活层面，基于 timestep 冗余度 D_t 动态选择 bit-width(t) ∈ {Bit_max, Bit_mid, Bit_min}——高冗余步（连续帧变化小）用 Bit_min 激进量化，低冗余步（场景转换/细节涌现）用 Bit_max 保留精度。额外引入 channel balancing（scaling + rotation）消除量化 outlier。解决 ViDiT-Q 等 uniform quantization 的"一刀切"问题，AIGQ+HLC 联合达 6.33× speedup；(3) **SRAP 动态剪枝替代静态剪枝**：在线计算相邻层 cosine similarity S_t^(l,l+1)，S > τ_high 时完全跳过 layer l+1；同时追踪累积 feature variation V_t 动态调整全局剪枝概率——V_t 低（精细 refine）→ 激进剪枝，V_t 高（剧烈变换）→ 保守剪枝。解决静态剪枝的刚性，总 speedup 达 6.72×；(4) **联合优化替代孤立应用**：HLC（跨 timestep 冗余消除）、AIGQ（精度自适应）、SRAP（同 timestep 层间冗余消除）三个维度互补——HLC 跳过冗余 timestep 时 AIGQ 降低精度进一步加速；AIGQ 激进量化后的 low-precision features 使 SRAP 的相似度计算和剪枝判断更高效；小 skip（低 τ_t^(l)）用更小 bit-width 利用高冗余，大 skip（高 τ_t^(l)）后增加精度补偿缓存带来的 drift。
+  - 全栈执行例子（QuantCache W4A6 + HLC + SRAP on Open-Sora 1.2, A800-80GB）：
+    - **算法pipeline**：Open-Sora 1.2 预训练权重 (FP16) → Offline calibration → AIGQ 混合精度分配（sensitive layers: W8A8, medium: W6A6, redundant: W4A4）→ Channel balancing factors offline 吸收到前层权重。Inference: timestep t → (a) HLC: D_t^(l) = ||p_t^(l)-p_{t-k}^(l)||_1/k · ||∇_t m_t^(l)|| → 三档刷新决策 → 如命中缓存则跳过当前层；(b) AIGQ: bit-width(t) = f(D_t, θ_1, θ_2) → 量化权重 W̄ 和激活 X̄ → 执行 low-precision fused GEMM；(c) SRAP: S_t^(l,l+1) = cosine(p_t^(l), p_t^(l+1)) → 如 S > τ_high → 跳过 layer l+1；(d) V_t 全局剪枝率调整。最终 speedup 6.72×（130s → ~19.3s）。
+    - **系统框架**：论文未明确说明特定 Serving 框架，基于 Open-Sora 推理代码直接修改。
+    - **编译框架**：论文未明确说明。
+    - **kernel调度**：Fused CUDA kernel（quantization + rotation + GEMM 单次 launch）+ HLC cache buffer（GPU global memory）+ SRAP kernel-skip 逻辑（kernel 调用侧判断）。CUDA 12.1, A800-80GB。Kernel fusion 将 3 次 kernel launch（quantize/rotate/GEMM）合并为 1 次。
+    - **硬件架构**：NVIDIA A800-80GB GPU (Ampere, 80GB HBM2e)。6.72× speedup 在单 GPU 上实现，论文未涉及多 GPU 或分布式推理。

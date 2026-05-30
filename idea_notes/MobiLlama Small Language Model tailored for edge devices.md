@@ -1,0 +1,35 @@
+## MobiLlama Small Language Model tailored for edge devices
+
+- baseline方法是什么？
+  - **baseline1（22 层 / hidden 1024）**：通过减少 hidden dimension size 来缩小模型。22 个 Transformer 块，每层 hidden dim = 1024，每层有独立的 MHA + MLP（含 3 个 FFN）。总参数 0.54B。训练时间 7.5 天（A100）。
+    - 缺陷：hidden dim 从 2048 缩减到 1024，模型表征能力受限（bottleneck effect），难以捕捉复杂数据模式。
+  - **baseline2（8 层 / hidden 2048）**：通过减少层数来缩小模型。8 个 Transformer 块，每层 hidden dim = 2048，每层有独立的 MHA + MLP。总参数 0.52B。训练时间 7 天。
+    - 缺陷：深度从 22 层缩减到 8 层，丧失层次化语言表征学习能力，深层语义理解能力下降。
+  - **large-base（22 层 / hidden 2048 / 1.2B）**：直接将 baseline1 的宽度和 baseline2 的深度结合，得到 22 层 + hidden 2048 的模型。每层独立 FFN（占 65% 参数量），总参数 1.2B，训练时间 12 天，GPU 内存 6 GB。虽然精度高（avg 49.06），但参数量和训练成本显著增大，不适合边缘部署。
+  - Baseline 全栈执行例子（以 baseline1 为例，0.54B model 推理一个 token）：
+    - 算法层：token embedding → 22 层 decoder：每层 RMNorm → MHA（32 heads, Q/K/V/O projection）→ 残差连接 → RMSNorm → SwiGLU FFN（W_gate, W_up, W_down，164M FFN 参数/层）→ 残差连接 → 最终 LM head。总计 22 套独立 FFN 参数。
+    - 系统框架层：HuggingFace Transformers PyTorch 推理；边缘部署使用 GGUF 格式 4-bit 量化。
+    - 编译框架层：论文未明确说明。
+    - kernel调度层：标准 PyTorch CUDA kernel + Flash-Attention（预训练时），无自定义 kernel。
+    - 硬件架构层：NVIDIA A100 训练，RTX2080Ti/i7 CPU/Snapdragon-685 部署推理。
+  - Baseline 核心缺陷：**宽度（表征能力）和深度（层次化学习）不可兼得**——保持两者都意味着 1.2B 的参数爆炸（large-base），而满足 0.5B 参数约束就必须牺牲其一（baseline1 牺牲宽度，baseline2 牺牲深度）。根源在于：每层独立 FFN 导致 FFN 参数占 65%，构成参数冗余的核心来源。
+
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  - **MobiLlama 共享 FFN 设计**：从 large-base 的架构（22 layer / 2048 hidden）出发，通过**跨层共享 FFN 参数**大幅削减参数量——所有 22 个 Transformer block 复用同一套 FFN（W_gate, W_up, W_down），省去 21 份冗余 FFN 副本。共享 FFN 将总参数从 1.2B 降至 0.5B（减少约 60%），同时保持 22 层的深度和 2048 的宽度。
+  - **核心洞察**：FFN 参数占 65% 但并非都需要独立——Transformer 不同层对 FFN 的使用有冗余。通过共享可以保留模型的高容量（深度+宽度），并将节省的参数预算用于保持架构完整性。
+  - **如何解决 Baseline 缺陷**：
+    - 针对"baseline1 宽度受限"：MobiLlama 保持 hidden dim=2048（vs baseline1 的 1024），不产生 bottleneck effect，模型可充分捕捉复杂模式。
+    - 针对"baseline2 深度受限"：MobiLlama 保持 22 层（vs baseline2 的 8 层），保留层次化语言表征学习，深入理解上下文。
+    - 针对"large-base 参数爆炸"：共享 FFN 从 1.2B→0.5B（60% 参数减少），训练 GPU 小时从 46.1K→26.6K（42% 减少），GPU 内存从 6GB→3GB（50% 减少）。
+  - 论文方法全栈执行例子（以 MobiLlama 0.5B 推理一个 token 为例）：
+    - 算法层：token embedding → 22 层 decoder：每层 RMSNorm → MHA（32 heads, 每层独立 Q/K/V/O proj）→ 残差连接 → RMSNorm → **shared SwiGLU FFN**（22 层共用同一 W_gate, W_up, W_down，仅 56M 参数）→ 残差连接 → LM head。注意：共享的仅是 FFN，attention 层的 Q/K/V/O projection 每层独立。
+    - 系统框架层：同 baseline，HuggingFace Transformers PyTorch 推理。边缘部署使用 GGUF 4-bit 量化。MobiLlama 0.5B 在 RTX2080Ti bf16：63.38 tok/s，内存 3046 MB，电池 8.19 mAH/1k tokens。
+    - 编译框架层：论文未明确说明。
+    - kernel调度层：标准 PyTorch CUDA kernel + Flash-Attention，无自定义 kernel。共享 FFN 意味着更少的参数需要从 HBM 加载，减少内存带宽压力。
+    - 硬件架构层：预训练用 160×A100(80GB)，部署在 RTX2080Ti/i7 CPU/Snapdragon-685 手机上。无专用硬件设计。
+  - 关键设计动机映射：
+    - baseline1 宽度受限（hidden 1024 → bottleneck） → MobiLlama 保持 hidden 2048，不产生信息瓶颈
+    - baseline2 深度受限（8 layers → 无法深度理解） → MobiLlama 保持 22 layers，保留层次化表征
+    - large-base FFN 冗余（65% 参数 × 22 份副本） → 共享 FFN 仅保留 1 份，削减 60% 参数
+    - "从大开始再缩小"的设计哲学：先设计高容量架构（large-base），再用参数共享机制降低到目标参数量。这种思路保证了架构设计的最优性，而非在设计之初就在容量上妥协。
+  - 开源与透明度：完整训练数据pipeline、训练代码、模型权重、300+ 中间 checkpoints、评估代码全开源（https://github.com/mbzuai-oryx/MobiLlama）。训练数据使用 Amber dataset 1.2T tokens 全透明。

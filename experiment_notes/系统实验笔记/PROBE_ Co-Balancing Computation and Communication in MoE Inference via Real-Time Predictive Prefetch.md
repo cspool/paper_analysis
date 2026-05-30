@@ -1,0 +1,11 @@
+## PROBE: Co-Balancing Computation and Communication in MoE Inference via Real-Time Predictive Prefetching
+
+- 属于Serving调度的实现是什么？实验比较什么？
+  - 实现：PROBE 在 SGLang 框架上实现 Continuous Lookahead Pipelining 机制，包含三个核心模块：(1) Gate-Initialized Lookahead Predictor——克隆目标层 router 参数并冻结作为先验，附加可训练残差 MLP，利用前一层 hidden state 预测下一层 expert 激活分布；(2) Hardware-Aware Balance Planning——单SM CUDA kernel 实现的贪心求解器，以 bottleneck rank 的 latency 为目标函数，在 hiding window 约束下动态复制 expert 到低负载 rank；(3) Phase-Locked Co-Scheduling——双轨架构，Predict/Plan/Update 阶段与 All-to-All Dispatch 重叠，Prefetch 通过 split-phase transmission 与 MoE Compute 和下一层 Attention 重叠。使用 NVSHMEM 管理 replicated-expert buffer，支持每 rank 最多 3 个冗余 expert，双缓冲异步写入。
+  - 实验比较：PROBE vs SGLang（标准 EP + sharded placement）vs DeepSeek-EPLB（统计式负载均衡，2 冗余 slots）。比较指标：(a) Prefill Latency (TTFT)——chunked prefill 8K/16K tokens per rank；(b) Decoding Throughput-Latency Pareto frontier——per-rank batch size 512-1536；(c) Robustness to Semantic Shifts——Code→Chinese 突然切换下的吞吐稳定性；(d) Predictor Fidelity——Top-K Accuracy、Top-Half-K Hit-Rate、2×Top-K Recall；(e) Per-Layer Latency Breakdown。
+- 硬件平台是什么，配置是什么。
+  - 8×NVIDIA Hopper-141GB (H800) 节点，900 GB/s NVSwitch 互联。软件栈：PyTorch 2.9、CUDA 12.9、NCCL 2.27.3、NVSHMEM 3.3.20。
+- 开源Serving框架是什么。修改了什么。
+  - 基于 SGLang 框架。修改包括：(1) 集成 DeepEP (normal mode) 作为 All-to-All 通信后端；(2) 使用 NVSHMEM symmetric memory 管理 replicated-expert buffer region；(3) 实现轻量级全局 All-Gather（NVSHMEM primitives）用于同步 per-rank 预测结果；(4) 实现 Phase-Locked Co-Scheduling 双轨执行调度；(5) 实现 split-phase transmission 避免 P2P prefetch 与 All-to-All Combine 竞争带宽；(6) 使用双缓冲（double buffering）管理最多 6 个 expert slots（3 incoming + 3 outgoing）的异步写入。
+- 开源情况。基于开源文档和论文，使用例子解释Serving框架如何使用？作用是什么？至少具体到框架输入到硬件执行的全过程。
+  - 论文未明确说明是否开源。框架使用流程：请求到达→SGLang continuous batching 组装全局 batch→进入 MoE 层时 PROBE Lookahead Predictor 读取前一层的 hidden states、预测下一层各 expert 的 token 分布→全局 All-Gather 聚合预测结果→单SM CUDA Planning Solver 在 All-to-All Dispatch 期间执行贪心复制决策→若决策复制 expert，通过自定义 Triton kernel 发起 P2P put 操作将 expert weights 从源 rank 传输到目标 rank→Split-phase：传输在 MoE Compute 期间进行，All-to-All Combine 前暂停，Combine 完成后恢复→下一层执行时复制已完成，按照更新后的 routing assignment A 进行 token dispatch→实现 straggler neutralization，将 IR 从 2.13 降至 1.09，prefill 加速最高 1.32×，decoding 吞吐提升最高 1.26×。
