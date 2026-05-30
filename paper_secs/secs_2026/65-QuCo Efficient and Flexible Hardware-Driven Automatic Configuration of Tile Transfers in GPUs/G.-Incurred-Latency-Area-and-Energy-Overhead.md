@@ -1,0 +1,4 @@
+# *G. Incurred Latency, Area and Energy Overhead*
+
+QuCo includes a simple RISC-V microcontroller implementing the RV32IMF instruction set. At the 28 nm FDSOI technology node from ST Microelectronics and operating frequency of 700 MHz, the area estimate for the core is 0.027 mm<sup>2</sup> [42]. As for the memory structures, the combined memory subsystem of QuCo of 8 KiB (firmware)+2 KiB (data)+256-byte GST, occupies a physical footprint of approximately 0.014 mm2, and, according to CACTI, delivers an access latency of 0.37 ns with a dynamic energy cost of 0.0032 nJ per read and 0.0061 nJ per write. Assuming an IPC=1, we estimate QuCo reconfiguration takes 6,300–8,300 cycles—much less than kernel execution time. These results demonstrate that QuCo adds negligible area overhead, latency and energy consumption, making it suitable for integration into modern GPU designs.
+

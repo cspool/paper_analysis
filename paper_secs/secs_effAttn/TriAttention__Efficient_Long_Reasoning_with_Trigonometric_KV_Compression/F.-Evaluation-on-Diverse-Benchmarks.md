@@ -1,0 +1,6 @@
+# F. Evaluation on Diverse Benchmarks
+
+To evaluate generalization beyond mathematical reasoning, we test on LongBench [\(Bai et al.,](#page-8-8) [2024\)](#page-8-8) (16 subtasks spanning QA, summarization, dialogue, retrieval, and code; Qwen3-8B, 50% KV budget) and RULER [\(Hsieh et al.,](#page-9-22) [2024\)](#page-9-22) (retrieval tasks, 4K context). We compare against StreamingLLM [\(Xiao et al.,](#page-10-11) [2024\)](#page-10-11), PyramidKV [\(Cai et al.,](#page-8-9) [2024\)](#page-8-9), KnormPress [\(Devoto et al.,](#page-8-2) [2025\)](#page-8-2), Ada-KV+SnapKV [\(Feng et al.,](#page-9-11) [2025\)](#page-9-11), and H2O [\(Zhang et al.,](#page-10-2) [2023\)](#page-10-2).
+
+Table [B](#page-16-0) presents the full LongBench results. TriAttention achieves the highest average (48.1) across 16 subtasks, winning 11 out of 16, and surpasses Ada-KV+SnapKV by +2.5 (48.1 vs. 45.6). On RULER (Table [C\)](#page-16-1), TriAttention outperforms all baselines with 66.1, a +10.5 gap over SnapKV. We also compare with H2O, which requires O(n 2 ) memory and cannot use FlashAttention; on the 12 LongBench subtasks where H2O fits in 48GB GPU memory (Table [D\)](#page-17-2), TriAttention wins 10 out of 12.
+

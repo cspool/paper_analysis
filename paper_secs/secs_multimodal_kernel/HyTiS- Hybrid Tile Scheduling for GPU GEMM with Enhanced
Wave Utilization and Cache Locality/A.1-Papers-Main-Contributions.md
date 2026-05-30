@@ -1,0 +1,7 @@
+# A.1 Paper's Main Contributions
+
+- 1 We propose a hybrid two-level tile scheduling strategy that alleviates the wave quantization problem without introducing additional synchronization overhead. Evaluations across a wide range of GEMM operators on NVIDIA H100 and A100 GPUs demonstrate that HyTiS achieves significant speedups over cuBLAS, Split-K, Stream-K, and Inductor-Triton.
+- 2 HyTiS improves SM workload balance by adopting hybrid tile scheduling, which simultaneously maximizes throughput for full waves and minimizes latency for partial waves. To efficiently determine the optimal tile configuration at each scheduling level, HyTiS perform an offline profiling stage that identifies throughput-oriented and latency-oriented micro-kernels. These profiled micro-kernels form a compact and efficient runtime search space for selecting the optimal configuration.
+- <sup>3</sup> HyTis implements an adaptive tile layout scheduling method that improves the L2 cache affinity using an analytical model that accounts for data locality both within a single wave and across multiple waves. Based on this model, HyTis adaptively selects the optimal tile layout according to the specific problem size and tile configuration.
+- 4 HyTiS analyzes the impact of hyperparameters1 and 2, demonstrating their sensitivity and illustrating the relationship between the number of virtual tiles ("vtiles") and the size of the search space.
+

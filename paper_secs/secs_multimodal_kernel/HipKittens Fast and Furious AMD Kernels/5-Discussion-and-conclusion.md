@@ -1,0 +1,6 @@
+# 5 Discussion and conclusion
+
+Ideally, AI systems can leverage the full diversity of modern hardware. AMD CDNA4 GPUs offer state-ofthe-art compute and memory bandwidth, but the "CUDA moat" limits adoption. While prior systems such as Triton aim for multi-silicon portability, our study shows that these compilers (and sometimes even C++ compilers) often fail to enable peak AMD performance.
+
+This work provides the first systematic analysis of the principles that enable high-performance AMD AI kernels and introduces HipKittens, a minimal set of C++ embedded programming primitives that capture those principles. Though the abstractions and front-end interface—tiles and PyTorch-inspired bulk operations over tiles—remains the same across NVIDIA and AMD, the instantiation of those abstractions—in terms of schedules, memory movement, and cache optimizations—differ due to fundamental hardware differences. We evaluate the ideas presented in HK by implementing a suite of representative AI workloads and find that we can achieve peak performance across them. By codifying the principles for AMD kernels into composable, open abstractions, these findings move the community closer to the long-standing vision of a universal software stack that performs well across diverse hardware platforms.
+

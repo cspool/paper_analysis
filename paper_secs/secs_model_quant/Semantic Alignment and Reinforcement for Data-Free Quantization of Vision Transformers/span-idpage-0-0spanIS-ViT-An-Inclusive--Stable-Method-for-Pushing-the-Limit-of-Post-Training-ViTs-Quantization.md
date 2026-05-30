@@ -1,0 +1,10 @@
+# <span id="page-0-0"></span>I&S-ViT: An Inclusive & Stable Method for Pushing the Limit of Post-Training ViTs Quantization
+
+Yunshan Zhong<sup>1</sup>,<sup>2</sup> , Jiawei Hu<sup>2</sup> , Mingbao Lin<sup>3</sup> , Mengzhao Chen<sup>2</sup> , Rongrong Ji<sup>1</sup>,2,4\* 1 Institute of Artificial Intelligence, Xiamen University <sup>2</sup>MAC Lab, Department of Artificial Intelligence, School of Informatics, Xiamen University <sup>3</sup> Rakuten <sup>4</sup>Peng Cheng Laboratory,
+
+> zhongyunshan@stu.xmu.edu.cn, jiaweihu@stu.xmu.edu.cn linmb001@outlook.com, cmzxmu@stu.xmu.edu.cn, rrji@xmu.edu.cn
+
+## Abstract
+
+*Albeit the scalable performance of vision transformers (ViTs), the dense computational costs (training & inference) undermine their position in industrial applications. Post-training quantization (PTQ), tuning ViTs with a tiny dataset and running in a low-bit format, well addresses the cost issue but unluckily bears more performance drops in lower-bit cases. In this paper, we introduce I&S-ViT, a novel method that regulates the PTQ of ViTs in an inclusive and stable fashion. I&S-ViT first identifies two issues in the PTQ of ViTs: (1) Quantization inefficiency in the prevalent log2 quantizer for post-Softmax activations; (2) Rugged and magnified loss landscape in coarsegrained quantization granularity for post-LayerNorm activations. Then, I&S-ViT addresses these issues by introducing: (1) A novel shift-uniform-log2 quantizer (SULQ) that incorporates a shift mechanism followed by uniform quantization to achieve both an inclusive domain representation and accurate distribution approximation; (2) A three-stage smooth optimization strategy (SOS) that amalgamates the strengths of channel-wise and layer-wise quantization to enable stable learning. Comprehensive evaluations across diverse vision tasks validate I&S-ViT's superiority over existing PTQ of ViTs methods, particularly in low-bit scenarios. For instance, I&S-ViT elevates the performance of 3-bit ViT-B by an impressive 50.68%. Code:* <https://github.com/zysxmu/IaS-ViT>*.*
+

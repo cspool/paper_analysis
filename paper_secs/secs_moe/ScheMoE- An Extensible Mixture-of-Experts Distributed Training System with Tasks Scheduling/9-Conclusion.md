@@ -1,0 +1,4 @@
+# 9 Conclusion
+
+In this work, we proposed a new flexible and efficient training system, named ScheMoE, for training MoE models on GPU clusters. In ScheMoE, we proposed three new novel techniques: 1) a generic scheduling framework that supports customized implementations for the three main time-consuming tasks: data compression, all-to-all communication, and expert computation; 2) an optimal scheduling algorithm under the constraint of input token partitioning for the MoE layer; and 3) a pipelined all-to-all algorithm that allows intra-node communications to be overlapped with inter-node communications. We implemented our system atop PyTorch and conducted extensive experiments on a 32-GPU cluster connected with 100Gb/s InfiniBand to demonstrate its effectiveness. Experimental results show that our ScheMoE outperforms state-of-the-art MoE systems including Tutel and Faster-MoE by around 1.09×-1.3× in time efficiency on several common configurations of MoE models.
+

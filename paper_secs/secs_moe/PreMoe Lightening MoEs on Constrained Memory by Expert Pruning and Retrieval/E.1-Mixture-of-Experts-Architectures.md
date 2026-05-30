@@ -1,0 +1,8 @@
+# **E.1 Mixture-of-Experts Architectures**
+
+The Mixture-of-Experts (MoE) paradigm has been instrumental in scaling neural networks to trillions of parameters while keeping computational costs manageable [\(Shazeer et al.,](#page-10-0) [2017;](#page-10-0) [Lepikhin et al.,](#page-9-0) [2020\)](#page-9-0). By routing each input token to a small subset of "expert" subnetworks, MoE models such as GShard, Switch Transformers [\(Fedus et al.,](#page-9-9) [2022\)](#page-9-9), and more recent large language models like Mixtral [\(Jiang et al.,](#page-9-1) [2024\)](#page-9-1) and DeepSeek-R1 [\(Guo et al.,](#page-9-3) [2025\)](#page-9-3) achieve performance comparable to much larger dense models through dynamic, sparse activation of parameters.
+
+### **E.2 Efficiency in Large Language Models**
+
+The challenge of deploying massive LLMs has spurred extensive research into model efficiency. Techniques such as quantization [\(Dettmers et al.,](#page-9-10) [2022;](#page-9-10) [Frantar et al.,](#page-9-11) [2022\)](#page-9-11), which reduces the numerical precision of model weights, and knowledge distillation [\(Hinton et al.,](#page-9-12) [2015\)](#page-9-12), where a smaller student model is trained to mimic a larger teacher, are commonplace. Structural pruning [\(Frankle & Carbin,](#page-9-13) [2018;](#page-9-13) [Hoefler et al.,](#page-9-14) [2021;](#page-9-14) [Pei et al.,](#page-10-10) [2024;](#page-10-10) [2025\)](#page-10-11) aims to remove entire neurons or weights from dense models. While effective, these methods are often applied globally and do not typically account for the specific, input-dependent activation patterns unique to MoE architectures.
+

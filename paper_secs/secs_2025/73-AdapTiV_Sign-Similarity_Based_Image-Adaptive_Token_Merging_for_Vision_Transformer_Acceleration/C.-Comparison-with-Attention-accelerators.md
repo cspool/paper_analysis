@@ -1,0 +1,8 @@
+# *C. Comparison with Attention accelerators*
+
+As briefly mentioned in Section IV-A, recent research on various attention accelerators [29], [30] has primarily focused on reducing the computational load of the self-attention mechanism. In contrast, AdapTiV aims to decrease the overall input size through TM, thereby reducing the load across the entire model, not just the self-attention mechanism.
+
+Due to these differing focus areas, directly comparing Adap-TiV with previous attention accelerators is not straightforward. Therefore, we compare AdapTiV against an ideal accelerator, which operates at 100% peak throughput at a 1GHz frequency and possesses the same hardware resources as AdapTiV. This ideal accelerator aims to showcase the theoretical upper bound of performance achievable with AdapTiV's specifications. More importantly, for the ideal accelerator, we assume that the attention mechanism consumes zero latency. Given the variety of methods employed by previous attention accelerators, a detailed comparison would be cumbersome; therefore, we propose a bold comparison by assuming an extreme hypothetical scenario where the attention accelerator completely eliminates the latency associated with the attention process to zero.
+
+Figure 18(a) presents the comparison results. Across the ViT models, AdapTiV achieves speedups ranging from 2.1× to 3.6× over the ideal accelerator, which assumes zero latency for the attention mechanism. This outcome suggests that reducing the overall input size through TM is more effective for lowering latency than solely optimizing the self-attention mechanism, particularly for ViT models that exhibit a high degree of redundant tokens in the input.
+

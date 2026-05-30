@@ -1,0 +1,4 @@
+# 5 Implementation
+
+FlashPS is an end-to-end serving system featuring a FastAPI frontend [\[21\]](#page-13-28) and a GPU-based inference engine. The frontend enables users to customize image generation parameters for requests, including image templates, masks, and input conditions. The backend engine is built on Diffusers [\[52\]](#page-14-3), a PyTorch-based diffusion model inference framework that incorporates state-of-the-art model optimization techniques [\[28\]](#page-13-29), such as FlashAttn [\[18\]](#page-13-30). Mask-aware image editing is achieved by adapting the attention operator and utilizing CUDA streams to load cached activations asynchronously. We implement request queues for continuous batching and load balance scheduler using asyncio [\[30\]](#page-13-31). Communication between the scheduler and workers is facilitated via ZeroMQ [\[61\]](#page-14-12).
+

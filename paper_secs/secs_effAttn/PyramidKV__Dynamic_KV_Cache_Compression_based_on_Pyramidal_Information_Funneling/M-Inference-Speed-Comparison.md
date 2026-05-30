@@ -1,0 +1,4 @@
+# **M Inference Speed Comparison**
+
+PyramidKV does not require extra computation time for budget allocation at inference by design. We show the inference speed comparison between PyramidKV and baselines on LlaMa-3-8B-Instruct as [Table 10.](#page-21-0) Each row shows the setting of using a specific "[Prompt length, Generation length]" combination. Each cell is the latency measured in seconds. PyramidKV does not sacrifice the speed. PyramidKV provides performance improvement and memory saving while runs at a comparable speed compared with baselines (i.e. SnapKV [\(Li et al.,](#page-10-2) [2024\)](#page-10-2), StreamingLLM [\(Xiao et al., 2023\)](#page-11-6) and H2O [\(Zhang et al., 2024\)](#page-11-5)). That's because the allocation strategy requires very limited additional complexity in the inference/generation phase compared with computation required for generation as [Appendix L.](#page-20-1)
+

@@ -1,0 +1,12 @@
+# *C. MoE Transformer Model Architecture*
+
+The MoE Transformer combines the MoE idea with the Transformer architecture. In addition to the normal dense Transformer layer, it introduces a new kind of layer with sparse MoEs. Sparse MoE layers replace the FFN block with an MoE block that consists of multiple different expert FFNs. Instead of applying a single FFN to all the input tokens, it first uses a gating function to decide which expert(s) is most suitable for each token, and then routes the tokens to their corresponding expert. Typically, a token is routed to one or two experts in a policy that is referred to as top-1 or top-2 gating. Sparse MoE
+
+![](_page_2_Figure_0.jpeg)
+
+<span id="page-2-0"></span>Fig. 3. Visualization of MoE module, dense transformer encoder layer, MoE transformer encoder layer and MoE transformer encoder layer deployed with expert parallelism. MHA stands for Multi-head attention block, whereas FFN stands for Feed-forward Network block. (a) MoE module introduced in [\[29\]](#page-11-11) (b) Dense Transformer Encoder Layer. A typical dense transformer layer consists of Multi-head Attention (MHA) followed by an FFN layer. (c) Naive MoE Transformer layer. The single FFN block in dense transformer is replaced by a set of FFNs, called experts, that operate in parallel. Not all tokens are processed by all experts. The gating function decides which experts will receive which tokens.. (d) MoE Transformer with expert parallelism. Each device only holds a subset of all experts. Tokens assigned to non-local expert FFNs are dispatched to their assigned expert via an all-to-all communication collective. .
+
+layers replace the dense transformer layers intermittently in the multi-layer model architecture.
+
+These modifications grant greater degrees of freedom to the model and effectively expand the model size. Compared to traditional Transformer models, where the FLOP count per batch scales linearly with the number of parameters, MoE networks require much less computation, thus allowing large models to be trained efficiently. MoE Transformers have been successful in reducing the training cost of large transformer models [\[2\]](#page-10-0), [\[5\]](#page-10-2), [\[7\]](#page-10-1), [\[21\]](#page-11-1) and achieving high accuracy in vision, text, speech and multitask learning area [\[11\]](#page-10-5), [\[12\]](#page-11-13), [\[20\]](#page-11-14), [\[27\]](#page-11-5), [\[35\]](#page-11-15).
+

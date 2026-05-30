@@ -1,0 +1,8 @@
+# RoMe: Row Granularity Access Memory System for Large Language Models
+
+Hwayong Nam†∗, Seungmin Baek†∗, Jumin Kim† , Michael Jaemin Kim‡ , and Jung Ho Ahn† Seoul National University† , Meta‡ †{nhy4916, qortmdalss, tkfkaskan1, gajh}@snu.ac.kr, ‡michael604@meta.com
+
+*Abstract*—Modern HBM-based memory systems have evolved over generations while retaining cache line granularity accesses. Preserving this fine granularity necessitated the introduction of bank groups and pseudo channels. These structures expand timing parameters and control overhead, significantly increasing memory controller scheduling complexity. Large language models (LLMs) now dominate deep learning workloads, streaming contiguous data blocks ranging from several kilobytes to megabytes per operation. In a conventional HBM-based memory system, these transfers are fragmented into hundreds of 32B cache line transactions. This forces the memory controller to employ unnecessarily intricate scheduling, leading to growing inefficiency.
+
+To address this problem, we propose **RoMe**. **RoMe** accesses DRAM at row granularity and removes columns, bank groups, and pseudo channels from the memory interface. This design simplifies memory scheduling, thereby requiring fewer pins per channel. The freed pins are aggregated to form additional channels, increasing overall bandwidth by 12.5% with minimal extra pins. **RoMe** demonstrates how memory scheduling logic can be significantly simplified for representative LLM workloads, and presents an alternative approach for next-generation HBM-based memory systems achieving increased bandwidth with minimal hardware overhead.
+

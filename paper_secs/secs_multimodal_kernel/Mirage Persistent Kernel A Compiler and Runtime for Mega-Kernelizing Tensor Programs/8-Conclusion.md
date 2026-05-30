@@ -1,0 +1,4 @@
+# 8 Conclusion
+
+This paper presents MPK, the first compiler and runtime system that automatically transforms multi-GPU model inference into a fully fused mega-kernel. By introducing SM-level task graphs and an in-kernel parallel runtime, MPK overcomes fundamental limitations of the kernel-per-operator model, enabling inter-operator software pipelining, fine-grained overlap of computation and communication, and the elimination of kernel-launch and CPU-side scheduling overheads. Our evaluation shows that MPK brings LLM serving latency close to hardware limits and significantly improves throughput across models and GPU generations. By unifying execution within a single mega-kernel while preserving the usability of existing ML frameworks, MPK opens a new path for building high-performance, compiler-driven inference systems.
+

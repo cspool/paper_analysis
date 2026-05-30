@@ -1,0 +1,16 @@
+# G. Discussion
+
+End-to-end speedup of Hybrid H3 Model on GPU. There is a hybrid H3 model with two of its H3 layers replaced by self-attention layers [18]. This model exhibits higher quality than the H3-only model but suffers from worse latency. As the sequence length increases, the overall execution time in the hybrid model is eventually dominated by the self-attention layer, nullifying the throughput gains of H3-GPT. Thus, the hybrid model is most viable for relatively short sequence lengths, up to 64K, for which the hybrid model has a latency competitive with the H3-only model. In this range, VGA achieves end-to-end speedups of  $1.58 \times$ ,  $1.57 \times$ , and  $1.45 \times$  for sequence lengths of 16K, 32K, and 64K, respectively.
+
+Comparison between Convolution and Parallel Scan. Parallel scan serves as an alternative to FFT convolution in computing SSMConv [22]. While the parallel scan offers model flexibility by eliminating the need for precomputed filters, FFT convolution excels in speed for SSMConv. Table II shows the speedup of FFT convolution with state passing over an optimized parallel scan kernel [22] as the sequence length varies, with  $h=768,\ m=64,$  and a batch size of 8. Across varying sequence lengths, FFT convolution is, on average,  $3.3\times$  faster than the parallel scan.
+
+**Estimation of FlashFFTConv GPU Baseline.** FlashFFT-Conv [20] is a recently introduced GPU kernel for FFT-convolution, utilizing a matrix multiplication-based FFT
+
+![](_page_11_Figure_0.jpeg)
+
+Fig. 14. FP32 roofline of AMD AI engine (AIE) and VGA in an iso-area configuration. Labeled operations are: (a) real multiplication, (b) complex number multiplication, (c,d) *State Update* and *Output Projection* without Vandermonde matrix generation, (e) FFT/IFFT, (f,g) *State Update* and *Output Projection* with Vandermonde matrix generation.
+
+approach to leverage tensor cores. Direct application of FlashFFTConv to the H3 model is challenging as it operates on FP16, whereas our model uses FP32. To estimate its performance impact on the GPU baseline, we replace the time spent on FFT-convolution in the H3 baseline layer (56 ms) of H3-GPT using 128K input sequence, with FlashFFTConv's time for FFT-convolution on an FP16 input sequence of identical length (32 ms). This substitution reduces the time spent on ROI on the GPU from 140 ms to 116 ms, translating to an 18% reduction in ROI speedup for VGA. However, this number serves as the upper bound of speedup reduction, as the FP32 version of FlashFFTConv would halve the FLOPs and double the bandwidth usage.
+
+Comparison with AMD AI Engine. Fig. 14 show an FP32 roofline comparison between the AMD AI Engine (AIE) [7], a Coarse-Grained Reconfigurable Architecture (CGRA) style accelerator platform, and VGA. The number of tiles in the AIE is scaled to match the area of a single PE of VGA. The area of the AIE is estimated from its die photo [5] fabricated in a 7nm process. VGA has 9.45× higher area-normalized throughput, as arithmetic intensity for operations in ROI is mostly between the ridge point of the AIE and VGA. The relative area inefficiency of the AIE architecture is attributed to the overhead of sophisticated inter-tile connections and non-FP32 arithmetic units, whereas VGA's specialization avoids such overhead.
+

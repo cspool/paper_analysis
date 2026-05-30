@@ -1,0 +1,26 @@
+# 1 Introduction
+
+The rapid advancement of MLLMs [\(Liu et al.,](#page-11-0) [2024b,](#page-11-0) [2023a;](#page-11-1) [Dong et al.,](#page-10-0) [2024;](#page-10-0) [Chen et al.,](#page-9-0) [2024a\)](#page-9-0) has demonstrated their remarkable capabilities across various applications [\(Chu et al.,](#page-9-1) [2024;](#page-9-1) [Yang et al.,](#page-12-0) [2023;](#page-12-0) [Wu et al.,](#page-12-1) [2023;](#page-12-1) [Chen et al.,](#page-9-2) [2024b\)](#page-9-2). However, multi-image scenario remain an important yet to-be-explored aspect. In particular, expanding the context of MLLMs to understand longer videos [\(Zhang et al.,](#page-12-2) [2023;](#page-12-2) [Cheng et al.,](#page-9-3) [2024a\)](#page-9-3), higher-resolution images [\(Xu et al.,](#page-12-3) [2024b;](#page-12-3) [Wu and Xie,](#page-12-4) [2023a\)](#page-12-4), and make decisions based on more historical messages [\(Wang et al.,](#page-12-5) [2024b;](#page-12-5) [Liu et al.,](#page-11-2) [2024d\)](#page-11-2) is crucial for enhancing user experience [\(Li et al.,](#page-11-3) [2024b\)](#page-11-3) and further broadening MLLMs' application scope [\(Apple,](#page-9-4) [2024\)](#page-9-4).
+
+However, extending the context length of MLLMs to improve their usability poses challenges related to degraded performance and high computational costs when processing more images. To maintain the performance in longer context, some studies [\(Zhang et al.,](#page-13-0) [2024a;](#page-13-0) [Zhao et al.,](#page-13-1) [2024a\)](#page-13-1) have concentrated on curating long-context training data involving multiple images to enhance performance. Additionally, other research efforts have explored new training strategies [\(Liu et al.,](#page-11-4) [2024a;](#page-11-4) [Zhang et al.,](#page-13-2) [2024b;](#page-13-2) [Li et al.,](#page-11-5) [2024a;](#page-11-5) [Zhang et al.,](#page-13-3) [2024c\)](#page-13-3) to mitigate performance declines. Regarding the issue of high computational costs, [Xue et al.](#page-12-6) [\(2024\)](#page-12-6) have made strides in improving multi-node efficiency by reducing communication costs. However, a significant gap persists in accelerating core on-node computation for long visual contexts without sacrificing performance. An integrated architectural solution addressing both performance and efficiency is thus needed.
+
+To tackle these challenges, we propose LongLLaVA, featuring a hybrid architecture for efficient acceleration. Our solution focuses on three aspects: *Multi-modal Architecture*, *Data Construction*, and *Training Strategy*.
+
+- Multi-modal Architecture: We use a hybrid Transformer-Mamba design and 2D pooling to compress image tokens, reducing computation while maintaining performance.
+- Data Construction: We create task-specific formats to help the model distinguish temporal and spatial relationships between images.
+- Training Strategy: We implement a threestage adaptation process to enhance model's multi-modal long-context capabilities.
+
+<sup>\*</sup>Benyou is the corresponding author (*wangbenyou@cuhk.edu.cn*); † means contributing equally.
+
+<span id="page-1-0"></span>
+
+|                                | Model                          | Active     |        |   | #Few-shot of VL-ICL              |   |              | Compute                      | 100K Token (Efficiency) |                  |              |                      |
+|--------------------------------|--------------------------------|------------|--------|---|----------------------------------|---|--------------|------------------------------|-------------------------|------------------|--------------|----------------------|
+| Arch.                          |                                | Param. ICL |        | 1 | 2                                | 4 | 5            | Complexity                   | Prefill<br>(s)          | TP<br>(tokens/s) | Mem.<br>(GB) | Max TP<br>(tokens/s) |
+| Mamba<br>Transformer LLaVA-1.5 | Falcon-mamba-V                 | 7B<br>13B  | ✗<br>✓ |   | 49.0 51.9 52.4<br>50.0 52.3 54.6 |   | 53.2<br>58.9 | Linear<br>Quadratic          | 14.3<br>34.0            | 72.6<br>14.7     | 32.1<br>79.4 | 170.3<br>14.7        |
+| Hybrid<br>Hybrid               | LongLLaVA-9B<br>LongLLaVA-A13B | 9B<br>13B  | ✓<br>✓ |   | 51.6 57.8 58.4<br>52.3 59.0 59.0 |   | 60.2<br>61.3 | Quasi-Linear<br>Quasi-Linear | 16.5<br>25.5            | 62.1<br>37.6     | 38.7<br>79.1 | 155.2<br>37.6        |
+
+Table 1: Model Architectures Analysis: ICL Capability, and Efficiency. ICL performance is reported using VL-ICL [\(Zong et al.,](#page-13-4) [2024\)](#page-13-4) with varying numbers of examples. Efficiency metrics for processing 100K tokens include Prefill time (Prefill), Throughput (TP), Memory usage (Mem.). The Mamba architecture is represented by Falcon-mamba [\(Zuo et al.,](#page-13-5) [2024\)](#page-13-5), the largest publicly available pure Mamba LLM. Details are in Appendix [A.](#page-13-6)
+
+Experiemntal results show that LongLLaVA excels in understanding multi-modal long contexts with high efficiency. It leads in retrieval, counting, and ordering tasks in VNBench [\(Zhao et al.,](#page-13-7) [2024d\)](#page-13-7) and achieves nearly 100% accuracy with 1,000 images on a single 80GB GPU for Needle-In-A-Haystack evaluation [\(Zhang et al.,](#page-13-2) [2024b\)](#page-13-2).
+

@@ -1,0 +1,4 @@
+# Limitations
+
+While our approach achieves strong performance with significantly fewer experts, a few limitations remain. The number of activated experts per layer, is currently fixed. Currently, the number of activated experts per layer is fixed. Although this method is effective, it may not be optimal across all datasets. Adopting a more automated or adaptive mechanism could further improve performance across a wider range of tasks. Additionally, while our approach demonstrates robustness across multiple datasets, it has primarily been evaluated in multi-task and few-shot learning settings. Further investigation is needed to assess its effectiveness in extreme low-resource or highly specialized domains where expert specialization could play a more crucial role. In future work, we aim to address these limitations.
+

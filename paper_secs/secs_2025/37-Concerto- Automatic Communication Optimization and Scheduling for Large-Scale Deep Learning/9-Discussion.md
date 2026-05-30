@@ -1,0 +1,8 @@
+# 9 Discussion
+
+While Concerto represents a significant advancement in the realm of automatic communication optimization and scheduling, several limitations highlight areas for further improvement: 1) Joint Optimization of Scheduling and Decomposition: Concerto treats scheduling and decomposition as two critical aspects independently, which can prevent the system from achieving truly optimal solutions. Future research should focus on developing algorithms and methods that can simultaneously consider both scheduling and decomposition to enhance the system's overall effectiveness. 2) Performance Model for Decomposition: Currently, we
+
+need to profile each possible sub-operator to solve decomposition. In the future, using performance model to predict the performance of sub-operator. 3) Overlapping Different Communication Operations: Extending the solver to overlap different communication operations, such as intranode and inter-node communication, could be beneficial. For example, instead of considering just two types of resources (computation and communication), we could include three types: computation, intra-node communication, and internode communication. 4) Adaptability to Different Batch Sizes: Currently, the system needs to solve problems from scratch for different batch sizes. Future work should focus on developing adaptive algorithms that can adjust to changes in batch size without requiring complete re-compilation.
+
+These limitations point to promising areas for future research, with the potential to significantly enhance the capabilities and applicability of Concerto.
+

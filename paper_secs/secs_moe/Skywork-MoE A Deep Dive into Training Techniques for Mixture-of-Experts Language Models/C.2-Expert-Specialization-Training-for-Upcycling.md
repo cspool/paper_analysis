@@ -1,0 +1,13 @@
+# C.2 Expert Specialization Training for Upcycling
+
+Conventional sparse upcycling methods involve initializing MoE weights from a single dense model checkpoint, where the weights in the Feed-Forward Network (FFN) layers of the dense model are replicated n times, creating an MoE model with n identical experts in each MoE layer. It is reasonable to hypothesize that this method of initializing MoE models with identical experts could impede the diversification of the experts, potentially leading to suboptimal performance.
+
+To investigate this, we explored a method which we refer to as expert specialization training for upcycling. Briefly, this method allocates a portion of our computational budget to independently pre-train the dense model on each of n distinct datasets, each characterized by different distributions  $\mathcal{D}_1, \ldots, \mathcal{D}_n$ . This process yields n diverse and more specialized model checkpoints. We anticipated that initializing the MoE weights from these specialized checkpoints would promote expert diversification, resulting in a performance improvement.
+
+Our experiments were conducted using dense checkpoints that contain 1.3B parameters, initially pre-trained from scratch for 1T tokens on a mixed corpus of Chinese texts, English texts, and code. We refer to this initial model as  $M_{\rm base}$ . Subsequently, we continued to pre-train  $M_{\rm base}$  separately on an additional 100B tokens of exclusively Chinese, English, and code data, updating only the FFN part of  $M_{\rm base}$ . The
+
+resulting models are designated as Mcn, Men, and Mcode, respectively. In our experiments, to initialize an MoE model with 8 experts, we utilized three copies of Mcn, three copies of Men, one copy of Mcode, and one copy of Mbase. This setup was compared against a baseline method, which involves initializing from eight copies of Mbase.
+
+The experimental results, as shown in Figure [8,](#page-12-1) reveal that while expert specialization training does offer a slight advantage over the baseline upcycling approach, the advantage diminishes as training progresses. By the end of 90 billion tokens of training, the difference in loss between the specialization training and the baseline is below 0.01. We consider this difference to be marginal and not justifying the additional effort[3](#page-13-0) involved.
+
+<span id="page-13-0"></span><sup>3</sup>We have trained each of Mcn, Men, and Mcode for 100B tokens, which altogether is roughly equivalent to 150B training of the MoE model in terms of GPU hours invested.

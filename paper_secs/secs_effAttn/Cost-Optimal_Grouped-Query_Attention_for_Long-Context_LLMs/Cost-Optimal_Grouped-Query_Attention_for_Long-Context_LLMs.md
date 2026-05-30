@@ -1,0 +1,65 @@
+## Cost-Optimal Grouped-Query Attention for Long-Context Modeling
+
+Yingfa Chen<sup>1</sup><sup>∗</sup> , Yutong Wu<sup>2</sup><sup>∗</sup> , Chenyang Song<sup>1</sup> , Zhenleng Thai<sup>1</sup> , Xingyu Shen<sup>1</sup> , Xu Han<sup>1</sup>† , Zhiyuan Liu<sup>1</sup>† , and Maosong Sun<sup>1</sup> <sup>1</sup>NLP Group, DCST, IAI, BNRIST, Tsinghua University, Beijing, China <sup>2</sup>SIST, University of Science and Technology Beijing, Beijing, China chenyingfa1999@gmail.com, wuyutong\_yuna@163.com {han-xu,liuzy}@tsinghua.edu.cn
+
+## Abstract
+
+Grouped-Query Attention (GQA) is a widely adopted strategy for reducing the computational cost of attention layers in large language models (LLMs). However, current GQA configurations are often suboptimal because they overlook how context length influences inference cost. Since inference cost grows with context length, the most cost-efficient GQA configuration should vary accordingly. In this work, we analyze the relationship among context length, model size, GQA configuration, and model loss, and introduce two innovations: (1) we decouple the total head size from the hidden size, enabling more flexible control over attention FLOPs; and (2) we jointly optimize the model size and the GQA configuration to arrive at a better allocation of inference resources between attention layers and other components. Our analysis reveals that commonly used GQA configurations are highly suboptimal for longcontext scenarios. Moreover, we propose a recipe for deriving cost-optimal GQA configurations. Our results show that for long-context scenarios, one should use fewer attention heads while scaling up the model size. Configurations selected by our recipe can reduce both memory usage and FLOPs by more than 50% compared to Llama-3's GQA, with *no degradation in model capabilities*. Our findings offer valuable insights for designing efficient longcontext LLMs.[1](#page-0-0)
+
+## 1 Introduction
+
+It is well established that increasing the size of large language models (LLMs) can improve their language modeling qualities [\(Hestness et al.,](#page-9-0) [2017;](#page-9-0) [Kaplan et al.,](#page-9-1) [2020\)](#page-9-1). Thus, many prior studies have focused on minimizing model size while
+
+maintaining quality to ensure cost-effectiveness [\(Hoffmann et al.,](#page-9-2) [2022;](#page-9-2) [Hu et al.,](#page-9-3) [2024;](#page-9-3) [Abdin](#page-8-0) [et al.,](#page-8-0) [2024\)](#page-8-0). However, the vast majority of LLMs are Transformer-based [\(Vaswani et al.,](#page-9-4) [2017;](#page-9-4) [Grattafiori et al.,](#page-8-1) [2024\)](#page-8-1), and the cost of running such architectures does not solely depend on the model size. Specifically, during inference, a cache of keys/values (i.e., KV cache) is maintained to avoid recomputation in attention layers, resulting in memory costs that scale linearly with the context length. Also, attention layers include the computation of pair-wise attention scores and the weighted summation of value vectors, incurring per-token computational costs that scale linearly with the context length. Many studies have aimed to reduce these costs, including KV cache compression [\(Li et al.,](#page-9-5) [2024a\)](#page-9-5), prompt compression [\(Pan et al.,](#page-9-6) [2024;](#page-9-6) [Li et al.,](#page-9-7) [2024b\)](#page-9-7), sparse attention [\(Lou et al.,](#page-9-8) [2024;](#page-9-8) [Ge et al.,](#page-8-2) [2024;](#page-8-2) [Jiang et al.,](#page-9-9) [2024\)](#page-9-9), etc.
+
+One of the most widely used techniques for reducing memory costs is Grouped-Query Attention (GQA) [\(Ainslie et al.,](#page-8-3) [2023\)](#page-8-3), in which attention heads are split into groups and the heads in each group share the same KV vectors. Current implementations of GQA have two critical limitations: (1) Most existing models unnecessarily restrict the total number of head dimensions to be equal to the hidden size, resulting in redundant FLOPs (floatingpoint operations). (2) When deciding on the number of attention heads and groups, current models do not take into account the influence of context length on the computational and memory costs, resulting in suboptimal long-context configurations.
+
+In this paper, we aim to optimize the costeffectiveness of GQA Transformers from the perspective of resource allocation. Concretely, we categorize inference costs into *time-invariant costs*, which are constant with respect to context length (e.g., fixed model parameters), and *time-variant costs*, which grow with context length (e.g., attention computation and KV cache). To freely
+
+<span id="page-0-0"></span><sup>1</sup>The code and models are available at [https://www.](https://www.github.com/THUNLP/cost-optimal-gqa) [github.com/THUNLP/cost-optimal-gqa](https://www.github.com/THUNLP/cost-optimal-gqa).
+
+<sup>\*</sup>Equal contributions.
+
+<sup>†</sup>Corresponding authors.
+
+<span id="page-1-0"></span>![](_page_1_Figure_0.jpeg)
+
+Figure 1: Our approach makes two changes to unlock the flexible adjustment of memory and compute allocation between *time-invariant* components (model weights) and *time-variant* components (KV cache/attention computation). Optimizing resource allocation results in cost-optimal GQA configuration ("Ours"), which has markedly lower memory and FLOPs usage compared to Llama-3, without compromising model capabilities.
+
+control the resource allocated to time-variant and time-invariant parts, we make two changes to the existing GQA design procedures: (1) By decoupling the total number of head dimensions and the model hidden size, we unlock a free hyperparameter to control the compute allocated to attention operations. (2) We jointly optimize GQA configurations and model size to modulate the resource allocation between time-variant and time-invariant components. After these changes, we can answer our main research question:
+
+*Given an expected inference context length and target loss, how can GQA be configured to minimize inference costs while achieving that loss?*
+
+To avoid sweeping all combinations of model sizes and GQA configurations, we present a threestep search procedure (detailed in Section [4\)](#page-4-0). Our approach is empirically validated on models up to 1.2B parameters. Empirical results show that the widely used Llama-3 GQA configuration [\(Grattafiori et al.,](#page-8-1) [2024\)](#page-8-1) is highly suboptimal at 128K (which is the context length supported by Llama-3). Instead, our approach gives a configuration that achieves the same loss while reducing inference FLOPs and memory usage by more than 50% (Figure [1](#page-1-0) (right)).
+
+The contributions of this paper can be summarized by the following points:
+
+• By decoupling the model hidden size from the attention head number and jointly optimizing the model size and GQA configuration, we can flexibly allocate memory and compute resources among time-variant and timeinvariant components.
+
+- We present the first rigorous study to search for the optimal GQA configuration in terms of inference costs for reaching a target loss. Our three-step approach can precisely identify cost-optimal GQA configurations without exhaustively sweeping many configurations.
+- Our framework reveals valuable insights for designing more cost-effective Transformer LLMs, especially in long-context scenarios.
+
+## 2 Related Work
+
+This paper explores how to build efficient longcontext LLMs based on GQA Transformer. Please refer to the LLM-related surveys [\(Zhao et al.,](#page-10-0) [2023;](#page-10-0) [Lu et al.,](#page-9-10) [2024\)](#page-9-10) for more details on LLMs.
+
+Grouped-Query Attention The original Transformer model employs multi-head attention (MHA) [\(Vaswani et al.,](#page-9-4) [2017\)](#page-9-4), in which each layer consists of multiple heads that are computed in parallel, and the layer's output is the sum of the heads' outputs. To improve decoding efficiency, especially improving memory efficiency, multi-query attention (MQA) [\(Shazeer,](#page-9-11) [2019\)](#page-9-11) shares the weights of all key and value projections among all heads, significantly reducing KV cache size and memory bandwidth requirements during autoregressive decoding. Grouped-query attention (GQA) [\(Ainslie](#page-8-3) [et al.,](#page-8-3) [2023\)](#page-8-3) extends this by partitioning heads into groups where each group shares a common KV projection. Formally, MHA is a variant of GQA with independent KV projections per query head,
+
+<span id="page-2-0"></span>
+
+| Notation                                                             | Meaning                                                                                        | Adjustable?<br>Vanilla GQA This paper |                  | Constrained by                                                                                                                                |
+|----------------------------------------------------------------------|------------------------------------------------------------------------------------------------|---------------------------------------|------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| $\overline{T}$                                                       | Context length                                                                                 | X                                     | ×                | None                                                                                                                                          |
+| $ \begin{array}{c} N \\ n_h \\ n_{kv} \end{array} $                  | Model size Attention head number KV head number                                                | X<br>X                                | <i>J J</i>       | None<br>None<br>None                                                                                                                          |
+| $ \begin{array}{c} L \\ d \\ d_{\text{ff}} \\ d_h \\ V \end{array} $ | Number of layers<br>Model hidden size<br>FFN intermediate size<br>Head size<br>Vocabulary size | X<br>X<br>X<br>X                      | x<br>x<br>x<br>x | $N$ and pre-defined aspect ratio $(d/L)$ $N$ and pre-defined aspect ratio $(d/L)$ $d_{\rm ff} \approx 8d/3$ $d_h = 64$ Pre-defined vocabulary |
+
+Table 1: Notations in the paper. We optimize more free hyperparameters, resulting in better cost-efficiency.
+
+while MQA corresponds to the extreme where all queries share one common KV projection. Recent attention methods based on low-rank factorization, such as MLA (DeepSeek-AI et al., 2024), can also be viewed as variants of GQA. Hence, it can be said that most of the current popular LLMs (Groeneveld et al., 2024; Biderman et al., 2023; Hu et al., 2024; Grattafiori et al., 2024; Yang et al., 2025b) are built based on GQA.
+
+Efficient Long-Context Attention Attention mechanisms pose a major bottleneck in longcontext settings due to high computational and memory costs, especially from the KV cache. To mitigate this, techniques like sparse attention (Lou et al., 2024; Ge et al., 2024; Jiang et al., 2024), prompt compression (Pan et al., 2024; Xiao et al., 2024), and KV cache compression (Liu et al., 2024; Hooper et al., 2024; Zhang et al., 2024; Yao et al., 2024; Cai et al., 2024) have been proposed. While these methods build on and optimize GQA, they often compromise performance relative to vanilla GQA. Our work focuses on identifying cost-optimal GQA configurations for longcontext scenarios through precise characterization of model size, context length, and attention head configurations in terms of their impacts on model performance, computational cost, and memory cost. The efficient long-context attention methods described above remain orthogonal to our GQA architecture search and can be subsequently applied as complementary optimizations to the cost-optimal GQA structures. For more details on efficient longcontext attention methods, please refer to the surveys (Yuan et al., 2024; Shi et al., 2024).
+
+Scaling Laws for LLMs Recent studies on scaling laws for LLMs (Hestness et al., 2017; Kaplan et al., 2020; Hoffmann et al., 2022) have established that model loss follows a log-linear rela-
+
+tionship concerning model size and training data size. They utilize this relationship to minimize the model loss given a fixed training FLOPs budget. However, there are two critical limitations: (1) These works do not consider the influence of context length on the computational and memory costs. (2) These laws prioritize the optimal allocation of compute during training, ignoring inference costs. Although Sardana et al. (2023) supplement scaling laws by accounting for total inference FLOPs, their inference cost estimation ignores the influence of context length and memory usage during inference. Our work extends these studies by accounting for both the computational and memory costs during inference and addressing the impact of context lengths.
+

@@ -1,0 +1,6 @@
+# 7 Conclusion & Future Work
+
+The advent of MoE models poses efficiency challenges for conventional fault-tolerant checkpointing methods due to the substantial escalation in model parameters. Breaking new ground in efficient fault tolerance for MoE model training, we propose the Mixture-of-Checkpoint System (MoC-System). This system integrates an innovative algorithm-system codesign—Partial Experts Checkpoint (PEC) mechanism—along with multiple optimization strategies, including fully sharded checkpointing and two-level checkpointing management. Empirical evaluations substantiate that our MoC-System significantly reduces checkpointing overhead without compromising model accuracy.
+
+While existing LLM checkpointing ensures algorithm invariance, the MoC-System illustrates the feasibility of a more flexible algorithm-system co-designed approach to fault tolerance. As system efficiency becomes increasingly important in LLM development, more algorithms are being co-designed to enhance efficiency during training and inference. We believe fault tolerance can also be more closely integrated with LLM algorithms. In future work, we intend to explore features of LLMs, such as sparsity, to develop more efficient co-design strategies for LLM training and fault tolerance.
+

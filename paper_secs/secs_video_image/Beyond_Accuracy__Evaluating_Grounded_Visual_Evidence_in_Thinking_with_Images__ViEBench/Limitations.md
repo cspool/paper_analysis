@@ -1,0 +1,4 @@
+# Limitations
+
+While ViEBench provides a rigorous and processverifiable framework for auditing agentic VLMs, our current benchmark primarily focuses on cropping as the central visual operation for "Thinkingwith-Images," as it represents the most critical mechanism for resolving spatial sparsity and fine-grained perception. However, as the field evolves, agentic models are expected to perform a broader suite of complex visual operations. Since ViEBench is currently optimized for highresolution spatial perception and reasoning tasks, it does not fully account for the evaluation of these emerging diverse tool-use capabilities. We recognize this as a vital area for growth and plan to incorporate the assessment of more varied visual operations into our subsequent work to maintain a comprehensive diagnostic standard for future multimodal agents.
+

@@ -1,0 +1,4 @@
+# 11 Conclusion
+
+We introduced Tilus, a tile-level GPGPU programming language designed to expose shared memory and registers to developers, which enables the creation of efficient low-precision kernels for LLM serving. Tilus features an algebraic layout system for managing tensor distribution across threads, a thread-block-level programming model with fine-grained memory management, and comprehensive support for subbyte data types, enabling arbitrary precision from 1 to 8 bits. Our experimental results demonstrate substantial performance gains over state-of-the-art approaches, showcasing the flexibility and scalability of our method. This work establishes a foundation for efficient and extensible LLM inference, paving the way for future optimizations in emerging hardware, advanced quantization techniques, and diverse low-precision formats.
+

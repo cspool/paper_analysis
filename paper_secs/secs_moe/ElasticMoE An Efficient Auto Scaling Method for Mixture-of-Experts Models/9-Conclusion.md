@@ -1,0 +1,4 @@
+# 9 Conclusion
+
+This paper presented ElasticMoE, a system that enables finegrained, low-latency, and zero-downtime vertical scaling for large MoE models in production. By decoupling memory from execution, repurposing weights and KV caches via zerocopy and P2P mechanisms, and supporting efficient expert redistribution, ElasticMoE achieves rapid scaling with low peak memory overhead. Central to this design are the HMM, which manages weights and KV caches independently of inference instances, and the IMM, which anticipates scaling needs through pre-initialization of target configurations. Together, these components enable live reconfiguration without service interruption. Evaluation shows substantial improvements in scale-up latency, throughput stability, and resource efficiency compared to baselines. Lastly, we discuss the limitations and future work in Appendix. [C.](#page-16-1)
+

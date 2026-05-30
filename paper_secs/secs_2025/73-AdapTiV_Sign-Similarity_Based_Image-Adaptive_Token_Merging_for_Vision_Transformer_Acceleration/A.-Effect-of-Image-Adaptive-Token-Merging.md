@@ -1,0 +1,6 @@
+# *A. Effect of Image-Adaptive Token Merging*
+
+To illustrate the advantages of image-adaptive TM facilitated by AdapTiV, we conducted a comparative analysis among three configurations: AdapTiV, Vanilla accelerator, and Vanilla accelerator with ideal fixed MR TM scheme assuming that incurs no latency overhead. Here, Vanilla accelerator refers to hardware with identical specifications to AdapTiV but without the algorithmic optimizations. For both the fixed MR TM and AdapTiV, we consider scenarios where each method achieves an 80% token merge rate at the final layer.
+
+Figure 17(a) demonstrates that AdapTiV achieves significant speedup and energy efficiency improvements over both Vanilla accelerator and Vanilla accelerator with fixed MR TM. Notably, AdapTiV excels across most layers, primarily due to its ability to achieve higher merge rates through the imageadaptive TM facilitated by the Dynamic MR strategy. As the graph illustrates, this image-adaptive approach results in a pronounced improvement in speedup and energy efficiency starting from the first layer. This feature substantially contributes to AdapTiV's overall superior performance, achieving speedups of 4.6× and an efficiency increase of 3.6× compared to Vanilla accelerator. These results underscore the effectiveness of AdapTiV's image-adaptive TM strategy.
+

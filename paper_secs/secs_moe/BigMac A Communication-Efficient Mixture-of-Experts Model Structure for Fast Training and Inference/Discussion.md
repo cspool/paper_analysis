@@ -1,0 +1,4 @@
+# Discussion
+
+In Figure 2c, BigMac introduces two additional scaling projections. However, the computation brought by the two projections is negligible compared with the benefits from the All-to-All communication reduction. For small models without the necessity of expert parallelism, BigMac indeed slightly increases the overall latency since no All-to-All communication is required in this case. Therefore, BigMac is more suitable for large models which are the current trend of novel models. In our structure, the downscaling factor r affects both the All-to-All communication overhead and the model quality. In this paper, for a fair comparison, we set the factor r as 0.25 to ensure that the MoE models with three different structures involve similar number of parameters. One can adjust the ratio in real applications, according to the actual demand.
+

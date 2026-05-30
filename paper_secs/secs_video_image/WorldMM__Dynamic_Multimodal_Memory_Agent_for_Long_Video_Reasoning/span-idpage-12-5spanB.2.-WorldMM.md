@@ -1,0 +1,4 @@
+# <span id="page-12-5"></span>B.2. WorldMM
+
+To construct multi-scale episodic memory, video captioning is performed at each temporal unit by passing sampled video frames along with transcripts generated using Distil-Whisper large-v3.5 [\[8\]](#page-8-14). Moreover, we tailor the temporal resolutions to each dataset's duration. For EgoLifeQA and Ego-R1 Bench, which contain week-long videos, we use four broad timescales: 30 seconds, 3 minutes, 10 minutes, and 1 hour. For HippoVlog, LVBench, and Video-MME, which contain shorter recordings averaging about an hour, we adopt shorter timescales of 10 seconds, 30 seconds, 3 minutes, and 10 minutes to better match their temporal structure. For semantic memory, triplets with a similarity score above 0.6 are consolidated using an LLM, and the top 10 triplets are retrieved at query time. The retrieval agent is limited to a maximum of five iterations, consistent with the baseline evaluation setting.
+

@@ -1,0 +1,10 @@
+# PTQ*1.61*: Push the Real Limit of Extremely Low-Bit Post-Training Quantization Methods for Large Language Models
+
+Jiaqi Zhao<sup>1</sup> , Miao Zhang<sup>1</sup>\*, Ming Wang<sup>1</sup> , Yuzhang Shang<sup>2</sup> , Kaihao Zhang<sup>1</sup> , Weili Guan<sup>1</sup> , Yaowei Wang<sup>1</sup> , Min Zhang<sup>1</sup>
+
+> <sup>1</sup> Harbin Institute of Technology (Shenzhen) 2 Illinois Institute of Technology jiaqizhao0455@outlook.com, 190110509@stu.hit.edu.cn {zhangmiao, guanweili, wangyaowei, zhangmin2021}@hit.edu.cn yshang4@hawk.iit.edu, super.khzhang@gmail.com
+
+## Abstract
+
+Large Language Models (LLMs) suffer severe performance degradation when facing extremely low-bit (sub 2-bit) quantization. Several existing sub 2-bit post-training quantization (PTQ) methods utilize a mix-precision scheme by leveraging an unstructured finegrained mask to explicitly distinguish salient weights, while which introduces an extra 1 bit or more per weight. To explore the real limit of PTQ, we propose an extremely lowbit PTQ method called PTQ1.61, which enables weight quantization to 1.61-bit for the first time. Specifically, we first introduce a onedimensional structured mask with negligibly additional 0.0002-bit per weight based on input activations from the perspective of reducing the upper bound of quantization error to allocate corresponding salient weight channels to 4-bit. For non-salient channels binarization, an efficient block-wise scaling factors optimization framework is then presented to take implicit row-wise correlations and angular biases into account. Different from prior works that concentrate on adjusting quantization methodologies, we further propose a novel paradigm called quantization preprocessing, where we argue that transforming the weight distribution of the pretrained model before quantization can alleviate the difficulty in per-channel extremely low-bit PTQ. Extensive experiments indicate our PTQ1.61 achieves state-of-the-art performance in extremely low-bit quantization. Codes are available at [https://github.com/](https://github.com/zjq0455/PTQ1.61) [zjq0455/PTQ1.61](https://github.com/zjq0455/PTQ1.61).
+

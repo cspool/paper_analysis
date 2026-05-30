@@ -1,0 +1,3 @@
+# M Impact Statement
+
+This work introduces DartQuant, an efficient rotational distribution calibration method for LLM quantization. DartQuant simplifies the optimization of rotation matrices while avoiding the overfitting risks associated with end-to-end training. It successfully quantizes a 70B model on a single RTX 3090, marking a significant advancement. This progress not only improves the efficiency of LLMs in practical applications but also provides a practical solution for large-scale model quantization, contributing to the accessibility and scalability of AI technologies. However, if misused for harmful purposes, it could have a negative social impact.

@@ -1,0 +1,6 @@
+# <span id="page-33-0"></span>D Limitations and Future Work
+
+In FlyLoRA, matrix A is randomly initialized and frozen during training, but there may still be room for improvement. Recent neuroscience studies [\[13\]](#page-11-10) suggest that A need not be entirely frozen and random, indicating potential for more bio-inspired mechanisms to enhance task decoupling through an adaptable version of A. Moreover, recent works suggest that component-wise interpretability [\[98\]](#page-16-2) and spectral modulation [\[74\]](#page-14-13) could inspire adaptive or frequency-aware modifications of A in FlyLoRA to improve efficiency, robustness, and task decoupling.
+
+Recently, RL fine-tuning for LLMs has emerged as a promising approach that significantly enhances their reasoning ability [\[24\]](#page-11-16). However, stabilizing MoE RL training remains an open question [\[96\]](#page-15-16), and further exploration will focus on the integration of FlyLoRA with RL training [\[61\]](#page-13-9) and potentially extending it to offline policy optimization [\[50–](#page-13-10)[53,](#page-13-11) [60,](#page-13-12) [68\]](#page-14-14). Additionally, integrating active data selection methods could be a promising direction to further improve data efficiency [\[62,](#page-13-13) [77,](#page-14-15) [79,](#page-14-16) [99\]](#page-16-3).
+

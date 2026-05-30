@@ -1,0 +1,60 @@
+# Acknowledgements
+
+We sincerely thank the anonymous reviewers of PPoPP'26 for their constructive comments and insightful suggestions. This work is supported in part by the Fundamental and Interdisciplinary Disciplines Breakthrough Plan of the Ministry of Education of China (JYB2025XDXM113) and the National Natural Science Foundation of China (No. 62132014). Haibo Chen (haibochen@sjtu.edu.cn) is the corresponding author.
+
+### A Artifact Appendix
+
+MetaAttention is publicly available in https://github.com/SJTU-IPADS/MetaAttention. Our framework is also available as a Zenodo archive[5]: https://doi.org/10.5281/zenodo. 17701680. Detailed instructions are available within the README in the repository.
+
+#### References
+
+- <span id="page-11-12"></span> $[1] \ [n.\,d.]. \ NVIDIA \ TensorRT. \ https://developer.nvidia.com/tensorrt.$
+- <span id="page-11-18"></span>[2] [n.d.]. PyTorch. https://pytorch.org/.
+- <span id="page-11-8"></span>[3] Jason Ansel, Edward Yang, Horace He, Natalia Gimelshein, Animesh Jain, Michael Voznesensky, Bin Bao, Peter Bell, David Berard, Evgeni Burovski, Geeta Chauhan, Anjali Chourdia, Will Constable, Alban Desmaison, DeVito, et al. 2024. PyTorch 2: Faster Machine Learning Through Dynamic Python Bytecode Transformation and Graph Compilation. In Proceedings of the 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2 (La Jolla, CA, USA) (ASPLOS '24). Association
+
+- for Computing Machinery, New York, NY, USA, 929–947. https://doi.org/10.1145/3620665.3640366
+- <span id="page-11-7"></span>[4] Iz Beltagy, Matthew E. Peters, and Arman Cohan. 2020. Longformer: The Long-Document Transformer. arXiv:2004.05150 [cs.CL] https://arxiv.org/abs/2004.05150
+- <span id="page-11-20"></span>[5] Feiyang Chen. 2025. Artifact for: MetaAttention: A Unified and Performant Attention Framework Across Hardware Backends. https://doi.org/10.5281/zenodo.17701680
+- <span id="page-11-9"></span>[6] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie Yan, Haichen Shen, Meghan Cowan, Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin, and Arvind Krishnamurthy. 2018. TVM: An Automated End-to-End Optimizing Compiler for Deep Learning. In 13th USENIX Symposium on Operating Systems Design and Implementation (OSDI 18). USENIX Association, Carlsbad, CA, 578–594. https://www.usenix.org/conference/osdi18/presentation/chen
+- <span id="page-11-15"></span>[7] NVIDIA Corporation. 2024. CUTLASS: CUDA Templates for Linear Algebra Subroutines. https://github.com/NVIDIA/cutlass.
+- <span id="page-11-6"></span>[8] Tri Dao. 2023. Flashattention-2: Faster attention with better parallelism and work partitioning. arXiv preprint arXiv:2307.08691 (2023).
+- <span id="page-11-0"></span>[9] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. 2022. Flashattention: Fast and memory-efficient exact attention with io-awareness. Advances in Neural Information Processing Systems 35 (2022), 16344–16359.
+- <span id="page-11-1"></span>[10] Tri Dao and Albert Gu. 2024. Transformers are SSMs: Generalized models and efficient algorithms through structured state space duality. arXiv preprint arXiv:2405.21060 (2024).
+- <span id="page-11-4"></span>[11] DeepSeek-AI, Aixin Liu, Bei Feng, Bin Wang, Bingxuan Wang, Bo Liu, Chenggang Zhao, Chengqi Dengr, Chong Ruan, Damai Dai, Daya Guo, Dejian Yang, Deli Chen, Dongjie Ji, Erhang Li, Fangyun Lin, Fuli Luo, Guangbo Hao, Guanting Chen, Guowei Li, et al. 2024. DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model. arXiv:2405.04434 [cs.CL] https://arxiv.org/abs/2405.04434
+- <span id="page-11-13"></span>[12] Juechu Dong, Boyuan Feng, Driss Guessous, Yanbo Liang, and Horace He. 2024. Flex Attention: A Programming Model for Generating Optimized Attention Kernels. arXiv:2412.05496 [cs.LG] https://arxiv.org/abs/2412.05496
+- <span id="page-11-16"></span>[13] Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Amy Yang, Angela Fan, et al. 2024. The llama 3 herd of models. arXiv preprint arXiv:2407.21783 (2024).
+- <span id="page-11-3"></span>[14] Yizhao Gao, Zhichen Zeng, Dayou Du, Shijie Cao, Hayden Kwok-Hay So, Ting Cao, Fan Yang, and Mao Yang. 2024. SeerAttention: Learning Intrinsic Sparse Attention in Your LLMs. arXiv:2410.13276 [cs.CL] https://arxiv.org/abs/2410.13276
+- <span id="page-11-11"></span>[15] Guyue Huang, Yang Bai, Liu Liu, Yuke Wang, Bei Yu, Yufei Ding, and Yuan Xie. 2023. Alcop: Automatic load-compute pipelining in deep learning compiler for ai-gpus. *Proceedings of Machine Learning and Systems* 5 (2023), 680–694.
+- <span id="page-11-5"></span>[16] Shengyu Liu Jiashi Li. 2025. FlashMLA: Efficient MLA decoding kernels. https://github.com/deepseek-ai/FlashMLA.
+- <span id="page-11-10"></span>[17] Chendi Li, Yufan Xu, Sina Mahdipour Saravani, and Ponnuswamy Sadayappan. 2024. Accelerated auto-tuning of gpu kernels for tensor computations. In Proceedings of the 38th ACM International Conference on Supercomputing. 549–561.
+- <span id="page-11-14"></span>[18] Maxim Milakov and Natalia Gimelshein. 2018. Online normalizer calculation for softmax. arXiv:1805.02867 [cs.PF] https://arxiv.org/ abs/1805.02867
+- <span id="page-11-17"></span>[19] Hao Peng, Nikolaos Pappas, Dani Yogatama, Roy Schwartz, Noah A. Smith, and Lingpeng Kong. 2021. Random Feature Attention. arXiv:2103.02143 [cs.CL] https://arxiv.org/abs/2103.02143
+- <span id="page-11-2"></span>[20] Jason Ramapuram, Federico Danieli, Eeshan Dhekane, Floris Weers, Dan Busbridge, Pierre Ablin, Tatiana Likhomanenko, Jagrit Digani, Zijin Gu, Amitis Shidani, and Russ Webb. 2024. Theory, Analysis, and Best Practices for Sigmoid Self-Attention. arXiv:2409.04431 [cs.LG]
+
+#### <span id="page-12-0"></span><https://arxiv.org/abs/2409.04431>
+
+- <span id="page-12-4"></span>[21] Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ramani, and Tri Dao. 2024. Flashattention-3: Fast and accurate attention with asynchrony and low-precision. Advances in Neural Information Processing Systems 37 (2024), 68658–68685.
+- <span id="page-12-10"></span>[22] Yining Shi, Zhi Yang, Jilong Xue, Lingxiao Ma, Yuqing Xia, Ziming Miao, Yuxiao Guo, Fan Yang, and Lidong Zhou. 2023. Welder: Scheduling deep learning memory access via tile-graph. In 17th USENIX Symposium on Operating Systems Design and Implementation (OSDI 23). 701–718.
+- <span id="page-12-3"></span>[23] Yutao Sun, Li Dong, Shaohan Huang, Shuming Ma, Yuqing Xia, Jilong Xue, Jianyong Wang, and Furu Wei. 2023. Retentive network: A successor to transformer for large language models. arXiv preprint arXiv:2307.08621 (2023).
+- <span id="page-12-16"></span>[24] Yutao Sun, Li Dong, Yi Zhu, Shaohan Huang, Wenhui Wang, Shuming Ma, Quanlu Zhang, Jianyong Wang, and Furu Wei. 2024. You only cache once: Decoder-decoder architectures for language models. Advances in Neural Information Processing Systems 37 (2024), 7339–7361.
+- <span id="page-12-2"></span>[25] Philippe Tillet, H. T. Kung, and David Cox. 2019. Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations. Association for Computing Machinery, New York, NY, USA, 10–19. <https://doi.org/10.1145/3315508.3329973>
+- <span id="page-12-1"></span>[26] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you need. Advances in neural information processing systems 30 (2017).
+- <span id="page-12-19"></span>[27] Leandro von Werra, Younes Belkada, Lewis Tunstall, Edward Beeching, Tristan Thrush, Nathan Lambert, Shengyi Huang, Kashif Rasul, and Quentin Gallouédec. 2020. TRL: Transformer Reinforcement Learning. <https://github.com/huggingface/trl>.
+- <span id="page-12-12"></span>[28] Hongyu Wang, Shuming Ma, Li Dong, Shaohan Huang, Huaijie Wang, Lingxiao Ma, Fan Yang, Ruiping Wang, Yi Wu, and Furu Wei. 2023. BitNet: Scaling 1-bit Transformers for Large Language Models. arXiv[:2310.11453](https://arxiv.org/abs/2310.11453) [cs.CL] <https://arxiv.org/abs/2310.11453>
+- <span id="page-12-14"></span>[29] Lei Wang, Yu Cheng, Yining Shi, Zhengju Tang, Zhiwen Mo, Wenhao Xie, Lingxiao Ma, Yuqing Xia, Jilong Xue, Fan Yang, and Zhi Yang. 2025. TileLang: A Composable Tiled Programming Model for AI Systems. arXiv[:2504.17577](https://arxiv.org/abs/2504.17577) [cs.LG] <https://arxiv.org/abs/2504.17577>
+- <span id="page-12-18"></span>[30] Thomas Wolf, Lysandre Debut, Victor Sanh, et al. 2020. Transformers: State-of-the-Art Natural Language Processing. In Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing: System Demonstrations. Association for Computational Linguistics, Online, 38–45. [https://www.aclweb.org/anthology/2020.emnlp-demos.](https://www.aclweb.org/anthology/2020.emnlp-demos.6) [6](https://www.aclweb.org/anthology/2020.emnlp-demos.6)
+
+<span id="page-12-15"></span>[31] Mitchell Wortsman, Jaehoon Lee, Justin Gilmer, and Simon Kornblith. 2023. Replacing softmax with ReLU in Vision Transformers. arXiv[:2309.08586](https://arxiv.org/abs/2309.08586) [cs.CV] <https://arxiv.org/abs/2309.08586>
+
+.
+
+- <span id="page-12-13"></span>[32] Songlin Yang, Bailin Wang, Yikang Shen, Rameswar Panda, and Yoon Kim. 2024. Gated Linear Attention Transformers with Hardware-Efficient Training. arXiv[:2312.06635](https://arxiv.org/abs/2312.06635) [cs.LG] [https://arxiv.org/abs/](https://arxiv.org/abs/2312.06635) [2312.06635](https://arxiv.org/abs/2312.06635)
+- <span id="page-12-8"></span>[33] Songlin Yang and Yu Zhang. 2024. FLA: A Triton-Based Library for Hardware-Efficient Implementations of Linear Attention Mechanism. <https://github.com/fla-org/flash-linear-attention>
+- <span id="page-12-6"></span>[34] Tianzhu Ye, Li Dong, Yuqing Xia, Yutao Sun, Yi Zhu, Gao Huang, and Furu Wei. 2024. Differential Transformer. arXiv[:2410.05258v2](https://arxiv.org/abs/2410.05258v2) [cs.CL] <http://arxiv.org/abs/2410.05258v2>
+- <span id="page-12-11"></span>[35] Zihao Ye, Lequn Chen, Ruihang Lai, Wuwei Lin, Yineng Zhang, Stephanie Wang, Tianqi Chen, Baris Kasikci, Vinod Grover, Arvind Krishnamurthy, and Luis Ceze. 2025. FlashInfer: Efficient and Customizable Attention Engine for LLM Inference Serving. arXiv[:2501.01005v2](https://arxiv.org/abs/2501.01005v2) [cs.DC] <http://arxiv.org/abs/2501.01005v2>
+- <span id="page-12-7"></span>[36] Manzil Zaheer, Guru Guruganesh, Avinava Dubey, Joshua Ainslie, Chris Alberti, Santiago Ontanon, Philip Pham, Anirudh Ravula, Qifan Wang, Li Yang, and Amr Ahmed. 2021. Big Bird: Transformers for Longer Sequences. arXiv[:2007.14062](https://arxiv.org/abs/2007.14062) [cs.LG] [https://arxiv.org/abs/](https://arxiv.org/abs/2007.14062) [2007.14062](https://arxiv.org/abs/2007.14062)
+- <span id="page-12-17"></span>[37] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody Hao Yu, Ameer Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen, Joseph E. Gonzalez, and Ion Stoica. 2020. Ansor: Generating High-Performance Tensor Programs for Deep Learning. In 14th USENIX Symposium on Operating Systems Design and Implementation (OSDI 20). USENIX Association, 863–879. [https://www.usenix.org/conference/](https://www.usenix.org/conference/osdi20/presentation/zheng) [osdi20/presentation/zheng](https://www.usenix.org/conference/osdi20/presentation/zheng)
+- <span id="page-12-9"></span>[38] Runxin Zhong, Yuyang Jin, Chen Zhang, Kinman Lei, Shuangyu Li, and Jidong Zhai. 2025. FlashTensor: Optimizing Tensor Programs by Leveraging Fine-grained Tensor Property. In Proceedings of the 30th ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel Programming. 183–196.
+- <span id="page-12-5"></span>[39] Zayd M. K. Zuhri, Erland Hilman Fuadi, and Alham Fikri Aji. 2025. Softpick: No Attention Sink, No Massive Activations with Rectified Softmax. arXiv[:2504.20966](https://arxiv.org/abs/2504.20966) [cs.LG] <https://arxiv.org/abs/2504.20966>
+
+Received 2025-09-01; accepted 2025-11-10

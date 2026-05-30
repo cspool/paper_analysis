@@ -1,0 +1,4 @@
+# Conclusion
+
+In this paper, we propose ETR, a fundamentally new approach to MoE routing that solves the longstanding trade-off between computational efficiency and model performance through theoretically-grounded bidirectional selection mechanisms. By dynamically coordinating tokenchoice and expert-choice routing based on training progress, ETR achieves simultaneous improvements in both training efficiency and downstream task quality. The substantial performance gains demonstrated across diverse benchmarks, combined with significant reductions in computational overhead, establish ETR as a critical advancement for practical deployment of large-scale sparse models. Our theoretical contributions provide new insights into expert-token dynamics that extend beyond incremental optimizations, opening pathways for next-generation MoE architectures.
+

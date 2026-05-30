@@ -1,0 +1,8 @@
+# 2 PRELIMINARY
+
+#### 2.1 BLOCK SPARSE ATTENTION
+
+Given queries, keys, and values  $Q, K, V \in \mathbb{R}^{N \times d}$ , the standard attention computes the score matrix  $S = QK^{\top}/\sqrt{d}$  and the attention weights  $P = \operatorname{Softmax}(S)$  to obtain the output O = PV. This is inefficient for large N as it requires  $\mathcal{O}(N^2d)$  operations. The idea of sparse attention is to reduce computation by applying a mask  $M \in \{0,1\}^{N \times N}$  to the attention weights:  $P \leftarrow P \odot M$ , where  $\odot$  is the element-wise product. A common strategy is to choose a threshold  $\tau$  and set  $M_{ij} = 1$  if  $P_{ij} > \tau$ . For entries with  $M_{ij} = 0$ , the multiplications  $Q_i K_j^{\top}$  and  $P_{ij} V_j$  can be skipped, where  $Q_i = Q[i,:], K_j = K[j,:], V_j = V[j,:]$ .
+
+However, element-wise sparse attention is inefficient on modern GPUs. Practical implementations such as FlashAttention (Dao, 2023) operate at the block level. Specifically, the sparse FlashAttention first partitions Q, K, V, S, P, M into blocks  $\{\mathbf{Q}_i\}, \{\mathbf{K}_j\}, \{\mathbf{V}_j\}, \{\mathbf{S}_{ij}\}, \{\mathbf{P}_{ij}\}, \{\mathbf{M}_{ij}\}$ , where  $\mathbf{Q}_i \in \mathbb{R}^{b_q \times d}$ ,  $\mathbf{K}_j, \mathbf{V}_j \in \mathbb{R}^{b_{kv} \times d}$ , and  $\mathbf{S}_{ij}, \mathbf{P}_{ij}, \mathbf{M}_{ij} \in \mathbb{R}^{b_q \times b_{kv}}$ . Each block mask  $\mathbf{M}_{ij}$  is fully filled with either 0 or 1, and we skip the computations of  $\mathbf{Q}_i \mathbf{K}_j^{\top}$  and  $\mathbf{P}_{ij} \mathbf{V}_j$  if  $\mathbf{M}_{ij}[:,:] = 0$ .
+

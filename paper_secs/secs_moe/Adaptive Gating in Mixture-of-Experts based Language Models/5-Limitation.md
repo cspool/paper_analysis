@@ -1,0 +1,4 @@
+# 5 Limitation
+
+Choice of k. Adaptive gating in MoE currently is limited to top-k gating, where k can be either 1 or 2. This is built on the common practice in extensive prior work that top-2 gating shows a promissing resut in MoE. Further evaluation is necessary to validate the performance of a wider range of k values. Our experiments were conducted on a diverse set of NLP tasks and datasets, but it is essential to note that the effectiveness and efficiency of adaptive MoE may vary depending on the specific task characteristics. Different tasks may exhibit distinct patterns and complexities, which can impact the performance and generalizability of the proposed approach. Further investigation and evaluation on a wider range of tasks would provide a more comprehensive understanding of the limitations and applicability of adaptive MoE.
+

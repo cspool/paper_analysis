@@ -1,0 +1,6 @@
+# B.3. Evaluation Metrics
+
+Following QLoRA [\(Dettmers et al.,](#page-9-7) [2023\)](#page-9-7) and QA-LoRA [\(Xu et al.,](#page-11-2) [2023b\)](#page-11-2), we evaluate language understanding capabilities of the LLMs on Massively Multitask Language Understanding (MMLU) benchmark [\(Hendrycks et al.,](#page-9-6) [2020\)](#page-9-6) and commonsense reasoning ability on several Common Sense QA datasets.
+
+MMLU includes 57 language tasks, including humanities (Hums.), STEM, social science, etc. We utilize the MMLU evaluation script and prompts as outlined in [\(Hendrycks et al.,](#page-9-17) [2021\)](#page-9-17). Common Sense QA datasets includes HellaSwag [\(Zellers](#page-11-3) [et al.,](#page-11-3) [2019\)](#page-11-3), PIQA [\(Bisk et al.,](#page-9-12) [2020\)](#page-9-12), WinoGrande [\(Sakaguchi et al.,](#page-10-20) [2021\)](#page-10-20), ARC [\(Clark et al.,](#page-9-18) [2018\)](#page-9-18), BoolQ [\(Clark et al.,](#page-9-19) [2019\)](#page-9-19), and OpenBookQA [\(Mihaylov et al.,](#page-10-21) [2018\)](#page-10-21). We adopt lm-evalharness [\(Gao et al.,](#page-9-20) [2023\)](#page-9-20) to produce the Common Sense QA results. Table [14](#page-15-0) provides examples of each evaluation dataset. Given the multiple-choice (MC) nature of these tasks, accuracy is selected as the primary metric for evaluation.
+

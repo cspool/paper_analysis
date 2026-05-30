@@ -1,0 +1,26 @@
+# <span id="page-22-1"></span><span id="page-22-0"></span>**E. Configuration of Environments**
+
+In this section, we provide the tunable parameters for each task that determine its difficulty. Note that in some environments, higher difficulty primarily increases the complexity of the input observations (e.g., Sec. [5.2\)](#page-7-4), while in others it tightens the reward criteria and requires more precise control. Details are in Tab. [3.](#page-22-2)
+
+<span id="page-22-2"></span>Table 3. **Configuration summary for all tasks**: tunable parameters, easy and hard configurations, and source datasets.
+
+| Task                                    | Tunable Difficulty Parameters                                                                 | Easy                     | Hard                     | Src. Dataset                               |  |
+|-----------------------------------------|-----------------------------------------------------------------------------------------------|--------------------------|--------------------------|--------------------------------------------|--|
+| Colorization                            | Accuracy radius ar (precision required for<br>hue and saturation match).                      | ar = 11                  | ar = 16                  | LLaVA<br>Liu<br>et al. (2023)              |  |
+| Counting                                | Minimum and maximum<br>count range c_min, c_max.                                              | c_min = 2,<br>c_max = 20 | c_min = 5,<br>c_max = 30 | LVIS<br>Gupta<br>et al. (2019)             |  |
+| Jigsaw                                  | number of rows and columns nr, nc.                                                            | nr = 2, nc = 2           | nr = 3, nc = 3           | LLaVA<br>Liu<br>et al. (2023)              |  |
+| Matchstick<br>Equation                  | Number of break moves<br>bm (corruptions to fix).                                             | bm = 1                   | bm = 2                   | —                                          |  |
+| Matchstick<br>Rotation                  | Hidden scale range sr, position tolerance<br>pt, angular tolerance at.                        | pt = 10,<br>at = 15      | pt = 5,<br>at = 10       | —                                          |  |
+| Maze 2D                                 | Maze width and height mw, mh.                                                                 | mw = 9, mh = 9           | mw = 11, mh =<br>11      | —                                          |  |
+| Maze 3D                                 | Maze width and height mw, mh.                                                                 | mw = 7, mh = 7           | mw = 9, mh = 9           | —                                          |  |
+| Mental<br>Rotation<br>2D                | Angular tolerance at.                                                                         | at = 10.0                | at = 5.0                 | LLaVA<br>Liu<br>et al. (2023)              |  |
+| Mental<br>Rotation<br>3D<br>(Cube)      | Number of segments ns, length range lr,<br>angular tolerance at.                              | ns = 4                   | ns = 6                   | —                                          |  |
+| Mental<br>Rotation<br>3D<br>(Objaverse) | Angular tolerance at.                                                                         | at = 15.0                | at = 5.0                 | Objaverse<br>Deitke<br>et<br>al.<br>(2023) |  |
+| MuJoCo Fetch<br>Pick-and-Place          | No user-tuned difficulty parameters<br>(standardized task).                                   | Standard                 | Standard                 | —                                          |  |
+| MuJoCo Fetch<br>Reach                   | No user-tuned difficulty parameters<br>(standardized task).                                   | Standard                 | Standard                 | —                                          |  |
+| Patch Reassembly                        | Grid size gs, number of patches np.                                                           | gs = (6, 6),<br>np = 5   | gs = (8, 8),<br>np = 6   | —                                          |  |
+| Referring<br>Dot-Pointing               | No user-tuned difficulty parameters<br>(standardized task).                                   | Standard                 | Standard                 | RefCOCO<br>Kazemzadeh<br>et al. (2014)     |  |
+| Sliding Block                           | Number of shuffle moves sm.                                                                   | sm = 30                  | sm = 90                  | —                                          |  |
+| Video Unshuffle                         | Number of frames nf, sampling strategy ss,<br>minimum frame-diff threshold mfd.               | nf = 4                   | nf = 5                   | SS2 Goyal et al.<br>(2017)                 |  |
+| Zoom-In Puzzle                          | Zoom gap zg, zoom variability zs, mini<br>mum zoom mz, num. of views zv, nested<br>crop nest. | zv = 4                   | zv = 5                   | LLaVA<br>Liu<br>et al. (2023)              |  |
+

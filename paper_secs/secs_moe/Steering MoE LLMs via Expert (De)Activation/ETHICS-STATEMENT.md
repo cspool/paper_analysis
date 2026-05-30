@@ -1,0 +1,8 @@
+# ETHICS STATEMENT
+
+This work introduces techniques that can both enhance and undermine model safety, including the possibility of generating harmful or misaligned outputs if misused. While we believe the immediate and direct risks are limited, we acknowledge the potential for dual-use and adversarial exploitation. Our intention is to surface these vulnerabilities so the community can better understand the risks posed by expert routing in MoE models, and to encourage the development of stronger and more comprehensive alignment strategies that ensure safety across all routing paths.
+
+### LIMITATIONS
+
+Our method relies on several assumptions. First, the approach requires access to models with a Mixture-of-Experts (MoE) architecture. While MoEs are increasingly common in large-scale systems, the technique cannot be directly applied to dense models without an analogous notion of pertoken expert routing. Second, our method relies on paired inputs that exhibit clear contrasts in the targeted behavior. While such pairs are often easy to gather or synthesize for well-defined tasks, they may require additional curation or domain knowledge for more subtle or emergent behaviors. Third, determining how many experts to adjust depends on model-specific factors, including the number of experts, routing sparsity, and whether the model was trained with sufficiently strong incentives for sparse and stable expert utilization. The optimal configuration may therefore vary across architectures and tasks. We provide additional discussion and practical guidance on these considerations in the Appendix.
+

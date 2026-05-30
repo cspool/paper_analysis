@@ -1,0 +1,4 @@
+# 5 CONCLUSION
+
+In this work, we introduce FlowMM, an adaptive framework for cross-modal KV cache merging guided by multimodal information flow. FlowMM dynamically determines cross-modal interaction patterns through layer-wise information flow analysis, enabling layer-specific merging strategies to integrate contextual information. Moreover, our sensitivity-aware token matching jointly assesses token similarity and their task-specific sensitivity, preserving highly sensitive and informative tokens. Extensive experiments demonstrate that FlowMM achieves accuracy comparable to full KV cache utilization while significantly outperforming existing KV cache compression methods across multiple tasks. While this work focuses on image-text modalities, future efforts will explore extending FlowMM to video-audio models, where the longer temporal sequences and higher-dimensional features impose higher memory pressures.
+

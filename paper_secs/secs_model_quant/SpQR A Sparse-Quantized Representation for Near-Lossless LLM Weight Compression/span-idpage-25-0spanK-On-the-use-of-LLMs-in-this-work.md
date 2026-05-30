@@ -1,0 +1,5 @@
+# <span id="page-25-0"></span>K On the use of LLMs in this work
+
+Following the request in this year's call for papers, we describe the use of large language models in our paper. We used two different chat-based language models: ChatGPT and Claude+. We used these models to accelerate the process of writing LaTeX code in Alg. [1](#page-6-0) and Figure [3](#page-6-1) (via Tikz). We also used these LLMs to provide slight improvements to the table design throughout the paper.
+
+In addition to this, we use ChatGPT to generate some prompts for Appendix [I.](#page-21-1) Finally, we used Claude+ to produce possible formulations for the outlier criterion in Alg. [1.](#page-6-0) In all these cases, we used LLMs through chat-based user interfaces, instructing them to generate code (LaTeX) or suggest improvements. If the suggested changes would not work as expected, we reported them to the model in natural language, using the same chat-based interface.

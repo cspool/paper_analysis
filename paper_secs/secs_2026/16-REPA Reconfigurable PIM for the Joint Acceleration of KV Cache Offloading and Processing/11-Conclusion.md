@@ -1,0 +1,4 @@
+# 11 Conclusion
+
+In this paper, we propose REPA, a GPU-PIM hybrid system for the joint acceleration of KV cache offloading and processing. Our system is characterized by high parallelism, which is achieved by in-depth optimizations on micro-architecture, data mapping and GPU-PIM pipelining. We propose bulkwise memory instructions and multi-level controllers to enable fine-grained parallelism in the PIM device. To fully leverage this parallelization ability, we propose locality-aware data mapping, which significantly reduces the long-range data transfer overhead. At the system level, we adopt subbatch pipelining to reduce the idleness inside a batch, and propose transfer overlapping to shadow the KV transfer overhead by computation. REPA is fast, efficient and highly integratable. It is 1.5–6.5× faster, and 6.2–6.3× more efficient than NVIDIA A100. When integrated into FlexGen, it achieves 1.2–1.4× inference speedup.
+

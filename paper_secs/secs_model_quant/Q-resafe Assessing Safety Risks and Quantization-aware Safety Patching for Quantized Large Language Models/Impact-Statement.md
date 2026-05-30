@@ -1,0 +1,4 @@
+# Impact Statement
+
+This study investigates the safety challenges of quantized large language models (LLMs) and proposes effective mitigation strategies to restore their robustness. While quantization enables LLM deployment in resource-constrained environments, it also introduces vulnerabilities that can compromise safety. Our findings highlight the need for systematic safety assessments across different quantization techniques and bit-widths. To address these issues, we introduce Q-resafe, a quantization-aware safety patching framework that efficiently restores the safety capabilities of quantized LLMs with minimal impact on utility. Extensive evaluations demonstrate that Q-resafe effectively aligns the safety of quantized LLMs with their high-precision counterparts, ensuring reliable and responsible AI deployment even in challenging scenarios.
+

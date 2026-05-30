@@ -1,0 +1,10 @@
+# <span id="page-2-1"></span>3.1 Lessons Learned: Representation Matters
+
+As outlined in Section 2.2, existing inter-layer schedulers suffer from several critical limitations. Our in-depth analysis reveals that the root cause lies in the lack of a proper representation framework:
+
+Lesson #1. Representation should provide rich expressiveness. For Challenge #1, the reason prior works cannot fully explore all four design factors is that their underlying representations lack the expressiveness needed to support such exploration. For example, automatic exploration of recomputation strategies requires fine-grained tracking of memory consumption across all time steps and layers—something that the resource allocation (RA) tree-based notation used in SET cannot provide.
+
+Lesson #2. Representation should exhibit topological flexibility. For Challenge #2, the inherent topology of the representations used in prior works limits the flexibility of scheduling. For example, the construction process of the ratio-tree in SET inherently enforces repeated execution patterns across the same node, which imposes rigid scheduling constraints. In the case of TileFlow, its tile-centric tree representation works well for simple, linear chains of computation. However, it becomes significantly challenging to construct tile trees that accurately describe more complex computation flows involving multiple fan-in and fan-out structures.
+
+Lesson #3. Representation should support mathematical structuredness. For Challenge #3, the representation fundamentally shapes the form and tractability of the optimization problem. Existing works fail to produce well-structured objectives—they lack essential mathematical properties such as continuity, differentiability, convexity, and linear-discrete structure. As a result, the scheduling problems cannot be formulated for efficient, principled optimization and must instead rely on heuristic, sampling-based search with slow convergence and no guarantee of solution quality.
+

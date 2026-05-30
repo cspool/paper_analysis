@@ -1,0 +1,3 @@
+# <span id="page-33-1"></span>E Broader Impact
+
+Our proposed FlyLoRA resolves the trade-off between parameter interference and efficiency in MoE-based LoRA approaches. Additionally, this efficient decoupling mechanism, which is inspired by fly olfactory circuits, can be applied across various domains, helping researchers and developers leverage more powerful LoRA fine-tuning strategies. On the other hand, FlyLoRA could potentially be misused to fine-tune LLMs that exhibit biases or generate harmful content. We recommend implementing model access controls and bias-monitoring frameworks when deploying this technique.

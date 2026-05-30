@@ -1,0 +1,13 @@
+# B.3 Relationship to RNNs
+
+RNNs and SSMs are broadly related, as they both involve the concepts of recurrence on a latent state.
+
+Several older RNNs such as the strongly typed RNN (Balduzzi and Ghifary [2016\)](#page-17-15), quasi-RNN (QRNN) (Bradbury et al. [2016\)](#page-17-3), and simple recurrent unit (SRU) (Lei [2021;](#page-19-18) Lei et al. [2017\)](#page-19-5) involve forms of gated RNNs without time-wise nonlinearities. Because of the connections of gating mechanisms and selection mechanisms, these can be viewed as cases of selective SSMs, and are thus more powerful in a sense than the family of LTI structured SSMs above. The main differences are:
+
+- They do not use state expansion ( = 1) or selective , parameters, both of which are important for performance (Section [4.6\)](#page-14-0).
+- They use a heuristic gating mechanism, which we generalize as a consequence of the selection mechanism + discretization (Theorem [1\)](#page-7-1). The connections to principled SSM theory provides better parameterizations and initializations (Section [3.6\)](#page-8-0).
+
+Additionally, older RNNs famously suffered from efficiency issues and the vanishing gradients problem (Hochreiter [1991;](#page-19-19) Hochreiter, Bengio, et al. [2001;](#page-19-20) Pascanu, Mikolov, and Bengio [2013\)](#page-20-12), both caused by their sequential nature. The former could be solved for some of the above RNNs by leveraging the parallel scan (Martin and Cundy [2018\)](#page-20-7), but the latter was difficult without theory later developed for SSMs. For example, modern structured SSMs differ in more careful parameterization of the recurrent dynamics inspired by classical SSM theory (e.g. through discretization (Gu, Johnson, Goel, et al. [2021;](#page-18-2) Gu, Johnson, Timalsina, et al. [2023\)](#page-18-7)), or direct analysis (Gupta, Mehta, and Berant [2022;](#page-18-17) Kaul [2020;](#page-19-21) Orvieto et al. [2023\)](#page-20-3)).
+
+We also note that there is a long line of work on orthogonal RNNs (Arjovsky, Shah, and Bengio [2016;](#page-16-0) Henaff, Szlam, and LeCun [2016;](#page-19-22) Lezcano-Casado and Martínez-Rubio [2019;](#page-19-23) Mhammedi et al. [2017;](#page-20-13) Vorontsov et al. [2017\)](#page-21-20) which are motivated by constraining the transition matrix to be orthogonal or unitary, in order to control its eigenvalues and prevent the vanishing gradient problem. However, these had other limitations; we believe that these stem from the fact that orthogonal/unitary RNNs are also LTI. For example, they are almost always evaluated on the Copying task which they can solve perfectly, but observed to struggle on the Selective Copying task (Jing et al. [2019\)](#page-19-11).
+

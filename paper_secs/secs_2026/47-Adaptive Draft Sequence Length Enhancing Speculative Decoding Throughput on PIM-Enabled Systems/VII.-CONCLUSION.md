@@ -1,0 +1,4 @@
+# VII. CONCLUSION
+
+Speculative decoding enhances LLM throughput but suffers from redundant computation and limited parallelism on PIM-enabled heterogeneous systems, particularly under large batch sizes. To address this, we present SADDLE, a PIMenabled heterogeneous system that adaptively adjusts draft sequence lengths and overcomes key performance bottlenecks. SADDLE incorporates three core optimizations: (1) runtime draft-length tuning based on cumulative acceptance probability to reduce invalid tokens and maintain TLM parallelism, (2) an asynchronous decoding pipeline that decouples DLM and TLM to avoid pipeline stalls, and (3) arithmetic intensity–aware operator scheduling that dynamically maps tasks to PIM or GPU for efficient hardware utilization. Experimental results show that SADDLE improves inference throughput by 2.88× over GPU-only and 1.71× over existing PIM-enabled speculative decoding systems on average.
+

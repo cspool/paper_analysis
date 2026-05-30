@@ -1,0 +1,4 @@
+# <span id="page-6-2"></span>4.4. Dynamic Temporal Scope Retrieval
+
+We evaluate episodic memory retrieval performance across diverse temporal scales of events using temporal intersection over union (tIoU), which measures the overlap between retrieved and ground truth segments as the ratio of their intersection to their union duration. We compare WorldMM with various models in temporal grounding, single-modality retrieval, long-form egocentric video retrieval, and keyframe selection. Details about baselines are given in Sec. [C.1.](#page-12-1) As shown in Tab. [3,](#page-7-0) WorldMM achieves significantly superior tIoU scores than strong baselines. Notably, reasoning-based retrieval and keyframe selection methods exhibit lower tIoU values, indicating difficulty in handling long input contexts. Moreover, Fig. [5](#page-7-1) demonstrates that the superior tIoU is directly correlated with higher overall accuracy, particularly in understanding long videos.
+

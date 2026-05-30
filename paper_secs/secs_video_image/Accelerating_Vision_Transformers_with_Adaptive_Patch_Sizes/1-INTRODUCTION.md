@@ -1,0 +1,22 @@
+# 1 INTRODUCTION
+
+Vision Transformers (ViTs) [\(Dosovitskiy et al.,](#page-11-0) [2020\)](#page-11-0) have become the dominant paradigm for visual recognition, but their scalability is limited by the quadratic cost of self-attention with respect to sequence length. Since inputs are divided into fixed-size patches, image resolution directly determines sequence length: higher resolution images yield disproportionately long token sequences despite much higher redundancy.
+
+Many prior works have proposed solutions to this issue, typically by merging a fixed proportion of similar tokens [\(Bolya et al.,](#page-10-0) [2022\)](#page-10-0) or pruning uninformative ones with auxiliary predictors [\(Rao](#page-13-0) [et al.,](#page-13-0) [2021;](#page-13-0) [Yin et al.,](#page-14-0) [2022\)](#page-14-0). While these reduce theoretical FLOPs, they face two drawbacks. Firstly, a fixed reduction ratio is mismatched to image complexity: merging only half the tokens in a pure white image is insufficient, while merging half the tokens in a busy cityscape is harmful. Secondly, pruning during the forward pass introduces padding and irregular shapes, often negating speedups in practice [\(Dehghani et al.,](#page-10-1) [2021\)](#page-10-1). In contrast to vision transformers, language models rely on adaptive tokenizers such as Byte-Pair Encoding [\(Sennrich et al.,](#page-13-1) [2016\)](#page-13-1) and SentencePiece [Kudo & Richardson](#page-11-1) [\(2018\)](#page-11-1), which flexibly assign tokens of varying lengths depending on subword frequency. This reduces input sequence size while improving performance, suggesting that variablegranularity tokenization can be more efficient than fixed-size splits.
+
+Our key insight is that a similar idea can be applied to vision transformers. As illustrated in Figure [1,](#page-1-0) ViTs use the same amount of computation on a uniform green background as on the complex patches on the head of the bird, despite the significant difference in visual complexity. We introduce the Adaptive Patch Transformer (APT), which addresses this mismatch by varying patch sizes *within a single image*. Regions that are smooth and redundant can be represented with large patches, while regions rich in detail are allocated smaller patches. This content-aware patchification preserves important information where it matters while reducing redundancy elsewhere. To do this, APT computes entropy at multiple scales and assigns larger patch sizes to regions with the lowest entropy,
+
+<sup>\*</sup>Equal contribution
+
+<sup>†</sup>Equal advising
+
+<span id="page-1-0"></span>![](_page_1_Picture_1.jpeg)
+
+Figure 1: Adaptive Patch Sizing. We present APT, Adaptive Patch Transformers, which significantly accelerate vision transformer training and inference by patchifying images based on their content. Complex regions receive more, smaller tokens, while simpler, homogeneous regions receive fewer.
+
+resulting in significantly fewer input tokens. We then down-sample the larger patches and combine their patch embeddings with the information from the original large patch using a zero-initialized MLP, allowing APT to converge without harming the network.
+
+APT speeds up ViT inference *and* training by almost 40%, with even larger boosts for higher resolution images and larger models. When initialized from a self-supervised or large-scale pretrained checkpoint, APT reaches the same performance as the original ViT after fine-tuning. If applied directly to an already fine-tuned ImageNet checkpoint, APT incurs only a small accuracy drop without additional training. With our zero-initialized MLP, this gap can be closed in as little as a single epoch of fine-tuning. We also find that unlike most prior token reduction works, APT can successfully accelerate vision transformers on a wide range of image understanding tasks, such as visual question answering, object detection, and semantic segmentation, while matching the baseline performance.
+
+In summary, we (1) introduce the Adaptive Patch Transformer (APT), which accelerates Vision Transformers by up to 40% through content-aware patch sizes, with larger gains at higher resolutions and model scales; (2) show that APT preserves the accuracy of standard pretrained models across resolutions and scales; and (3) demonstrate that APT extends beyond ImageNet, performing well on dense prediction and vision-language tasks.
+

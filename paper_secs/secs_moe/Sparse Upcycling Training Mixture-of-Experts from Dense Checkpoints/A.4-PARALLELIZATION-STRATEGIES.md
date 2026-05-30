@@ -1,0 +1,4 @@
+# A.4 PARALLELIZATION STRATEGIES
+
+Sparsely activated Mixture-of-Experts (MoE) models combine three types of parallelization strategies to train large models across multiple accelerator chips: data, model and expert parallelism. We use data parallelism to shard the training batch across devices. We use expert parallelism to partition experts across devices; for example, placing experts 1 and 2 on device 1, experts 3 and 4 on device 2, and so on. Model parallelism is a third axis along which model weights (matrices) can be sharded across devices; for example, expert 1 is split across devices 1 and 2, expert 2 is split across devices 3 and 4, and so on. Model parallelism is beneficial for scaling to larger model sizes. See also [\(Fedus](#page-10-4) [et al., 2022\)](#page-10-4) for a more detailed discussion of these three parallelization strategies.
+

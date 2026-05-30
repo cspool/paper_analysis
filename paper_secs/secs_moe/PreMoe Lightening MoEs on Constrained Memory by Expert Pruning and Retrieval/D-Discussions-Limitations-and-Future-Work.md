@@ -1,0 +1,4 @@
+# **D Discussions, Limitations, and Future Work**
+
+**Discussions.** PreMoE demonstrates that MoE models across scales (30B–718B parameters) can be efficiently deployed through proactive compilation, achieving up to 50% sparsity with minimal performance loss. Our experiments show that the approach is remarkably dataefficient: just 5–10 calibration samples achieve near-optimal performance (Appendix [C.7\)](#page-16-1), and including reasoning context significantly improves pattern quality (Appendix [C.6\)](#page-16-0). The cross-domain expert overlap analysis reveals that high-utility experts are highly domainspecific while lower-ranked experts are more general, validating our synthesis approach for multi-domain generalists. This work establishes computational patterns as a practical tool for model specialization, enabling significant infrastructure savings while maintaining model capabilities.
+

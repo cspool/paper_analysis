@@ -1,0 +1,18 @@
+# Fix: externalizing network I/O in serverless computing
+
+Yuhan Deng Stanford University
+
+Francis Chua Stanford University Akshay Srivatsan Stanford University
+
+Yasmine Mitchell Stanford University Matthew Vilaysack Stanford University
+
+Sebastian Ingino
+
+Stanford University
+
+Keith Winstein Stanford University
+
+#### **Abstract**
+
+We describe a system for serverless computing where users, programs, and the underlying platform share a common representation of a computation: a deterministic procedure, run in an environment of well-specified data or the outputs of other computations. This representation externalizes I/O: data movement over the network is performed exclusively by the platform. Applications can describe the precise data needed at each stage, helping the provider schedule tasks and network transfers to reduce starvation. The design suggests an end-to-end argument for outsourced computing, shifting the service model from "pay-for-effort" to "pay-for-results."
+

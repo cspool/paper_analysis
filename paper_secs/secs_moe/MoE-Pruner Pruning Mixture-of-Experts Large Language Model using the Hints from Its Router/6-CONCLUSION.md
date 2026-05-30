@@ -1,0 +1,4 @@
+# 6 CONCLUSION
+
+We propose a simple and effective pruning method for MoE models, MoE-Pruner. We prune weights with the smallest magnitudes multiplied by the corresponding input activations and router weights, on each output neuron. Our pruning method is one-shot and fast, without the need for any retraining or weight update procedures. Pruning MoE LLM with high sparsity will incur performance degradation, so we also propose a fine-tuning method that leverages the unpruned pretrained MoE model as a teacher to guide the pruned student model through expert-wise knowledge distillation. The fine-tuned MoE models could maintain 99% of the performance of the original model after the expert-wise knowledge distillation, using only a small set of training data and low GPU hours. In the future, MoE-Pruner could also be extended to structured pruning of MoE LLMs, such as channel pruning and expert pruning, for better hardware acceleration.
+

@@ -1,0 +1,10 @@
+# 5 Discussion
+
+#### 5.1 Interference in Model Merging
+
+In scenarios requiring training, gradient orthogonalization techniques are commonly employed to reduce task interference, as seen in multi-task learning [\[88\]](#page-15-9) and continual learning [\[8,](#page-10-9) [91\]](#page-15-10). In our training-free model merging setting, all components are derived from the same base model through domain-specific SFT. Task interference can be quantified by measuring the orthogonality of parameter updates (relative to the base model) across different tasks [\[29\]](#page-11-5). For our LoRA components merging, these parameter updates correspond to BiA<sup>i</sup> . We formally prove the near-orthogonality of FlyLoRA in Appendix [A.3,](#page-25-0) which inherently reduces inter-task correlations.
+
+#### 5.2 FlyLoRA's Connection to Other Orthogonality-Based Designs in PEFT
+
+Representative orthogonality-based PEFT methods like OFT [\[46,](#page-12-14) [59\]](#page-13-8) and LoReFT [\[83\]](#page-15-11) both operate on single tasks, and their orthogonal matrix R multiplies the pre-trained weight matrix W0, differing from LoRA variants (including FlyLoRA) that add ∆W to W0. The multiplication scheme rotates the entire weight parameter space, and [\[46,](#page-12-14) [59\]](#page-13-8) demonstrate this better adjusts semantic information compared to changing magnitude, explaining its success. In contrast, the additive scheme lacks this property since W<sup>0</sup> cannot be rotated. In single-task settings, removing the MoE part with only random A reduces FlyLoRA to LoRA-FA [\[94\]](#page-15-5) or Asymmetry LoRA [\[97\]](#page-15-12). These variants can save resources but cannot improve performance. Thus, although all methods use orthogonality, FlyLoRA succeeds differently. We think the orthogonality design in LoRA excels in *multi-task* scenarios, such as model merging (this work and LoRI [\[93\]](#page-15-7)) and continual learning (O-LoRA [\[80\]](#page-14-8)), because it decouples parameter interference across multiple downstream tasks when fine-tuning from the base model.
+

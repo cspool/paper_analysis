@@ -1,0 +1,92 @@
+# REFERENCES
+
+- [1] Add Splitwise Implementation to vLLM. GitHub. [Online]. Available: https://github.com/vllm-project/vllm/pull/2809
+- [2] AMD Instinct™ MI250 Accelerator. [Online]. Available: https: //www.amd.com/en/products/server-accelerators/instinct-mi250
+- [3] Azure InfiniBand HPC VMs. [Online]. Available: https://learn.microsoft. com/en-us/azure/virtual-machines/overview-hb-hc
+- [4] Azure Public Dataset: Azure LLM Inference Trace 2023. GitHub. [Online]. Available: https://github.com/Azure/AzurePublicDataset/blob/ master/AzureLLMInferenceDataset2023.md
+- [5] CoreWeave Specialized Cloud Provider. [Online]. Available: https://www.coreweave.com
+- [6] Google Assistant with Bard. [Online]. Available: https://blog.google/ products/assistant/google-assistant-bard-generative-ai/
+- [7] HPC Interconnect on CoreWeave Cloud. [Online]. Available: https: //docs.coreweave.com/networking/hpc-interconnect
+- [8] Intel BigDL-LLM. [Online]. Available: https://github.com/intel-analytics/ BigDL
+- [9] Intel Sapphire Rapids with HBM. [Online]. Available: https://www.anandtech.com/show/17422/ intel-showcases-sapphire-rapids-plus-hbm-xeon-performance-isc-2022
+- [10] Microsoft Azure ND A100 v4-series . [Online]. Available: https: //learn.microsoft.com/en-us/azure/virtual-machines/nda100-v4-series
+- [11] MSCCL++: A GPU-driven communication stack for scalable AI applications. [Online]. Available: https://github.com/microsoft/mscclpp
+- [12] Numenta Inference on CPUs. [Online]. Available: https://www.servethehome.com/ numenta-has-the-secret-to-ai-inference-on-cpus-like-the-intel-xeon-max/
+- [13] NVIDIA Accelerated InfiniBand Solutions. [Online]. Available: https://www.nvidia.com/en-us/networking/products/infiniband/
+- [14] NVIDIA Chip Shortage. [Online]. Available: https://www.wired.com/story/ nvidia-chip-shortages-leave-ai-startups-scrambling-for-computing-power/
+- [15] NVIDIA DGX A100: Universal System for AI Infrastructure. [Online]. Available: https://resources.nvidia.com/en-us-dgx-systems/dgx-ai
+- [16] NVIDIA DGX H100. [Online]. Available: https://www.nvidia.com/en-us/ data-center/dgx-h100/
+- [17] NVIDIA Hopper GPUs Expand Reach as Demand for AI Grows. [Online]. Available: https://nvidianews.nvidia.com/news/ nvidia-hopper-gpus-expand-reach-as-demand-for-ai-grows
+- [18] OpenAI ChatGPT APIs. [Online]. Available: https://openai.com/blog/ introducing-chatgpt-and-whisper-apis
+- [19] Power Availability Stymies Datacenter Growth. [Online]. Available: https://www.networkworld.com/article/972483/ power-availability-stymies-data-center-growth.
+- [20] SplitwiseSim: LLM Serving Cluster Simulator. GitHub. [Online]. Available: https://github.com/Mutinifni/splitwise-sim
+- [21] The New Bing. [Online]. Available: https://www.microsoft.com/en-us/ edge/features/the-new-bing?form=MT00D8
+- [22] TurboMind Inference Server. [Online]. Available: https://github.com/ InternLM/lmdeploy
+- [23] A. Agrawal, A. Panwar, J. Mohan, N. Kwatra, B. S. Gulavani, and R. Ramjee, "SARATHI: Efficient LLM Inference by Piggybacking Decodes with Chunked Prefills," *arXiv preprint arXiv:2308.16369*, 2023.
+- [24] H. Albahar, S. Dongare, Y. Du, N. Zhao, A. K. Paul, and A. R. Butt, "SchedTune: A heterogeneity-aware GPU Scheduler for Deep Learning," in *CCGrid*, 2022.
+- [25] R. Y. Aminabadi, S. Rajbhandari, A. A. Awan, C. Li, D. Li, E. Zheng, O. Ruwase, S. Smith, M. Zhang, J. Rasley, and Y. He, "DeepSpeed-Inference: Enabling Efficient Inference of Transformer Models at Unprecedented Scale," in *SC*, 2022.
+- [26] L. A. Barroso, U. Hölzle, and P. Ranganathan, "The Datacenter as a Computer: Designing Warehouse-Scale Machines," *Synthesis Lectures on Computer Architecture*, 2018.
+- [27] E. Boutin, J. Ekanayake, W. Lin, B. Shi, J. Zhou, Z. Qian, M. Wu, and L. Zhou, "Apollo: Scalable and Coordinated Scheduling for Cloud-scale Computing," in *OSDI*, 2014.
+- [28] T. B. Brown, B. Mann, N. Ryder, M. Subbiah, J. Kaplan, P. Dhariwal, A. Neelakantan, P. Shyam, G. Sastry, A. Askell, S. Agarwal, A. Herbert-Voss, G. Krueger, T. Henighan, R. Child, A. Ramesh, D. M. Ziegler, J. Wu, C. Winter, C. Hesse, M. Chen, E. Sigler, M. Litwin, S. Gray, B. Chess, J. Clark, C. Berner, S. McCandlish, A. Radford, I. Sutskever,
+
+- and D. Amodei, "Language Models are Few-Shot Learners," *arXiv preprint arXiv:2005.14165*, 2020.
+- [29] J. Chen and L. K. John, "Efficient Program Scheduling for Heterogeneous Multi-core Processors," in *DAC*, 2009.
+- [30] Y. Choi, J. Kim, and M. Rhu, "Hera: A Heterogeneity-Aware Multi-Tenant Inference Server for Personalized Recommendations," *arXiv preprint arXiv:2302.11750*, 2023.
+- [31] D. Crankshaw, G.-E. Sela, X. Mo, C. Zumar, I. Stoica, J. Gonzalez, and A. Tumanov, "InferLine: Latency-aware Provisioning and Scaling for Prediction Serving Pipelines," in *SoCC*, 2020.
+- [32] T. Dao, D. Fu, S. Ermon, A. Rudra, and C. Ré, "FlashAttention: Fast and Memory-efficient Exact Attention with IO-Awareness," in *NeurIPS*, 2022.
+- [33] David Patterson. Domain Specific Architectures for Deep Neural Networks: Three Generations of Tensor Processing Units (TPUs). Allen School Distinguished Lecture. [Online]. Available: https: //www.youtube.com/watch?v=VCScWh966u4
+- [34] J. Dean and S. Ghemawat, "MapReduce: Simplified Data Processing on Large Clusters," *Communications of the ACM*, 2008.
+- [35] T. Dettmers, M. Lewis, Y. Belkada, and L. Zettlemoyer, "LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale," *arXiv preprint arXiv:2208.07339*, 2022.
+- [36] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding," in *NAACL*, 2019.
+- [37] A. Gujarati, R. Karimi, S. Alzayat, W. Hao, A. Kaufmann, Y. Vigfusson, and J. Mace, "Serving DNNs like Clockwork: Performance Predictability from the Bottom Up," in *OSDI*, 2020.
+- [38] U. Gupta, S. Hsia, V. Saraph, X. Wang, B. Reagen, G.-Y. Wei, H.-H. S. Lee, D. Brooks, and C.-J. Wu, "DeepRecSys: A System for Optimizing End-to-end At-scale Neural Recommendation Inference," in *ISCA*, 2020.
+- [39] V. Gupta, M. Harchol Balter, K. Sigman, and W. Whitt, "Analysis of Join-the-Shortest-Queue Routing for Web Server Farms," *Performance Evaluation*, 2007.
+- [40] M. E. Haque, Y. H. Eom, Y. He, S. Elnikety, R. Bianchini, and K. S. McKinley, "Few-to-Many: Incremental Parallelism for Reducing Tail Latency in Interactive Services," *ACM SIGPLAN Notices*, 2015.
+- [41] M. E. Haque, Y. He, S. Elnikety, T. D. Nguyen, R. Bianchini, and K. S. McKinley, "Exploiting Heterogeneity for Tail Latency and Energy Efficiency," in *MICRO*, 2017.
+- [42] K. Hong, G. Dai, J. Xu, Q. Mao, X. Li, J. Liu, K. Chen, H. Dong, and Y. Wang, "FlashDecoding++: Faster Large Language Model Inference on GPUs," *arXiv preprint arXiv:2311.01282*, 2023.
+- [43] Y. Hu, R. Ghosh, and R. Govindan, "Scrooge: A Cost-effective Deep Learning Inference System," in *SoCC*, 2021.
+- [44] Huggingface. Text Generation Inference (TGI). [Online]. Available: https://github.com/huggingface/text-generation-inference
+- [45] R. Hwang, T. Kim, Y. Kwon, and M. Rhu, "Centaur: A Chiplet-based, Hybrid Sparse-Dense Accelerator for Personalized Recommendations," in *ISCA*, 2020.
+- [46] M. Isard, M. Budiu, Y. Yu, A. Birrell, and D. Fetterly, "Dryad: Distributed Data-Parallel Programs from Sequential Building Blocks," in *EuroSys*, 2007.
+- [47] M. Javaheripi and S. Bubeck, "Phi-2: The Surprising Power of Small Language Models," *Microsoft Research Blog*, 2023.
+- [48] W. Jiang, Z. He, S. Zhang, K. Zeng, L. Feng, J. Zhang, T. Liu, Y. Li, J. Zhou, C. Zhang *et al.*, "FleetRec: Large-scale Recommendation Inference on Hybrid GPU-FPGA Clusters," in *KDD*, 2021.
+- [49] R. S. Kannan, L. Subramanian, A. Raju, J. Ahn, J. Mars, and L. Tang, "GrandSLAm: Guaranteeing SLAs for Jobs in Microservices Execution Frameworks," in *EuroSys*, 2019.
+- [50] R. Kumar, K. I. Farkas, N. P. Jouppi, P. Ranganathan, and D. M. Tullsen, "Single-ISA Heterogeneous Multi-core Architectures: The Potential for Processor Power Reduction," in *MICRO*, 2003.
+- [51] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. E. Gonzalez, H. Zhang, and I. Stoica, "Efficient Memory Management for Large Language Model Serving with PagedAttention," in *SOSP*, 2023.
+- [52] Y. Kwon, Y. Lee, and M. Rhu, "TensorDIMM: A Practical Near-Memory Processing Architecture for Embeddings and Tensor Operations in Deep Learning," in *MICRO*, 2019.
+- [53] Z. Li, L. Zheng, Y. Zhong, V. Liu, Y. Sheng, X. Jin, Y. Huang, Z. Chen, H. Zhang, J. E. Gonzalez, and I. Stoica, "AlpaServe: Statistical Multiplexing with Model Parallelism for Deep Learning Serving," in *OSDI*, 2023.
+
+- [54] Y. Liu, M. Ott, N. Goyal, J. Du, M. Joshi, D. Chen, O. Levy, M. Lewis, L. Zettlemoyer, and V. Stoyanov, "RoBERTa: A Robustly Optimized BERT Pretraining Approach," *arXiv preprint arXiv:1907.11692*, 2019.
+- [55] Z. Liu, J. Wang, T. Dao, T. Zhou, B. Yuan, Z. Song, A. Shrivastava, C. Zhang, Y. Tian, C. Re, and B. Chen, "Deja Vu: Contextual Sparsity for Efficient LLMs at Inference Time," in *ICML*, 2023.
+- [56] Meta. Introducing the AI Research SuperCluster Meta's Cutting-Edge AI Supercomputer for AI Research. [Online]. Available: https://ai.facebook.com/blog/ai-rsc/
+- [57] "Azure OpenAI Service," Microsoft Azure, 2022. [Online]. Available: https://azure.microsoft.com/en-us/products/ai-services/openai-service
+- [58] R. Mittal, A. Shpiner, A. Panda, E. Zahavi, A. Krishnamurthy, S. Ratnasamy, and S. Shenker, "Revisiting Network Support for RDMA," *arXiv preprint arXiv:1806.08159*, 2018.
+- [59] P. Moritz, R. Nishihara, S. Wang, A. Tumanov, R. Liaw, E. Liang, M. Elibol, Z. Yang, W. Paul, M. I. Jordan *et al.*, "Ray: A Distributed Framework for Emerging AI Applications," in *OSDI*, 2018.
+- [60] OpenAI. Scaling Kubernetes to 7,500 Nodes. [Online]. Available: https://openai.com/research/scaling-kubernetes-to-7500-nodes
+- [61] K. Ousterhout, P. Wendell, M. Zaharia, and I. Stoica, "Sparrow: Distributed, Low Latency Scheduling," in *SOSP*, 2013.
+- [62] P. Patel, E. Choukse, C. Zhang, Í. Goiri, B. Warrier, N. Mahalingam, and R. Bianchini, "POLCA: Power Oversubscription in LLM Cloud Providers," *arXiv preprint arXiv:2308.12908*, 2023.
+- [63] P. Patel, E. Choukse, C. Zhang, Í. Goiri, B. Warrier, N. Mahalingam, and R. Bianchini, "Characterizing Power Management Opportunities for LLMs in the Cloud," in *ASPLOS*, 2024.
+- [64] P. Patel, Z. Gong, S. Rizvi, E. Choukse, P. Misra, T. Anderson, and A. Sriraman, "Towards Improved Power Management in Cloud GPUs," in *IEEE CAL*, 2023.
+- [65] P. Patel, K. Lim, K. Jhunjhunwalla, A. Martinez, M. Demoulin, J. Nelson, I. Zhang, and T. Anderson, "Hybrid Computing for Interactive Datacenter Applications," *arXiv preprint arXiv:2304.04488*, 2023.
+- [66] R. Pope, S. Douglas, A. Chowdhery, J. Devlin, J. Bradbury, J. Heek, K. Xiao, S. Agrawal, and J. Dean, "Efficiently Scaling Transformer Inference," in *MLSys*, 2023.
+- [67] A. Radford, J. Wu, R. Child, D. Luan, D. Amodei, and I. Sutskever, "Language Models are Unsupervised Multitask Learners," *OpenAI blog*, 2019.
+- [68] F. Romero, Q. Li, N. J. Yadwadkar, and C. Kozyrakis, "INFaaS: Automated Model-less Inference Serving," in *USENIX ATC*, 2021.
+- [69] T. L. Scao, A. Fan, C. Akiki, E. Pavlick, S. Ilic, D. Hesslow, R. Castagné, ´ A. S. Luccioni, F. Yvon, M. Gallé, J. Tow, A. M. Rush, S. Biderman, A. Webson, P. S. Ammanamanchi, T. Wang, B. Sagot, N. Muennighoff, A. V. del Moral, O. Ruwase, R. Bawden, S. Bekman, A. McMillan-Major, I. Beltagy, H. Nguyen, L. Saulnier, S. Tan, P. O. Suarez, V. Sanh, H. Laurençon, Y. Jernite, J. Launay, M. Mitchell, and C. Raffel, "BLOOM: A 176B-Parameter Open-access Multilingual Language Model," *arXiv preprint arXiv:2211.05100*, 2022.
+- [70] P. Schmid. Fine-tune FLAN-T5 XL/XXL using DeepSpeed & Hugging Face Transformers. [Online]. Available: https://www.philschmid.de/ fine-tune-flan-t5-deepspeed
+- [71] P. Schmid, O. Sanseviero, P. Cuenca, and L. Tunstall. Llama 2 is here - Get it on Hugging Face. [Online]. Available: https://huggingface.co/blog/llama2
+- [72] M. Schwarzkopf, A. Konwinski, M. Abd-El-Malek, and J. Wilkes, "Omega: Flexible, Scalable Schedulers for Large Compute Clusters," in *EuroSys*, 2013.
+- [73] Y. Sheng, S. Cao, D. Li, B. Zhu, Z. Li, D. Zhuo, J. E. Gonzalez, and I. Stoica, "Fairness in Serving Large Language Models," *arXiv preprint arXiv:2401.00588*, 2023.
+- [74] Y. Sheng, L. Zheng, B. Yuan, Z. Li, M. Ryabinin, B. Chen, P. Liang, C. Ré, I. Stoica, and C. Zhang, "FlexGen: High-Throughput Generative Inference of Large Language Models with a Single GPU," in *ICML*, 2023.
+- [75] K. Shvachko, H. Kuang, S. Radia, and R. Chansler, "The Hadoop Distributed File System," in *MSST*, 2010.
+- [76] K. Van Craeynest, A. Jaleel, L. Eeckhout, P. Narvaez, and J. Emer, "Scheduling Heterogeneous Multi-cores Through Performance Impact Estimation (PIE)," *ACM SIGARCH Computer Architecture News*, 2012.
+- [77] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, Ł. Kaiser, and I. Polosukhin, "Attention is All You Need," in *NeurIPS*, 2017.
+
+- [78] T. Wolf, L. Debut, V. Sanh, J. Chaumond, C. Delangue, A. Moi, P. Cistac, T. Rault, R. Louf, M. Funtowicz, J. Davison, S. Shleifer, P. v. Platen, C. Ma, Y. Jernite, J. Plu, C. Xu, T. L. Scao, S. Gugger, M. Drame, Q. Lhoest, and A. M. Rush, "Transformers: State-of-the-art Natural Language Processing," in *EMNLP*, 2020.
+- [79] B. Wu, Y. Zhong, Z. Zhang, G. Huang, X. Liu, and X. Jin, "Fast Distributed Inference Serving for Large Language Models," *arXiv preprint arXiv:2305.05920*, 2023.
+- [80] H. Yang, Q. Chen, M. Riaz, Z. Luan, L. Tang, and J. Mars, "PowerChief: Intelligent Power Allocation for Multi-stage Applications to Improve Responsiveness on Power Constrained CMP," in *ISCA*, 2017.
+- [81] G.-I. Yu, J. S. Jeong, G.-W. Kim, S. Kim, and B.-G. Chun, "Orca: A Distributed Serving System for Transformer-Based Generative Models," in *OSDI*, 2022.
+- [82] M. Zaharia, M. Chowdhury, T. Das, A. Dave, J. Ma, M. McCauly, M. J. Franklin, S. Shenker, and I. Stoica, "Resilient Distributed Datasets: A Fault-Tolerant Abstraction for In-Memory Cluster Computing," in *NSDI*, 2012.
+- [83] C. Zhang, M. Yu, W. Wang, and F. Yan, "MArk: Exploiting Cloud Services for Cost-Effective, SLO-Aware Machine Learning Inference Serving," in *USENIX ATC*, 2019.
+- [84] S. Zhang, S. Roller, N. Goyal, M. Artetxe, M. Chen, S. Chen, C. Dewan, M. Diab, X. Li, X. V. Lin *et al.*, "OPT: Open Pre-trained Transformer Language Models," *arXiv preprint arXiv:2205.01068*, 2022.
+- [85] W. Zhu, "Analysis of JSQ Policy on Soft Real-time Scheduling in Cluster," in *HPCAsia*, 2000.
+

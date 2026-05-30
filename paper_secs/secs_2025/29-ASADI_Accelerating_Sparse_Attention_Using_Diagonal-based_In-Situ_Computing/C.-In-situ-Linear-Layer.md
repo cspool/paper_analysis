@@ -1,0 +1,23 @@
+# C. In-situ Linear Layer
+
+Previous studies [4], [12] demonstrate that analog in-situ computing exhibits greater parallelism compared to digital insitu computing. However, analog in-situ computing inherently possesses coarse-grained matrix-level parallelism, making it particularly suitable for bubble-free calculations. The DDMM calculations performed in the linear layer represent a typical example of bubble-free computations that are well-suited for analog in-situ computing. Due to the relatively lower computational overhead of the linear layer compared to the attention layer, the impact of analog-to-digital conversion overhead on ASADI is minimized.
+
+Figure 14 (a) depicts the computation of the first bit of linear layers using weight matrices  $W_O$ ,  $W_K$ , and  $W_V$ , pre-stored in ReRAM arrays. Assuming 64 dimensions of input embeddings, the input register receives the first bit of each dimension and activates the corresponding DRV. Then, the ReRAM array performs a VMM operation between Embedding#1 and the weight matrices. The sample and hold (SH) unit holds the output vector, which is then converted into numbers by ADC. The Shift and Add (S&A) unit combines all bits to obtain the 32-bit results, with each column holding one of the 64 dimensions, as illustrated in Figure 4 (a). Figure 14 (b) shows that the obtained results are written to ReRAM arrays. Each ReRAM array stores the same dimension of matrices Q, K, and V, with 64 dimensions being stored in 64 different arrays. This storage method is identical to that in Figure 12 (c). Therefore, the in-situ  $Q \times K^{\mathsf{T}}$  operation in Figure 14 (b) can be directly performed without data remapping.
+
+#### D. In-situ Softmax
+
+Equation (1) involves four fundamental operations in the softmax function: maximum, subtraction, exponential, and summation. Prior research has addressed the use of ReRAM arrays for subtraction and summation operations [12]. Therefore, this paper focuses on performing high-parallel in-situ maximum and  $e^x$  operations using ReRAM arrays.
+
+$$softmax(s_i) = \frac{e^{s_i - s_{max}}}{\sum_{c=1}^{n} e^{s_c - s_{max}}}$$
+(1)
+
+![](_page_6_Figure_0.jpeg)
+
+Fig. 15. (a) Int4 unsigned vector for maximal operation, (b) Pruning '0' rows of bit3, (c) Pruning of the left bits
+
+In-situ maximum operation. ReSQM [20] proposes the original idea of this method, and we provide a visual description of their approach. To process the int4 unsigned vector as shown in Figure 15 (a), the *word-lines* (WL) and *bit-lines* (BL) selectors first activate all the WL and BL of the highest bit (bit3). The control signals of the WL selector are referred to as the *input voltage of bit3* (IV*bit*3). The WL selectors charge all DRV of the WL, setting all WLs to high voltage. The high voltage of the WLs leaks from the ReRAM cells that store '1' (low resistance) to the BL. The memory controller detects the *output voltage of bit3* (OV*bit*3), which records all 0's of bit3 because the voltage leaks from all '1's of bit3 as shown in the red cells of Figure 15 (b). The OV*bit*<sup>3</sup> values are not the maximum and are filtered out.
+
+To generate the input signals for the second highest bit (bit2), we perform a subtraction IV*bit*<sup>2</sup> = IV*bit*<sup>3</sup> − OV*bit*3. If the result of the subtraction is zero, the input signal remains unchanged. We perform these operations sequentially from the highest bit to the lowest bit (bit0), and then we perform a subtraction Max index = IV*bit*<sup>0</sup> − OV*bit*<sup>0</sup> to obtain the row index of the maximum. We can read out the Max index row to obtain the maximum value of the vector. For a vector of n× 32-bit floating-point numbers, it requires only 32 cycles to find the maximum.
+
+In-situ *ex*. Figure 16 (a) displays two vectors, i.e., 2<sup>0</sup> and *x*, both stored in the same ReRAM array. To begin, we load the highest bit of vector *x* to the word-line selector and activate the word-line DRVs with '1'. As shown by the red word lines in Figure 16 (b), we left-shift all activated rows of vector 20 2× (4× for bit2, 8× for bit3, and so on). After loading all bits of vector *x* to the word-line selector and performing the above operations, we can obtain 2*<sup>x</sup>* in the same ReRAM array, as illustrated in Figure 16 (c). For a vector *x* of n× 32-bit fixed-point numbers, we can calculate 2*<sup>x</sup>* in just 32 cycles. Since *e<sup>x</sup>* = 2*<sup>x</sup>* log2 *<sup>e</sup>*, we can perform in-situ vector-vector multiplication *y* = *x* log2 *e* to get vector *y*, followed by 2*<sup>y</sup>* to obtain *ex*.
+

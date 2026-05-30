@@ -1,0 +1,4 @@
+# *B. Transformer Model Architecture*
+
+The Transformer architecture has gained popularity in computer vision and natural language processing by defining the state-of the-art on multiple tasks in these domains [\[4\]](#page-10-4), [\[32\]](#page-11-12). From the top down, a Transformer consists of a tokenizer that parses the input into tokens, and an encoder-decoder architecture consisting of dense transformer layers. The encoder structure has N dense transformer layers, where N varies from single digits to dozens across different model architectures. Each dense transformer layer is composed of two blocks: a multi-head attention (MHA) block, and a Feed-Forward Network (FFN) block connected by a residual connection, as shown in Figure [3.](#page-2-0) The decoder's structure is very similar to the encoder's, except for an optional MHA layer that attends to encoder output.
+

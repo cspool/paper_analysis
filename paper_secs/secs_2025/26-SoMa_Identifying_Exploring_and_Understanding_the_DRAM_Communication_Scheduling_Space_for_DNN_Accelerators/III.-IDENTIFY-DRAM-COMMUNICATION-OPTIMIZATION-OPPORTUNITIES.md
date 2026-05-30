@@ -1,0 +1,6 @@
+# III. IDENTIFY DRAM COMMUNICATION OPTIMIZATION OPPORTUNITIES
+
+The GBUF plays a crucial role in optimizing DRAM communication within DNN accelerators, and research on how to use it to optimize DRAM communication has been a hot topic since the advent of DNN accelerators [10]–[12], [26], [35]. However, most current studies focus on optimizing dataflow for small-scale DNN accelerators, specifically on how to tile a single layer into small parts and adjust their computing order to optimize DRAM communication [20], [21], [27], [32], [36], [42], [48], [52], [55], [57].
+
+As DNN accelerators have evolved, architects have equipped them with increasingly larger GBUFs, with capacities reaching tens or even hundreds of megabytes [2], [16], [24], [25], [31], [34]. Such large buffers can accommodate most individual layers of most networks, significantly reducing the effects of optimizing single-layer dataflow for DRAM communication. Therefore, developing new techniques to fully leverage the rapidly growing on-chip buffer resources to optimize the increasingly bottlenecked DRAM bandwidth is crucial and offers significant opportunities. Next, we will analyze the challenges and optimization opportunities in DRAM communication scheduling.
+

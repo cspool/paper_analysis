@@ -1,0 +1,5 @@
+# C.2. APH Importance
+
+Fig. B demonstrates the APH importance for tokens from ViT-S.blocks.7, where Fig. B (a) displays the tokens with top 8 importance, and Fig. B (b) shows the importance of the rearranged  $14 \times 14$  patch tokens. It can be observed that the importance of the class token, the first one in Fig. B (a), is much higher than that of the patch tokens, and distinct patch tokens have substantially different APH importance. Moreover, Fig. C displays APH importance for the output channels with indices 100 to 250 from ViT-S.blocks.7, indicating that the values of APH importance for certain channels are significantly higher than that of others.
+
+The above visualization results indicate that the importance between distinct tokens or channels varies significantly in Vision Transformers, implying the necessity of incorporating important metrics during reconstruction.

@@ -1,0 +1,4 @@
+# 8 Conclusion
+
+We introduce Focus, a composable sparse attention method. Lightweight centroid modules are composed onto a pretrained model's attention layers, making the attention sparse by gating which token pairs can attend at long range. All original weights stay frozen; only the centroids are trained. This composability is the key property: Focus can be applied to any pretrained model—regardless of size, architecture, or training recipe. A comparison against four efficient attention baselines shows Focus is the only method that achieves improved quality, zero benchmark degradation, and wall-clock speedup. This composability holds from 124M to 70B across five attention architectures. Learning which tokens to attend to, rather than attending to all or selecting heuristically, is an effective approach to efficient attention. Our results indicate that full attention can be improved by sparse attention in terms of quality.
+

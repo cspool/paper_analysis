@@ -1,0 +1,8 @@
+# Communication-Efficient Sparsely-Activated Model Training via Sequence Migration and Token Condensation
+
+Fahao Chen, Peng Li, *Senior Member, IEEE,* Zicong Hong, Zhou Su, *Senior Member, IEEE,* Song Guo, *Fellow, IEEE,*
+
+*Abstract*—Mixture-of-Experts (MoE) is an emerging technique for scaling large models with sparse activation. MoE models are typically trained in a distributed manner with an *expert parallelism* scheme, where experts in each MoE layer are distributed across multiple GPUs. However, the default expert parallelism suffers from the heavy network burden due to the allto-all intermediate data exchange among GPUs before and after the expert run. Some existing works have proposed to reduce intermediate data exchanges by transferring experts to reduce the network loads, however, which would decrease parallelism level of expert execution and make computation inefficient. The weaknesses of existing works motivate us to explore whether it is possible to reduce inter-GPU traffic while maintaining a high degree of expert parallelism. This paper gives a positive response by presenting LUFFY, a communication-efficient distributed MoE training system with two new techniques. First, LUFFY migrates sequences among GPUs to hide heavy token pulling paths within GPUs and avoid copying experts over GPUs. Second, we propose token condensation that identifies similar tokens and then eliminates redundant transmissions. We implement LUFFY based on PyTorch and evaluate its performance on a testbed of 16 V100 GPUs. LUFFY system can achieve a speedup of up to 2.73× compared to state-of-the-art MoE training systems.
+
+*Index Terms*—Mixture-of-Experts, Distributed Training, Parallelism.
+

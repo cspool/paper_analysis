@@ -1,0 +1,58 @@
+# 1 Introduction
+
+Large language models (LLMs) have accelerated advancements in fields ranging from natural language processing [\[33\]](#page-13-0) to scientific modeling [\[27\]](#page-12-0). However, the largest LLMs have hundreds of billions of parameters that can take over a terabyte of memory to load in half-precision; this size poses significant challenges for the practical deployment of LLMs [\[32,](#page-13-1) [16,](#page-12-1) [2\]](#page-11-0). For example, smallbatch autoregressive decoding, a common form of inference for LLMs, is memory bound [\[34\]](#page-13-2). Even on a modern datacenter GPU with ≈ 3TB/s memory bandwidth, a large LLM (> 200GB) can only be directly run at < 20 tokens per second and may require multiple devices [\[34\]](#page-13-2). One way to accelerate inference is by compressing LLMs. This directly reduces the memory footprint of the model and increases the theoretical maximum inference throughput on any given machine.
+
+One form of compression, weight-only post-training quantization (PTQ), quantizes trained model weights to lower precision datatypes [\[9,](#page-11-1) [34,](#page-13-2) [5\]](#page-11-2). The latest state-of-the-art weight-only PTQ methods, QuIP# and AQLM, use vector quantization (VQ) to achieve high-quality 2-bit models [\[34,](#page-13-2) [11\]](#page-11-3). In VQ, a vector x ∈ R d is quantized to one of 2 kd vectors in R d that form a codebook C ∈ R 2 kd×d . A higher vector dimension d allows for better codebook shaping and packing density, improving information utilization [\[18\]](#page-12-2). However, unstructured VQ requires exponential time and space in both the bitrate and dimension, limiting its practicality. During quantization, VQ costs O(2kdd) time to perform nearestneighbor rounding to C, and during inference, C must fit in hardware cache for fast lookups. This exponential scaling limits how high d can be and thus the advantages of VQ over scalar quantization.
+
+![](_page_1_Figure_0.jpeg)
+
+Figure 1: QTIP performs ultra-high dimensional (> 100) quantization by using Trellis Coded Quantization, which has linear cost in dimension. This enables QTIP to outperform Vector Quantization-based approaches (QuIP#, AQLM) that are limited to low dimensions. With QTIP, 2 bit models scale better than theoretically optimal 4 bit models.
+
+To address this limitation, we propose QTIP, which uses trellis-coded quantization (TCQ) to enable tractable ultra-high-dimensional (> 100) quantization and improve quantization quality over prior VQ-based approaches. In the simplest scalar form of TCQ, a length-T sequence S is statefully quantized using a trellis – a directed graph G with  $2^L$  nodes, each with  $2^k$  incoming and outgoing edges and a scalar value [23]. The reconstructed sequence  $\hat{S}$  corresponds to the node values of a length-T walk on G, and quantization finds the walk that minimizes some distortion metric on S and  $\hat{S}$ . Since neighboring entries in  $\hat{S}$  are connected by one of  $2^k$  edges, we only need to store which edge an entry came from, which takes k bits. For additive distortion metrics such as squared error, the optimal  $\hat{S}$  can be found with the Viterbi algorithm, which runs in  $O(2^LT)$  time [13, 23]. This means that the cost of quantization is independent of the bitrate k and linear in the sequence dimension T, enabling tractable high dimensional quantization.
+
+However, TCQ is not free. During inference, vanilla TCQ requires storing both G and the size  $2^L \times V$  node value codebook, which can be too large to fit in cache. TCQ-quantized sequences also cannot generally be decoded in parallel, as tth elment of  $\hat{S}$  could depend on up to the first tk encoded bits. In QTIP, we solve these issues by introducing a series of fast compute-based Gaussian codes designed for the hardware-efficient "bitshift trellis." Specifically, the bitshift trellis supports parallel decoding, does not require storing G, and our compute-based codes eliminate needing to store a large node value codebook. This enables high-quality quantization of Gaussian sources while supporting fast inference, and we adopt incoherence processing with the random Hadamard transform to ensure that LLM weights are approximately i.i.d Gaussian distributed. Altogether, QTIP
+
+- Achieves a state-of-the-art combination of weight-only LLM PTQ quality and fast inference through hardware-efficient trellis and codebook design.
+- 2. Introduces multiple novel hardware-efficient (≤ 4 instructions per weight) compute-based random Gaussian codes for TCQ on i.i.d. Gaussian sources.
+
+## 2 Background and Related Works
+
+We focus on weight-only post-training quantization (PTQ) of LLMs in this work; other model-compression approaches include quantization-aware training (QAT) and pruning. These methods are not strictly orthogonal to each other, as one could both prune and quantize a model. Since QTIP is a weight-only PTQ method, the rest of this section focuses on this area. Most current state-of-the-art PTQ methods round to minimize the per-layer proxy loss from Nagel et al. [26].
+
+$$\ell(\hat{W}) = \mathbb{E}_x \left[ \|(\hat{W} - W)x\|^2 \right] = \operatorname{tr}\left( (\hat{W} - W)H(\hat{W} - W)^T \right)$$
+ (1)
+
+Here,  $\hat{W} \in \mathbb{R}^{m \times n}$  is the quantized weight matrix,  $x \in \mathbb{R}^n$  is an input activation, and  $H = \mathbb{E}_x \left[ x x^T \right] \in \mathbb{R}^{n \times n}$  is interpreted as a proxy Hessian matrix. This objective is defined *per-layer*, making it tractable for very large models. However, minimizing it is difficult due to the non-differentiable nature of quantization. Instead many works have proposed algorithms such as Hessian-based adaptive rounding, alternating optimization, and even coordinate descent to approximately minimize the proxy error [11, 5, 34, 14].
+
+#### 2.1 Incoherence Processing
+
+The effectiveness of these methods depends on properties of W. For example, many works have observed that weight and activation outliers cause poor quantization quality [10, 19, 28]. In QuIP, Chee et al. [5] proposed that *incoherence* was important for quantifying this effect.
+
+**Definition 2.1** (Chee et al. [5]). A Hessian  $H \in \mathbb{R}^{n \times n}$  is  $\mu$ -incoherent if its eigendecomposition  $H = Q\Lambda Q^T$  has  $\max_{i,j} |Q_{ij}| = \max_{i,j} |e_i^T Q e_j| \le \mu/\sqrt{n}$ . A weight matrix  $W \in \mathbb{R}^{m \times n}$  is  $\mu$ -incoherent if  $\max_{i,j} |W_{ij}| = \max_{i,j} |e_i^T W e_j| \le \mu \|W\|_F/\sqrt{mn}$ .
+
+Essentially, incoherence means the weights and important rounding directions (Hessian eigenvectors) are not too large in any direction, aiding quantization. To make W, H incoherent (small  $\mu$ ), one can perform incoherence processing (IP) by conjugating W, H with random orthogonal matrices  $U, V: \tilde{W} \leftarrow UWV^T, \tilde{H} \leftarrow VHV^T$ . QuIP# introduced IP with the random Hadamard transformation (RHT), which performs  $\tilde{W} \leftarrow V_m S_m W S_n V_n^T, \tilde{H} \leftarrow V_n S_n H S_n V_n^T$  where  $V_k$  is a  $k \times k$  Hadamard matrix and  $S_k$  is a length k random sign vector. The RHT achieves, with probability  $\geq 1 - \delta, \mu_{\tilde{W}} = 2\log(4mn/\delta)$ , meaning that  $\tilde{W}$ 's entries are approximately independently Gaussian distributed, which can aid quantization [34, 3]. We choose to build on incoherence processing here because the independent Gaussian-like weights it produces are suitable inputs for trellis coding [22].
+
+### 2.2 Vector Quantization (VQ) for LLM PTQ
+
+k-bit VQ quantizes a d dimensional vector S to one of  $2^{kd}$  d-dimensional vectors that form a codebook  $C \in \mathbb{R}^{2^{kd} \times d}$  [1]. Since C is an unstructured collection of arbitrary vectors, VQ enables better shaping and packing density than scalar product quantization (SPQ), where each entry in S is quantized independently [18]. However, this also comes at the cost of exponential time quantization and exponential space inference: finding the nearest neighbor in C requires  $O(2^{kd}d)$  time, and storing C requires  $O(2^{kd}d)$  space. The current crop of state-of-the-art LLM PTQ methods, QuIP# and AQLM, both use VQ to achieve high-quality 2-bit models. Since the shaping advantage of VQ comes from high dimensionality, both QuIP# and AQLM attempt to maximize dimensionality. AQLM's uses a large 8D codebook (1MiB) that does not fit in L1 cache. QuIP# uses an 8D compressible codebook based on the  $E_8$  lattice, which is highly symmetric. This codebook is compressible by  $256 \times$  and barely fits in L1 cache. In either case, the VQ dimension is effectively hardware-limited to  $\leq 8$ , motivating methods that enable even higher-dimensional quantization.
+
+#### 2.3 Trellis-Coded Quantization (TCQ)
+
+TCQ was first proposed by Marcellin and Fischer [23] to apply the benefits of trellis coded *modulation*, a conceptually dual problem, to quantization. Define a (L,k,V) trellis G as a directed graph with  $2^L$  nodes, each of which has  $2^{kV}$  incoming and outgoing edges and a value  $\in \mathbb{R}^V$ ; these values form a codebook  $C \in \mathbb{R}^{2^L \times V}$ . To quantize a length-T sequence  $S \in \mathbb{R}^T$ , each contiguous length-V subsequence of S is assigned to a node  $\in G$ , with the restriction that the assigned nodes form a walk. The reconstruction  $\hat{S}$  of S is then given by concatenating node values in the walk. When V = 1, this setup describes Marcellin and Fischer [23]'s original scalar TCQ. When V > 1, this describes TCVQ, which applies TCQ to vectors [12, 37].
+
+Finding the optimal  $\hat{S}$  under an additive distortion metric can be done with the Viterbi algorithm in  $O(2^LT)$  time. This is linear in sequence length, enabling ultra-high dimensional quantization. For exposition, we briefly describe the Viterbi algorithm here. Concretely, if we want to quantize a T-length scalar sequence reinterpreted as a sequence of vectors  $s_1, s_2, \ldots, s_{T/V} \in \mathbb{R}^V$  using a trellis
+
+code with graph G and codebook C, this corresponds to solving the optimization problem
+
+$$\text{minimize } \sum_{i=1}^{T/V} \|C_{x_i} - s_i\|^2 \quad \text{over } x_1, x_2, \dots, x_{T/V} \text{ the vertex sequence of a walk on graph } G.$$
+
+This optimization problem can be solved exactly with dynamic programming via the value function
+
+$$\mathcal{V}_t(x) = \min \left\{ \sum_{i=1}^t \|C_{x_i} - s_i\|^2 \ \middle| \ x_1, x_2, \dots, x_t \text{ the vertex sequence of a walk on } G \text{ and } x_t = x \right\}$$
+
+using the update rule
+
+$$\mathcal{V}_t(y) = \min_{(x,y) \in G} \mathcal{V}_{t-1}(x) + \|C_y - s_t\|^2.$$
+
+This Viterbi approach clearly takes time linear in T and in the number of edges of G; with a few simple optimizations this can be brought to  $O(2^LT)$ . In comparison, brute-force-searching all possible  $2^{kT}$  codes—which is what we would need to do for an unstructured k-bit T-dimensional codebook—would take time proportional to  $2^{LT/V}$ . The ability to tractably find the closest representable vector in  $\mathbb{R}^T$ , even for large T, is in some sense the "main benefit" of trellis coding. For i.i.d sources, as L increases, TCQ efficiently approaches the infinite-length distortion-rate  $D_R$ , which lower bounds the attainable distortion of a k-bit quantizer [18]. As shown in Table 1, when quantizing an i.i.d. Gaussian with k=2, the scalar Lloyd-Max quantizer attains 0.118 MSE, QuIP#'s 8D E8P codebook 0.089 MSE, our (QTIP) 256D L=16 TCQ quantizer 0.069 MSE, and  $D_R=0.063$  [20, 24, 34, 8].
+

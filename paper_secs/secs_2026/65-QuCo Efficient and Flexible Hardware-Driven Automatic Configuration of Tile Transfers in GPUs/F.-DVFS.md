@@ -1,0 +1,12 @@
+# *F. DVFS*
+
+To further prove QuCo's adaptability, we conduct a frequency-aware evaluation of the Whisper-Tiny DNN on the MI100 GPU under three dynamic voltage and frequency scaling (DVFS) scenarios, inspired by prior work [1]. For each scenario, we adjust the operating frequency layer by layer. Each layer is evaluated under two queue configuration policies: QuCo-SW, which always assumes the default GPU frequency (1500 MHz), and QuCo-HW, which adapts to the current GPU frequency when each layer is executed. Results are normalized per layer to the corresponding QuCo-SW baseline scenario.
+
+The first scenario (Decreasing Freq.) explores a monotonic frequency decrease, starting at 1500 MHz and gradually reducing to 900 MHz. This exposes a significant benefit for QuCo-HW in later layers. Interestingly, at FC-5 (1300 MHz), a seemingly minor adjustment—e.g., reducing the tile size from 512 to 256—leads to measurable speedups. QuCo-HW achieves up to 11% performance improvement over its software-based counterpart.
+
+The second one (Decreasing-Increasing Freq.) simulates a U-shaped frequency curve, decreasing from 1500 MHz to 950 MHz by layer 7, then increasing back to 1500 MHz. Here, early and late layers show negligible differences, but layers with intermediate frequency drops (e.g., FC-3,4,5, and 11) benefit from QuCo-HW's adaptive queue sizing. Across all layers, QuCo-HW delivers up to 10% performance improvement compared to QuCo-SW.
+
+The third one (Decreasing-Holding Freq.) decreases the frequency progressively until layer 6, and then, holds it constant at 1000 MHz for the rest of the layers. While the early layers see little change, QuCo-HW consistently improves performance in the later layers by adapting to the sustained low frequency, demonstrating cumulative gains. This results in a speedup of up to 17% compared to QuCo-SW.
+
+Overall, across the three scenarios, performance differences between QuCo-SW and QuCo-HW are negligible in the first few layers, since both operate at the same frequency, and therefore, generate identical queue configuration. Similarly, in many intermediate layers, although the queue configurations may differ, the layers themselves tend to be linear and exhibit low CI, making them less sensitive to tuning. Despite this, QuCo-HW consistently outperforms the static software-based approach in most layers, thanks to its ability to adapt queue configurations dynamically based on the actual operating frequency during execution.
+

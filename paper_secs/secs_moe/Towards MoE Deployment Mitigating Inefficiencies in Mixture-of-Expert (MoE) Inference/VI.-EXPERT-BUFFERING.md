@@ -1,0 +1,8 @@
+# VI. EXPERT BUFFERING
+
+<span id="page-6-0"></span>Although dynamic gating reduces waste in computation and dynamic memory allocation associated with the gating function, static memory usage associated with the large number of MoE parameters still puts a huge burden on GPU memory at deployment. The high sparsity in expert activation pattern prompts us to investigate whether there is a way to reduce the memory usage by pruning out the idle experts.
+
+![](_page_7_Figure_0.jpeg)
+
+<span id="page-7-0"></span>Fig. 9. Throughput comparison of different gating policies in MoE models, including static gating (baseline), Tutel gating [\[16\]](#page-11-8), our dynamic gating policy (Sec. [V\)](#page-5-3), dynamic gating with Load Balancing (LB, Sec. [VII\)](#page-9-0), dynamic gating with Expert Buffering (EB, Sec. [VI\)](#page-6-0), and all optimizations combined. Missing bars represent infeasible cases under the corresponding policy and batch size. Eg. Tutel cannot support beyond batch size=32 for LM-1 Node. Dynamic gating reduces memory usage and message sizes in communication, enables larger batch sizes and substantially faster processing times than static gating. Expert buffering trades latency for smaller memory usage while still achieving higher throughput on the MT Decoder. Load balancing further improves latency when combined with dynamic gating and expert buffering. Note that load balancing only makes sense in the context of dynamic gating where each expert gets different number of tokens. Load balancing particularly shines under multi-node setting or combined with expert buffering as it can improve cache miss rate (See Fig [14\)](#page-9-1).
+

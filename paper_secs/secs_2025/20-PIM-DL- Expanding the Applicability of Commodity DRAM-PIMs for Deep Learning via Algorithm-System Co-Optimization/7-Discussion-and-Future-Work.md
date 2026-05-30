@@ -1,0 +1,4 @@
+# 7 Discussion and Future Work
+
+Finally, we list some architecture implications which can further improve PIM-DL's performance on DRAM-PIMs. Adder-only PIM Design: As discussed in Section 3.3, LUT-NN removes all multiplications in the PIM-side LUT operators. Therefore, we can equip adder-only PEs in DRAM-PIMs. Considering adders have much lower hardware overhead than multipliers [46], we can equip much more adders under the same area/power constraints. PIM-DL on such adderonly DRAM-PIMs will achieve much higher performance. On-chip Buffer Management Support: PIM-PE's on-chip buffer cannot support to exploit data reuse because of the severe overhead to implement caching mechanism [85]. Therefore, we only adopt three simple LUT load schemes Since the LUT access depends on the distribution of centroid indices, which may skew to several "hot" items, exploiting data reuse with better support of on-chip buffer management can bring
+

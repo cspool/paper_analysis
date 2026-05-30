@@ -1,0 +1,8 @@
+# MergeME: Model Merging Techniques for Homogeneous and Heterogeneous MoEs
+
+Yuhang Zhou <sup>1</sup> Giannis Karamanolakis <sup>2</sup> Victor Soto <sup>2</sup> Anna Rumshisky <sup>2</sup> Mayank Kulkarni <sup>2</sup> Furong Huang <sup>1</sup> Wei Ai <sup>1</sup> Jianhua Lu <sup>2</sup> <sup>1</sup> University of Maryland, College Park <sup>2</sup> Amazon AGI {tonyzhou, aiwei, furongh}@umd.edu Anna\_Rumshisky@uml.edu {karamai, nvmartin, maykul, jianhual}@amazon.com
+
+## Abstract
+
+The recent success of specialized Large Language Models (LLMs) in domains such as mathematical reasoning and coding has led to growing interest in methods for merging these expert LLMs into a unified Mixture-of-Experts (MoE) model, with the goal of enhancing performance in each domain while retaining effectiveness on general tasks. However, the effective merging of expert models remains an open challenge, especially for models with highly divergent weight parameters or different architectures. State-of-the-art MoE merging methods only work with homogeneous model architectures and rely on simple unweighted averaging to merge expert layers, which does not address parameter interference and requires extensive fine-tuning of the merged MoE to restore performance. To address these limitations, this paper introduces new MoE merging techniques, including strategies to mitigate parameter interference, routing heuristics to reduce the need for MoE fine-tuning, and a novel method for merging experts with different architectures. Extensive experiments across multiple domains demonstrate the effectiveness of our proposed methods, reducing fine-tuning costs, improving performance over state-of-the-art methods, and expanding the applicability of MoE merging.
+

@@ -1,0 +1,6 @@
+# Abstract
+
+Tiled architectures have emerged as a compelling platform for scaling deep neural network (DNN) execution, offering both compute density and communication efficiency. To harness their full potential, effective inter-layer scheduling is crucial for managing operation order, memory behavior, and compute resource coordination. However, current schedulers often fall short due to three persistent issues: incomplete treatment of core design factors, limited flexibility in handling diverse workload structures, and reliance on heuristic search algorithms with poor convergence.
+
+In this work, we trace these limitations to the absence of a unified and expressive scheduling representation. We introduce Crane, a framework that addresses these gaps through a hierarchical tableformat abstraction capable of encoding rich scheduling semantics. Crane supports both inference and training workloads, and reformulates scheduling as a mathematically structured optimization problem, enabling more complete and efficient exploration of the scheduling space. Evaluations show that Crane reduces energydelay product by up to 21.01× and improves scheduling speed by at least 2.82× over state-of-the-art baselines.
+

@@ -1,0 +1,10 @@
+# 5 Discussion
+
+Why our results surpass FP outcomes. While our method's performance metrics do not yet fully match those of full-precision models, visual results reveal a compelling advantage. As observed in image img\_092 of Figure [1](#page-1-1) of Urban100, our approach correctly identifies the direction of the stripes in the image. Whereas the full-precision model erroneously selects the wrong direction. This discrepancy arises because the lower-resolution image, affected by aliasing, creates an illusion of slanted stripes, misleading the FP model's reconstruction. This phenomenon demonstrates that our PTQ algorithm allows more accurate restored results in certain localized and challenging tasks without being misled. More examples are in the supplementary materials.
+
+It suggests that full-precision models contain not only redundant knowledge but also incorrect information. The latter is hard to get rid of by training the FP model. Our quantization method can effectively reduce model parameters and computational demands while eliminating erroneous information, achieving multiple benefits simultaneously. This also suggests that the FP model doesn't represent the pinnacle of what a quantized model can achieve.
+
+Limitations. Despite achieving excellent results, this study still has some limitations. During the DOBI process, the data distribution of activations and weights is required to approximate a bell curve or exponential distribution; otherwise, the DOBI method cannot find the most suitable positions. Additionally, increasing the number of search points for a single tensor in MSE does not necessarily guarantee better performance. However, the second-stage training can somewhat alleviate this issue. Moreover, our method requires a calibration set; without which, the first-stage DOBI and the second-stage DQC cannot be carried out at all.
+
+Societal impacts. Our super-resolution quantization method effectively saves computational resources, facilitating the deployment of super-resolution models at the cutting edge
+

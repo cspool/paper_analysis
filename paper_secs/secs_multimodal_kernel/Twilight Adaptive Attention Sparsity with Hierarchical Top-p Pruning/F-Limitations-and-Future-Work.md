@@ -1,0 +1,3 @@
+# F Limitations and Future Work
+
+While Twilight effectively accelerates existing top-k sparse attention methods, our analysis in [Figure 10](#page-9-1) reveals non-negligible estimation overheads. This makes Twilight particularly advantageous in scenarios like serving with large batch sizes or offloading, where the cost of loading tokens from the KV cache dominates. [Section B.2](#page-19-3) shows head-wise dynamism is unfriendly with GQA, which leads to some challenges to integrate Twilight with new model architectures. Future research could focus on optimizing the estimation method to further improve the end-to-end latency and throughput, and how to integrate Twilight with other model architectures like multi-head latent attention (MLA) [\[64\]](#page-17-12).

@@ -1,0 +1,7 @@
+# K\_ An Intuitive Illustration of Expert Specialization
+
+To clarify the intuition behind our expert specialization design, consider the following illustrative scenario: Alice, Bob, and Carol are working together to develop a robot. Initially, all three study mathematics, programming, and hardware simultaneously. However, their lack of focus leads to only moderate proficiency across all domains. Later, they adopt a collaborative specialization strategy: mathematics is primarily handled by Alice and Bob, programming by Bob and Carol, and hardware by Alice and Carol. In this arrangement, Alice takes the lead in mathematics with Bob assisting; Bob leads programming with Carol assisting; and Carol leads hardware assembly with Alice assisting.
+
+This role assignment enables each person to develop deeper expertise in their respective areas. The result is a more effective and efficient collaboration, ultimately leading to the successful construction of the robot.
+
+Translating this scenario into our model design, we employ contrastive learning to formalize the process of specialization. For example, we encourage Alice and Bob (experts) to focus on learning mathematical tasks while discouraging Carol's involvement in that domain. This negative signal allows Carol to concentrate on mastering programming or hardware instead. In practice, such structured encouragement and discouragement drive the emergence of distinct and complementary expert roles within the model, enabling better generalization across diverse tasks.

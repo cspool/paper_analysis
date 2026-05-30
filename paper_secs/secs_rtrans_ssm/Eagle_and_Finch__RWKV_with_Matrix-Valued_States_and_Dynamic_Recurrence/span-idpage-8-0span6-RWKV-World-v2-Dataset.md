@@ -1,0 +1,4 @@
+# <span id="page-8-0"></span>**6 RWKV World v2 Dataset**
+
+We train our models on the new **RWKV World v2 Dataset**, a new multilingual 1.12 trillion token dataset drawn from a wide variety of hand selected publicly available data sources. This dataset is designed to go beyond the English-heavy focus of many datasets widely used to train LLMs today. We do this to support usage by the majority of the worldwide population who are not native English speakers, to improve representation within model responses, and also to enable transfer learning so that our models can apply knowledge across cultures and locales. We put a strong emphasis on factual knowledge and code, but also on cultural works including stories, books, subtitles, and conversations. The source data is approximately 70% English, 15% multilingual, and 15% code. We describe the components of our dataset in detail in [Appendix D.](#page-32-0)
+

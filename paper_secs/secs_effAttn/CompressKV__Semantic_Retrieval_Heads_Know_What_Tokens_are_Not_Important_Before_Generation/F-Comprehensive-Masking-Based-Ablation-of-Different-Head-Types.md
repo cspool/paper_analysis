@@ -1,0 +1,7 @@
+# F Comprehensive Masking-Based Ablation of Different Head Types
+
+We extend the masking analysis from the main paper by evaluating the effect of masking the top 10, 20, and 30 Semantic Retrieval Heads and the traditional Retrieval Heads in both Mistral-7B-Instruct-v0.3 and Llama-3.1-8B-Instruct, shown in Figure 23. Our experiments demonstrate that masking the top 30 traditional Retrieval Heads in Mistral-7B-Instruct-v0.3 results in only a ≈ 12% drop in accuracy, whereas masking the top 30 Semantic Retrieval Heads causes a ≈ 74% degradation. Similarly, in Llama-3.1-8B-Instruct, masking Semantic Retrieval Heads yields a substantially larger accuracy loss compared to masking traditional Retrieval Heads. These findings underscore the critical role of Semantic Retrieval Heads in overall model performance and validate the superiority of our identification method over conventional head-selection approaches.
+
+![](_page_14_Figure_2.jpeg)
+
+Figure 23: Ablation on the Needle-in-a-Haystack retrieval task for Mistral-7B-Instruct-v0.3 and Llama-3.1-8B-Instruct. The left column masks the top-k retrieval heads, and the right column masks the top-k semantic retrieval heads. Lower scores indicate heads with the greatest impact on model performance—masking them causes the most severe drop in accuracy.

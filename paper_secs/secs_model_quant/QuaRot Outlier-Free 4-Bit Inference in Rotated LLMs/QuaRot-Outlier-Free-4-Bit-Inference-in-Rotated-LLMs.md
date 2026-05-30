@@ -1,0 +1,4 @@
+# QuaRot: Outlier-Free 4-Bit Inference in Rotated LLMs
+
+#### Saleh Ashkboos
+

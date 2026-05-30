@@ -1,0 +1,6 @@
+# Abstract
+
+Long-context large language models (LLMs) have seen widespread adoption in recent years. However, during inference, the key-value (KV) cache—which stores intermediate activations—consumes significant memory, particularly as sequence lengths grow. Quantization offers a promising path to compress KV cache, but existing 2-bit approaches fall short of achieving optimal inference efficiency due to hardwareunfriendly algorithms and system implementations.
+
+We present JanusQuant, a 2-bit KV cache quantization system that achieves both high accuracy and end-to-end efficiency through algorithm–system co-design for longcontext generation tasks. At its core is RtSmooth, a novel runtime smoothing quantization algorithm that mitigates outlier-induced accuracy loss via adaptive transformation. Building on RtSmooth, JanusQuant further enhances quantized inference with a series of optimizations: a fast absmax positioning technique for lightweight quantization, a memory-efficient data structure for managing recent tokens, and a custom mixed-precision attention kernel to accelerate computation. Across representative LLMs, JanusQuant preserves 99% of FP16 accuracy, reduces KV cache memory usage by up to 5.3×, and delivers up to 4.45× faster decoding throughput compared to state-of-the-art methods, while scaling efficiently to long-context inference.
+

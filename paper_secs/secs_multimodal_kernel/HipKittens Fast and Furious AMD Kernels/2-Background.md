@@ -1,0 +1,18 @@
+# 2 Background
+
+In this section, we provide background on AMD GPU hardware in Section 2.1 and discuss related work in Section 2.2. Section B provides an extended discussion of related work.
+
+#### <span id="page-2-1"></span>2.1 GPU fundamentals
+
+GPU kernels are small programs that load data, perform work on it, and write the results back out to memory. We generally adopt AMD terminology in this work and provide a mapping between AMD and NVIDIA terminology in Appendix A.
+
+- 1. Compute hierarchy. Kernels are executed by tens of thousands of threads across hundreds of processors, called "compute units" (CUs). CUs organize their hardware resources in 4 "single instruction, multiple data" (SIMD) units. Threads are arranged in a hierarchy: threads are the smallest units of execution, "waves", groups of 64 threads, execute in lockstep on individual SIMDs, and "thread blocks", groups of waves, are jointly scheduled on the CUs. AMD MI355X GPUs contain 256 CUs organized into 8 accelerator complex dies (XCDs) of 32 CUs in a chiplet layout.
+- 2. **Memory hierarchy.** Memory is organized in a hierarchy: small amounts of quick-access and large amounts of slow-access memory. A single SIMD contains 512 32-bit vector registers (for a total of 512KB per CU). Each CU has an L1 cache and shared memory that can be accessed by multiple waves in the same thread block. Each XCD shares a non-programmable 4MB L2 cache. All CUs share a large, slow global memory (HBM) and a last level cache (LLC) sits between L2 and HBM.
+- 3. Occupancy. Threads execute instructions on physical execution units (ALU, FMA, matrix cores), which are specialized for different types of compute. Instructions performed by these units each have a fixed issue latency and limited amount of bandwidth. Different waves can occupy different units simultaneously to avoid saturating any single unit. Each unit imposes different constraints on the memory layouts, or the mapping of logical data elements to physical thread ownership [6].
+
+**Software overview.** Developers can write kernels at different levels of the software stack. Raw assembly provides maximal control over register usage and instruction selection and ordering. CUDA / HIP C++ gets compiled (via NVCC, HIPCC) to assembly, and the compiler may introduce its own instruction reordering and register lifetime tracking. LLVM accepts compiler hints, which let the developer guide the compiler's behavior. Some compilers expose high level interfaces on top of C++ (e.g., Python [28], Triton [34]).
+
+#### <span id="page-3-0"></span>2.2 Related work
+
+Currently, peak-performance AMD kernels finely interleave compute and memory instruction issues in raw assembly (see the AITER and Composable Kernel libraries) [3, 4]. In contrast, to simplify and accelerate the kernel development process, the AI community recently adopted bulk programming operators over optimized *tile* primitives for kernel development, as proposed in ThunderKittens [33] <sup>2</sup> and successors (e.g., CuTe DSL [24]<sup>3</sup>, Gluon [38]<sup>4</sup>). However, these existing C++ based DSLs only run on NVIDIA GPUs, wrapping PTX and CUDA. Compiler libraries such as Triton, TileLang, and Mojo are built on top of LLVM/MLIR [18, 19, 20] and can compile for AMD GPUs. However, these works have neither provided reusable principles or primitives for AMD, nor released comprehensive suites of high performance AMD kernels. For instance, Mojo's MHA kernel suffers from expensive bank conflicts and achieves just 50% of the peak kernels' performance on the MI355X.<sup>5</sup> HIPKITTENS provides the first systematic set of AMD AI kernel primitives towards opening up the hardware landscape.
+

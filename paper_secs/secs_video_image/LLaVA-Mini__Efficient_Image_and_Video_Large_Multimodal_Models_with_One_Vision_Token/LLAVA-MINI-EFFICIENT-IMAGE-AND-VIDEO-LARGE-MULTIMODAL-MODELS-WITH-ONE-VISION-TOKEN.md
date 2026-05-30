@@ -1,0 +1,4 @@
+# LLAVA-MINI: EFFICIENT IMAGE AND VIDEO LARGE MULTIMODAL MODELS WITH ONE VISION TOKEN
+
+Shaolei Zhang1,3, Qingkai Fang1,3, Zhe Yang1,3, Yang Feng1,2,3<sup>∗</sup>
+

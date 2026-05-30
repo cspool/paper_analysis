@@ -1,0 +1,18 @@
+# III. FINE-GRAINED SYNCHRONIZATION OF KERNELS
+
+Our fine-grained synchronization of dependent CUDA kernels consists of four novel mechanisms. These mechanisms (i) ensure simultaneous allocation of dependent kernels (Section [III-A\)](#page-3-4), (ii) execute thread blocks of producer kernels before consumer kernels (Section [III-B\)](#page-3-0), (iii) control the order of tile processing in each kernel to minimize the wait time of synchronization (Section [III-C\)](#page-3-1), and (iv) performs finegrained synchronization of only dependent tiles of producer and consumer kernels (Section [III-D\)](#page-3-2). We have implemented these mechanisms in a header-only standalone CUDA library, cuSync.
+
+Figure [4a](#page-4-0) explains these mechanisms using an example of synchronizing the two dependent GeMM kernels of MLP using cuSync. The gemm function is the standard GeMM GPU kernel (we use NVIDIA CUTLASS [\[1\]](#page-11-3) for our experiments) with additional code (shown as underlined) to call into cuSync. cuSync associates each kernel with a CuStage object that provide synchronization facilities among kernels. The MLP function creates these stage objects, declares dependencies between them, and invokes kernels.
+
+## <span id="page-3-4"></span>*A. Invoke Dependent Kernels*
+
+The first requirement for fine-grained synchronization is to eliminate the stream synchronization between kernels. cuSync achieves this by invoking all kernels on different CUDA streams. The example creates producer (prod) and consumer (cons) stages for both GeMM kernels (lines [18–](#page-4-1)[20](#page-4-2) in Figure [4a\)](#page-4-0). Then, the example declares the dependency between the two stages by specifying that the output of the producer is the input of the consumer (line [23\)](#page-4-3). Finally, the example invokes both kernels on different streams associated with respective stages (lines [26](#page-4-4) and [30\)](#page-4-5). Section [III-D](#page-3-2) describes how cuSync enforces this dependency.
+
+## <span id="page-3-0"></span>*B. Stage Processing Order*
+
+The second requirement for fine-grained synchronization is to execute all full waves of the producer kernel before the consumer kernel. However, the CUDA runtime lacks any mechanism to enforce this execution order among kernels belonging to different streams. Hence, there is a possibility that the consumer kernel is scheduled on the GPU before the producer kernel. This can lead to poor performance as thread blocks of the consumer kernel occupy SMs without doing any useful work. In the worst case, this can lead to deadlocks if no SMs are available for the producer kernel.
+
+cuSync ensures this requirement by enforcing the scheduling order of kernels using its *wait-kernel* mechanism. The wait kernel is invoked by the consumer stage on the consumer stream before the consumer kernel (line [28](#page-4-6) in Figure [4a\)](#page-4-0). The wait kernel contains a single thread, which waits on a global memory semaphore for each consumer kernel using a busy-wait while loop. When the producer kernel calls the stage.start() function (line [4\)](#page-4-7), the function sets the semaphore using the first thread of the first thread block, which in-turn exits the wait-kernel. After the wait-kernel exits, the CUDA runtime can invoke the consumer kernel. Thus, cuSync ensures that no thread blocks of the consumer kernel are scheduled before at least one of the thread blocks of the producer kernel.
+
+The wait-kernel mechanism assumes that CUDA schedules thread blocks of kernels in the order the kernels are invoked by CUDA. We have found that the latest versions of CUDA 11 and 12 executing on NVIDIA GPUs based on Volta and Ampere architecture follow this schedule.
+

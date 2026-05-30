@@ -1,0 +1,10 @@
+# <span id="page-8-1"></span>4.4 Dynamic Restore and Fault Tolerance
+
+Dynamic parameter restoration. While dynamic parameter drop described in [§4.1](#page-4-0) can free up memory for new requests under memory overloading, the pipelined execution is not optimal under normal execution because (1) pipelined execution suffers from more frequent weight loading and (2) it has bubbles. Normal execution cannot simply apply our lookahead scheduling described in [§4.3](#page-6-0) because there are insufficient numbers of requests to balance.
+
+To this end, KUNSERVE dynamically restores parameters to return to a normal non-pipelined execution once the overloading fades away. Specifically, when the monitor detects that the total KVCache usage is below a threshold, it triggers a restoration process by loading the dropped parameters back to the GPUs. Currently we use a simple threshold where the memory usage is below 50 % of the GPU (without drop). The missing parameters are pulled from instances whenever possible using the network between instances.
+
+Two things need to be noted about the restoration. First, we overlap restoring with the normal request processing. Second, since KUNSERVE is concurrently restoring when the request is executing, the parameter pulling process may block activation transfer of normal requests, causing latency increases (see Figure [14\)](#page-11-1). Thus, we adopted a similar coordinated network transfer approach described in [§4.2](#page-5-0) to ensure a smooth execution of pipelined requests by prioritizing the pipeline network over the parameter transfer.
+
+Fault tolerance. Unlike traditional LLM serving where failures between instances are isolated, a failure node in KUN-SERVE can disrupt other instances that are involved in the same pipeline-parallel group. Thus, we dynamically restore these affected instances to ensure normal execution under failures. By replicating parameters in host DRAM or SSDs, we can always ensure successful parameter restoration.
+

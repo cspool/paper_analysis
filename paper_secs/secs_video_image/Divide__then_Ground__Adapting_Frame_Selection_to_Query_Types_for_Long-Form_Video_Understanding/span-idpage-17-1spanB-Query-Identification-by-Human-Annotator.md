@@ -1,0 +1,10 @@
+# <span id="page-17-1"></span>**B Query Identification by Human Annotator**
+
+In this section, we elaborate on the query identification process described in Section [3,](#page-2-1) detailing the methodology used to classify queries from each benchmark.
+
+**MLVU.** The task structure of MLVU [\[54\]](#page-14-0) maps directly to our proposed query definitions. Queries associated with its "holistic tasks", which necessitate a comprehensive understanding of the entire video's overarching narrative, themes or a summary of its content, are classified as global queries. Conversely, queries within its "single-detail" and "multi-detail" task categories, which inherently demand that the model focus on specific, discrete temporal segments or isolated events, are classified as localized queries. Applying this classification scheme, we identified 462 global queries and 1708 localized queries within MLVU [\[54\]](#page-14-0).
+
+**LongVideoBench.** The design of LongVideoBench [\[55\]](#page-14-1) is centered on "referring reasoning." This evaluation paradigm is explicitly designed to test a model's capacity to ground its reasoning in specific, fine-grained visual information. By their very nature, such queries require pinpointing information within distinct temporal or spatial segments rather than assessing the video as a whole. Consequently, all queries within this benchmark correspond directly to our definition of localized queries.
+
+**VideoMME.** VideoMME [\[56\]](#page-14-2) lacks an intrinsic task classification that aligns with our global-versus-localized classification. To address this gap, we implemented a rigorous manual annotation process. We established a standardized protocol wherein human annotators were provided with detailed instructions and precise criteria (as illustrated in Figure [11\)](#page-25-0) to distinguish between the two query types. To ensure the reliability of these labels and mitigate subjective bias, the final classification for each query was determined by a majority vote consensus. This annotation procedure resulted in the identification of 479 global queries and 2*,* 221 localized queries.
+

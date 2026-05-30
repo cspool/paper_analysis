@@ -1,0 +1,4 @@
+# C USE OF LARGE LANGUAGE MODELS
+
+During the preparation of this manuscript, we utilized large language models—GPT-5 [\(OpenAI,](#page-12-11) [2025\)](#page-12-11)—exclusively to refine the language, focusing on improving grammar, flow, and tone at the sentence and paragraph levels. These tools were not employed to generate ideas, design experiments, or draw conclusions. All technical content, methodologies, and interpretations were independently written, thoroughly verified, and approved by the authors. To minimize the risk of factual inaccuracies or citation errors, every model-edited sentence underwent human review, and all references were carefully cross-checked with their primary sources. The authors accept full responsibility for ensuring the accuracy and integrity of this manuscript.
+

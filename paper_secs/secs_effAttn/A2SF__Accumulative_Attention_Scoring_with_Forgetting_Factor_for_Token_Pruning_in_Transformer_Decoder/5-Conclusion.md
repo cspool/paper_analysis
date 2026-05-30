@@ -1,0 +1,4 @@
+# 5 Conclusion
+
+We propose a novel method, A2SF (Accumulative Attention Score with Forgetting Factor), to rectify imbalances in the Accumulative Attention Score utilized for token importance evaluation in Transformer Decoder-based models. A2SF addresses the skewed importance scoring induced by the causal masking in Masked Self-Attention, which disproportionately amplifies the significance of early sequence tokens. A2SF incorporates a Forgetting Factor to mitigate this historical bias in Attention Scores, thereby ensuring a more equitable distribution of token importance across the sequence length. Comprehensive experiments on a variety of models and datasets demonstrate that A2SF surpasses existing methods, enhancing accuracy without necessitating additional model retraining. Furthermore, given that A2SF is a token selection technique, it holds potential to enhance the performance of numerous ongoing KV Cache processing algorithms when integrated with A2SF.
+

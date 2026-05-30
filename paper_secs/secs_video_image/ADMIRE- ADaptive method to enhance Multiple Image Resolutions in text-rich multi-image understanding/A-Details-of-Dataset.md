@@ -1,0 +1,6 @@
+# A Details of Dataset
+
+MP-DocVQA includes images scanned from 6,000 industry documents, containing a mix of pictures, diagrams, tables, and both handwritten and printed text. DUDE covers a broader range of domains—such as medical, legal, technical, and financial—posing greater challenges for visual language models due to its more complex imagery and longer answers. In application, we assess our framework on the multi-page medical report question and answer scenarios using the Physical Report Question Answering (PRQA) dataset. PRQA is a Chinese text-rich, multi-image dataset comprising 1,303 image-text pairs, with questions derived from common queries about anomalies in medical reports. Due to sensitive user privacy information, this dataset is currently not open-sourced. As shown in Table [7,](#page-10-1) MP-DocVQA contains up to 40 images, while DUDE contains up to 50. The first two datasets feature higher resolution images than the latter two. Additionally, the average
+
+answer length in DUDE and SlideVQA is longer, suggesting that these datasets present a greater challenge for visual language models. Furthermore, the PRQA dataset is utilized as an independent external validation set to assess the performance improvements of ADMIRE in real-world industrial scenarios.
+

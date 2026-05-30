@@ -1,0 +1,4 @@
+# 7 Conclusion
+
+Motivated by the need to reduce LLM inference costs while maintaining response accuracy in AI agents, this paper presents an experimental analysis that yields several insightful observations. Based on these findings, we propose AIMS, a cost-efficient framework for AI agents in hybrid cloud-edge environments. AIMS leverages local SLMs for request- and subtask-level computation partitioning. Unlike existing approaches that allocate requests in isolation, AIMS takes a holistic approach, leveraging subtask position-aware decisions to account for the interconnected nature of agent reasoning and identifies convergence points between LLM and SLM subtask sequences to enhance local processing. Extensive experiments on nine datasets demonstrate that AIMS outperforms state-of-the-art methods in achieving this balance.
+

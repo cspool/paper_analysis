@@ -1,0 +1,4 @@
+# 6 Limitation
+
+We applied a uniform value for the Forget Factor across all heads, layers, and tokens. However, the characteristics of these elements can vary significantly. For instance, tokens can represent diverse features such as nouns, verbs, and so on. Therefore, applying the same rate of forgetting to all elements may not yield optimal results. For example, when summarizing content, it could be beneficial to retain as much information as possible about unique nouns that form the core of a paragraph. To address this, we could devise methods to determine an appropriate Forget Factor based on the form of the Attention Score generated during previous generation steps. Alternatively, we could set a distinct Forget Factor for each layer, head, and token by understanding their characteristics in advance.
+

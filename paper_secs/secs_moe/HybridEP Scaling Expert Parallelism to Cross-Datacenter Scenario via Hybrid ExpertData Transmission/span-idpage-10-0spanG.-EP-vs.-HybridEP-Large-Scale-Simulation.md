@@ -1,0 +1,6 @@
+# <span id="page-10-0"></span>G. EP vs. HybridEP: Large Scale Simulation
+
+In this section, we conduct the performance simulation with SimAI [53] due to limited environments. We test on a large scale to verify HybridEP's effectiveness under general settings.
+
+Results of Simulation. We evaluate the effectiveness under different bandwidth from two cases, as shown in Figure 17. We first fix the expert domain size  $S_{ED}$  and expand the number of DCs. This essentially reduces the proportion p determined by HybridEP's model, resulting in a smaller acceleration effect. Given 1000 DCs (red dot), HybridEP achieves a speedup of  $1.05\times$  to  $1.45\times$ . Then, we fix the proportion p and expand the number of DCs. This essentially increases the size of domain, resulting in an improvement in the acceleration effect. Given 1000 DCs, HybridEP achieves  $1.31 \times$  to  $3.76 \times$  speedup. Furthermore, in both cases, the lower the bandwidth, the greater the speedup. Note that in practice, the first case is the most common because  $S_{ED}$  is fixed due to the fixed training configurations. Thus, the speedup decreases as the number of DCs increases. How to expand in the second case still remains extremely challenging, which is widely recognized.
+

@@ -1,0 +1,4 @@
+# 5 Conclusions
+
+In this paper, we introduce for the first time VisualRWKV, which explores the construction of a visual language model using the linear RNN model RWKV. VisualRWKV incorporates three innovative designs: data-dependent recurrence to enhance the model's information extraction capabilities, sandwich prompt for better conditioning, and bidirectional scanning for more effective extraction of 2D visual information. We conducted extensive experiments on eight multimodal benchmarks and achieved comparable performance with some of the most advanced VLMs; we also carried out ablation studies to evaluate the effectiveness of data-dependent recurrence, prompting methods, and various scanning mechanisms. The results validate the effectiveness of our proposed model and demonstrate the potential of applying RNNs to VLMs.
+

@@ -1,0 +1,4 @@
+# <span id="page-6-0"></span>5 Inferring Models
+
+The Infera inference server (Fig. [7\)](#page-6-1) facilitates end-to-end DNN inference for users. It operates as a pipeline with 3 units: a Job Dispatch Unit (JDU), a Task Schedule Unit (TSU), and a Task Execution Unit (TEU). The models used for inference should be registered with the inference server prior to their inference process (§ [5.1\)](#page-6-2). At inference time, inference requests are organized as inference jobs, which are enqueued in the inference job queue. JDU dispatches jobs sequentially from the queue to different GPUs based on load balancing (§ [5.2\)](#page-7-0). TSU creates and manages the inference tasks, and determines which tasks to run in each scheduling cycle (§ [5.3\)](#page-7-1), so that TEU can execute these tasks by selecting, fusing, and launching kernels based on the tasks (§ [5.4\)](#page-8-0).
+

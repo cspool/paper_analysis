@@ -1,0 +1,4 @@
+# VI. CONCLUSION
+
+In this work, we present HierMoE, a novel MoE training approach that substantially reduces communication overhead through three key innovations: 1) a hierarchical All-to-All mechanism with token deduplication that eliminates redundant transfers across hierarchical levels, 2) a hierarchical expert placement strategy to align diverse efficiencies across different hierarchical levels in our proposed All-to-All, and 3) theoretical models to evaluate and enhance the hierarchical deduplication All-to-All and expert replacement strategy. Implemented atop Megatron-LM, our HierMoE demonstrates significant performance gains with extensive experiments conducted on a 32-GPU cluster using DeepSeek-V3 and Qwen3-30B-A3B models, achieving 1.55× to 3.32× faster AlltoAll communication compared to state-of-the-art systems like Tutel-2DH, SmartMoE and Megatron-LM, while delivering 1.18× to 1.27× faster end-to-end training time.
+

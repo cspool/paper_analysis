@@ -1,0 +1,4 @@
+# **2 Related Work**
+
+There has been a growing interest in addressing LLMs' memory constraints on processing long context inputs. FastGen [\(Ge et al., 2023\)](#page-10-3) introduces an adaptive KV cache management strategy that optimizes memory use by tailoring retention tactics to the specific nature of attention heads. SnapKV [\(Li et al., 2024\)](#page-10-2) improves efficiency by compressing KV caches via selecting/clustering significant KV positions based on their attention scores. Heavy Hitter Oracle (H2O) [\(Zhang et al., 2024\)](#page-11-5) implements a dynamic eviction policy that effectively balances the retention of recent and historically significant tokens, optimizing memory usage while preserving essential information. StreamingLLM [\(Xiao et al., 2023\)](#page-11-6) enables LLMs trained on finite attention windows to handle infinite sequence lengths without fine-tuning, thus expanding the models' applicability to broader contexts.
+

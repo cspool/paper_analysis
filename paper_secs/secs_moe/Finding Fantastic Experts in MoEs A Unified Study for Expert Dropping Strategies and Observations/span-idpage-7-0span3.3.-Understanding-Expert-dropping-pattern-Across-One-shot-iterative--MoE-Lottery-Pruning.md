@@ -1,0 +1,6 @@
+# <span id="page-7-0"></span>3.3. Understanding Expert dropping pattern Across One-shot, iterative & MoE Lottery Pruning
+
+In this section, we study the divergence of the selection of experts for pruning of *one-shot* and *iterative pruning* w.r.t. *MoE lottery pruning*. The primary aim of this study is to highlight the benefits of iterative pruning with re-estimation of expert importance criterions. It can be clearly observed from Figure 5(a) that there exists a *significantly high disagreement* (dark pink) between one-shot and iterative pruning while selecting least dominant experts *leading to completely different resultant subnetworks*. The substandard performance of the one-shot method indicates that the iden-
+
+<span id="page-7-3"></span><span id="page-7-2"></span><span id="page-7-1"></span>tified subnetwork is not of high quality in comparison to iterative pruning. On the other hand, Figure 5(b) illustrates a notable high agreement across experts, which undergoes dropping to achieve a sparsity ratio of 50%. This leads to an interesting conclusion that task-agnostic finetuning does not significantly alter the expert selection choice selection but instead helps in addressing the impact incurred due to sparsification in the form of load imbalance and abrupt performance drop.
+

@@ -1,0 +1,26 @@
+# 6 RELATED WORK
+
+Mixture-of-Expert (MoE) Models. Mixture-of-expert models are a popular approach for creating large-scale models that are more efficient for inference [\(Fedus et al.,](#page-10-0) [2022;](#page-10-0) [Artetxe et al.,](#page-10-0) [2022;](#page-10-0) [Clark et al.,](#page-10-0) [2022\)](#page-10-0). At the core of MoEs lie (sparse) routing mechanisms, of which many vari-
+
+<span id="page-9-0"></span>![](_page_9_Figure_1.jpeg)
+
+![](_page_9_Figure_2.jpeg)
+
+Figure 5. (Left) Per-layer compressed kernel performance relative to uncompressed execution. (Right) End-to-end runtimes of compressed models and estimates (\*, would require 65/130 GPUs) for bloat16 baselines. c2048 is run on 4×A6000 and 8×3090 GPUs, respectively.
+
+ants have been proposed. Those range from static assignment based on input token IDs (Roller et al., 2021), over dynamic token-to-expert matching (Zhou et al., 2022), to "soft" routing of linear input combinations (Puigcerver et al., 2023). Since MoEs can feature rather different computational profiles from standard dense models, there is also significant research on optimizing inference and training systems (Barham et al., 2022; Gale et al., 2023; Hwang et al., 2023). Among the most critical problems in this area are data-exchanges between accelerators during routing and dealing with uneven compute-loads for different experts.
+
+**LLM Quantization.** Quantization is a very popular compression technique, which has seen a vast amount of work (Gholami et al., 2021), especially in the context of LLMs. Specifically, the ability to perform accurate weight quantization for billion-parameter models has greatly boosted their accessibility: it has been shown that extremely large dense models can be quantized to 8- or even 4-bit precision at little accuracy loss (Dettmers et al., 2022; Yao et al., 2022; Frantar et al., 2022; Dettmers & Zettlemoyer, 2022). Pushing towards even lower bitwidths via more sophisticated compression formats, like multi-level grouping coupled with higher-precision outliers (Dettmers et al., 2023; Ashkboos et al., 2023), or new quantization techniques, like incoherence preprocessing (Chee et al., 2023), is an active area of research. Currently, accurate quantization to 2 or less bits appears to be a major barrier for post-training quantization of standard LLMs. By contrast, in this work we show that massive MoE models appear to be significantly more compressible, as we achieve sub-1-bit compression at comparable loss increases to 3-bit or 4-bit quantization of standard LLMs.
+
+**MoE Compression.** There has also been work on compressing MoE models in particular. Chen et al. (2022) and Koishekenov et al. (2022) perform compression via specialization of MoEs to specific "downstream" finetuning datasets by pruning components not relevant to the particular task. In contrast, we focus on general "upstream" compression of the pretrained model, via extremely low-bit quantization. Other works (Kim et al., 2022b; Yi et al., 2023; Kim et al., 2023) also perform MoE quantization, but focus
+
+on noticeably higher bit-widths, like 8 or 4 bits per weight. This is accomplished primarily via simple rounding, which, as shown by our experiments, is not accurate enough for full 2-bit or lower compression. Kim et al. (2022a) achieve 2-bit quantization on a 5 billion parameter MoE, which is considered relatively small in this area, by further optimization of the model via Quantization-Aware Training (Nagel et al., 2021). Applying such an approach for trillion-scale models would be extremely resource intensive. They also do not provide any mechansims for exploiting low-bit quantization and its corresponding natural sparsity in practice, which is challenging and constitutes a key contribution of our work.
+
+Relative to prior work, we are particularly focused on scalabilty and practicalty. While existing works study models with at most tens of billions of parameters, we demonstrate all our techniques at trillion parameter scale.
+
+## 7 DISCUSSION AND LIMITATIONS
+
+We have presented QMoE, an end-to-end compression and inference framework for massive MoEs. We showed, for the first time, that models like the trillion-parameter SwitchTransformer-c2048 can be accurately compressed to less than 1 bit per parameter, close to  $20\times$  compression rate, in a custom format that enables the first efficient execution of such a model on a single commodity GPU server. QMoE is open-source and built around the popular HuggingFace framework, making deployment and research for massive MoEs significantly cheaper and more accessible.
+
+Our study is limited in terms of models, as only very few massive and accurate MoEs are available publicly. Additionally, due to their size, most MoEs are trained and deployed in different bespoke framework, requiring complex manual integrations to use for further research. A natural extension of our work would be to apply our QMoE techniques to other MoE models or variants, such as Artetxe et al. (2022) or SoftMoEs (Puigcerver et al., 2023). It would also be interesting to further finetune a compressed model for specialized down-stream tasks. Zoph et al. (2022) report strong results when finetuning only non-expert layers, which QMoE leaves uncompressed, suggesting that this could be a promising direction for future work.
+

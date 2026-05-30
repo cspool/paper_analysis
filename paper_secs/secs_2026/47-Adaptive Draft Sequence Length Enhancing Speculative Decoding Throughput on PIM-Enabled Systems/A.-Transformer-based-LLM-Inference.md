@@ -1,0 +1,6 @@
+# A. Transformer-based LLM Inference
+
+As shown in Figure 1, mainstream LLMs are composed of multiple Transformer decoder [48] layers and operate in two phases: the *prefill* phase and the *decoding* phase. In the prefill phase, the LLM processes the entire input sequence in parallel to generate the first output token. In the decoding phase, the LLM takes the concatenation of the original prompt and all previously generated tokens as input to generate the next token. This process repeats until an end-of-sequence token is produced. Since only one token is generated per iteration, autoregressive decoding is inherently sequential and results in low throughput.
+
+Each decoder layer primarily consists of three kernels: QKV (query, key, and value) generation, *multi-head attention* (MHA), and *feed-forward networks* (FFN). These kernels fall into two categories: QKV generation and FFN are *fully connected* (FC) operators, while MHA represents the attention operator. All these operators rely on *general matrix-vector multiplication* (GEMV). During MHA execution, keys and values from all previously generated tokens must be accessed to compute the next token. To avoid redundant KV computations, a caching mechanism—commonly known as the KV cache [19], [58]—is employed to store previously generated keys and values for reuse in future decoding iterations.
+

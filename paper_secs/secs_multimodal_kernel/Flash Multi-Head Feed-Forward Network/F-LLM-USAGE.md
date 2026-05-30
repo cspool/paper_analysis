@@ -1,0 +1,3 @@
+# F LLM USAGE
+
+We acknowledge the use of a Large Language Model (LLM), specifically Google's Gemini and OpenAI's ChatGPT, as a writing assistant during the preparation of this manuscript. The LLM's role was strictly limited to improving the clarity, conciseness, and grammatical correctness of the text. All scientific contributions presented in this paper—including the formulation of the core ideas, the design of the FlashMHF architecture, the experimental methodology, and the analysis and interpretation of results—are the original work of the human authors.

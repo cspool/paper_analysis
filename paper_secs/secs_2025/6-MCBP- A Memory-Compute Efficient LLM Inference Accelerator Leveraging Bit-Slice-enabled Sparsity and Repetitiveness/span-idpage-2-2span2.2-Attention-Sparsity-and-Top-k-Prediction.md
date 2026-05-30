@@ -1,0 +1,6 @@
+# <span id="page-2-2"></span>2.2 Attention Sparsity and Top-k Prediction
+
+The standard attention mechanism in LLMs captures global context correlation via dense attention matrices. However, weak correlations between tokens produce many small attention scores, which are further suppressed by the softmax operation, further pushing them toward zero. This creates opportunities for *attention sparsity*.
+
+To exploit the *attention sparsity* for computation acceleration, the top-k prediction mechanism has been proposed [25]. Fig. 3 illustrates its workflow via a  $1 \times S$  attention example. Typically, it consists of three stages. Firstly, a *Pre-compute stage* estimates the attention matrix with a low-overhead paradigm (e.g., 4 bit MSB). The *Top-k sort stage* then selects the indices of the top-k highest-scoring Keys for each Query. For example, in the estimated attention in Fig. 3, Keys [0, 3] are identified as top-2 candidates for the current Query. Finally, the indices [0, 3] are transferred to *Formal compute stage*, which performs full-precision  $\mathbf{QK}^T$  (8bit), softmax (FP16) and  $\mathbf{PV}$  (8bit), using only these selected Keys and Values (i.e., [0, 3]). The top-k mechanism has been widely adopted in recent accelerators [72, 92, 94, 104] to improve attention efficiency.
+

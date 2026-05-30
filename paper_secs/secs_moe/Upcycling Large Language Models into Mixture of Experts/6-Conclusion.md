@@ -1,0 +1,8 @@
+# 6 Conclusion
+
+In this work, we conducted an extensive study of upcycling techniques and best practices for billionparameter scale language models. We proposed a "virtual group" initialization scheme and weight scaling approach to successfully enable both coarse-grained and fine-grained MoE upcycling at scale. We found that upcycling outperforms continued dense model training for the same amount of compute on both 2B and 15B parameter models. Based on the target inference and available upcycling FLOPs, an architecture that uses more FLOPs like E8G1T2 can achieve better accuracy than dense iso-FLOP MoE models. On our 2B ablations, we found that upcycling needs a different set of hyper-parameters than fine-tuning. Softmax-then-topK expert routing performs better than topK-then-softmax in the MoE router during upcycling. Higher granularity MoEs boost upcycling accuracy but require a more careful weight scaling and sharding strategy and also lead to a lower GPU FLOP utilization. In a purely FLOP-bound scenario, using virtual group init with granular model upcycling seems to be the best strategy. We hope this work illuminates the details of upcycling billion-parameter scale MoE models. Future directions include studying upcycling in larger models, improving expert diversity and utilization, and co-optimizing model architectures and system designs.
+
+<span id="page-13-0"></span><sup>8</sup>https://www.databricks.com/blog/introducing-dbrx-new-state-art-open-llm
+
+<span id="page-13-1"></span><sup>9</sup>https://www.snowflake.com/blog/arctic-open-efficient-foundation-language-models-snowflake/
+

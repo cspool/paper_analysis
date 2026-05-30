@@ -1,0 +1,12 @@
+# 7 Related Work
+
+Handling memory overloading with lossy methods. One possible way to handle memory overloading is to reduce the memory footprint of the serving, e.g., by compressing the activations [\[19,](#page-14-23) [31\]](#page-15-24). For example, FP8 quantization [\[47\]](#page-15-25) reduces the token memory usage by 2 ×, and methods like SparseGPT [\[22\]](#page-14-24) prune parameters to 50% sparsity. Unfortunately, such methods are lossy and can lead to model accuracy degradation or compromised user experience [\[33\]](#page-15-26). KUN-SERVE copes with the performance degradation caused by memory overloading without sacrificing the model accuracy.
+
+Handling memory overloading with lossless methods. KUNSERVE continues the line of work on handling memory overloading during LLM serving without modifying the model inference [\[7,](#page-14-11) [30,](#page-15-4) [30,](#page-15-4) [40,](#page-15-5) [44,](#page-15-6) [50,](#page-15-7) [55\]](#page-15-1). These works focus on allowing queued requests to execute by reorganizing GPU memory either with swap or migration-based methods, which do not create more space for execution so they either sacrifice
+
+ongoing requests or queued requests, as analyzed in [§2.3.](#page-3-0) In contrast, KUNSERVE frees more memory for execution with a new parameter-centric memory management method.
+
+LLM serving optimizations. Considerable research has focused on improving the efficiency of LLM serving under abundant memory [\[9,](#page-14-13) [17,](#page-14-22) [18,](#page-14-25) [27,](#page-14-26) [30,](#page-15-4) [38,](#page-15-3) [39,](#page-15-15) [55\]](#page-15-1). KUNSERVE builds on these works and seamlessly integrates with them. A recent work—POD-ATTENTION [\[29\]](#page-15-27)—proposes a better chunked prefill implementation. It is orthogonal to our work and KUNSERVE can benefit from its high-performance kernel to get better performance in all states. NanoFlow [\[56\]](#page-15-16) provides us with a more efficient microbatch scheduling, which is of help to KUNSERVE after parameter dropping.
+
+OS techniques for handling memory overloading. Handling memory overloading has been studied in operating systems for decades: e.g., Linux adopted a swap-based mechanism to handle memory pressure [\[1\]](#page-14-27). KUNSERVE leverages the domain-specific knowledge of LLM serving to expose more memory to serving requests beyond the limit of a general-purpose swap-based method.
+

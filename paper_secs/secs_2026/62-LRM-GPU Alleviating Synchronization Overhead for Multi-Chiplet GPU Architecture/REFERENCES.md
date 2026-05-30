@@ -1,0 +1,61 @@
+# REFERENCES
+
+- [1] J. Alsop, M. S. Orr, B. M. Beckmann, and D. A. Wood, "Lazy Release Consistency for GPUs," in *2016 49th Annual IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2016, pp. 1–14.
+- [2] A. Arunkumar, E. Bolotin, B. Cho, U. Milic, E. Ebrahimi, O. Villa, A. Jaleel, C.-J. Wu, and D. Nellans, "MCM-GPU: Multi-Chip-Module GPUs for Continued Performance Scalability," *ACM SIGARCH Computer Architecture News*, vol. 45, no. 2, pp. 320–332, 2017.
+- [3] A. Arunkumar, E. Bolotin, D. Nellans, and C.-J. Wu, "Understanding the Future of Energy Efficiency in Multi-Module GPUs," in *2019 IEEE International Symposium on High Performance Computer Architecture (HPCA)*. IEEE, 2019, pp. 519–532.
+- [4] S. Che, B. M. Beckmann, S. K. Reinhardt, and K. Skadron, "Pannotia: Understanding Irregular GPGPU Graph Applications," in *2013 IEEE International Symposium on Workload Characterization (IISWC)*. IEEE, 2013, pp. 185–195.
+- [5] S. Che, M. Boyer, J. Meng, D. Tarjan, J. W. Sheaffer, S.-H. Lee, and K. Skadron, "Rodinia: A Benchmark Suite for Heterogeneous Computing," in *2009 IEEE International Symposium on Workload Characterization (IISWC)*, 2009.
+- [6] S. Chetlur, C. Woolley, P. Vandermersch, J. Cohen, J. Tran, B. Catanzaro, and E. Shelhamer, "cudnn: Efficient Primitives for Deep Learning," *arXiv preprint arXiv:1410.0759*, 2014.
+- [7] Y. H. Chou, C. Ng, S. Cattell, J. Intan, M. D. Sinclair, J. Devietti, T. G. Rogers, and T. M. Aamodt, "Deterministic Atomic Buffering," in *2020 53rd Annual IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2020, pp. 981–995.
+- [8] P. Dalmia, R. S. Kumar, and M. D. Sinclair, "CPElide: Efficient Multi-Chiplet GPU Implicit Synchronization," in *2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2024, pp. 700–717.
+- [9] P. Dalmia, R. Mahapatra, J. Intan, D. Negrut, and M. D. Sinclair, "Improving the Scalability of GPU Synchronization Primitives," *IEEE Transactions on Parallel and Distributed Systems*, vol. 34, no. 1, pp. 275–290, 2022.
+- [10] P. Dalmia, R. Mahapatra, and M. D. Sinclair, "Only buffer When You Need to: Reducing on-Chip GPU Traffic with Reconfigurable Local Atomic Buffers," in *2022 IEEE International Symposium on High-Performance Computer Architecture (HPCA)*. IEEE, 2022, pp. 676– 691.
+- [11] S. Durvasula, A. Zhao, F. Chen, R. Liang, P. K. Sanjaya, Y. Guan, C. Giannoula, and N. Vijaykumar, "ARC: Warp-level Adaptive Atomic Reduction in GPUs to Accelerate Differentiable Rendering," in *Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 1*, 2025, pp. 64–83.
+- [12] A. ElTantawy and T. M. Aamodt, "Mimd synchronization on simt architectures," in *2016 49th Annual IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2016, pp. 1–14.
+- [13] A. ElTantawy and T. M. Aamodt, "Warp scheduling for fine-grained synchronization," in *2018 IEEE International Symposium on High Performance Computer Architecture (HPCA)*. IEEE, 2018, pp. 375– 388.
+- [14] Y. Feng, S. Na, H. Kim, and H. Jeon, "Barre Chord: Efficient Virtual Memory Translation for Multi-Chip-Module GPUs," in *2024 ACM/IEEE 51st Annual International Symposium on Computer Architecture (ISCA)*. IEEE, 2024, pp. 834–847.
+- [15] Y. Fu, E. Bolotin, N. Chatterjee, D. Nellans, and S. W. Keckler, "GPU Domain Specialization via Composable on-Package Architecture," *ACM*
+
+- *Transactions on Architecture and Code Optimization (TACO)*, vol. 19, no. 1, pp. 1–23, 2021.
+- [16] B. A. Hechtman, S. Che, D. R. Hower, Y. Tian, B. M. Beckmann, M. D. Hill, S. K. Reinhardt, and D. A. Wood, "QuickRelease: A Throughput-Oriented Approach to Release Consistency on GPUs," in *2014 IEEE 20th International Symposium on High Performance Computer Architecture (HPCA)*. IEEE, 2014, pp. 189–200.
+- [17] B. A. Hechtman and D. J. Sorin, "Exploring Memory Consistency for Massively-Threaded Throughput-Oriented Processors," in *Proceedings of the 40th Annual International Symposium on Computer Architecture*, 2013, pp. 201–212.
+- [18] D. R. Hower, B. A. Hechtman, B. M. Beckmann, B. R. Gaster, M. D. Hill, S. K. Reinhardt, and D. A. Wood, "Heterogeneous-Race-Free Memory Models," in *Proceedings of the 19th international conference on Architectural support for programming languages and operating systems*, 2014, pp. 427–440.
+- [19] N. Jiang, D. U. Becker, G. Michelogiannakis, J. Balfour, B. Towles, D. E. Shaw, J. Kim, and W. J. Dally, "A Detailed and Flexible Cycle-Accurate Network-on-Chip Simulator," in *2013 IEEE international symposium on performance analysis of systems and software (ISPASS)*. IEEE, 2013, pp. 86–96.
+- [20] H. Jooybar, W. W. Fung, M. O'Connor, J. Devietti, and T. M. Aamodt, "GPUDet: A Deterministic GPU Architecture," in *Proceedings of the eighteenth international conference on Architectural support for programming languages and operating systems*, 2013, pp. 1–12.
+- [21] V. Kandiah, S. Peverelle, M. Khairy, J. Pan, A. Manjunath, T. G. Rogers, T. M. Aamodt, and N. Hardavellas, "AccelWattch: A Power Modeling Framework for Modern GPUs," in *MICRO-54: 54th Annual IEEE/ACM International Symposium on Microarchitecture*, 2021, pp. 738–753.
+- [22] A. Kannan, N. E. Jerger, and G. H. Loh, "Exploiting Interposer Technologies to Disintegrate and Reintegrate Multicore Processors," *Ieee Micro*, vol. 36, no. 3, pp. 84–93, 2016.
+- [23] S. Keckler, "Life After Dennard and How I Learned to Love the Picojoule," *Keynote at MICRO*, 2011.
+- [24] M. Khairy, Z. Shen, T. M. Aamodt, and T. G. Rogers, "Accel-sim: An Extensible Simulation Framework for Validated GPU Modeling," in *2020 ACM/IEEE 47th Annual International Symposium on Computer Architecture (ISCA)*. IEEE, 2020, pp. 473–486.
+- [25] K. Koukos, A. Ros, E. Hagersten, and S. Kaxiras, "Building Heterogeneous Unified Virtual Memories (UVMs) Without the Overhead," *ACM Transactions on Architecture and Code Optimization (TACO)*, vol. 13, no. 1, pp. 1–22, 2016.
+- [26] A. Lavin and S. Gray, "Fast Algorithms for Convolutional Neural Networks," in *Proceedings of the IEEE conference on computer vision and pattern recognition*, 2016, pp. 4013–4021.
+- [27] J. M. Mellor-Crummey and M. L. Scott, "Algorithms for Scalable Synchronization on Shared-Memory Multiprocessors," *ACM Transactions on Computer Systems (TOCS)*, vol. 9, no. 1, pp. 21–65, 1991.
+- [28] D. Merrill, "NVIDIA CUB Library," *https:// nvlabs.github.io/ cub/*, 2020.
+- [29] U. Milic, O. Villa, E. Bolotin, A. Arunkumar, E. Ebrahimi, A. Jaleel, A. Ramirez, and D. Nellans, "Beyond the socket: NUMA-aware GPUs," in *Proceedings of the 50th Annual IEEE/ACM International Symposium on Microarchitecture*, 2017, pp. 123–135.
+- [30] G. E. Moore, "Cramming More Components onto Integrated Circuits," *Proceedings of the IEEE*, vol. 86, no. 1, pp. 82–85, 1998.
+- [31] M. A. O'Neil and M. Burtscher, "Microarchitectural Performance Characterization of Irregular GPU Kernels," in *2014 IEEE International Symposium on Workload Characterization (IISWC)*. IEEE, 2014, pp. 130–139.
+- [32] [Online], "llm.c," *https://https://github.com/karpathy/llm.c*.
+- [33] [Online], "Simple-vgg16-cu," *https://github.com/ rezaisajjad /simplevgg16-cu*.
+- [34] [Online], "Nvidias Next Generation CUDA Compute-Architecture: Kepler gk110," *https:// www.nvidia.com/ content/ dam/ en-zz/ Solutions/ Data-Center/ tesla-product-literature/ NVIDIA-Kepler-GK110-GK210- Architecture-Whitepaper.pdf*, 2012.
+- [35] [Online], "TOP500 Shows Growing Momentum for Accelerators." *https://insidehpc.com/2015/11/top500-shows-growing-momentumfor-accelerators/*, 2015.
+- [36] [Online], "NVIDIA Tesla P100 Architecture," *https://images.nvidia.com /content/pdf/tesla/whitepaper/pascal-architecture-whitepaper.pdf*, 2016.
+- [37] [Online], "NVIDIA Tesla V100 Architecture," *https://images.nvidia.com /content/volta-architecture/pdf/volta-architecture-whitepaper.pdf*, 2017.
+- [38] M. S. Orr, S. Che, A. Yilmazer, B. M. Beckmann, M. D. Hill, and
+
+- D. A. Wood, "Synchronization using Remote-Scope Promotion," *ACM SIGARCH Computer Architecture News*, vol. 43, no. 1, pp. 73–86, 2015.
+- [39] S. Pal, D. Petrisko, M. Tomei, P. Gupta, S. S. Iyer, and R. Kumar, "Architecting Waferscale Processors-a GPU Case Study," in *2019 IEEE International Symposium on High Performance Computer Architecture (HPCA)*. IEEE, 2019, pp. 250–263.
+- [40] J. W. Poulton, W. J. Dally, X. Chen, J. G. Eyles, T. H. Greer, S. G. Tell, J. M. Wilson, and C. T. Gray, "A 0.54 pJ/b 20 Gb/s Ground-Referenced Single-Ended Short-Reach Serial Link in 28 nm CMOS for Advanced Packaging Applications," *IEEE Journal of Solid-State Circuits*, vol. 48, no. 12, pp. 3206–3218, 2013.
+- [41] J. Power, A. Basu, J. Gu, S. Puthoor, B. M. Beckmann, M. D. Hill, S. K. Reinhardt, and D. A. Wood, "Heterogeneous System Coherence for Integrated CPU-GPU Systems," in *Proceedings of the 46th Annual IEEE/ACM International Symposium on Microarchitecture*, 2013, pp. 457–467.
+- [42] B. Pratheek, N. Jawalkar, and A. Basu, "Designing Virtual Memory System of MCM GPUs," in *2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2022, pp. 404–422.
+- [43] X. Ren, D. Lustig, E. Bolotin, A. Jaleel, O. Villa, and D. Nellans, "Hmg: Extending Cache Coherence Protocols Across Modern Hierarchical Multi-GPU Systems," in *2020 IEEE International Symposium on High Performance Computer Architecture (HPCA)*. IEEE, 2020, pp. 582– 595.
+- [44] H. SeyyedAghaei, M. Naderan-Tahan, M. Jahre, and L. Eeckhout, "Memory-Centric MCM-GPU Architecture," *IEEE Computer Architecture Letters*, vol. 24, no. 1, pp. 101–104, 2025.
+- [45] Y. S. Shao, J. Clemons, R. Venkatesan, B. Zimmer, M. Fojtik, N. Jiang, B. Keller, A. Klinefelter, N. Pinckney, P. Raina *et al.*, "Simba: Scaling Deep-Learning Inference with Multi-Chip-Module-Based Architecture," in *Proceedings of the 52nd annual IEEE/ACM international symposium on microarchitecture*, 2019, pp. 14–27.
+- [46] K. Simonyan and A. Zisserman, "Very Deep Convolutional Networks for Large-Scale Image Recognition," *arXiv preprint arXiv:1409.1556*, 2014.
+- [47] M. D. Sinclair, J. Alsop, and S. V. Adve, "Efficient GPU Synchronization Without Scopes: Saying No to Complex Consistency Models," in *Proceedings of the 48th International Symposium on Microarchitecture*, 2015, pp. 647–659.
+- [48] M. D. Sinclair, J. Alsop, and S. V. Adve, "HeteroSync: A Benchmark Suite for Fine-Grained Synchronization on Tightly Coupled GPUs," in *2017 ieee international symposium on workload characterization (IISWC)*. IEEE, 2017, pp. 239–249.
+- [49] I. Singh, A. Shriraman, W. W. Fung, M. O'Connor, and T. M. Aamodt, "Cache Coherence for GPU Architectures," in *2013 IEEE 19th International Symposium on High Performance Computer Architecture (HPCA)*. IEEE, 2013, pp. 578–590.
+- [50] A. Snell and L. Segervall, "HPC Application Support for GPU Computing," *Intersect365 Research*, 2017.
+- [51] K. Wang, D. Fussell, and C. Lin, "Fast fine-grained global synchronization on gpus," in *Proceedings of the Twenty-Fourth International Conference on Architectural Support for Programming Languages and Operating Systems*, 2019, pp. 793–806.
+- [52] S. Zhang, M. Naderan-Tahan, M. Jahre, and L. Eeckhout, "SAC: Sharing-aware Caching in Multi-Chip GPUs," in *Proceedings of the 50th Annual International Symposium on Computer Architecture*, 2023, pp. 1–13.
+- [53] X. Zhang, G. Zhang, L. Wang, S. Zhang, and X. Zhao, "AdCoalescer: An Adaptive Coalescer to Reduce the Inter-Module Traffic in MCM-GPUs," in *Proceedings of the 53rd International Conference on Parallel Processing*, 2024, pp. 1001–1011.
+- [54] Y. Zhang, M. Wang, W. Wang, Y. Mai, H. Huang, and Z. Yu, "Atomic Cache: Enabling Efficient Fine-Grained Synchronization with Relaxed Memory Consistency on GPGPUs Through In-Cache Atomic Operations," in *2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2024, pp. 671–685.
+- [55] X. Zhao, G. Zhang, L. Wang, S. Zhang, and H. Dai, "NearFetch: Saving Inter-Module Bandwidth in Many-Chip-Module GPUs," in *2025 IEEE International Symposium on High Performance Computer Architecture (HPCA)*. IEEE, 2025, pp. 1693–1706.

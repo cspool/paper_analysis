@@ -1,0 +1,4 @@
+# *B. Accuracy*
+
+We evaluate the accuracy of SparF along with the vanilla SparQ Attention, widely-adopted pruning techniques H2O [79] and StreamingLLM [68], and the local attention method, under different KV cache compression ratios, as illustrated in Figure 13a and 13b. As StreamingLLM only supports Llama models, we exclude it from the OPT-model evaluation. We observe that SparF performs nearly identically with the vanilla SparQ Attention while maintaining robustness against H2O, StreamingLLM, and local attention. This is because SparF primarily focuses on optimizing the KV cache access patterns on the flash chips, efficiently identifying the KV cache sparsity with dual-step loading. As SparF suffers negligible accuracy loss with a compression ratio up to 1/8, we set the default compression ratio as 1/8 for the following evaluations.
+

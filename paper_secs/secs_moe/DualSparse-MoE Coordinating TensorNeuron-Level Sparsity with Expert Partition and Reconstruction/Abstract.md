@@ -1,0 +1,8 @@
+# Abstract
+
+Mixture of Experts (MoE) has become a mainstream architecture for building Large Language Models (LLMs) by reducing per-token computation while enabling model scaling. It can be viewed as partitioning a large Feed-Forward Network (FFN) at the tensor level into fine-grained sub-FFNs, or experts, and activating only a sparse subset for each input. While this sparsity improves efficiency, MoE still faces substantial challenges due to their massive computational scale and unpredictable activation patterns.
+
+To enable efficient MoE deployment, we identify dual sparsity at the tensor and neuron levels in pre-trained MoE modules as a key factor for both accuracy and efficiency. Unlike prior work that increases tensor-level sparsity through finergrained expert design during pre-training, we introduce posttraining expert partitioning to induce such sparsity without retraining. This preserves the mathematical consistency of model transformations and enhances both efficiency and accuracy in subsequent fine-tuning and inference. Building upon this, we propose DualSparse-MoE, an inference system that integrates dynamic tensor-level computation dropping with static neuron-level reconstruction to deliver significant efficiency gains with minimal accuracy loss.
+
+Experimental results show that enforcing an approximate 25% drop rate with our approach reduces average accuracy by only 0.08%—0.28% across three prevailing MoE models, while nearly all degrees of computation dropping consistently yield proportional computational speedups. Furthermore, incorporating load-imbalance awareness into expert parallelism achieves a 1.41× MoE module speedup with just 0.5% average accuracy degradation.
+

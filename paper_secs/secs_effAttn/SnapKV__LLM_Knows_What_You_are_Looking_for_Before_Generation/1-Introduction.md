@@ -1,0 +1,23 @@
+# 1 Introduction
+
+Many leading LLMs have started to handle longer contexts, overcoming the difficulties in context maintenance and attention mechanism scalability, such as GPT-4 [\[1\]](#page-12-0) and Command-R [\[2\]](#page-12-1) with context length 128K, Claude-3 [\[3\]](#page-12-2) with 200K, and Gemini-Pro-1.5 with 1M [\[4\]](#page-12-3). Despite their impressive capabilities, LLMs still face significant challenges when dealing with long context prompts. Specifically, the KV cache in attention calculation becomes less efficient when processing long context. During inference time, as prompt length increases, the decoding latency per step grows linearly due to the attention calculation across past KVs. Moreover, the large KV cache requires significant memory capacity, increasing hardware demands and limiting model scalability.
+
+<sup>∗</sup> equal contribution
+
+<span id="page-1-0"></span>![](_page_1_Figure_0.jpeg)
+
+Figure 1: The graph shows the simplified workflow of SnapKV, where the orange area represents the cluster of features per head selected by SnapKV. These features are then used to form new Key-Value pairs concatenated with the features in the observation window. Together, the selected prefix and observation windows constitute the new KV cache utilized for the generation.
+
+There are many approaches to mitigate these problems, such as KV cache eviction during generation stage [\[5–](#page-12-4)[8\]](#page-12-5). However, most of these methods lack a detailed evaluation in long-context settings. Moreover, they mainly focus on compressing the KV cache appended during decoding steps, while overlooking the realistic problem of compressing KV cache for prompts, which is typically the bottleneck in memory efficiency. In practical applications like chatbots and agents, where prompts range from multi-turn conversations to extensive articles or codebases [\[1,](#page-12-0) [9,](#page-12-6) [10\]](#page-12-7), prompts are often much larger than generated responses such as summaries and code pieces, thus creating significant inference latency and memory utilization overhead. Additional challenge lies in compressing KV cache for such vast prompts without losing crucial information for accurate generation, especially in scenarios with various noisy contexts.
+
+In our paper, we find an important attention allocation phenomenon: only a portion of prompt tokens convey essential information for response generation, and these tokens remain unchanged during generation. To validate the robustness of this finding, we design a thorough set of experiments across diverse prompts in terms of length, format, and content. From our observations, we derive an innovative and intuitive method, SnapKV, which can smartly identify the attention allocation pattern and compress the KV cache for long sequence prompts without compromising the model's accuracy. With its comprehensive design, SnapKV demonstrates its effectiveness on various datasets and can be easily integrated into popular deep-learning frameworks with just a few code adjustments. Our contributions are as follows:
+
+- We design experiments to explore the attention allocation pattern during generation, focusing on two key questions:
+  - 1. Is there a consistent attention allocation pattern for input sequence tokens?
+  - 2. Is it feasible to identify this pattern prior to the generation stage?
+
+Our finding suggests that for LLMs, the attention allocation of most input sequence tokens stay consistent during generation. Thus, *LLMs knows what you are looking for before generation*.
+
+- Inspired by our observations above, we develop an efficient and fine-tuning-free algorithm, SnapKV, which efficiently identifies critical attention features and compresses KV cache correspondingly with minimal model modification (See Fig. [1\)](#page-1-0).
+- We evaluate SnapKV across diverse LLMs and long-sequence datasets. SnapKV shows comparable accuracy with full KV caching method while achieving improved decoding speed and memory efficiency. Meanwhile, we conduct the pressure test with Needle-in-a-Haystack to further demonstrate its memory efficiency and information retrieval ability.
+

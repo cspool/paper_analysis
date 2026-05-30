@@ -1,0 +1,4 @@
+# 9 Conclusion
+
+This paper proposes *FineMoE*, a fine-grained expert offloading system for MoE serving that achieves low inference latency without incurring significant model memory footprints. *FineMoE* tracks iteration-level expert probability distributions from the MoE model using expert map and analyzes input semantic embeddings from individual request prompts. Based on the input semantic and expert trajectory information, *FineMoE* searches the most accurate expert map to carefully guide the expert prefetching, caching, and offloading decisions tailored to every inference iteration. *FineMoE* is prototyped on top of HugginFace Transformers and deployed to a six-GPU testbed. Extensive experiments with open-source MoE models and real-world workloads show that *FineMoE* reduces inference latency by 47% and improves expert hit rate by 39% compared to state-of-the-art solutions.
+

@@ -1,0 +1,4 @@
+# VIII. CONCLUSION
+
+In this paper, we propose Pro-Prophet, a systematic loadbalancing approach for efficient training of MoE models. We observe a locality among input distributions and use it to design the planner and scheduler. Pro-Prophet planner identifies lightweight expert placements and designs a locality-based greedy algorithm to efficiently search for a communicationefficient expert placement using its proposed performance model, effectively reducing the communication overhead. Pro-Prophet scheduler predicts the input distribution based on the locality in the MoE model training and applies blockwise scheduling to overlap communications and computations, further decreasing the communication cost. Our experiments show that Pro-Prophet achieves 1.18-2.66x and 1.01-1.50x speedups compared to Deepspeed-MoE and FasterMoE. Besides, Pro-Prophet achieves a load balancing enhancement of up to 11.01 when compared to FasterMoE.
+

@@ -1,0 +1,4 @@
+# **Ethics Statement**
+
+This paper presents a novel approach for training sparse large language models. It is crucial to acknowledge that, similar to existing language models, those trained using our method may have comparable societal consequences. For instance, language models can generate factually inaccurate outputs and unethical content, posing risks of spreading misinformation and perpetuating harmful stereotypes or biases [\(Zhao et al.,](#page-12-15) [2024\)](#page-12-15). Furthermore, malicious users may extract the training data used to develop these models, leading to potential privacy and licensing issues [\(Carlini et al.,](#page-10-9) [2021\)](#page-10-9). We recognize these potential negative consequences and advise those employing our approach to remain vigilant about these risks when developing powerful language models.
+

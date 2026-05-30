@@ -1,0 +1,45 @@
+# 1 Introduction
+
+In an era of bigger and bigger models [\[Canziani et al.,](#page-16-0) [2016;](#page-16-0) [Strubell et al.,](#page-21-0) [2019;](#page-21-0) [Rae et al.,](#page-19-0) [2021;](#page-19-0) [Raffel et al.,](#page-20-0) [2020;](#page-20-0) [Bommasani et al.,](#page-15-0) [2022;](#page-15-0) [Hooker,](#page-17-0) [2024\]](#page-17-0), there are several key objectives driving state-of-art progress. Doing more with less by improving efficiency [\[Treviso et al.,](#page-21-1) [2023\]](#page-21-1) remains paramount, but in addition to efficiency the deployment of these models in the wild means that the ability to adapt to new data [\[Pozzobon et al.,](#page-19-1) [2023b;](#page-19-1) [Gururangan et al.,](#page-17-1) [2020a;](#page-17-1) [Jang et al.,](#page-17-2) [2022;](#page-17-2) [Jin](#page-18-0) [et al.,](#page-18-0) [2022\]](#page-18-0), and specialization of compute [\[Zadouri et al.,](#page-22-0) [2024;](#page-22-0) [Shazeer et al.,](#page-20-1) [2018;](#page-20-1) [Riquelme et al.,](#page-20-2) [2021;](#page-20-2) [Du et al.,](#page-16-1) [2022;](#page-16-1) [Fedus et al.,](#page-17-3) [2022\]](#page-17-3) have gained renewed focus. While all these properties are desirable, a formidable challenge is designing architectures that can fulfill all of these requirements.
+
+The Mixture-of-Expert (MoE) approach gained prominence because of its efficiency properties. In contrast to dense models which require significant compute to deploy, MoE approaches only activate
+
+Corresponding authors: Nikolas Gritsch, Sara Hooker, Ahmet Üstün
+
+<sup>†</sup>Work done at Cohere
+
+<span id="page-1-0"></span>![](_page_1_Figure_0.jpeg)
+
+Figure 1: **Depiction of Nexus for a single Transformer block: A)** In the initial training phase, each expert is trained separately. Furthermore, its training data is embedded by an embedding model and stored. The experts are combined by initializing each block's MoE layer with the seed model and each of the experts' FFN layers, and finetuning the model on a mix of all domains. During a forward pass, the seed model FFN is used as the shared expert and always activated. For the other experts, we perform top-1 routing based on the similarity of the transformed expert embeddings with the input data. **B)** Later, we can add a new expert by appending its training data embedding to the existing domain embeddings. The router function is independent of the number of experts, and therefore adapts fast to the new one.
+
+a subset of the parameters for every single token. Intuitively, not all parameters are necessary for each request, as some parameters will specialize on certain tasks, and those unrelated to the current request can be ignored. However, while MoEs greatly improved efficiency, the ability to induce meaningful specialization has been more limited with observations that experts don't appear to exhibit dedicated expertise [Jiang et al., 2024; Zoph et al., 2022; Zadouri et al., 2023]. Furthermore, MoEs tend to suffer from severe training instabilities [Zoph et al., 2022].
+
+Recent work has attempted to address both the training instabilities and the lack of specialization. These techniques often train completely separate experts and "upcycle" (combine) them into a single unified MoE model after dense training [Sukhbaatar et al., 2024]. This reduces the memory and communication cost, and improves efficiency during training as computations are more local and cross-device communication is reduced [Li et al., 2022; Gururangan et al., 2023]. Notably, the other major advantage of these approaches is the increase in specialization with separate experts that are trained on specific domains, making them clearly responsible for their human-interpretable subset of the data. On the other hand, MoEs with a standard router, which needs to be trained on a mix of all training data, are not designed to maintain domain specialization [Jiang et al., 2024].
+
+However, efficiently integrating new experts into upcycled MoE models - a setting that is of great interest for *adaptability* objectives is far less studied. For most practitioners, given the scale of modern LLMs [Brown et al., 2020; Touvron et al., 2023; Kaplan et al., 2020; Anil et al., 2023] training MoEs repeatedly is an infeasible computational cost. Furthermore, most model development fails to take into account distribution drift in use cases, with limited flexibility and applicability across
+
+|                                                           | MoE<br>(Vanilla) | BTM<br>(Merge) | BTX<br>(Linear router) | Nexus<br>(Ours) |
+|-----------------------------------------------------------|------------------|----------------|------------------------|-----------------|
+| Dense experts are trained independently (upcycling)       | ✗                | ✔              | ✔                      | ✔               |
+| Experts are specialized in different domains              | ✗                | ✔              | ✔                      | ✔               |
+| Experts are chosen by a learned router per input token    |                  | ✗              | ✔                      | ✔               |
+| Router is adaptive via learned projection for new domains | ✗                | ✗              | ✗                      | ✔               |
+
+Table 1: A comparison of existing approaches with Nexus: Unlike the vanilla MoE architecture [\[Shazeer et al.,](#page-20-3) [2017;](#page-20-3) [Fedus et al.,](#page-17-3) [2022\]](#page-17-3) the Branch-Train-Merge [BTM; [Li et al.,](#page-18-1) [2022\]](#page-18-1) and the Branch-Train-Mix [BTX; [Sukhbaatar et al.,](#page-21-2) [2024\]](#page-21-2) approaches train experts separately in different domains, reducing the training cost and improving specialization. However, they either merge the experts during inference or learn an MoE router layer from scratch, where prior domain information is not used. Our approach trains the MoE router based on domain information, maintaining the specialization and enabling efficient extension of the MoE with a new expert after training.
+
+different tasks and domains [\[Pozzobon et al.,](#page-19-2) [2023a;](#page-19-2) [Gururangan et al.,](#page-17-6) [2020b\]](#page-17-6). However, human language is shaped by a cumulative culture, constantly building upon itself and evolving over time [\[Silvey,](#page-21-4) [2016\]](#page-21-4). Also, specialized use cases such as multilingual, code and math often require tailored additional training.
+
+In this work, we attempt to reconcile all three desirable properties: efficiency, specialization, and adaptability. We ask "how can we adaptively combine separately trained specialized experts?" To address this, we introduce Nexus, a novel MoE architecture that parameterizes the router based on domain-specific data by learning to project the embedding of each data domain to an expert embedding. This learnable projection for the router allows for the easy extension of the MoE model with new experts that are trained independently on new datasets of interest. This also avoids the difficulties of MoE training, as our learned router scales with the number of experts without needing to be trained from scratch, which enables adding or removing experts as desired.
+
+Our experiments show that Nexus outperforms previous work when upscaling an MoE from separately trained specialized domain experts. Going beyond the single upscaling phase, Nexus can be efficiently extended with a new expert trained on a new domain, by finetuning it with much fewer tokens, compared to the finetuning after the initial upcycling.
+
+In summary, our contributions are as follows:
+
+- (i) We present Nexus, a novel MoE framework designed to enhance sparse upcycling of specialized trained dense experts, while reducing the training cost of MoEs by facilitating easy adaptation to unseen data distributions. In Nexus, the traditional linear router from vanilla MoE models is replaced with routing based on the similarity of layer inputs to an expert embedding vector, derived from the average embedding of the corresponding expert training dataset.
+- (ii) Our method outperforms the existing approach for upcycling specialized models into MoE, leading to 2.1% and 1.6% relative increase over the upcycled MoE (linear router) in 470M and 2.8B scales respectively. This enables performance increase in general tasks with 5.8% and 7.4% relative gains over the dense seed model at 470M and 2.8B respectively.
+- (iii) Our method enables efficient adaptation to new domains by extending upcycled MoE with the new experts trained on unseen dataset. In this setting, Nexus outperforms the baseline MoE
+
+(linear router) when finetuning on the limited amount of data, leading 18.8% relative gain on the new domain with 1B finetuning tokens upon MoE extension.
+
+(iv) Finally, we show that our method is robust across different load balancing and data mixtures, and consistently outperforms the MoE with a linear router for specialized upcycling, confirming the benefits of the adaptive routing based on domain projections used in Nexus.
+

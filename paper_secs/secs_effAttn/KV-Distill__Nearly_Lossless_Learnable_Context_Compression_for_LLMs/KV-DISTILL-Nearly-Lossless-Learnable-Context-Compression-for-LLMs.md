@@ -1,0 +1,58 @@
+# KV-DISTILL: Nearly Lossless Learnable Context Compression for LLMs
+
+Vivek Chari<sup>1</sup> , Guanghui Qin<sup>2</sup> , Benjamin Van Durme<sup>1</sup>,<sup>2</sup> 1 Johns Hopkins University <sup>2</sup>Microsoft {vchari2,vandurme}@jhu.edu
+
+## Abstract
+
+Sequence-to-sequence tasks often benefit from long contexts, but the quadratic complexity of self-attention in standard Transformers renders this non-trivial. During generation, temporary representations – stored in the so-called KV cache – account for a large portion of GPU memory usage and scale linearly with context length. We introduce KV-DISTILL , a Transformer compression framework that distills long context KV caches into significantly shorter representations in a *questionindependent* fashion. KV-DISTILL can be trained as a parameter-efficient adaptor for pretrained models, and enables the compression of arbitrary spans of a context while preserving pre-trained model capabilities. We treat a compressed-uncompressed cache as a studentteacher pairing and apply a KL-type divergence to match the generated outputs. KV-DISTILL outperforms other compression techniques in worst-case extractive tasks and approaches uncompressed performance in long context question answering and summarization, and it can be fine-tuned on domain-specific contexts to reduce lengths by up to 99% while preserving downstream performance. We demonstrate the generalizability of KV-DISTILL across various model sizes and architectures.[1](#page-0-0)
+
+### 1 Introduction
+
+Harnessing the full potential of attention-based large language models (LLMs) often requires them to condition on long contexts. However, use of expansive contexts is complicated by the quadratic complexity of self-attention. In particular, during generation, one must maintain a store of all past key and value representations of past tokens (called the KV cache) that grows linearly with sequence length. The memory burden imposed by the KV cache is significant, and often limits the length of the sequences that a model can handle.
+
+Much work has been devoted to architectural improvements to attention in order to reduce memory during generation. Strategies include augmenting sequences with memory tokens [\(Rae et al.,](#page-8-0) [2020;](#page-8-0) [Wu et al.,](#page-9-0) [2022\)](#page-9-0), sparsifying attention patterns [\(Beltagy et al.,](#page-8-1) [2020\)](#page-8-1), and using conditional computation to only process essential tokens [\(Ainslie](#page-8-2) [et al.,](#page-8-2) [2023\)](#page-8-2). However, such techniques have seen little widespread adoption due to performance drops on downstream tasks, or inefficient training/inference procedures. Even when given long contexts without compression, LLMs fail to fully utilize them [\(Qin et al.,](#page-8-3) [2022;](#page-8-3) [Liu et al.,](#page-8-4) [2024;](#page-8-4) [Lu](#page-8-5) [et al.,](#page-8-5) [2024\)](#page-8-5). Together this suggests long contexts may allow for significant compression while yielding large memory savings.
+
+In what follows, we suppose that a prompt to a LLM is composed of contextual text(s) followed by a question whose answer is dependent on the provided context. KV compression can be divided into two paradigms: *question-aware*, and *questionindependent*. In question-aware compression, we have access to the question that we need answered, and can compress the context with this in mind. In question-independent compression, we do not know what questions will be asked in the future. For instance, consider a scenario in which a fixed textual context will be used to respond to many questions; the goal of question-independent compression is to compress this context once for reuse across many question.
+
+Prior work in training-free context compression has primarily focused on which representations in the KV cache to select for eviction, with excellent results [\(Zhang et al.,](#page-9-1) [2023;](#page-9-1) [Li et al.,](#page-8-6) [2024\)](#page-8-6). In practice we observe that the performance of this selection procedure suffers greatly in the questionindependent paradigm. Furthermore, we anticipate that there is room for performance improvements in general-purpose context compression when the model is trained to handle for compression.
+
+<span id="page-0-0"></span><sup>1</sup>Our code and checkpoints will be made available soon at this [link](https://github.com/vnchari/kv-distill)
+
+![](_page_1_Figure_0.jpeg)
+
+Figure 1: We subselect tokens from the KV cache and distill into the smaller subset
+
+Prior work in trainable context compression have typically utilized a combination of cross-entropy and autoencoding objectives to pre-train general context compressors [\(Qin et al.,](#page-8-7) [2024;](#page-8-7) [Ge et al.,](#page-8-8) [2024;](#page-8-8) [Rae et al.,](#page-8-0) [2020\)](#page-8-0), which are suitable for question-independent compression. These loss functions have led to significant performance loss at high compression rates.
+
+In this work we design a general-purpose trainable context compression method for LLMs that outperforms prior methods in both the *questionindependent* and *question-aware* paradigms. Our method, KV-DISTILL , accomplishes this, while also maintaining pretrained model capabilities, being suitable for long contexts, and having minimal performance penalty on downstream tasks. KV-DISTILL can support coherent, useful generation at compression ratios as high as 1000x.
+
+To achieve this we train a scorer which retains the most important context tokens, while applying a parameter efficient adapter to conditionally modify important tokens' activations in-place. We further apply a token-level KL-type divergence to match the next-token prediction distributions, treating the compressed cache as a student, and the uncompressed cache as a teacher. KV-DISTILL only need be applied once to a fixed context, has zero overhead during auto-regressive decoding, and can compress arbitrary (sub)spans of a given context. We show improvements on several model families, considering extractive and abstractive tasks, with both short and long contexts, and at multiple model scales. KV-DISTILL is general purpose and has broad applicability to the LLM community.
+
+## 2 Background
+
+### <span id="page-1-0"></span>2.1 Key-Value Cache
+
+Transformer-based language models (LMs) [\(Vaswani et al.,](#page-9-2) [2017\)](#page-9-2) use self-attention to aggregate context information and make predictions. A decoder-only transformer LM *autoregressively* predicts new tokens, and each step requires the LM to obtain the key and value states of all past tokens. To avoid re-computing the KV state of past tokens, most LM implementations (e.g. [Wolf](#page-9-3) [et al.](#page-9-3) [\(2020\)](#page-9-3)) cache the key and values states, in a structure called the KV cache. When making new predictions, self-attention is performed on query states of the new token and the KV -cache, and the new token's key and value representations are appended to the KV cache. Because the KV cache grows proportional to the number of tokens generated, maintaining the full KV cache in memory is a primary bottleneck when conditioning on large contexts. The goal of this work is to alleviate this by *compressing KV cache in the dimension of sequence length*, especially in the question-independent regime
+
+### <span id="page-1-1"></span>2.2 Related Work
+
+Much prior work has tackled the problem of reducing the complexity of the self-attention mechanism itself. Previous work tries to sparsify the attention patterns[\(Beltagy et al.,](#page-8-1) [2020;](#page-8-1) [Zaheer et al.,](#page-9-4) [2020\)](#page-9-4), use recurrence attention[\(Yang et al.,](#page-9-5) [2019\)](#page-9-5), or kernelize the attention matrix[\(Choromanski et al.,](#page-8-9) [2021\)](#page-8-9), but they require a considerable amount of further training.
+
+Similar to our work, one line of work involves compressing the hidden states (KV cache) of past tokens into a shorter sequence of representations. For example, some methods learns "soft representations" of context (Qin and Eisner, 2021). Mu et al. (2023) compress particular prompts into much shorter "gist tokens", but do not attempt more general context compression. Furthermore, their method demonstrates poor generalizability, as performance does not scale with the number of gist tokens used. Zeng et al. (2023) propose to recognize and prioritize some important tokens (VIP tokens) during inference. Most relevant here, the following methods employ a similar idea of dynamically compressing the context prior to inference.
+
+#### 2.3 Trainable Compression
+
+Ge et al. (2024) design In-Context Autoencoder (ICAE) to compress long contexts for use in large language models (LLMs). ICAE consists of two main components: a learnable encoder and a fixed decoder. The encoder compresses the input context into a small number of memory slots. These memory slots are then used by the frozen LLMs (decoder) to reconstruct the context or respond to prompts. ICAE is pretrained using autoencoding and language modeling objectives on a large pretraining corpus and further fine-tuned using instruction data to maintain instruction-tuning. However, there is still a gap in downstream task performance when using an ICAE-compressed context, compared to an uncompressed context, and the method falters under high compression ratios.
+
+Qin et al. (2024) propose DODO to compress sub-select KV activations to a set of "nugget" to-kens, which grow proportionally with the length of context sequence. Their method is trained with auto-encoding or language modeling objectives. However, DODO models operate at a fixed compression ratio, require training both an encoder and decoder, and still show a large gap in downstream task performance when compared to an uncompressed context.
+
+#### 2.4 Training-Free Compression
+
+Zhang et al. (2023) propose  $H_2$  to reduce memory usage during generation.  $H_2$  identifies "heavy-hitter" tokens, which significantly influence attention scores during inference. Specifically,  $H_2$  calculates the accumulated attention for each key and retains the top-k key-value pairs with the highest scores. In the question-aware setting, the accumu-
+
+lated attention scores include scores from tokens in the question attending to the context. This effectively uses the question to scan for important details in the context. This allows H<sub>2</sub> to maintain nearly uncompressed performance at moderate compression ratios, by focusing on tokens most relevant to the current question. However, performance still degrades when compression ratios exceed 20×.
+
+In the question-independent paradigm, the H<sub>2</sub> selection mechanism is applied solely to the context (as opposed to the context and question in the question-aware setting). We then allow the question to attend to only to this compressed context. We empirically observe that in the question-independent paradigm, H<sub>2</sub> performance plummets drastically, highlighting the need for improved question-independent compression methods. Lastly, H<sub>2</sub> offers no way to further improve compressive performance given prior domain knowledge.
+
+Similarly SnapKV (Li et al., 2024) uses the attentions of a window of recent tokens to determine which context tokens are "heavy-hitters"; in the question-independent setting, this is undesirable, as the last tokens of a context may not necessarily provide additional information regarding attention patterns. In the question-independent paradigm we find that SnapKV performs similarly to H<sub>2</sub>, so do not compare against it in the remainder here.
+

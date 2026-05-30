@@ -1,0 +1,4 @@
+# B Training Efficiency
+
+Figure [6](#page-11-1) illustrates the training efficiency comparison between RWKV-X and RWKV-7 across varying sequence lengths, ranging from 1K to 32K tokens. As the sequence length increases, both models exhibit approximately linear growth in computation time, consistent with their underlying design. Notably, RWKV-X consistently demonstrates lower computation time compared to RWKV-7 at all sequence lengths, highlighting its improved training efficiency. The gap in efficiency becomes more pronounced at longer sequence lengths, suggesting that the architectural modifications in RWKV-X more effectively scale with context size. These results indicate that RWKV-X offers a more computationally efficient alternative to RWKV-7, particularly for tasks requiring long-context processing.
+

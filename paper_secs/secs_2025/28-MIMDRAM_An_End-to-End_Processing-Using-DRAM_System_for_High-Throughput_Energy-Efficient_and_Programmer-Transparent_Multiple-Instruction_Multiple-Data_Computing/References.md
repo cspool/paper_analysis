@@ -1,0 +1,249 @@
+# References
+
+- [1] O. Mutlu, "Memory Scaling: A Systems Architecture Perspective," in *IMW*, 2013. [2] O. Mutlu and L. Subramanian, "Research Problems and Opportunities in Memory Systems," *SUPERFRI*, 2014.
+- [3] J. Dean and L. A. Barroso, "The Tail at Scale," *CACM*, 2013.
+- [4] S. Kanev, J. P. Darago *et al.*, "Profiling a Warehouse-Scale Computer," in *ISCA*, 2015.
+- [5] O. Mutlu, S. Ghose *et al.*, "Enabling Practical Processing in and near Memory for Data-Intensive Computing," in *DAC*, 2019.
+- [6] O. Mutlu, S. Ghose *et al.*, "Processing Data Where It Makes Sense: Enabling In-Memory Computation," *MicPro*, 2019.
+- [7] O. Mutlu, "Intelligent Architectures for Intelligent Machines," in *VLSI-DAT*, 2020.
+- [8] S. Ghose, A. Boroumand *et al.*, "Processing-in-Memory: A Workload-Driven Perspective," *IBM JRD*, 2019.
+- [9] O. Mutlu, S. Ghose *et al.*, "A Modern Primer on Processing in Memory," in *Emerging Computing: From Devices to Systems — Looking Beyond Moore and Von Neumann*. Springer, 2021.
+- [10] A. Boroumand, S. Ghose *et al.*, "Google Workloads for Consumer Devices: Mitigating Data Movement Bottlenecks," in *ASPLOS*, 2018.
+- [11] S. Wang and E. Ipek, "Reducing Data Movement Energy via Online Data Clustering and Encoding," in *MICRO*, 2016.
+- [12] S. A. McKee, "Reflections on the Memory Wall," in *CF*, 2004.
+- [13] M. V. Wilkes, "The Memory Gap and the Future of High Performance Memories," *CAN*, 2001.
+- [14] Y. Kim, V. Seshadri *et al.*, "A Case for Exploiting Subarray-Level Parallelism (SALP) in DRAM," in *ISCA*, 2012.
+- [15] W. A. Wulf and S. A. McKee, "Hitting the Memory Wall: Implications of the Obvious," *CAN*, 1995.
+- [16] S. Ghose, T. Li *et al.*, "Demystifying Complex Workload–DRAM Interactions: An Experimental Study," in *SIGMETRICS*, 2020.
+- [17] J. Ahn, S. Hong *et al.*, "A Scalable Processing-in-Memory Accelerator for Parallel Graph Processing," in *ISCA*, 2015.
+- [18] J. Ahn, S. Yoo *et al.*, "PIM-Enabled Instructions: A Low-Overhead, Locality-Aware Processing-in-Memory Architecture," in *ISCA*, 2015.
+- [19] R. Sites, "It's the Memory, Stupid!" *MPR*, 1996.
+- [20] G. F. Oliveira, J. Gómez-Luna *et al.*, "DAMOV: A New Methodology and Benchmark Suite for Evaluating Data Movement Bottlenecks," *IEEE Access*, 2021.
+- [21] J. Sevilla, L. Heim *et al.*, "Compute Trends Across Three Eras of Machine Learning," in *IJCNN*, 2022.
+- [22] A. Gholami, Z. Y. *et al.*, "AI and Memory Wall," RiseLab Medium Post, 2021.
+- [23] F. Devaux, "The True Processing in Memory Accelerator," in *Hot Chips*, 2019.
+- [24] N. M. Ghiasi, J. Park *et al.*, "GenStore: A High-Performance and Energy-Efficient In-Storage Computing System for Genome Sequence Analysis," in *ASPLOS*, 2022.
+- [25] J. Gómez-Luna, I. El Hajj *et al.*, "Benchmarking Memory-Centric Computing Systems: Analysis of Real Processing-in-Memory Hardware," in *CUT*, 2021.
+- [26] J. Gómez-Luna, I. E. Hajj *et al.*, "Benchmarking a New Paradigm: An Experimental Analysis of a Real Processing-in-Memory Architecture," arXiv:2105.03814 [cs.AR], 2021.
+- [27] J. Gómez-Luna, I. El Hajj *et al.*, "Benchmarking a New Paradigm: Experimental Analysis and Characterization of a Real Processing-in-Memory System," *IEEE Access*, 2022.
+- [28] C. Giannoula, N. Vijaykumar *et al.*, "SynCron: Efficient Synchronization Support for Near-Data-Processing Architectures," in *HPCA*, 2021.
+- [29] G. Singh, D. Diamantopoulos *et al.*, "NERO: A Near High-Bandwidth Memory Stencil Accelerator for Weather Prediction Modeling," in *FPL*, 2020.
+- [30] S. Lee, K. Kim *et al.*, "A 1ynm 1.25V 8Gb, 16Gb/s/pin GDDR6-Based Acceleratorin-Memory Supporting 1TFLOPS MAC Operation and Various Activation Functions for Deep-Learning Applications," in *ISSCC*, 2022.
+- [31] L. Ke, X. Zhang *et al.*, "Near-Memory Processing in Action: Accelerating Personalized Recommendation with AxDIMM," *IEEE Micro*, 2021.
+- [32] C. Giannoula, I. Fernandez *et al.*, "SparseP: Towards Efficient Sparse Matrix Vector Multiplication on Real Processing-in-Memory Architectures," in *SIGMETRICS*, 2022.
+- [33] A. Denzler, R. Bera *et al.*, "Casper: Accelerating Stencil Computation using Near-Cache Processing," *IEEE Access*, 2023.
+- [34] D. Patterson, T. Anderson *et al.*, "A Case for Intelligent RAM," *IEEE Micro*, 1997.
+- [35] D. G. Elliott, M. Stumm *et al.*, "Computational RAM: Implementing Processors in Memory," *D&T*, 1999.
+- [36] M. Gokhale, B. Holmes, and K. Iobst, "Processing in Memory: The Terasys Massively Parallel PIM Array," *Computer*, 1995.
+- [37] M. Hall, P. Kogge *et al.*, "Mapping Irregular Applications to DIVA, a PIM-Based Data-Intensive Architecture," in *SC*, 1999.
+- [38] A. Boroumand, S. Ghose *et al.*, "LazyPIM: An Efficient Cache Coherence Mechanism for Processing-in-Memory," *CAL*, 2017.
+- [39] D. Zhang, N. Jayasena *et al.*, "TOP-PIM: Throughput-Oriented Programmable Processing in Memory," in *HPDC*, 2014.
+- [40] J. S. Kim, D. S. Cali *et al.*, "GRIM-Filter: Fast Seed Location Filtering in DNA Read Mapping Using Processing-in-Memory Technologies," *BMC Genomics*, 2018.
+- [41] P. C. Santos, G. F. Oliveira *et al.*, "Operand Size Reconfiguration for Big Data Processing in Memory," in *DATE*, 2017.
+- [42] G. F. Oliveira, P. C. Santos *et al.*, "NIM: An HMC-Based Machine for Neuron Computation," in *ARC*, 2017.
+- [43] D. Kim, J. Kung *et al.*, "Neurocube: A Programmable Digital Neuromorphic Architecture with High-Density 3D Memory," in *ISCA*, 2016. [44] A. Boroumand, S. Ghose *et al.*, "CoNDA: Efficient Cache Coherence Support for
+- Near-Data Accelerators," in *ISCA*, 2019. [45] K. Hsieh, E. Ebrahimi *et al.*, "Transparent Offloading and Mapping (TOM) Enabling Programmer-Transparent Near-Data Processing in GPU Systems," in *ISCA*, 2016.
+
+- [46] D. S. Cali, G. S. Kalsi *et al.*, "GenASM: A High-Performance, Low-Power Approximate String Matching Acceleration Framework for Genome Sequence Analysis," in *MICRO*, 2020.
+- [47] K. Hsieh, S. Khan *et al.*, "Accelerating Pointer Chasing in 3D-Stacked Memory: Challenges, Mechanisms, Evaluation," in *ICCD*, 2016.
+- [48] A. Boroumand, S. Ghose *et al.*, "Mitigating Edge Machine Learning Inference Bottlenecks: An Empirical Study on Accelerating Google Edge Models," arXiv:2103.00768 [cs.AR], 2021.
+- [49] A. Boroumand, S. Ghose *et al.*, "Google Neural Network Models for Edge Devices: Analyzing and Mitigating Machine Learning Inference Bottlenecks," in *PACT*, 2021.
+- [50] A. Boroumand, S. Ghose *et al.*, "Polynesia: Enabling High-Performance and Energy-Efficient Hybrid Transactional/Analytical Databases with Hardware/Software Co-Design," in *ICDE*, 2022.
+- [51] A. Boroumand, S. Ghose *et al.*, "Polynesia: Enabling Effective Hybrid Transactional/Analytical Databases with Specialized Hardware/Software Co-Design," arXiv:2103.00798 [cs.AR], 2021.
+- [52] M. Besta, R. Kanakagiri *et al.*, "SISA: Set-Centric Instruction Set Architecture for Graph Mining on Processing-in-Memory Systems," in *MICRO*, 2021.
+- [53] I. Fernandez, R. Quislant *et al.*, "NATSA: A Near-Data Processing Accelerator for Time Series Analysis," in *ICCD*, 2020.
+- [54] G. Singh, G. *et al.*, "NAPEL: Near-Memory Computing Application Performance Prediction via Ensemble Learning," in *DAC*, 2019.
+- [55] S. Lee, S.-h. Kang *et al.*, "Hardware Architecture and Software Stack for PIM Based on Commercial DRAM Technology: Industrial Product," in *ISCA*, 2021.
+- [56] J. S. Kim, D. Senol *et al.*, "GRIM-Filter: Fast Seed Filtering in Read Mapping using Emerging Memory Technologies," arXiv:1708.04329 [q-bio.GN], 2017.
+- [57] A. Boroumand, S. Ghose *et al.*, "LazyPIM: Efficient Support for Cache Coherence in Processing-in-Memory Architectures," arXiv:1706.03162 [cs.AR], 2017.
+- [58] P. C. Santos, G. F. Oliveira *et al.*, "Processing in 3D Memories to Speed Up Operations on Complex Data Structures," in *DATE*, 2018.
+- [59] P. Chi, S. Li *et al.*, "PRIME: A Novel Processing-in-Memory Architecture for Neural
+- Network Computation in ReRAM-Based Main Memory," in *ISCA*, 2016. [60] A. Shafiee, A. Nag *et al.*, "ISAAC: A Convolutional Neural Network Accelerator
+- with In-Situ Analog Arithmetic in Crossbars," in *ISCA*, 2016. [61] V. Seshadri, D. Lee *et al.*, "Ambit: In-Memory Accelerator for Bulk Bitwise Opera-
+- tions Using Commodity DRAM Technology," in *MICRO*, 2017. [62] V. Seshadri and O. Mutlu, "In-DRAM Bulk Bitwise Execution Engine," arXiv:1905.09822 [cs.AR], 2019.
+- [63] S. Li, D. Niu *et al.*, "DRISA: A DRAM-Based Reconfigurable In-Situ Accelerator," in *MICRO*, 2017.
+- [64] V. Seshadri, Y. Kim *et al.*, "RowClone: Fast and Energy-Efficient In-DRAM Bulk Data Copy and Initialization," in *MICRO*, 2013.
+- [65] V. Seshadri and O. Mutlu, "The Processing Using Memory Paradigm: In-DRAM
+- Bulk Copy, Initialization, Bitwise AND and OR," arXiv:1610.09603 [cs.AR], 2016. [66] Q. Deng, L. Jiang *et al.*, "DrAcc: A DRAM Based Accelerator for Accurate CNN Inference," in *DAC*, 2018.
+- [67] X. Xin, Y. Zhang, and J. Yang, "ELP2IM: Efficient and Low Power Bitwise Operation Processing in DRAM," in *HPCA*, 2020.
+- [68] L. Song, X. Qian *et al.*, "PipeLayer: A Pipelined ReRAM-Based Accelerator for Deep Learning," in *HPCA*, 2017.
+- [69] F. Gao, G. Tziantzioulis, and D. Wentzlaff, "ComputeDRAM: In-Memory Compute Using Off-the-Shelf DRAMs," in *MICRO*, 2019.
+- [70] C. Eckert, X. Wang *et al.*, "Neural Cache: Bit-Serial In-Cache Acceleration of Deep Neural Networks," in *ISCA*, 2018.
+- [71] S. Aga, S. Jeloka *et al.*, "Compute Caches," in *HPCA*, 2017.
+- [72] D. Fujiki, S. Mahlke, and R. Das, "Duality Cache for Data Parallel Acceleration," in *ISCA*, 2019.
+- [73] V. Seshadri, D. Lee *et al.*, "Buddy-RAM: Improving the Performance and Efficiency of Bulk Bitwise Operations Using DRAM," arXiv:1611.09988 [cs.AR], 2016.
+- [74] V. Seshadri and O. Mutlu, "Simple Operations in Memory to Reduce Data Movement," in *Advances in Computers, Volume 106*, 2017.
+- [75] V. Seshadri, Y. Kim *et al.*, "RowClone: Accelerating Data Movement and Initialization Using DRAM," arXiv:1805.03502 [cs.AR], 2018.
+- [76] V. Seshadri, K. Hsieh *et al.*, "Fast Bulk Bitwise AND and OR in DRAM," *CAL*, 2015. [77] S. Li, C. Xu *et al.*, "Pinatubo: A Processing-in-Memory Architecture for Bulk
+- Bitwise Operations in Emerging Non-Volatile Memories," in *DAC*, 2016. [78] J. D. Ferreira, G. Falcao *et al.*, "pLUTo: In-DRAM Lookup Tables to Enable Mas-
+- sively Parallel General-Purpose Computation," arXiv:2104.07699 [cs.AR], 2021. [79] J. D. Ferreira, G. Falcao *et al.*, "pLUTo: Enabling Massively Parallel Computation
+- in DRAM via Lookup Tables," in *MICRO*, 2022. [80] J. Park, R. Azizi *et al.*, "Flash-Cosmos: In-Flash Bulk Bitwise Operations Using
+- Inherent Computation Capability of NAND Flash Memory," in *MICRO*, 2022. [81] M. S. Truong, L. Shen *et al.*, "Adapting the RACER Architecture to Integrate Improved In-ReRAM Logic Primitives," *JETCAS*, 2022.
+- [82] M. S. Truong, E. Chen *et al.*, "RACER: Bit-Pipelined Processing Using Resistive Memory," in *MICRO*, 2021.
+- [83] A. Olgun, M. Patel *et al.*, "QUAC-TRNG: High-Throughput True Random Number Generation Using Quadruple Row Activation in Commodity DRAMs," in *ISCA*, 2021.
+- [84] J. S. Kim, M. Patel *et al.*, "The DRAM Latency PUF: Quickly Evaluating Physical Unclonable Functions by Exploiting the Latency-Reliability Tradeoff in Modern Commodity DRAM Devices," in *HPCA*, 2018.
+- [85] F. N. Bostancı, A. Olgun *et al.*, "DR-STRaNGe: End-to-End System Design for DRAM-Based True Random Number Generators," in *HPCA*, 2022.
+- [86] A. Olgun, J. G. Luna *et al.*, "PiDRAM: A Holistic End-to-End FPGA-Based Framework for Processing-in-DRAM," *TACO*, 2022.
+
+- [87] M. F. Ali, A. Jaiswal, and K. Roy, "In-Memory Low-Cost Bit-Serial Addition Using Commodity DRAM Technology," in *TCAS-I*, 2019.
+- [88] S. Li, A. O. Glova *et al.*, "SCOPE: A Stochastic Computing Engine for DRAM-Based In-Situ Accelerator," in *MICRO*, 2018.
+- [89] L. Orosa, Y. Wang *et al.*, "CODIC: A Low-Cost Substrate for Enabling Custom In-DRAM Functionalities and Optimizations," in *ISCA*, 2021.
+- [90] M. Sharad, D. Fan, and K. Roy, "Ultra Low Power Associative Computing with Spin Neurons and Resistive Crossbar Memory," in *DAC*, 2013.
+- [91] C. Gao, X. Xin *et al.*, "ParaBit: Processing Parallel Bitwise Operations in NAND Flash Memory Based SSDs," in *MICRO*, 2021.
+- [92] W. H. Choi, P.-F. Chiu *et al.*, "An In-Flash Binary Neural Network Accelerator with SLC NAND Flash Array," in *ISCAS*, 2020.
+- [93] R. Han, P. Huang *et al.*, "A Novel Convolution Computing Paradigm Based on NOR Flash Array with High Computing Speed and Energy Efficiency," *TCAS-I*, 2019.
+- [94] F. Merrikh-Bayat, X. Guo *et al.*, "High-Performance Mixed-Signal Neurocomputing with Nanoscale Floating-Gate Memory Cell Arrays," *TNNLS*, 2017.
+- [95] P. Wang, F. Xu *et al.*, "Three-Dimensional NAND Flash for Vector–Matrix Multiplication," *TVLSI*, 2018.
+- [96] A. Nag, C. Ramachandra *et al.*, "GenCache: Leveraging In-Cache Operators for Efficient Sequence Alignment," in *MICRO*, 2019.
+- [97] M. Kang, M.-S. Keel *et al.*, "An Energy-Efficient VLSI Architecture for Pattern Recognition via Deep Embedding of Computation in SRAM," in *ICASSP*, 2014.
+- [98] Z. Wang, C. Liu *et al.*, "Infinity Stream: Portable and Programmer-Friendly In- /Near-Memory Fusion," in *ASPLOS*, 2023.
+- [99] M. Kang, E. P. Kim *et al.*, "Energy-Efficient and High Throughput Sparse Distributed Memory Architecture," in *ISCAS*, 2015.
+- [100] K. K. Chang, P. J. Nair *et al.*, "Low-Cost Inter-Linked Subarrays (LISA): Enabling
+- Fast Inter-Subarray Data Movement in DRAM," in *HPCA*, 2016. [101] N. Hajinazar, G. F. Oliveira *et al.*, "SIMDRAM: A Framework for Bit-Serial SIMD
+- Processing Using DRAM," in *ASPLOS*, 2021. [102] P. R. Sutradhar, S. Bavikadi *et al.*, "Look-Up-Table Based Processing-in-Memory Architecture with Programmable Precision-Scaling for Deep Learning Applications,"
+- *TPDS*, 2021. [103] P. R. Sutradhar, M. Connolly *et al.*, "pPIM: A Programmable Processor-in-Memory
+- Architecture with Precision-Scaling for Deep Learning," *CAL*, 2020. [104] M. Lenjani, P. Gonzalez *et al.*, "Fulcrum: A Simplified Control and Access Mecha-
+- nism Toward Flexible and Practical In-Situ Accelerators," in *HPCA*, 2020. [105] X. Peng, Y. Wang, and M.-C. Yang, "CHOPPER: A Compiler Infrastructure for Programmable Bit-Serial SIMD Processing Using Memory In DRAM," in *HPCA*, 2023.
+- [106] G. F. Oliveira, J. Gómez-Luna *et al.*, "Accelerating Neural Network Inference with Processing-in-DRAM: From the Edge to the Cloud," *IEEE Micro*, 2022.
+- [107] G. Singh, M. Alser *et al.*, "FPGA-Based Near-Memory Acceleration of Modern Data-Intensive Applications," *IEEE Micro*, 2021.
+- [108] G. F. Oliveira, A. Kohli *et al.*, "DaPPA: A Data-Parallel Framework for Processingin-Memory Architectures," arXiv:2310.10168 [cs.AR], 2023.
+- [109] G. F. Oliveira, J. Gómez-Luna *et al.*, "Methodologies, Workloads, and Tools for Processing-in-Memory: Enabling the Adoption of Data-Centric Architectures," in *ISVLSI*, 2022.
+- [110] G. F. Oliveira, A. Boroumand *et al.*, "Heterogeneous Data-Centric Architectures for Modern Data-Intensive Applications: Case Studies in Machine Learning and Databases," in *ISVLSI*, 2022.
+- [111] J. Chen, J. Gómez-Luna *et al.*, "SimplePIM: A Software Framework for Productive and Efficient Processing-In-Memory," in *PACT*, 2023.
+- [112] H. Gupta, M. Kabra *et al.*, "Evaluating Homomorphic Operations on a Real-World Processing-In-Memory System," in *IISWC*, 2023.
+- [113] J. Gómez-Luna, Y. Guo *et al.*, "Evaluating Machine LearningWorkloads on Memory-Centric Computing Systems," in *ISPASS*, 2023.
+- [114] M. Item, J. Gómez-Luna *et al.*, "TransPimLib: Efficient Transcendental Functions for Processing-in-Memory Systems," in *ISPASS*, 2023.
+- [115] S. Diab, A. Nassereldine *et al.*, "A Framework for High-Throughput Sequence Alignment Using Real Processing-In-Memory Systems," *Bioinformatics*, 2023.
+- [116] H. Mao, M. Alser *et al.*, "GenPIP: In-Memory Acceleration of Genome Analysis via Tight Integration of Basecalling and Read Mapping," in *MICRO*, 2022. [117] G. Singh, D. Diamantopoulos *et al.*, "Accelerating Weather Prediction Using Near-
+- Memory Reconfigurable Fabric," *TRETS*, 2022.
+- [118] HMC Consortium, "HMC Specification Rev. 2.0," www.hybridmemorycube.org/.
+- [119] D. U. Lee, K. W. Kim *et al.*, "A 1.2V 8Gb 8-Channel 128GB/s High-Bandwidth Memory (HBM) Stacked DRAM with Effective Microbump I/O Test Methods Using 29nm Process and TSV," in *ISSCC*, 2014.
+- [120] D. Lee, S. Ghose *et al.*, "Simultaneous Multi-Layer Access: Improving 3D-Stacked Memory Bandwidth at Low Cost," *TACO*, 2016.
+- [121] L. Song, Y. Zhuo *et al.*, "GraphR: Accelerating Graph Processing Using ReRAM," in *HPCA*, 2018.
+- [122] M. Imani, S. Gupta *et al.*, "FloatPIM: In-Memory Acceleration of Deep Neural Network Training with High Precision," in *ISCA*, 2019.
+- [123] Z. He, L. Yang *et al.*, "Sparse BD-Net: A Multiplication-Less DNN with Sparse Binarized Depth-Wise Separable Convolution," *JETC*, 2020.
+- [124] J. S. Kim, M. Patel *et al.*, "D-RaNGe: Using Commodity DRAM Devices to Generate True Random Numbers With Low Latency and High Throughput," in *HPCA*, 2019.
+- [125] S. Angizi and D. Fan, "GraphiDe: A Graph Processing Accelerator Leveraging In-DRAM-Computing," in *GLSVLSI*, 2019.
+- [126] A. Subramaniyan and R. Das, "Parallel Automata Processor," in *ISCA*, 2017.
+- [127] Y. Zha and J. Li, "Hyper-AP: Enhancing Associative Processing Through A Full-Stack Optimization," in *ISCA*, 2020.
+- [128] D. Fujiki, S. Mahlke, and R. Das, "In-Memory Data Parallel Processor," in *ASPLOS*, 2018.
+
+- [129] S. H. S. Rezaei, M. Modarressi *et al.*, "NoM: Network-on-Memory for Inter-Bank Data Transfer in Highly-Banked Memories," *CAL*, 2020.
+- [130] H.-T. Lue, P.-K. Hsu *et al.*, "Optimal Design Methods to Transform 3D NAND Flash into a High-Density, High-Bandwidth and Low-Power Nonvolatile Computing in Memory (nvCIM) Accelerator for Deep-Learning Neural Networks (DNN)," in *IEDM*, 2019.
+- [131] S. Kim, Y. Jin *et al.*, "Behemoth: A Flash-Centric Training Accelerator for Extreme-Scale {DNNs}," in *FAST*, 2021.
+- [132] S. Wang, "MemCore: Computing-in-Flash Design for Deep Neural Network Acceleration," in *EDTM*, 2022.
+- [133] R. Han, Y. Xiang *et al.*, "Flash Memory Array for Efficient Implementation of Deep Neural Networks," *Adv. Intell. Syst.*, 2021.
+- [134] M. Kang, H. Kim *et al.*, "S-FLASH: A NAND Flash-Based Deep Neural Network Accelerator Exploiting Bit-Level Sparsity," *TC*, 2021.
+- [135] S.-T. Lee and J.-H. Lee, "Neuromorphic Computing Using NAND Flash Memory Architecture with Pulse Width Modulation Scheme," *Front. Neurosci.*, 2020.
+- [136] H. Lee, M. Kim *et al.*, "3D-FPIM: An Extreme Energy-Efficient DNN Acceleration System Using 3D NAND Flash-Based In-Situ PIM Unit," in *MICRO*, 2022.
+- [137] X. Si, W.-S. Khwa *et al.*, "A Dual-Split 6T SRAM-Based Computing-in-Memory Unit-Macro with Fully Parallel Product-Sum Operation for Binarized DNN Edge Processors," *TCAS-I*, 2019.
+- [138] W. A. Simon, Y. M. Qureshi *et al.*, "BLADE: An In-Cache Computing Architecture for Edge Devices," *TC*, 2020.
+- [139] X. Wang, J. Yu *et al.*, "Bit Prudent In-Cache Acceleration of Deep Convolutional Neural Networks," in *HPCA*, 2019.
+- [140] K. Al-Hawaj, O. Afuye *et al.*, "Towards a Reconfigurable Bit-Serial/Bit-Parallel Vector Accelerator Using In-Situ Processing-in-SRAM," in *ISCAS*, 2020.
+- [141] H. Kim, T. Yoo *et al.*, "Colonnade: A Reconfigurable SRAM-Based Digital Bit-Serial Compute-in-Memory Macro for Processing Neural Networks," *JSSC*, 2021. [142] Z. Jiang, S. Yin *et al.*, "C3SRAM: An In-Memory-Computing SRAM Macro Based
+- on Robust Capacitive Coupling Computing Mechanism," *JSSC*, 2020. [143] S. Jeloka, N. B. Akesh *et al.*, "A 28 nm Configurable Memory (TCAM/BCAM/SRAM) Using Push-Rule 6T Bit Cell Enabling Logic-in-Memory,"
+- *JSSC*, 2016. [144] M. Imani, S. Pampana *et al.*, "DUAL: Acceleration of Clustering Algorithms Using Digital-Based Processing in-Memory," in *MICRO*, 2020.
+- [145] Q. Deng, Y. Zhang *et al.*, "LAcc: Exploiting Lookup Table-Based Fast and Accurate Vector Multiplication in DRAM-Based CNN Accelerator," in *DAC*, 2019.
+- [146] T. Shahroodi, G. Singh *et al.*, "Swordfish: A Framework for Evaluating Deep Neural Network-Based Basecalling Using Computation-In-Memory with Non-Ideal Memristors," in *MICRO*, 2023.
+- [147] Micron Technology, "SDRAM, 4Gb: x4, x8, x16 DDR4 SDRAM Features," 2014.
+- [148] E. Cooper-Balis and B. Jacob, "Fine-Grained Activation for Power Reduction in DRAM," *IEEE Micro*, 2010.
+- [149] A. N. Udipi, N. Muralimanohar *et al.*, "Rethinking DRAM Design and Organization for Energy-Constrained Multi-Cores," in *ISCA*, 2010.
+- [150] T. Zhang, K. Chen *et al.*, "Half-DRAM: A High-Bandwidth and Low-Power DRAM Architecture from the Rethinking of Fine-Grained Activation," in *ISCA*, 2014.
+- [151] H. Ha, A. Pedram *et al.*, "Improving Energy Efficiency of DRAM by Exploiting Half Page Row Access," in *MICRO*, 2016.
+- [152] Y. Lee, H. Kim *et al.*, "Partial Row Activation for Low-Power DRAM System," in *HPCA*, 2017.
+- [153] A. Olgun, F. Bostanci *et al.*, "Sectored DRAM: An Energy-Efficient High-Throughput and Practical Fine-Grained DRAM Architecture," arXiv:2207.13795 [cs.AR], 2022.
+- [154] J. M. O'Connor, "Energy Efficient High Bandwidth DRAM for Throughput Processors," Ph.D. dissertation, The University of Texas at Austin, 2021.
+- [155] M. O'Connor, N. Chatterjee *et al.*, "Fine-Grained DRAM: Energy-Efficient DRAM for Extreme Bandwidth Systems," in *MICRO*, 2017.
+- [156] JEDEC, *JESD79-4: DDR4 SDRAM*, 2012.
+- [157] N. Firasta, M. Buxton *et al.*, "Intel AVX: New Frontiers in Performance Improvements and Energy Efficiency," Intel Corp. White Paper, 2008.
+- [158] B. J. Smith, "A Pipelined, Shared Resource MIMD Computer," in *ICPP*, 1978.
+- [159] M. J. Flynn, "Very High-Speed Computing Systems," *Proc. IEEE*, 1966. [160] J. E. Thornton, "Parallel Operation in the Control Data 6600," in *AFIPS*, 1964.
+- [161] R. M. Yoo, A. Romano, and C. Kozyrakis, "Phoenix Rebirth: Scalable MapReduce on a Large-Scale Shared-Memory System," in *IISWC*, 2009.
+- [162] L.-N. Pouchet, "PolyBench: The Polyhedral Benchmark Suite," https://www.cs. colostate.edu/~pouchet/software/polybench/.
+- [163] S. Che, M. Boyer *et al.*, "Rodinia: A Benchmark Suite for Heterogeneous Computing," in *IISWC*, 2009.
+- [164] Standard Performance Evaluation Corp., "SPEC CPU2017," https://t.ly/\_ibe2.
+- [165] D. Lee, Y. Kim *et al.*, "Adaptive-Latency DRAM: Optimizing DRAM Timing for the Common-Case," in *HPCA*, 2015. [166] R. H. Dennard, "Field-Effect Transistor Memory," U.S. Patent 3,387,286, 1968.
+- [167] B. Keeth, R. J. Baker *et al.*, *DRAM Circuit Design: Fundamental and High-Speed Topics*. John Wiley & Sons, 2007. [168] A. G. Yaglikçi, A. Olgun ˘ *et al.*, "HiRA: Hidden Row Activation for Reducing
+- Refresh Latency of Off-the-Shelf DRAM Chips," in *MICRO*, 2022. [169] H. Luo, A. Olgun *et al.*, "RowPress: Amplifying Read Disturbance in Modern DRAM Chips," in *ISCA*, 2023.
+- [170] B. Keeth and R. J. Baker, *DRAM Circuit Design: A Tutorial*, 2001.
+- [171] J. Kim, M. Patel *et al.*, "Solar-DRAM: Reducing DRAM Access Latency by Exploiting the Variation in Local Bitlines," in *ICCD*, 2018.
+- [172] D. Lee, S. Khan *et al.*, "Design-Induced Latency Variation in Modern DRAM Chips: Characterization, Analysis, and Latency Reduction Mechanisms," in *SIGMETRICS*, 2017.
+
+- [173] C. Kim, D. Burger, and S. W. Keckler, "An Adaptive, Non-Uniform Cache Structure for Wire-Delay Dominated On-Chip Caches," in *ASPLOS*, 2002.
+- [174] A. Pohl, B. Cosenza, and B. Juurlink, "Cost Modelling for Vectorization on ARM," in *CLUSTER*, 2018.
+- [175] K. Trifunovic, D. Nuzman *et al.*, "Polyhedral-Model Guided Loop-Nest Auto-Vectorization," in *PACT*, 2009.
+- [176] R. M. Sokulski, S. R. dos Santos, and M. A. Alves, "On the SPEC-CPU 2017 Opportunities for Dynamic Vectorization Possibilities on PIM Architectures," in *WSCAD*, 2022.
+- [177] C. Lattner, "LLVM and Clang: Next Generation Compiler Technology," in *BSDCan*, 2008.
+- [178] S. Sarda and M. Pandey, *LLVM Essentials*. Packt Publishing Ltd, 2015.
+- [179] B. C. Lopes and R. Auler, *Getting Started with LLVM Core Libraries*. Packt Publishing Ltd, 2014.
+- [180] A. Sampson, "LLVM for Grad Students," https://www.cs.cornell.edu/~asampson/ blog/llvm.html.
+- [181] IITH-Compilers, "LLVM-Loop-Profiler," https://github.com/IITH-Compilers/ LLVM-Loop-Profiler.
+- [182] Y. Wang, L. Orosa *et al.*, "FIGARO: Improving System Performance via Fine-Grained In-DRAM Data Relocation and Caching," in *MICRO*, 2020.
+- [183] S. Lee, K.-D. Kang *et al.*, "GreenDIMM: OS-Assisted DRAM Power Management for DRAM with a Sub-array Granularity Power-Down State," in *MICRO*, 2021.
+- [184] JEDEC, *JESD79-4C: DDR4 SDRAM*, 2017.
+- [185] JEDEC, *JESD79-5: DDR5 SDRAM Standard*, 2020.
+- [186] M. R. Garey, R. L. Graham, and J. D. Ullman, "Worst-Case Analysis of Memory Allocation Algorithms," in *STOC*, 1972.
+- [187] LLVM Project, "Auto-Vectorization in LLVM," https://llvm.org/docs/Vectorizers. html.
+- [188] H. Ahmed, P. C. Santos *et al.*, "A Compiler for Automatic Selection of Suitable Processing-in-Memory Instructions," in *DATE*, 2019.
+- [189] A. Devic, S. B. Rai *et al.*, "To PIM or Not for Emerging General Purpose Processing in DDR Memory Systems," in *ISCA*, 2022.
+- [190] T. H. Cormen, C. E. Leiserson *et al.*, *Introduction to Algorithms*. MIT Press, 2022.
+- [191] R. E. Tarjan, "Edge-Disjoint Spanning Trees and Depth-First Search," *Acta Informatica*, 1976.
+- [192] L. Dagum and R. Menon, "OpenMP: An Industry Standard API for Shared-Memory Programming," *IEEE CSE*, 1998.
+- [193] E. Lindholm, J. Nickolls *et al.*, "NVIDIA Tesla: A Unified Graphics and Computing Architecture," *IEEE Micro*, 2008.
+- [194] NVIDIA, "NVIDIA;s Next Generation CUDA Compute Architecture: Fermi," White Paper, 2009.
+- [195] B. Lopes, R. Auler *et al.*, "ISA Aging: A X86 Case Study," in *WIVOSCA*, 2013.
+- [196] B. C. Lopes, R. Auler *et al.*, "SHRINK: Reducing the ISA Complexity via Instruction Recycling," in *ISCA*, 2015.
+- [197] M. Doblas, O. Lostes-Cazorla *et al.*, "GMX: Instruction Set Extensions for Fast, Scalable, and Efficient Genome Sequence Alignment," in *MICRO*, 2023.
+- [198] R. Razdan and M. D. Smith, "A High-Performance Microarchitecture with Hardware-Programmable Functional Units," in *MICRO*, 1994.
+- [199] Intel Corp., *Intel® 64 and IA-32 Architectures Software Developer's Manual, Vol. 3*, 2016.
+- [200] ARM Ltd., *Cortex-A8 Technical Reference Manual*, 2010.
+- [201] The Kernel Development Community, "Linux and the Devicetree The Linux Kernel Documentation," https://t.ly/uC69W.
+- [202] J. S. Kim, M. Patel *et al.*, "Revisiting RowHammer: An Experimental Analysis of Modern DRAM Devices and Mitigation Techniques," in *ISCA*, 2020.
+- [203] L. Orosa, A. G. Yaglikci *et al.*, "A Deeper Look into RowHammer's Sensitivities: Experimental Analysis of Real DRAM Chips and Implications on Future Attacks and Defenses"," in *MICRO*, 2021.
+- [204] A. G. Yaglıkçı, H. Luo ˘ *et al.*, "Understanding RowHammer Under Reduced Wordline Voltage: An Experimental Study Using Real DRAM Devices," in *DSN*, 2022.
+- [205] K. Loughlin, J. Rosenblum *et al.*, "Siloz: Leveraging DRAM Isolation Domains to Prevent Inter-VM Rowhammer," in *SOSP*, 2023.
+- [206] D. S. Johnson, "Near-Optimal Bin Packing Algorithms," Ph.D. dissertation, Massachusetts Institute of Technology, 1973.
+- [207] K. C. Knowlton, "A Programmer's Description of L6," *CACM*, 1966.
+- [208] N. Binkert, B. Beckmann *et al.*, "The gem5 Simulator," *Comput. Archit. News*, 2011. [209] Intel Corp., "6th Generation Intel Core Processor Family Datasheet," http://www.
+- intel.com/content/www/us/en/processors/core/. [210] NVIDIA, "NVIDIA A100 Tensor Core GPU Architecture," https://t.ly/rMUgA, 2020.
+- [211] M. Hähnel, B. Döbel *et al.*, "Measuring Energy Consumption for Short Code Paths Using RAPL," *SIGMETRICS*, 2012.
+- [212] NVIDIA, "NVIDIA Management Library (NVML)," https://developer.nvidia.com/ nvidia-management-library-nvml.
+- [213] P. Shivakumar and N. P. Jouppi, "CACTI 3.0: An Integrated Cache Timing, Power, and Area Model," Compaq Computer Corporation, Tech. Rep. 2001/2, 2001.
+- [214] N. Muralimanohar, R. Balasubramonian, and N. Jouppi, "Optimizing NUCA Organizations and Wiring Alternatives for Large Caches with CACTI 6.0," in *MICRO*, 2007.
+- [215] O. Mutlu and T. Moscibroda, "Stall-Time Fair Memory Access Scheduling for Chip Multiprocessors," in *MICRO*, 2007.
+
+- [216] W. K. Zuravleff and T. Robinson, "Controller for a Synchronous DRAM That Maximizes Throughput by Allowing Memory Requests and Commands to Be Issued Out of Order," U.S. Patent 5 630 096, 1997.
+- [217] Standard Performance Evaluation Corp., "SPEC CPU2006 Benchmarks," http:// www.spec.org/cpu2006/.
+- [218] J. A. Stratton, C. Rodrigues *et al.*, "Parboil: A Revised Benchmark Suite for Scientific and Commercial Throughput Computing," Univ. of Illinois at Urbana– Champaign, IMPACT Research Group, Tech. Rep. IMPACT-12-01, 2012.
+- [219] S. C. Woo, M. Ohara *et al.*, "The SPLASH-2 Programs: Characterization and Methodological Considerations," in *ISCA*, 1995.
+- [220] SAFARI Research Group, "DAMOV Benchmark Suite and Simulation Framework," https://github.com/CMU-SAFARI/DAMOV.
+- [221] K. Vadivel, L. Chelini *et al.*, "TDO-CIM: Transparent Detection and Offloading for Computation In-Memory," in *DATE*, 2020.
+- [222] V. Iskandar, M. A. Abd El Ghany, and D. Goehringer, "NDP-RANK: Prediction and Ranking of NDP Systems Performance using Machine Learning," *Microprocessors and Microsystems*, 2023.
+- [223] A. Pattnaik, X. Tang *et al.*, "Scheduling Techniques for GPU Architectures with Processing-in-Memory Capabilities," in *PACT*, 2016.
+- [224] A. Yazdanbakhsh, D. Mahajan *et al.*, "AxBench: A Multiplatform Benchmark Suite for Approximate Computing," *IEEE Design & Test*, 2016.
+- [225] N.-M. Ho, E. Manogaran *et al.*, "Efficient Floating Point Precision Tuning for Approximate Computing," in *ASP-DAC*, 2017.
+- [226] A. Snavely and D. M. Tullsen, "Symbiotic Jobscheduling for a Simultaneous Multithreaded Processor," in *ASPLOS*, 2000.
+- [227] S. Eyerman and L. Eeckhout, "System-Level Performance Metrics for Multiprogram Workloads," *IEEE Micro*, 2008.
+- [228] P. Michaud, "Demystifying Multicore Throughput Metrics," *CAL*, 2012.
+- [229] K. Luo, J. Gummaraju, and M. Franklin, "Balancing Thoughput and Fairness in SMT Processors," in *ISPASS*, 2001.
+- [230] Y. Kim, M. Papamichael *et al.*, "Thread Cluster Memory Scheduling: Exploiting Differences in Memory Access Behavior," in *MICRO*, 2010.
+- [231] Y. Kim, D. Han *et al.*, "ATLAS: A Scalable and High-Performance Scheduling Algorithm for Multiple Memory Controllers," in *HPCA*, 2010.
+- [232] L. Subramanian, D. Lee *et al.*, "The Blacklisting Memory Scheduler: Achieving High Performance and Fairness at Low Cost," in *ICCD*, 2014.
+- [233] L. Subramanian, D. Lee *et al.*, "BLISS: Balancing Performance, Fairness and Complexity in Memory Access Scheduling," *TPDS*, 2016.
+- [234] L. Subramanian, V. Seshadri *et al.*, "MISE: Providing Performance Predictability and Improving Fairness in Shared Main Memory Systems," in *HPCA*, 2013.
+- [235] L. Subramanian, V. Seshadri *et al.*, "The Application Slowdown Model: Quantifying and Controlling the Impact of Inter-Application Interference at Shared Caches and Main Memory," in *MICRO*, 2015.
+- [236] E. Ebrahimi, C. J. Lee *et al.*, "Fairness via Source Throttling: A Configurable and High-Performance Fairness Substrate for Multi-Core Memory Systems," in *ASPLOS*, 2010.
+- [237] E. Ebrahimi, C. J. Lee *et al.*, "Prefetch-Aware Shared Resource Management for Multi-Core Systems," in *ISCA*, 2011.
+- [238] R. Das, O. Mutlu *et al.*, "Application-Aware Prioritization Mechanisms for On-Chip Networks," in *MICRO*, 2009.
+- [239] R. Das, R. Ausavarungnirun *et al.*, "Application-to-Core Mapping Policies to Reduce Memory System Interference in Multi-Core Systems," in *HPCA*, 2013.
+- [240] O. Mutlu and T. Moscibroda, "Parallelism-Aware Batch Scheduling: Enhancing Both Performance and Fairness of Shared DRAM Systems," in *ISCA*, 2008. [241] Y. Kim, W. Yang, and O. Mutlu, "Ramulator: A Fast and Extensible DRAM
+- Simulator," *CAL*, 2016. [242] C. J. Lee, V. Narasiman *et al.*, "Improving Memory Bank-Level Parallelism in the
+- Presence of Prefetching," in *MICRO*, 2009. [243] M. Xie, D. Tong *et al.*, "Improving System Throughput and Fairness Simultaneously
+- in Shared Memory CMP Systems via Dynamic Bank Partitioning," in *HPCA*, 2014. [244] G. F. Oliveira, A. Olgun *et al.*, "MIMDRAM: An End-to-End Processing-Using-DRAM System for High-Throughput, Energy-Efficient and Programmer-Transparent
+- Multiple-Instruction Multiple-Data Processing," arXiv, 2024. [245] O. Leitersdorf, D. Leitersdorf *et al.*, "AritPIM: High-Throughput In-Memory Arithmetic," *IEEE Trans. Emerg. Topics Comput.*, 2023.
+- [246] Synopsys, Inc., "Design Compiler." [Online]. Available: https://www.synopsys.com/ implementation-and-signoff/rtl-synthesis-test/design-compiler-graphical.html
+- [247] A. Stillmaker and B. Baas, "Scaling Equations for the Accurate Prediction of CMOS Device Performance from 180 Nm to 7 Nm," *Integration*, 2017.
+- [248] G. Dai, Z. Zhu *et al.*, "DIMMining: Pruning-Efficient and Parallel Graph Mining on Near-Memory-Computing," in *ISCA*, 2022. [249] Y. Zhang, N. Zhang *et al.*, "SARA: Scaling a Reconfigurable Dataflow Accelerator,"
+- in *ISCA*, 2021. [250] R. Zhou, A. Roohi *et al.*, "FlexiDRAM: A Flexible In-DRAM Framework to Enable
+- Parallel General-Purpose Computation," in *ISLPED*, 2022. [251] J. Cheng, M. Grossman, and T. McKercher, *Professional CUDA C Programming*.
+- John Wiley & Sons, 2014. [252] OpenACC Organization, "The OpenACC® Application Programming Interface, Version 3.1," 2020.

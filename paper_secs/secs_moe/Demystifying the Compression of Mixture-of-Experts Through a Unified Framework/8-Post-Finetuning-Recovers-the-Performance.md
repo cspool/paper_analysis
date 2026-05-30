@@ -1,0 +1,14 @@
+# **8 Post-Finetuning Recovers the Performance**
+
+While the discussed compression techniques maintains most of the performance of the original models, we further conduct post-finetuning to recover the degraded performance. Specifically, for comparison, we full-finetune DeepSeek-MoE-16B and corresponding compressed models on the Alpaca-GPT4 dataset [\(Peng](#page-13-16) [et al., 2023\)](#page-13-16) for 3 epochs using a learning rate of 8e-6 with 0.03 warmup ratio and cosine scheduling, where the global batch size is set to 32. As shown in Figure [4,](#page-10-0) the post-finetuning process significantly reduces the performance gap between the compressed models and the original models, e.g. narrowing it from 5.5% to 0.6% for the model following Block Drop.
+
+<span id="page-10-0"></span>Table 4: **Performance of the DeepSeek-MoE-16B models finetuned after Expert Trimming**. We mark the relative average performance loss of the compressed models compared to baselines in brackets.
+
+|                  | DeepSeek-MoE-16B |       |        |              |              |              |              |              |              |              |                                                                                 |                            |  |
+|------------------|------------------|-------|--------|--------------|--------------|--------------|--------------|--------------|--------------|--------------|---------------------------------------------------------------------------------|----------------------------|--|
+|                  |                  |       |        |              |              |              |              |              |              |              | Method SpeedUp FLOPs Memory ARC-C BoolQ HellaSwag MMLU OBQA PIQA RTE WinoGrande | Average                    |  |
+| Baseline<br>+SFT | –                | 11.7T | 30.8GB | 48.1<br>44.6 | 72.4<br>75.3 | 77.3<br>79.0 | 37.9<br>40.3 | 44.0<br>44.6 | 80.4<br>80.3 | 63.9<br>70.4 | 70.3<br>71.7                                                                    | 61.8<br>63.3               |  |
+| + E16/64<br>+SFT | 1.06×            | 11.7T | 23.9GB | 45.0<br>44.4 | 67.1<br>74.0 | 75.6<br>78.6 | 31.8<br>38.5 | 42.2<br>45.8 | 80.2<br>79.6 | 59.9<br>65.7 | 70.0<br>70.1                                                                    | 59.0 (-2.8)<br>62.1 (-1.2) |  |
+| + L4/28<br>+SFT  | 1.14×            | 10.6T | 26.6GB | 39.5<br>42.1 | 70.2<br>78.9 | 67.6<br>75.2 | 35.2<br>40.8 | 40.4<br>43.4 | 75.8<br>77.6 | 48.4<br>71.1 | 65.7<br>69.5                                                                    | 55.3 (-6.5)<br>62.3 (-1.0) |  |
+| + B4/28<br>+SFT  | 1.16×            | 10.1T | 26.4GB | 40.3<br>43.2 | 71.3<br>78.2 | 69.0<br>75.0 | 36.2<br>40.4 | 37.8<br>43.8 | 75.8<br>76.8 | 51.6<br>74.0 | 68.0<br>70.2                                                                    | 56.3 (-5.5)<br>62.7 (-0.6) |  |
+

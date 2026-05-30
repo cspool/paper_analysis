@@ -1,0 +1,45 @@
+# <span id="page-19-0"></span>A Extended related work discussion
+
+The notion that causal models are limited because they need to "predict the future" when computing representations is well-known [\[13,](#page-12-12) [44,](#page-14-12) [45\]](#page-14-13). Yet, current large language models (e.g., Llama [\[32\]](#page-14-0), GPT [\[30\]](#page-13-12), and efficient Mamba [\[1\]](#page-12-0), Griffin [\[66\]](#page-16-3), GLA [\[9\]](#page-12-8), RWKV [\[2\]](#page-12-1), Striped Hyena [\[67\]](#page-16-4)) are causal. Here we provide an extended discussion of the related work.
+
+## A.1 Prompting strategies
+
+Most related to our work, Springer et al. [\[43\]](#page-14-11) recently proposes to produce embeddings from autoregressive Transformer models by repeating the context twice and taking embeddings from the activations of second occurrence. We focus on 1) sub-quadratic models / memory perspective, 2) recall-intensive tasks rather than producing embeddings. Our findings build on these ideas and the key distinctions are: (1) our focus on sub-quadratic architectures, which can provide asymptotically higher efficiency, (2) our focus on recall and in-context learning based tasks as opposed to embedding generation, and (3) our theoretical analysis on why JRT-Prompt impacts the memory requirement of recurrent LMs.
+
+We are certainly not the first to try modifying the data order for recurrent LMs. The seminal Seq2seq paper from Sutskever et al. [\[37\]](#page-14-5) proposes to reverse the order of the tokens in the source sequence when using encoder-decoder LSTM-based recurrent language models.
+
+## A.2 Encoder-decoder language models
+
+A long line of work has explored the use of bidirectional networks [\[13,](#page-12-12) [44,](#page-14-12) [45,](#page-14-13) [46,](#page-14-14) [47,](#page-14-15) [48\]](#page-15-0). In early work, Schuster and Paliwal [\[44\]](#page-14-12) demonstrate synthetic math tasks that require recurrent models to use lagging and future values to produce outputs, favoring bidirectional networks. Kosko [\[45\]](#page-14-13) explores associative recall style tasks in two layer bidirectional networks. We build on the ideas from this line of work and focus on our discussion on large language modeling architectures.
+
+Three popular language modeling architecture paradigms are encoder-only, decoder-only, or encoderdecoder. A popular use case for bidirectional, encoder-only, models is producing word or context embeddings [\[47,](#page-14-15) [68\]](#page-16-5). It is challenging to use these models for fast and open-ended generation [\[14,](#page-12-13) [49\]](#page-15-1). Encoder-decoder models have emerged as a compelling alternative, combining non-causal bidirectional encoding for parts of the input text and causal decoding to generate responses.
+
+However, causal decoder-only language models currently prevail (e.g., Llama-3 [\[69\]](#page-16-6), GPT [\[30,](#page-13-12) [70\]](#page-16-7), PaLM [\[31\]](#page-13-13)). Current research on efficient architectures also largely focuses on pure encoder-only (e.g. M2-BERT [\[62\]](#page-15-14), Mamba-Caduceus [\[71\]](#page-16-8), Orchid [\[63\]](#page-16-0)) or decoder-only causal LMs (e.g., Mamba [\[1\]](#page-12-0), RWKV [\[2\]](#page-12-1), Griffin [\[66\]](#page-16-3), Striped Hyena [\[67\]](#page-16-4)), as opposed to encoder-decoder. In contrast, our work on JRT-RNN explores encoder-decoder recurrent LMs in light of recent progress in sub-quadratic efficient architectures.
+
+Recurrent encoder-decoder language models Recurrent encoder-decoder language models were popular in the context of machine translation systems. Sutskever et al. [\[37\]](#page-14-5) uses two LSTM RNNs, one to process the inputs and produce a fixed dimensional vector, and the other to decode the outputs from this vector. Wu et al. [\[72\]](#page-16-9) use a similar two-stack (encoder-stack and decoder-stack) architecture, using right-to-left and left-to-right RNNs for some encoder layers).
+
+Instead of compressing the source sentence into a fixed recurrent state, Bahdanau et al. [\[3\]](#page-12-2) use attention to refer back to encoder states. A key motivating observation for the switch to attention comes from Cho et al. [\[5\]](#page-12-4), which finds that the quality of RNN-based encoder-decoder language models degrades quickly as the sequence length increases. Following the rise of attention and the Transformer architecture [\[4\]](#page-12-3) in popularity, subsequent work predominantly explores Transformer-based encoder-decoder LMs.
+
+Transformer-based encoder-decoder language models Raffel et al. [\[13\]](#page-12-12) propose the T5 architecture, which uses two separate Transformer stacks, one for non-causally encoding input text and one for causally decoding response. Cross-attention allows the decoder attention queries to attend to the final attention key and value states form the encoder stack. More recently, [\[73\]](#page-16-10) trains a 7Bn parameter two-stack encoder-decoder
+
+model called CEPE, adapted form Llama-2 [32] with cross-attention between stacks, following T5.<sup>6</sup> We evaluate this model on the recall-intensive tasks and surprisingly find that ignoring its encoder altogether and placing documents and questions in the decoder far outperforms placing the document in the encoder and questions in the decoder on the recall-intensive benchmarks.
+
+|              | SWDE Acc. ↑ | FDA<br>Acc. ↑ |
+|--------------|-------------|---------------|
+| CEPE EncDec. | 51.0        | 5.9           |
+| CEPE DecOnly | 80.4        | 72.5          |
+
+Table 6: Evaluating the CEPE 7Bn parameter model [73] on the document information extraction tasks, using N=50 random examples. For the encoder-decoder baseline, the document is inputted to the encoder and the question (i.e., name of the attribute to extract from the document) is sent to the decoder. In the decoder-only model, the standard prompt containing the document plus attribute are inputted to the decoder and the model's encoders are ignored (empty inputs). We observe the encoder-decoder model tends to produce irrelevant responses.
+
+Prior work suggests that the T5 architecture struggles in open-ended generation [48, 49]. Some differences between JRT-RNN and the T5-style approach are that the T5 corruption pretraining objective deviates from how the models are used for downstream generation tasks, and training requires the use of multiple special sentinel tokens and unique positional encodings per stack of layers.
+
+Instead of using separate encoder and decoder stacks, some prior work explores the use of Prefix-LMs. These models split the input into encoder and decoder regions *within* each layer, where the former is processed non-causally and the latter is processed causally [13]. Next token prediction loss is computed on the causal tokens and no loss is computed on the prefix tokens.
+
+To better equip encoder-decoders with generation abilities, UniLM [14], UL2 [49], AlexaTM [74] and others use different combinations of span corruption and prefix language modeling pretraining objectives. During training, given an input sequence, one of the suite of objectives is sampled with some pre-defined probability. Each of these architectures are Transformer-based, facing quadratic scaling in sequence length during training and linear scaling during inference. In GLM [75], spans of text are masked and autoregressively in-filled during training, to endow the model with generation capabilities. We are inspired by these works in combining MLM and next token prediction objectives, and future work could explore alternate variations to the training objective used in JRT-RNN.
+
+Discussing the differences in JRT-RNN Recent work has made exciting progress in designing efficient LMs that extend the Pareto-frontier of the quality-efficiency tradeoff space relative to Transformers and prior recurrent architectures. However, these are decoder-only LMs, while JRT-RNN uses the encoder-decoder framework. Prior popular encoder-decoder LMs are Transformer-based with quadratic scaling and do not convincingly improve in quality over decoder-only models [15], so the motivation to use them is unclear. JRT-RNN improves efficiency (Table 5) and quality (Table 2).
+
+Within the encoder-decoder framework, JRT-RNN uses a prefix LM structure. Unfortunately, prior work and our ablations suggest this training strategy does not perform well ([15] and Table 11), and this architecture has not seen adoption. Instead JRT-RNN deviates by (1) adding a masked language modeling loss to the prefix alongside next token prediction for the suffix. JRT-RNN (2) reads the prefix twice. Prefix LM models modify the attention mask of standard attention to make the prefix non-causal and use shared projection weights for the non-causal encoder and causal decoder regions. Instead, JRT-RNN uses two sets of key and value representations for encoding and decoding respectively.
+
+<span id="page-20-0"></span><sup>&</sup>lt;sup>6</sup>https://huggingface.co/hyen/CEPED-LLaMA-2-Chat-7B
+

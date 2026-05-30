@@ -1,0 +1,4 @@
+# 6 Conclusion
+
+We introduced Branch-Train-Stitch, or BTS, a simple, flexible method for merging expert models to create a stronger, unified, generalist model. BTS combines expert models by inserting novel "stitch" layers between expert language model layers, which are learned in a lightweight training step. In experiments, we find that this approach outperforms competitive baselines, yielding the strongest generalist model performance with only a small number of training parameters. In some settings, BTS is shown to even outperform the expert models in their specialized domains. We further demonstrate that a BTS model can demonstrate new skills at the intersection of expert domains and motivate this architecture with extensive ablations and analysis. We hope this work furthers research into efficient and flexible methods for creating generalist large language models from modular, independently-trained experts.
+

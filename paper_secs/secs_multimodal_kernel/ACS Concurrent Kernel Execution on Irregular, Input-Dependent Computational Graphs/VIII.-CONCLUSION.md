@@ -1,0 +1,110 @@
+# VIII. CONCLUSION
+
+We introduce ACS, the first framework that enables automatic concurrent kernel execution with low overhead runtime scheduling and dependency checks. The key idea behind ACS is to dynamically schedule a small window of kernels by identifying which kernel(s) within the window is ready for execution. ACS leverages kernel annotations to automatically identify kernel dependencies at runtime. We implement ACS as both a software framework and a hardware-software mechanism that is able to further reduce synchronization overheads from CPU-GPU communication. We demonstrate that ACS can improve the performance of important emerging classes of workloads, such as RL simulations and dynamic DNNs, whose kernel dependencies are irregular and vary with input.
+
+## REFERENCES
+
+- [1] C. D. Freeman, E. Frey, A. Raichuk, S. Girgin, I. Mordatch, and O. Bachem, "Brax - a differentiable physics engine for large scale rigid body simulation," *ArXiv*, vol. abs/2106.13281, 2021.
+- [2] V. Makoviychuk, L. Wawrzyniak, Y. Guo, M. Lu, K. Storey, M. Macklin, D. Hoeller, N. Rudin, A. Allshire, A. Handa, and G. State, "Isaac gym: High performance gpu-based physics simulation for robot learning," *ArXiv*, vol. abs/2108.10470, 2021.
+- [3] B. Shacklett, E. Wijmans, A. Petrenko, M. Savva, D. Batra, V. Koltun, and K. Fatahalian, "Large batch simulation for deep reinforcement learning," *ArXiv*, vol. abs/2103.07013, 2021.
+- [4] S. Dalton and I. Frosio, "Accelerating reinforcement learning through gpu atari emulation," *arXiv: Learning*, 2020.
+- [5] A. Petrenko, Z. Huang, T. Kumar, G. Sukhatme, and V. Koltun, "Sample factory: Egocentric 3d control from pixels at 100000 fps with asynchronous reinforcement learning," in *ICML*, 2020.
+- [6] K. Yuan, Q. Li, S. Guo, D. Chen, A. Zhou, F. Yu, and Z. Liu, "Differentiable dynamic wirings for neural networks," *2021 IEEE/CVF International Conference on Computer Vision (ICCV)*, pp. 317–326, 2021.
+- [7] L. Liu and J. Deng, "Dynamic deep neural networks: Optimizing accuracy-efficiency trade-offs by selective execution," in *AAAI*, 2018.
+- [8] Z. Yuan, B. Wu, Z. Liang, S. Zhao, W. Bi, and G. Sun, "S2dnas: Transforming static cnn model for dynamic inference via neural architecture search," *ArXiv*, vol. abs/1911.07033, 2020.
+- [9] Y. Han, G. Huang, S. Song, L. Yang, H. Wang, and Y. Wang, "Dynamic neural networks: A survey," *IEEE Transactions on Pattern Analysis and Machine Intelligence*, vol. 44, pp. 7436–7456, 2022.
+- [10] A. Cheng, C. H. Lin, D.-C. Juan, W. Wei, and M. Sun, "Instanas: Instance-aware neural architecture search," in *AAAI*, 2020.
+- [11] J. Wei, G. Gibson, V. Vasudevan, and E. Xing, "Dynamic scheduling for dynamic control flow in deep learning systems," *URL http://www. cs. cmu. edu/jinlianw/papers/dynamic scheduling nips18 sysml. pdf*, 2018.
+- [12] S. Cai, Y. Shu, and W. Wang, "Dynamic routing networks," *2021 IEEE Winter Conference on Applications of Computer Vision (WACV)*, pp. 3587–3596, 2021.
+- [13] H. Wang, S. Li, S.-C. Su, Z. Qin, and X. Li, "Rdi-net: Relational dynamic inference networks," *2021 IEEE/CVF International Conference on Computer Vision (ICCV)*, pp. 4601–4610, 2021.
+- [14] P. Singh and V. P. Namboodiri, "Skipconv: skip convolution for computationally efficient deep cnns," in *2020 International Joint Conference on Neural Networks (IJCNN)*, pp. 1–8, IEEE, 2020.
+- [15] S. Teerapittayanon, B. McDanel, and H. T. Kung, "Branchynet: Fast inference via early exiting from deep neural networks," *2016 23rd International Conference on Pattern Recognition (ICPR)*, pp. 2464– 2469, 2016.
+- [16] Z. Wu, T. Nagarajan, A. Kumar, S. Rennie, L. S. Davis, K. Grauman, and R. Feris, "Blockdrop: Dynamic inference paths in residual networks," in *CVPR*, 2018.
+- [17] A. Veit and S. J. Belongie, "Convolutional networks with adaptive inference graphs," *International Journal of Computer Vision*, vol. 128, pp. 730–741, 2019.
+- [18] Y. Li, Y. Chen, X. Dai, D. Chen, M. Liu, L. Yuan, Z. Liu, L. Zhang, and N. Vasconcelos, "Micronet: Improving image recognition with extremely low flops," *2021 IEEE/CVF International Conference on Computer Vision (ICCV)*, pp. 458–467, 2021.
+- [19] W. Xia, H. Yin, X. Dai, and N. K. Jha, "Fully dynamic inference with deep neural networks," *IEEE Transactions on Emerging Topics in Computing*, vol. 10, pp. 962–972, 2022.
+- [20] A. Kendall, J. Hawke, D. Janz, P. Mazur, D. Reda, J. M. Allen, V.-D. Lam, A. Bewley, and A. Shah, "Learning to drive in a day," *2019 International Conference on Robotics and Automation (ICRA)*, pp. 8248–8254, 2019.
+- [21] T. Chen, J. Xu, and P. Agrawal, "A system for general in-hand object re-orientation," in *Conference on Robot Learning*, pp. 297–307, PMLR, 2022.
+- [22] J. Panerati, H. Zheng, S. Zhou, J. Xu, A. Prorok, A. P. S. U. of Toronto Institute for A Studies, V. I. for Artificial Intelligence, and U. of Cambridge, "Learning to fly—a gym environment with pybullet physics for reinforcement learning of multi-agent quadcopter control," *2021 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS)*, pp. 7512–7519, 2021.
+
+- [23] L. Bartolomei, L. Teixeira, and M. Chli, "Semantic-aware active perception for uavs using deep reinforcement learning," in *2021 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS)*, pp. 3101–3108, 2021.
+- [24] J. Chen, S. E. Li, and M. Tomizuka, "Interpretable end-to-end urban autonomous driving with latent deep reinforcement learning," *arXiv preprint arXiv:2001.08726*, 2020.
+- [25] S. Krishnan, B. Boroujerdian, W. Fu, A. Faust, and V. J. Reddi, "Air learning: a deep reinforcement learning gym for autonomous aerial robot visual navigation," *Mach. Learn.*, vol. 110, pp. 2501–2540, 2021.
+- [26] Z. Xie, X. Da, B. Babich, A. Garg, and M. van de Panne, "Glide: Generalizable quadrupedal locomotion in diverse environments with a centroidal model," *arXiv preprint arXiv:2104.09771*, 2021.
+- [27] Z. Si and W. Yuan, "Taxim: An example-based simulation model for gelsight tactile sensors," *IEEE Robotics and Automation Letters*, vol. 7, no. 2, pp. 2361–2368, 2022.
+- [28] N. Rudin, D. Hoeller, P. Reist, and M. Hutter, "Learning to walk in minutes using massively parallel deep reinforcement learning," *ArXiv*, vol. abs/2109.11978, 2021.
+- [29] S. Rajbhandari, C. Li, Z. Yao, M. Zhang, R. Y. Aminabadi, A. A. Awan, J. Rasley, and Y. He, "Deepspeed-moe: Advancing mixture-ofexperts inference and training to power next-generation ai scale," in *ICML*, 2022.
+- [30] "Nvidia inc, hyperq." https://developer.download.nvidia.com/compute/ DevZone/C/html x64/6 Advanced/simpleHyperQ/doc/HyperQ.pdf. Accessed: 2023-07-21.
+- [31] "Nvidia inc, cuda programming guide." https://docs.nvidia.com/cuda/ cuda-c-programming-guide/index.html#streams. Accessed: 2022-11- 21.
+- [32] "Nvidia inc, getting started with cuda graphs." https://developer.nvidia. com/blog/cuda-graphs/. Accessed: 2020-09-30.
+- [33] "Radeon open compute, atmi (asynchronous task and memory interface)." https://github.com/RadeonOpenCompute/atmi. Accessed: 2022- 09-30.
+- [34] Y. Etsion, F. Cabarcas, A. Rico, A. Ramirez, R. M. Badia, E. Ayguade, J. Labarta, and M. Valero, "Task superscalar: An out-of-order task pipeline," in *2010 43rd Annual IEEE/ACM International Symposium on Microarchitecture*, pp. 89–100, IEEE, 2010.
+- [35] S. Kumar, C. J. Hughes, and A. D. Nguyen, "Carbon: architectural support for fine-grained parallelism on chip multiprocessors," in *International Symposium on Computer Architecture*, 2007.
+- [36] E. Castillo, L. Alvarez, M. Moreto, M. Casas, E. Vallejo, J. L. Bosque, ´ R. Beivide, and M. Valero, "Architectural support for task dependence management with flexible software scheduling," *2018 IEEE International Symposium on High Performance Computer Architecture (HPCA)*, pp. 283–295, 2018.
+- [37] D. Sanchez, R. M. Yoo, and C. E. Kozyrakis, "Flexible architectural ´ support for fine-grain scheduling," in *ASPLOS XV*, 2010.
+- [38] S. Puthoor, X. Tang, J. Gross, and B. M. Beckmann, "Oversubscribed command queues in gpus," *Proceedings of the 11th Workshop on General Purpose GPUs*, 2018.
+- [39] J. Gleeson, D. Snider, Y. Yang, M. Gabel, E. de Lara, and G. Pekhimenko, "Optimizing data collection in deep reinforcement learning," *ArXiv*, vol. abs/2207.07736, 2022.
+- [40] J. Gleeson, S. Krishnan, M. Gabel, V. J. Reddi, E. de Lara, and G. Pekhimenko, "Rl-scope: Cross-stack profiling for deep reinforcement learning workloads," *ArXiv*, vol. abs/2102.04285, 2021.
+- [41] B. Zoph, V. Vasudevan, J. Shlens, and Q. V. Le, "Learning transferable architectures for scalable image recognition," *2018 IEEE/CVF Conference on Computer Vision and Pattern Recognition*, pp. 8697–8710, 2018.
+- [42] E. Real, A. Aggarwal, Y. Huang, and Q. V. Le, "Regularized evolution for image classifier architecture search," in *AAAI*, 2019.
+- [43] H. Liu, K. Simonyan, and Y. Yang, "Darts: Differentiable architecture search," *arXiv preprint arXiv:1806.09055*, 2018.
+- [44] S. Xie, A. Kirillov, R. B. Girshick, and K. He, "Exploring randomly wired neural networks for image recognition," *2019 IEEE/CVF International Conference on Computer Vision (ICCV)*, pp. 1284–1293, 2019.
+- [45] H. Bai, F. Zhou, L. Hong, N. Ye, S.-H. G. Chan, and Z. Li, "Nasood: Neural architecture search for out-of-distribution generalization," *2021 IEEE/CVF International Conference on Computer Vision (ICCV)*, pp. 8300–8309, 2021.
+
+- [46] B. Yang, G. Bender, Q. V. Le, and J. Ngiam, "Condconv: Conditionally parameterized convolutions for efficient inference," in *NeurIPS*, 2019.
+- [47] Z. You, S. Feng, D. Su, and D. Yu, "Speechmoe: Scaling to large acoustic models with dynamic routing mixture of experts," *arXiv preprint arXiv:2105.03036*, 2021.
+- [48] N. M. Shazeer, A. Mirhoseini, K. Maziarz, A. Davis, Q. V. Le, G. E. Hinton, and J. Dean, "Outrageously large neural networks: The sparsely-gated mixture-of-experts layer," *ArXiv*, vol. abs/1701.06538, 2017.
+- [49] M. Sandler, A. G. Howard, M. Zhu, A. Zhmoginov, and L.-C. Chen, "Mobilenetv2: Inverted residuals and linear bottlenecks," *2018 IEEE/CVF Conference on Computer Vision and Pattern Recognition*, pp. 4510–4520, 2018.
+- [50] Y. Ding, L. Zhu, Z. Jia, G. Pekhimenko, and S. Han, "Ios: Inter-operator scheduler for cnn acceleration," *ArXiv*, vol. abs/2011.01302, 2021.
+- [51] W. Kwon, G.-I. Yu, E. Jeong, and B.-G. Chun, "Nimble: Lightweight and parallel gpu task scheduling for deep learning," in *NeurIPS*, 2020.
+- [52] H. Oh, J. Lee, H. Kim, and J. Seo, "Out-of-order backprop: an effective scheduling technique for deep learning," *Proceedings of the Seventeenth European Conference on Computer Systems*, 2022.
+- [53] M. Abadi, P. Barham, J. Chen, Z. Chen, A. Davis, J. Dean, M. Devin, S. Ghemawat, G. Irving, M. Isard, M. Kudlur, J. Levenberg, R. Monga, S. Moore, D. G. Murray, B. Steiner, P. A. Tucker, V. Vasudevan, P. Warden, M. Wicke, Y. Yu, and X. Zhang, "Tensorflow: A system for large-scale machine learning," *ArXiv*, vol. abs/1605.08695, 2016.
+- [54] A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan, T. Killeen, Z. Lin, N. Gimelshein, L. Antiga, A. Desmaison, A. Kopf, ¨ E. Yang, Z. DeVito, M. Raison, A. Tejani, S. Chilamkurthy, B. Steiner, L. Fang, J. Bai, and S. Chintala, "Pytorch: An imperative style, highperformance deep learning library," *ArXiv*, vol. abs/1912.01703, 2019.
+- [55] T. Chen, M. Li, Y. Li, M. Lin, N. Wang, M. Wang, T. Xiao, B. Xu, C. Zhang, and Z. Zhang, "Mxnet: A flexible and efficient machine learning library for heterogeneous distributed systems," *ArXiv*, vol. abs/1512.01274, 2015.
+- [56] S. Puthoor, A. M. Aji, S. Che, M. Daga, W. Wu, B. M. Beckmann, and G. P. Rodgers, "Implementing directed acyclic graphs with the heterogeneous system architecture," *Proceedings of the 9th Annual Workshop on General Purpose Processing using Graphics Processing Unit*, 2016.
+- [57] HSA Foundation, "Hsa standard," 2017. http://hsafoundation.com/ standards/, Last accessed on 2023-02-14.
+- [58] Y. Chen, B. Brock, S. D. Porumbescu, A. Bulucc, K. A. Yelick, and J. D. Owens, "Atos: A task-parallel gpu dynamic scheduling framework for dynamic irregular computations," *ArXiv*, vol. abs/2112.00132, 2021.
+- [59] "Nvidia inc, cuda dynamic parallelism." https://developer.nvidia.com/ blog/cuda-dynamic-parallelism-api-principles/. Accessed: 2022-09-30.
+- [60] "Amd inc, rocm device enqueue." https://sep5.readthedocs.io/en/latest/ Programming Guides/Opencl-programming-guide.html#device-sideenqueue. Accessed: 2022-09-30.
+- [61] M. E. Belviranli, S. Lee, J. S. Vetter, and L. N. Bhuyan, "Juggler: a dependence-aware task-based execution framework for gpus," *Proceedings of the 23rd ACM SIGPLAN Symposium on Principles and Practice of Parallel Programming*, 2018.
+- [62] M. Steinberger, M. Kenzel, P. Boechat, B. Kerbl, M. Dokter, and D. Schmalstieg, "Whippletree: task-based scheduling of dynamic workloads on the gpu," *ACM Trans. Graph.*, vol. 33, pp. 228:1–228:11, 2014.
+- [63] N. Farooqui, A. Kerr, G. Diamos, S. Yalamanchili, and K. Schwan, "A framework for dynamically instrumenting gpu compute applications within gpu ocelot," in *Proceedings of the Fourth Workshop on General Purpose Processing on Graphics Processing Units*, pp. 1–9, 2011.
+- [64] M. Khairy, Z. Shen, T. M. Aamodt, and T. G. Rogers, "Accel-sim: An extensible simulation framework for validated gpu modeling," *2020 ACM/IEEE 47th Annual International Symposium on Computer Architecture (ISCA)*, pp. 473–486, 2020.
+- [65] E. Todorov, T. Erez, and Y. Tassa, "Mujoco: A physics engine for model-based control," in *2012 IEEE/RSJ international conference on intelligent robots and systems*, pp. 5026–5033, IEEE, 2012.
+- [66] M. Cordts, M. Omran, S. Ramos, T. Rehfeld, M. Enzweiler, R. Benenson, U. Franke, S. Roth, and B. Schiele, "The cityscapes dataset for semantic urban scene understanding," in *Proceedings of the IEEE conference on computer vision and pattern recognition*, pp. 3213–3223, 2016.
+
+- [67] M. Tan and Q. Le, "Efficientnet: Rethinking model scaling for convolutional neural networks," in *International conference on machine learning*, pp. 6105–6114, PMLR, 2019.
+- [68] F. N. Iandola, M. W. Moskewicz, K. Ashraf, S. Han, W. J. Dally, and K. Keutzer, "Squeezenet: Alexnet-level accuracy with 50x fewer parameters and ¡1mb model size," *ArXiv*, vol. abs/1602.07360, 2016.
+- [69] K. Gupta, J. A. Stuart, and J. D. Owens, "A study of persistent threads style gpu programming for gpgpu workloads," *2012 Innovative Parallel Computing (InPar)*, pp. 1–14, 2012.
+- [70] T. Aila and S. Laine, "Understanding the efficiency of ray traversal on gpus," *Proceedings of the Conference on High Performance Graphics 2009*, 2009.
+- [71] H. Zhu, A. Phanishayee, and G. Pekhimenko, "Daydream: Accurately estimating the efficacy of optimizations for DNN training," in *2020 USENIX Annual Technical Conference (USENIX ATC 20)*, pp. 337– 352, USENIX Association, July 2020.
+- [72] J. Reinders, M. J. Voss, P. Reble, and R. Asenjo-Plaza, "++ for heterogeneous programming: oneapi (dpc++ and onetbb)," in *C++ for Heterogeneous Programming: oneAPI (DPC++ and oneTBB)*, 2020.
+- [73] R. D. Blumofe, C. F. Joerg, B. C. Kuszmaul, C. E. Leiserson, K. H. Randall, and Y. Zhou, "Cilk: an efficient multithreaded runtime system," in *PPOPP '95*, 1995.
+- [74] L. Dagum and R. Menon, "Openmp: an industry standard api for shared-memory programming," in *OpenMP: an industry standard API for shared-memory programming*, 1998.
+- [75] A. Ram´ırez, F. Cabarcas, B. H. H. Juurlink, M. Alvarez-Mesa, F. Sanchez, A. Azevedo, C. Meenderinck, C. B. Ciobanu, S. Isaza, and ´ G. Gaydadjiev, "The sarc architecture," *IEEE Micro*, vol. 30, pp. 16–29, 2010.
+- [76] B. Choi, R. Komuravelli, H. Sung, R. Smolinski, N. Honarmand, S. V. Adve, V. S. Adve, N. P. Carter, and C.-T. Chou, "Denovo: Rethinking the memory hierarchy for disciplined parallelism," *2011 International Conference on Parallel Architectures and Compilation Techniques*, pp. 155–166, 2011.
+- [77] J. Planas, R. M. Badia, E. Ayguade, and J. Labarta, "Hierarchical task- ´ based programming with starss," *The International Journal of High Performance Computing Applications*, vol. 23, pp. 284 – 299, 2009.
+- [78] A. Pop and A. Cohen, "Openstream: Expressiveness and data-flow compilation of openmp streaming programs," *ACM Trans. Archit. Code Optim.*, vol. 9, pp. 53:1–53:25, 2012.
+- [79] G. Gupta and G. S. Sohi, "Dataflow execution of sequential imperative programs on multicore architectures," in *Proceedings of the 44th annual IEEE/ACM international symposium on Microarchitecture*, pp. 59–70, 2011.
+- [80] M. D. Allen, S. Sridharan, and G. S. Sohi, "Serialization sets: a dynamic dependence-based parallel execution model," in *Proceedings of the 14th ACM SIGPLAN symposium on Principles and practice of parallel programming*, pp. 85–96, 2009.
+- [81] AMD Research, "Dagee," 2017. https://github.com/AMDResearch/ DAGEE.git, Last accessed on 2023-02-14.
+- [82] AMD Research, "Hipgraph," 2017. https://github.com/HipGraph/, Last accessed on 2023-02-14.
+- [83] A. E. Helal, A. M. Aji, M. L. Chu, B. M. Beckmann, and W. chun Feng, "Adaptive task aggregation for high-performance sparse solvers on gpus," *2019 28th International Conference on Parallel Architectures and Compilation Techniques (PACT)*, pp. 324–336, 2019.
+- [84] A. M. Kaushik, A. M. Aji, M. A. Hassaan, N. Chalmers, N. Wolfe, S. Moe, S. Puthoor, and B. M. Beckmann, "Optimizing hyperplane sweep operations using asynchronous multi-grain gpu tasks," *2019 IEEE International Symposium on Workload Characterization (IISWC)*, pp. 59–69, 2019.
+- [85] A. Abdolrashidi, D. Tripathy, M. E. Belviranli, L. N. Bhuyan, and D. Wong, "Wireframe: Supporting data-dependent parallelism through dependency graph execution in gpus," *2017 50th Annual IEEE/ACM International Symposium on Microarchitecture (MICRO)*, pp. 600–611, 2017.
+- [86] A. Abdolrashidi, H. A. Esfeden, A. Jahanshahi, K. Singh, N. B. Abu-Ghazaleh, and D. Wong, "Blockmaestro: Enabling programmertransparent task-based execution in gpu systems," *2021 ACM/IEEE 48th Annual International Symposium on Computer Architecture (ISCA)*, pp. 333–346, 2021.
+- [87] G. Chen and X. Shen, "Free launch: Optimizing gpu dynamic kernel launches through thread reuse," *2015 48th Annual IEEE/ACM International Symposium on Microarchitecture (MICRO)*, pp. 407–419, 2015.
+
+- [88] I. E. Hajj, J. Gomez-Luna, C. Li, L.-W. Chang, D. S. Milojicic, and ´ W. mei W. Hwu, "Klap: Kernel launch aggregation and promotion for optimizing dynamic parallelism," *2016 49th Annual IEEE/ACM International Symposium on Microarchitecture (MICRO)*, pp. 1–12, 2016.
+- [89] J. Wang, N. Rubin, A. Sidelnik, and S. Yalamanchili, "Dynamic thread block launch: A lightweight execution mechanism to support irregular applications on gpus," *2015 ACM/IEEE 42nd Annual International Symposium on Computer Architecture (ISCA)*, pp. 528–540, 2015.
+- [90] P. Fegade, T. Chen, P. Gibbons, and T. Mowry, "Cortex: A compiler for recursive deep learning models," *Proceedings of Machine Learning and Systems*, vol. 3, pp. 38–54, 2021.
+- [91] E. Jeong, S. Cho, G.-I. Yu, J. S. Jeong, D.-J. Shin, and B.-G. Chun, "{JANUS}: fast and flexible deep learning via symbolic graph execution of imperative programs," in *16th USENIX Symposium on Networked Systems Design and Implementation (NSDI 19)*, pp. 453– 468, 2019.
+- [92] S. Xu, H. Zhang, G. Neubig, W. Dai, J. K. Kim, Z. Deng, Q. Ho, G. Yang, and E. P. Xing, "Cavs: An efficient runtime system for dynamic neural networks," in *2018 USENIX Annual Technical Conference (USENIX ATC 18)*, pp. 937–950, 2018.
+- [93] H. Shen, J. Roesch, Z. Chen, W. Chen, Y. Wu, M. Li, V. Sharma, Z. Tatlock, and Y. Wang, "Nimble: Efficiently compiling dynamic neural networks for model inference," *ArXiv*, vol. abs/2006.03031, 2021.
+- [94] E. Jeong, J. S. Jeong, S. Kim, G.-I. Yu, and B.-G. Chun, "Improving the expressiveness of deep learning frameworks with recursion," in *Proceedings of the Thirteenth EuroSys Conference*, pp. 1–13, 2018.
+- [95] M. Looks, M. Herreshoff, D. S. Hutchins, and P. Norvig, "Deep learning with dynamic computation graphs," *ArXiv*, vol. abs/1702.02181, 2017.
+- [96] F. Khorasani, H. A. Esfeden, N. B. Abu-Ghazaleh, and V. Sarkar, "In-register parameter caching for dynamic neural nets with virtual persistent processor specialization," *2018 51st Annual IEEE/ACM International Symposium on Microarchitecture (MICRO)*, pp. 377–389, 2018.
+- [97] C. J. Rossbach, J. Currey, M. Silberstein, B. Ray, and E. Witchel, "Ptask: operating system abstractions to manage gpus as compute devices," in *Proceedings of the Twenty-Third ACM Symposium on Operating Systems Principles*, pp. 233–248, 2011.
+- [98] C. J. Rossbach, Y. Yu, J. Currey, J.-P. Martin, and D. Fetterly, "Dandelion: a compiler and runtime for heterogeneous systems," in *Proceedings of the Twenty-Fourth ACM Symposium on Operating Systems Principles*, pp. 49–68, 2013.
+- [99] J. Zhong and B. He, "Kernelet: High-throughput gpu kernel executions with dynamic slicing and scheduling," *IEEE Transactions on Parallel and Distributed Systems*, vol. 25, no. 6, pp. 1522–1532, 2013.
+- [100] X. Tan, *GPUPool: A Holistic Approach to Fine-Grained GPU Sharing in the Cloud*. PhD thesis, University of Toronto (Canada), 2021.

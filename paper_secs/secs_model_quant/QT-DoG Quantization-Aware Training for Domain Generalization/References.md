@@ -1,0 +1,116 @@
+# References
+
+- <span id="page-9-11"></span>Addepalli, S., Asokan, A. R., Sharma, L., and Babu, R. V. Leveraging Vision-Language Models for Improving Domain Generalization in Image Classification. In *CVPR*, June 2024.
+- <span id="page-9-7"></span>An, G. The effects of adding noise during backpropagation training on a generalization performance. *Neural Comput.*, 1996.
+- <span id="page-9-14"></span>Andriushchenko, M., Croce, F., Müller, M., Hein, M., and Flammarion, N. A Modern Look at the Relationship between Sharpness and Generalization. *ICML*, 2023.
+- <span id="page-9-8"></span>Arjovsky, M., Bottou, L., Gulrajani, I., and Lopez-Paz, D. Invariant risk minimization. *arXiv preprint arXiv:1907.02893*, 2019.
+- <span id="page-9-6"></span>Arpit, D., Wang, H., Zhou, Y., and Xiong, C. Ensemble of Averages: Improving Model Selection and Boosting Performance in Domain Generalization. In Oh, A. H., Agarwal, A., Belgrave, D., and Cho, K. (eds.), *NeurIPS*, 2022.
+- <span id="page-9-0"></span>Bahng, H., Chun, S., Yun, S., Choo, J., and Oh, S. J. Learning De-biased Representations with Biased Representations. In *ICML*, 2020.
+- <span id="page-9-22"></span>Beery, S., Van Horn, G., and Perona, P. Recognition in terra incognita. In *ECCV*, 2018.
+- <span id="page-9-13"></span>Benton, G., Maddox, W., Lotfi, S., and Wilson, A. G. G. Loss Surface Simplexes for Mode Connecting Volumes and Fast Ensembling. In *ICML*, 2021.
+- <span id="page-9-19"></span>Bhalgat, Y., Lee, J., Nagel, M., Blankevoort, T., and Kwak, N. LSQ+: Improving low-bit quantization through learnable offsets and better initialization. In *CVPR*, 2020.
+- <span id="page-9-2"></span>Blanchard, G., Lee, G., and Scott, C. Generalizing from several related classification tasks to a new unlabeled sample. *NeurIPS*, 2011.
+- <span id="page-9-20"></span>Boncelet, C. Chapter 7 - Image Noise Models. In *The Essential Guide to Image Processing*. Academic Press, 2009.
+
+- <span id="page-9-23"></span>Breiman, L. Bagging predictors. *Machine learning*, 24(2): 123–140, 1996.
+- <span id="page-9-16"></span>Cai, Y., Yao, Z., Dong, Z., Gholami, A., Mahoney, M. W., and Keutzer, K. Zeroq: A novel zero shot quantization framework. In *CVPR*, 2020.
+- <span id="page-9-5"></span>Cha, J., Chun, S., Lee, K., Cho, H.-C., Park, S., Lee, Y., and Park, S. SWAD: Domain generalization by seeking flat minima. In *NeurIPS*, 2021.
+- <span id="page-9-17"></span>Chee, J., Cai, Y., Kuleshov, V., and De Sa, C. QuIP: 2-Bit Quantization of Large Language Models With Guarantees. In *NeurIPS*, 2023.
+- <span id="page-9-10"></span>Chen, Z., Wang, W., Zhao, Z., Su, F., Men, A., and Meng, H. PracticalDG: Perturbation Distillation on Vision-Language Models for Hybrid Domain Generalization. In *CVPR*, 2024.
+- <span id="page-9-9"></span>Cheng, D., Xu, Z., Jiang, X., Wang, N., Li, D., and Gao, X. Disentangled Prompt Representation for Domain Generalization. In *CVPR*, June 2024.
+- <span id="page-9-12"></span>Choshen, L., Venezian, E., Slonim, N., and Katz, Y. Fusing finetuned models for better pretraining. *arXiv preprint*, 2022.
+- <span id="page-9-1"></span>Dai, D. and Van Gool, L. Dark model adaptation: Semantic image segmentation from daytime to nighttime. In *ITCS*, 2018.
+- <span id="page-9-21"></span>Dinh, L., Pascanu, R., Bengio, S., and Bengio, Y. Sharp minima can generalize for deep nets. In *ICML*, 2017.
+- <span id="page-9-25"></span>Dong, Z., Yao, Z., Gholami, A., Mahoney, M., and Keutzer, K. HAWQ: Hessian AWare Quantization of Neural Networks with Mixed-Precision. In *ICCV*, 2019.
+- <span id="page-9-3"></span>Dziugaite, G. K. and Roy, D. M. Computing nonvacuous generalization bounds for deep (stochastic) neural networks with many more parameters than training data. In *UAI*, 2017.
+- <span id="page-9-18"></span>Esser, S. K., McKinstry, J. L., Bablani, D., Appuswamy, R., and Modha, D. S. Learned Step Size Quantization. *ICLR*, 2020.
+- <span id="page-9-24"></span>Fang, C., Xu, Y., and Rockmore, D. N. Unbiased metric learning: On the utilization of multiple datasets and web images for softening bias. In *ICCV*, 2013.
+- <span id="page-9-4"></span>Foret, P., Kleiner, A., Mobahi, H., and Neyshabur, B. Sharpness-Aware Minimization for Efficiently Improving Generalization. In *ICLR*, 2021.
+- <span id="page-9-15"></span>Frantar, E., Singh, S. P., and Alistarh, D. Optimal Brain Compression: A Framework for Accurate Post-Training Quantization and Pruning. In *NeurIPS*, 2022.
+
+- <span id="page-10-8"></span>Ganin, Y., Ustinova, E., Ajakan, H., Germain, P., Larochelle, H., Laviolette, F., Marchand, M., and Lempitsky, V. Domain-adversarial training of neural networks. *JMLR*, 2016.
+- <span id="page-10-2"></span>Garipov, T., Izmailov, P., Podoprikhin, D., Vetrov, D. P., and Wilson, A. G. Loss Surfaces, Mode Connectivity, and Fast Ensembling of DNNs. In *NeurIPS*, 2018.
+- <span id="page-10-0"></span>Geirhos, R., Rubisch, P., Michaelis, C., Bethge, M., Wichmann, F. A., and Brendel, W. ImageNet-trained CNNs are biased towards texture; increasing shape bias improves accuracy and robustness. In *ICLR*, 2019.
+- <span id="page-10-28"></span>Gildenblat, J. and contributors. PyTorch library for CAM methods. [https://github.com/jacobgil/](https://github.com/jacobgil/pytorch-grad-cam) [pytorch-grad-cam](https://github.com/jacobgil/pytorch-grad-cam), 2021.
+- <span id="page-10-5"></span>Goodfellow, I., Bengio, Y., and Courville, A. *Deep learning*. MIT press, 2016.
+- <span id="page-10-23"></span>Gray, R. and Neuhoff, D. Quantization. *IEEE Transactions on Information Theory*, 44(6):2325–2383, 1998. doi: 10.1109/18.720541.
+- <span id="page-10-10"></span>Gulrajani, I. and Lopez-Paz, D. In Search of Lost Domain Generalization. In *ICLR*, 2021.
+- <span id="page-10-19"></span>Gupta, V., Serrano, S. A., and DeCoste, D. Stochastic Weight Averaging in Parallel: Large-Batch Training That Generalizes Well. In *ICLR*, 2020.
+- <span id="page-10-16"></span>Hansen, L. K. and Salamon, P. Neural network ensembles. *TPAMI*, 1990.
+- <span id="page-10-29"></span>He, K., Zhang, X., Ren, S., and Sun, J. Deep Residual Learning for Image Recognition. In *CVPR*, 2016.
+- <span id="page-10-13"></span>Hinton, G., Vinyals, O., and Dean, J. Distilling the Knowledge in a Neural Network. In *NeurIPS*, 2015.
+- <span id="page-10-6"></span>Hochreiter, S. and Schmidhuber, J. Simplifying neural nets by discovering flat minima. *NeurIPS*, 1994.
+- <span id="page-10-26"></span>Hochreiter, S. and Schmidhuber, J. Flat minima. *Neural Computation*, 1997.
+- <span id="page-10-12"></span>Huang, Z., Wang, H., Xing, E. P., and Huang, D. Selfchallenging improves cross-domain generalization. In *ECCV*, 2020.
+- <span id="page-10-14"></span>Huang, Z., Zhou, A., Ling, Z., Cai, M., Wang, H., and Lee, Y. J. A Sentence Speaks a Thousand Images: Domain Generalization through Distilling CLIP with Language Guidance. In *ICCV*, 2023.
+- <span id="page-10-3"></span>Izmailov, P., Podoprikhin, D., Garipov, T., Vetrov, D., and Wilson, A. Averaging weights leads to wider optima and better generalization. In *UAI*, 2018.
+
+- <span id="page-10-20"></span>Jain, S., Addepalli, S., Sahu, P. K., Dey, P., and Babu, R. V. DART: Diversify-Aggregate-Repeat Training Improves Generalization of Neural Networks. In *CVPR*, 2023.
+- <span id="page-10-4"></span>Jiang, Y., Neyshabur, B., Mobahi, H., Krishnan, D., and Bengio, S. Fantastic generalization measures and where to find them. In *ICLR*, 2020.
+- <span id="page-10-1"></span>Keskar, N. S., Mudigere, D., Nocedal, J., Smelyanskiy, M., and Tang, P. T. P. On Large-Batch Training for Deep Learning: Generalization Gap and Sharp Minima. In *ICLR*, 2017.
+- <span id="page-10-25"></span>Kingma, D. P. and Ba, J. Adam: A Method for Stochastic Optimization. In *ICLR*, 2015.
+- <span id="page-10-11"></span>Koh, P. W., Sagawa, S., Marklund, H., Xie, S. M., Zhang, M., Balsubramani, A., Hu, W., Yasunaga, M., Phillips, R. L., Gao, I., Lee, T., David, E., Stavness, I., Guo, W., Earnshaw, B. A., Haque, I. S., Beery, S., Leskovec, J., Kundaje, A., Pierson, E., Levine, S., Finn, C., and Liang, P. WILDS: A benchmark of in-the-wild distribution shifts. In *International Conference on Machine Learning (ICML)*, 2021.
+- <span id="page-10-17"></span>Krogh, A. and Vedelsby, J. Neural network ensembles, cross validation, and active learning. In *NeurIPS*, 1995.
+- <span id="page-10-7"></span>Krueger, D., Caballero, E., Jacobsen, J.-H., Zhang, A., Binas, J., Zhang, D., Le Priol, R., and Courville, A. Out-ofdistribution generalization via risk extrapolation (rex). In *ICML*, 2021.
+- <span id="page-10-24"></span>Kullback, S. and Leibler, R. A. On information and sufficiency. *Annals of Mathematical Statistics*, 1951.
+- <span id="page-10-15"></span>Lakshminarayanan, B., Pritzel, A., and Blundell, C. Simple and scalable predictive uncertainty estimation using deep ensembles. In *NeurIPS*, 2017.
+- <span id="page-10-18"></span>Lee, Y., Yao, H., and Finn, C. Diversify and Disambiguate: Learning From Underspecified Data. *ICML Workshop*, 2022.
+- <span id="page-10-9"></span>Li, C., Zhang, D., Huang, W., and Zhang, J. Cross contrasting feature perturbation for domain generalization. In *ICCV*, 2023.
+- <span id="page-10-27"></span>Li, D., Yang, Y., Song, Y.-Z., and Hospedales, T. M. Deeper, broader and artier domain generalization. In *ICCV*, 2017.
+- <span id="page-10-22"></span>Li\*, M., Lin\*, Y., Zhang\*, Z., Cai, T., Li, X., Guo, J., Xie, E., Meng, C., Zhu, J.-Y., and Han, S. SVDQuant: Absorbing Outliers by Low-Rank Components for 4-Bit Diffusion Models. In *ICLR*, 2025.
+- <span id="page-10-21"></span>Li, Y., Gong, R., Tan, Z., Yang, Y., Hu, P., Zhang, Q., Yu, F., Wang, W., and Gu, S. BRECQ: Pushing the Limit of Post-Training Quantization by Block Reconstruction. *ICLR*, 2021.
+
+- <span id="page-11-11"></span>Li, Z., Ren, K., Jiang, X., Li, B., Zhang, H., and Li, D. Domain Generalization using Pretrained Models without Fine-tuning. *arXiv preprint*, 2022.
+- <span id="page-11-20"></span>Lin, J., Tang, J., Tang, H., Yang, S., Chen, W.-M., Wang, W.-C., Xiao, G., Dang, X., Gan, C., and Han, S. AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration. In *MLSys*, 2024.
+- <span id="page-11-8"></span>Liu, F., Kim, M., Ren, Z., and Liu, X. Distilling CLIP with Dual Guidance for Learning Discriminative Human Body Shape Representation. In *CVPR*, June 2024.
+- <span id="page-11-14"></span>Maddox, W. J., Izmailov, P., Garipov, T., Vetrov, D. P., and Wilson, A. G. A simple baseline for bayesian uncertainty in deep learning. In *NeurIPS*, 2019.
+- <span id="page-11-13"></span>Matena, M. and Raffel, C. Merging Models with Fisherweighted averaging. In *NeurIPS*, 2022.
+- <span id="page-11-10"></span>Mesbah, Y., Ibrahim, Y. Y., and Khan, A. M. Domain Generalization Using Ensemble Learning. In *ISWA*, 2022.
+- <span id="page-11-0"></span>Michaelis, C., Mitzkus, B., Geirhos, R., Rusak, E., Bringmann, O., Ecker, A. S., Bethge, M., and Brendel, W. Benchmarking robustness in object detection: Autonomous driving when winter is coming. *NeurIPS*, 2019.
+- <span id="page-11-7"></span>Moayeri, M., Rezaei, K., Sanjabi, M., and Feizi, S. Text-To-Concept (and Back) via Cross-Model Alignment. In *ICML*, 2023.
+- <span id="page-11-1"></span>Muandet, K., Balduzzi, D., and Schölkopf, B. Domain generalization via invariant feature representation. In *ICML*, 2013.
+- <span id="page-11-16"></span>Mueller, M., Vlaar, T. J., Rolnick, D., and Hein, M. Normalization layers are all that sharpness-aware minimization needs. In *NeurIPS*, 2023.
+- <span id="page-11-3"></span>Murray, A. and Edwards, P. Synaptic Weight Noise During MLP Learning Enhances Fault-Tolerance, Generalization and Learning Trajectory. In *NeurIPS*, 1992.
+- <span id="page-11-18"></span>Nagel, M., van Baalen, M., Blankevoort, T., and Welling, M. Data-Free Quantization Through Weight Equalization and Bias Correction. *ICCV*, 2019.
+- <span id="page-11-17"></span>Nagel, M., Amjad, R. A., van Baalen, M., Louizos, C., and Blanevoort, T. Up or Down? Adaptive Rounding for Post-Training Quantization. *ICML*, 2020.
+- <span id="page-11-12"></span>Pagliardini, M., Jaggi, M., Fleuret, F., and Karimireddy, S. P. Agree to Disagree: Diversity through Disagreement for Better Transferability. In *ICLR* , 2023.
+- <span id="page-11-25"></span>Peng, X., Bai, Q., Xia, X., Huang, Z., Saenko, K., and Wang, B. Moment matching for multi-source domain adaptation. In *ICCV*, 2019.
+
+- <span id="page-11-6"></span>Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G., Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark, J., Krueger, G., and Sutskever, I. Learning Transferable Visual Models From Natural Language Supervision. In *ICML*, 2021.
+- <span id="page-11-21"></span>Ramachandran, A., Kundu, S., and Krishna, T. Clamp-vit: Contrastive data-free learning for adaptive post-training quantization of vits. In Leonardis, A., Ricci, E., Roth, S., Russakovsky, O., Sattler, T., and Varol, G. (eds.), *ECCV*, 2024.
+- <span id="page-11-4"></span>Rame, A., Dancette, C., and Cord, M. Fishr: Invariant Gradient Variances for Out-of-distribution Generalization. In *ICML*, 2022a.
+- <span id="page-11-15"></span>Rame, A., Kirchmeyer, M., Rahier, T., Rakotomamonjy, A., Gallinari, P., and Cord, M. Diverse weight averaging for out-of-distribution generalization. In *NeurIPS*, 2022b.
+- <span id="page-11-2"></span>Ramé, A., Ahuja, K., Zhang, J., Cord, M., Bottou, L., and Lopez-Paz, D. Model Ratatouille: Recycling Diverse Models for Out-of-Distribution Generalization. In *ICML*, 2023.
+- <span id="page-11-24"></span>Rissanen, J. Modeling by shortest data description. *Automatica*, 1978.
+- <span id="page-11-27"></span>Russakovsky, O., Deng, J., Su, H., Krause, J., Satheesh, S., Ma, S., Huang, Z., Karpathy, A., Khosla, A., Bernstein, M., et al. Imagenet large scale visual recognition challenge. *IJCV*, 2015.
+- <span id="page-11-5"></span>Sagawa, S., Koh, P. W., Hashimoto, T. B., and Liang, P. Distributionally Robust Neural Networks. In *ICLR*, 2020.
+- <span id="page-11-26"></span>Sanh, V., Debut, L., Chaumond, J., and Wolf, T. Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter. *NeurIPS Workshop*, 2019.
+- <span id="page-11-22"></span>Shang, Y., Liu, G., Kompella, R., and Yan, Y. Enhancing Post-Training Quantization Calibration Through Contrastive Learning. 2024.
+- <span id="page-11-19"></span>Shao, W., Chen, M., Zhang, Z., Xu, P., Zhao, L., Li, Z., Zhang, K. Z., Gao, P., Qiao, Y., and Luo, P. OmniQuant: Omnidirectionally Calibrated Quantization for Large Language Models. *ICLR*, 2024.
+- <span id="page-11-23"></span>Shin, J., So, J., Park, S., Kang, S., Yoo, S., and Park, E. NIPQ: Noise Proxy-Based Integrated Pseudo-Quantization. In *CVPR*, 2023.
+- <span id="page-11-9"></span>Shu, Y., Guo, X., Wu, J., Wang, X., Wang, J., and Long, M. CLIPood: Generalizing CLIP to Out-of-Distributions. In *ICML*, 2023.
+
+- <span id="page-12-6"></span>Sultana, M., Naseer, M., Khan, M. H., Khan, S., and Khan, F. S. Self-Distilled Vision Transformer for Domain Generalization. In *ACCV*, 2022.
+- <span id="page-12-4"></span>Sun, B. and Saenko, K. Deep coral: Correlation alignment for deep domain adaptation. In *ECCV*, 2016.
+- <span id="page-12-3"></span>Sun, B., Feng, J., and Saenko, K. Return of Frustratingly Easy Domain Adaptation. In *AAAI*, 2016.
+- <span id="page-12-8"></span>Thopalli, K., Katoch, S., Thiagarajan, J. J., Turaga, P. K., and Spanias, A. Multi-Domain Ensembles for Domain Generalization. In *NeurIPS Workshop*, 2021.
+- <span id="page-12-20"></span>Venkateswara, H., Eusebio, J., Chakraborty, S., and Panchanathan, S. Deep hashing network for unsupervised domain adaptation. In *CVPR*, 2017.
+- <span id="page-12-11"></span>Wortsman, M., Horton, M., Guestrin, C., Farhadi, A., and Rastegari, M. Learning Neural Network Subspaces. *ICML*, 2021.
+- <span id="page-12-10"></span>Wortsman, M., Ilharco, G., Gadre, S. Y., Roelofs, R., Gontijo-Lopes, R., Morcos, A. S., Namkoong, H., Farhadi, A., Carmon, Y., Kornblith, S., and Schmidt, L. Model soups: averaging weights of multiple fine-tuned models improves accuracy without increasing inference time. In *ICML*, 2022a.
+- <span id="page-12-9"></span>Wortsman, M., Ilharco, G., Kim, J. W., Li, M., Kornblith, S., Roelofs, R., Lopes, R. G., Hajishirzi, H., Farhadi, A., Namkoong, H., et al. Robust fine-tuning of zero-shot models. In *CVPR*, 2022b.
+- <span id="page-12-0"></span>Xiao, K. Y., Engstrom, L., Ilyas, A., and Madry, A. Noise or Signal: The Role of Image Backgrounds in Object Recognition. In *ICLR*, 2020.
+- <span id="page-12-21"></span>Yalniz, I. Z., Jégou, H., Chen, K., Paluri, M., and Mahajan, D. Billion-scale semi-supervised learning for image classification. *arXiv preprint arXiv:1905.00546*, 2019.
+- <span id="page-12-16"></span>Yamamoto, K. Learnable Companding Quantization for Accurate Low-bit Neural Networks. In *CVPR*, 2021.
+- <span id="page-12-14"></span>Yang, J., Tang, C., Yu, C., and Lv, J. GWQ: Group-Wise Quantization Framework for Neural Networks. In *Asian Conference on Machine Learning*, 2023.
+- <span id="page-12-17"></span>Yao, Z., Dong, Z., Zheng, Z., Gholami, A., Yu, J., Tan, E., Wang, L., Huang, Q., Wang, Y., Mahoney, M. W., and Keutzer, K. HAWQV3: Dyadic Neural Network Quantization. In *ICML*, 2020.
+- <span id="page-12-5"></span>Ye, N., Li, K., Hong, L., Bai, H., Chen, Y., Zhou, F., and Li, Z. OoD-Bench: Benchmarking and Understanding Outof-Distribution Generalization Datasets and Algorithms. In *CVPR*, 2022.
+
+- <span id="page-12-7"></span>Yu, X., Yoo, S., and Lin, Y. CLIPCEIL: Domain Generalization through CLIP via Channel rEfinement and Imagetext aLignment. In Globerson, A., Mackey, L., Belgrave, D., Fan, A., Paquet, U., Tomczak, J., and Zhang, C. (eds.), *NeurIPS*, 2024.
+- <span id="page-12-18"></span>Zhang, H. R., Li, D., and Ju, H. Noise stability optimization for finding flat minima: A hessian-based regularization approach. *Transactions on Machine Learning Research*, 2024.
+- <span id="page-12-13"></span>Zhang, T. and Shrivastava, A. LeanQuant: Accurate and Scalable Large Language Model Quantization with Losserror-aware Grid. In *ICLR*, 2025.
+- <span id="page-12-2"></span>Zhang, X., Xu, R., Yu, H., Dong, Y., Tian, P., and Cui, P. Flatness-Aware Minimization for Domain Generalization. In *ICCV*, October 2023.
+- <span id="page-12-12"></span>Zhao, R., Hu, Y., Dotzel, J., De Sa, C., and Zhang, Z. Improving Neural Network Quantization without Retraining using Outlier Channel Splitting. *ICML*, June 2019.
+- <span id="page-12-15"></span>Zhou, A., Yao, A., Guo, Y., Xu, L., and Chen, Y. Incremental Network Quantization: Towards Lossless CNNs with Low-Precision Weights. In *ICLR*, 2017.
+- <span id="page-12-19"></span>Zhou, K., Yang, Y., Qiao, Y., and Xiang, T. Domain Generalization with MixStyle. In *ICLR*, 2021.
+- <span id="page-12-1"></span>Zhou, K., Liu, Z., Qiao, Y., Xiang, T., and Loy, C. C. Domain Generalization: A Survey. *TPAMI*, 2022.
+

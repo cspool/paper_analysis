@@ -1,0 +1,22 @@
+# 1 Introduction
+
+Transformers compute pairwise attention scores between all tokens at O(n 2 ) cost [\[Vaswani et al.,](#page-12-0) [2017\]](#page-12-0). Does each token really need to attend to every other token? The efficient attention literature has explored this question extensively, but how to reduce attention without losing quality remains open. Prior work falls into three camps. Structured sparsity methods use fixed patterns—local windows, block structures—and miss important long-range dependencies when retrofitted onto pretrained models [\[Beltagy et al.,](#page-11-0) [2020,](#page-11-0) [Zaheer et al.,](#page-13-0) [2020\]](#page-13-0). Approximation methods replace the attention matrix with a cheaper proxy via kernels or low-rank projections, but the approximation error compounds across layers [\[Choromanski et al.,](#page-11-1) [2021,](#page-11-1) [Wang et al.,](#page-13-1) [2020\]](#page-13-1). Token selection methods [\[Ribar et al.,](#page-13-2) [2024,](#page-13-2) [Chen et al.,](#page-13-3) [2024,](#page-13-3) [Zhang et al.,](#page-13-4) [2024,](#page-13-4) [Singhania et al.,](#page-13-5) [2024\]](#page-13-5) keep the attention mechanism intact and select the top-k most relevant tokens per query, but degrade perplexity by 5–10 points at high sparsity, as we show in Section [3.](#page-3-0)
+
+We take a different approach: we learn which token pairs actually matter. We introduce Focus. The key insight is that existing pretrained models can read every token but cannot focus—they have no mechanism to determine, before computing attention, which distant tokens are worth attending to. Focus adds this missing capability: learnable centroid vectors in each attention layer assign tokens to semantic groups and gate the attention scores accordingly. Tokens within the same group attend with exact softmax—no re-normalization, no approximation—so the pretrained computation is preserved, not approximated.
+
+Composability. Focus is composable: only the centroid parameters are trained—as few as 148K, just 0.1% of the model—while all original weights stay frozen. The model retains everything it knew and gains the ability to direct its attention. This holds from 124M to 70B, across five attention architectures (MHA, GQA, GQA+bias, MHA+QK-norm, interleaved+softcap), with zero degradation on downstream benchmarks. Composability distinguishes Focus from LoRA [\[Hu et al.,](#page-11-2) [2022\]](#page-11-2): in our experiments, LoRA degrades alignment scores at every learning rate we tested, while Focus preserves instruction-tuned behavior fully.
+
+Less attention can be more. Focus is sparse: with K=4 groups and top-k=2 membership, each token attends to only half of the distant tokens. Despite this sparsity, composing Focus onto GPT-2 124M achieves 30.3 PPL, surpassing the full-attention model at 31.4. At inference, the same sparse model yields 41.3 PPL—better than the pretrained model at 42.8—with 2× speedup. Trained from scratch on Mistral 7B with 2B tokens, Focus matches full attention at 13.82 vs 13.89 PPL.
+
+Speed. Focus's sparsity pattern decomposes into two standard FlashAttention calls with no custom kernels, reaching 8.6× speedup at 1M tokens.
+
+Training stable groups. Focus assigns tokens to groups and restricts distant attention. We found that training exhibits group dominance—one group absorbs all tokens, collapsing the learned sparsity. We identify three pathways through which dominance occurs and show that standard mitigations all fail. Our solution, Sinkhorn normalization, enforces balanced groups as a structural constraint.
+
+### Our contributions are as follows.
+
+- 1. We introduce Focus, the first composable efficient attention method that can be retrofitted onto any pretrained model with improved quality and zero benchmark degradation.
+- 2. We identify group dominance—a training instability analogous to expert collapse in Mixture of Experts [\[Fedus et al.,](#page-11-3) [2022\]](#page-11-3)—and solve it with Sinkhorn normalization.
+- 3. We show zero degradation when composing Focus onto models from 124M to 70B across five attention architectures.
+- 4. We show that less attention can improve quality, shedding light on the assumption that n 2 attention is the quality ceiling.
+- 5. We show that token routing requires only a 16-dimensional projection (dg=16, 148K parameters): token group assignment is far simpler than attention itself.
+

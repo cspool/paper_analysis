@@ -1,0 +1,4 @@
+# VII. CONCLUSION
+
+MoE is a promising technology to improving model quality by scaling the neural network to an extra-scale. In this paper, we consider high performance and memory efficiency of MoE model training in a holistic manner. Toward this end, we design adaptive pipeline parallelism with online granularity configuration. Second, we analyze the memory footprint breakdown of MoE training and propose efficient memory reusing strategies to reduce memory requirements by eliminating memory redundancies. What is more, we develop an adaptive selection component to decide whether to offload or recompute the required tensors, which considers both the hardware capacities and model characteristics at runtime. We implement and integrate these features into MPipeMoE library and perform extensive evaluations. The results show that MPipeMoE achieves 2.8× speedup and reduces memory footprint by up to 47% compared to FasterMoE.
+

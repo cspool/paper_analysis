@@ -1,0 +1,6 @@
+# VII. CONCLUSION
+
+As GPUs become more heterogeneous, programming complexity increases. A key example is asynchronous tile transfers (ATTs) between global and shared memory (e.g., NVIDIA's TMA). Leveraging ATT effectively requires careful producerconsumer coordination and precise configuration based on GPU architecture and kernel behavior. Although frameworks such as NVIDIA's SDK, CUTLASS3+CuTe or ThunderKittens provide useful abstractions, they do not eliminate the burden of manually selecting optimal parameters, wavefront specialization, or fine-grained synchronization barriers.
+
+To address this, we introduce Queue Configurator (QuCo), a novel, lightweight hardware unit embedded in the GPU. At kernel launch, QuCo firmware transparently automates ATT configuration by inferring optimal queue setups from static GPU specification data (GST) provided by the vendor, combined with dynamic kernel features. Our evaluation across multiple GPU platforms and linear algebra kernels shows QuCo achieves performance within 1.04% of expert hand-tuned ATT configurations. Further, for state-of-the-art DNN models and composite kernels—where manual tuning is even less feasible—QuCo consistently outperforms manual attempts, highlighting its potential as a general framework for automated memory-transfer optimization.
+

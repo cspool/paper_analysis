@@ -1,0 +1,6 @@
+# **5 Conclusion and discussion**
+
+We introduce Artificial Hippocampus Networks (AHNs), a novel class of lightweight architectural components that enhance Transformer models for efficient long-sequence processing. AHNs address the efficiency limitation of standard transformers by maintaining a sliding window of KV cache as lossless memory while transforming out-of-window information into a fixed-size compressed memory. This approach enables AHN-augmented models to achieve constant memory and computational complexity per token over long sequences. Experiments demonstrate that AHNs can significantly reduce both memory cache size and computation while maintaining competitive performance on long-context benchmarks.
+
+Limitations and future works. While AHNs strike an effective balance between computational efficiency and memory fidelity, their fixed-size compressed memory inevitably entails some information loss and may impair performance on tasks that require exact recall, as detailed in the appendix. Future work may explore stronger recall mechanisms. For application scenarios, the AHN framework opens up opportunities in longcontext domains with sparse information or constrained resources, such as lifelong learning, streaming video processing, and deployment on edge devices.
+

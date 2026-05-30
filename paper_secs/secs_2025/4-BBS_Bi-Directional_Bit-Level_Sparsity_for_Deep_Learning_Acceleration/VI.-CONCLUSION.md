@@ -1,0 +1,4 @@
+# VI. CONCLUSION
+
+In this paper, we introduce BBS, a new concept to exploit bit-level sparsity in a symmetrical way to prune either zerobits or one-bits. BBS pushes the limit of post-training DNN compression to a new state-of-the-art through binary pruning, a data-free optimization that generates bi-directional sparse bit columns inside DNN weights while maximally preserving the statistical characteristics of the original uncompressed model. As a result, the proposed binary pruning technique achieves much higher accuracy compared to previous bit-sparsity-aware pruning methods. On top of the algorithmic innovation, we design a bit-serial accelerators named *BitVert* with an areaand power-efficient PE to fully mine the potential of BBS. Compared to prior DNN accelerators, *BitVert* achieves up to 3.03× speedup and 2.44× energy saving, while having negligible accuracy degradation on both vision and language models with large-scale benchmark datasets.
+

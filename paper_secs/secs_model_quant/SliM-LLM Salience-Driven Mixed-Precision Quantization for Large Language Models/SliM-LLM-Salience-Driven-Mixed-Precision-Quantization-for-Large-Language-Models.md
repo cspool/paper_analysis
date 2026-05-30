@@ -1,0 +1,10 @@
+# SliM-LLM: Salience-Driven Mixed-Precision Quantization for Large Language Models
+
+Wei Huang <sup>1</sup> Haotong Qin<sup>B</sup> <sup>2</sup> Yangdong Liu <sup>3</sup> Yawei Li <sup>2</sup> Qinshuo Liu <sup>1</sup> Xianglong Liu <sup>3</sup> Luca Benini <sup>2</sup> Michele Magno <sup>2</sup> Shiming Zhang<sup>B</sup> <sup>1</sup> Xiaojuan Qi<sup>B</sup> <sup>1</sup>
+
+## Abstract
+
+Post-training quantization (PTQ) is an effective technique for compressing large language models (LLMs). However, while uniform-precision quantization is computationally efficient, it often compromises model performance. To address this, we propose SliM-LLM, a saliencedriven mixed-precision quantization framework that allocates bit-widths at the group-wise. Our approach leverages the observation that important weights follow a structured distribution and introduces two key components: 1) *Salience-Determined Bit Allocation* adaptively assigns bitwidths to groups within each layer based on their salience; and 2) *Salience-Weighted Quantizer Calibration* optimizes quantizer parameters by incorporating element-level salience. With its structured partitioning, SliM-LLM provides a hardware-friendly solution that matches the efficiency of uniform quantization methods while improving accuracy. Experiments show that SliM-LLM achieves superior performance across various LLMs at low bit-widths. For example, a 2-bit quantized LLaMA-7B model reduces memory usage by nearly 6x compared to the floating-point baseline, decreases perplexity by 48% compared to state-of-the-art gradient-free PTQ methods, and maintains GPU inference speed. Additionally, the extended version, SliM-LLM<sup>+</sup>, which incorporates gradient-based quantization, further reduces perplexity by 35.1%. Our code is available at [https://github.com/Aaronhuang-778/SliM-LLM.](https://github.com/Aaronhuang-778/SliM-LLM)
+
+*Proceedings of the* 42 nd *International Conference on Machine Learning*, Vancouver, Canada. PMLR 267, 2025. Copyright 2025 by the author(s).
+

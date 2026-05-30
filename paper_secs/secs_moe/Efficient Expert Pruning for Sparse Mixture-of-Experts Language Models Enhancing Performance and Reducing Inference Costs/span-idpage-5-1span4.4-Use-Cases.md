@@ -1,0 +1,4 @@
+# <span id="page-5-1"></span>4.4 Use Cases
+
+We explore two applications of EEP: expert pruning and expert activation pruning. In expert pruning, EEP searches for optimal router mapping (WRM) and expert merging matrices (WEM) to minimize the total number of experts while maintaining high performance. For expert activation pruning, the goal is to achieve strong performance with only one active expert per token. Here, we use the same EEP search algorithm to conduct expert and router networks optimization by updating the WRM and WEM matrices, while only activates one expert during inference. Fig. [2](#page-3-2) illustrates these two use cases. Additionally, we investigate the combination of these two approaches, reducing both the total number of experts and the number of active experts simultaneously (see Sec. [5.3\)](#page-7-0).
+
