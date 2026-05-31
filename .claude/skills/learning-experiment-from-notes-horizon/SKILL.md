@@ -11,11 +11,18 @@ description: Horizon Summary Agent —— 接收单层的问题空间和所有�
 
 ## 输入
 
-scheduler.ts 在 prompt 中传递：
-- 指定 layer 的问题空间文件路径
-- 该层所有答案文件路径列表
-- 输出文件路径（`<lid>_horizon_summary.md`）
-- 侧重配置
+scheduler.ts 将参数直接嵌入此段（`fillSkillInput`），替换本文档中本段占位内容：
+
+- 层: <lid> <层名称>
+- 问题空间文件: <work-dir>/<lid>_问题空间.md
+- 答案文件 (<N> 个):
+  - <work-dir>/<Q1>_<lid>_answer.md
+  - <work-dir>/<Q2>_<lid>_answer.md
+  - ...
+- 输出文件: <work-dir>/<lid>_horizon_summary.md
+- 侧重: <侧重标签>
+- 侧重配置: <JSON, 含 label/primary/secondary>
+- 完成后在输出文件末尾写入 [HORIZON_SUMMARY_DONE] <lid>
 
 ## 核心原则：减少冗余，保持具体
 

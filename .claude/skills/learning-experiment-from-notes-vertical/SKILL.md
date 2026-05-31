@@ -15,11 +15,20 @@ description: Vertical Summary Agent —— 接收所有层的 horizon summary �
 
 ## 输入
 
-scheduler.ts 在 prompt 中传递：
-- 所有层的 horizon summary 文件路径列表
-- 输出文件路径（`summary.md`）
-- 用户输入要素（模型负载、后端平台、请求模式、计算场景、侧重标签）
-- 侧重配置
+scheduler.ts 将参数直接嵌入此段（`fillSkillInput`），替换本文档中本段占位内容：
+
+- Horizon Summary 文件 (<N> 个):
+  - <work-dir>/L1_horizon_summary.md
+  - <work-dir>/L2_horizon_summary.md
+  - ...（仅列出存在的文件）
+- 输出文件: <work-dir>/summary.md
+- 模型负载: <用户指定>
+- 后端平台: <用户指定>
+- 请求模式: <用户指定>
+- 计算场景: <用户指定>
+- 侧重: <侧重标签>
+- 侧重配置: <JSON, 含 label/primary/secondary>
+- 完成后在输出文件末尾写入 [VERTICAL_SUMMARY_DONE]
 
 ## Workflow
 

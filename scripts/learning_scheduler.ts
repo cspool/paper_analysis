@@ -4,7 +4,7 @@
  *
  * Multi-agent pipeline with worker pool pattern + checkpoint/resume + progress viz:
  *   Phase 1: Launch 6 Question Agents → build work pool of question entries
- *   Phase 2: 3 worker threads, each picks undone question → Answer Agent
+ *   Phase 2: 2 worker threads, each picks undone question → Answer Agent
  *   Phase 3: 2 worker threads, each picks undone layer → Horizon Summary Agent
  *   Phase 4: 1 Vertical Summary Agent → final summary.md
  *
@@ -12,7 +12,7 @@
  *   npx tsx /data3/paper_analysis/scripts/learning_scheduler.ts --work-dir <dir> --user-input "..."
  */
 
-import { spawn, ChildProcess, exec } from "child_process";
+import { spawn, ChildProcess } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { existsSync, createWriteStream } from "fs";
@@ -62,7 +62,7 @@ const LAYER_DEFS: Record<string, { name: string; scope: string; questions: strin
     questions: [
       "Q4.1: 在<后端平台>上，kernel 如何切分和调度来支持<计算场景>？",
       "Q4.2: <计算场景>的指令编排和 pipeline 设计？",
-      "Q4.3: 有哪些 kernel 调度框架/方法支持？",
+      "Q4.3: 有哪些 kernel 调度框架/运行时环境支持？",
       "Q4.4: 这些 kernel 调度方法的实现和实验环境？",
     ],
   },
@@ -88,7 +88,7 @@ const LAYER_DEFS: Record<string, { name: string; scope: string; questions: strin
 };
 
 const SIDE_EMPHASIS_MAP: Record<string, Record<string, string>> = {
-  "硬件体系结构": { label: "硬件体系结构", primary: "硬件数据流 + 计算/控制模块设计 + 架构", secondary: "软件栈/算法" },
+  "硬件体系结构": { label: "硬件架构和运行时", primary: "硬件数据流 + 计算/控制模块设计 + 架构 + 运行时调度/并发/流水线", secondary: "软件栈/算法" },
   "编译框架":     { label: "编译框架",     primary: "编译优化流程 + IR 转换 + Codegen",     secondary: "Kernel/硬件目标" },
   "Kernel 调度":  { label: "Kernel 调度",  primary: "Kernel 实现 + 指令编排 + Pipeline",   secondary: "编译/硬件" },
   "实验和实现":   { label: "实验和实现",   primary: "实现代码/框架 + 实验环境",            secondary: "创新方法" },
@@ -107,10 +107,16 @@ interface UserInput {
   constraints: string;
 }
 
+type WorkStatus = "pending" | "running" | "done";
+
 interface WorkEntry {
   questionId: string;
   layerId: string;
-  isDone: boolean;
+  status?: WorkStatus;
+  isDone?: boolean; // Backward compatible with older progress.json files.
+  workerId?: number;
+  started_at?: number;
+  finished_at?: number;
 }
 
 interface Checkpoint {
@@ -182,17 +188,59 @@ async function checkFileHasSignal(filepath: string, signal: string): Promise<boo
   catch { return false; }
 }
 
-// ─── Skill Body Reader ───────────────────────────────────────────────────────
-
-function stripFrontmatter(md: string): string {
-  if (md.startsWith("---")) { const parts = md.split("---"); return parts.slice(2).join("---").trim(); }
-  return md.trim();
+function getWorkStatus(entry: WorkEntry): WorkStatus {
+  if (entry.status === "pending" || entry.status === "running" || entry.status === "done") return entry.status;
+  return entry.isDone ? "done" : "pending";
 }
 
+function setWorkStatus(entry: WorkEntry, status: WorkStatus, workerId?: number): void {
+  entry.status = status;
+  entry.isDone = status === "done";
+  if (status === "running") {
+    entry.workerId = workerId;
+    entry.started_at = Date.now();
+    delete entry.finished_at;
+  } else {
+    delete entry.workerId;
+    if (status === "pending") {
+      delete entry.started_at;
+      delete entry.finished_at;
+    }
+    if (status === "done") entry.finished_at = Date.now();
+  }
+}
+
+function isWorkDone(entry: WorkEntry): boolean {
+  return getWorkStatus(entry) === "done";
+}
+
+function countDoneAnswers(cp: Checkpoint): number {
+  return cp.question_pool.filter(isWorkDone).length;
+}
+
+// ─── Skill Body Reader ───────────────────────────────────────────────────────
+
+/** 读取 SKILL.md body（去掉 frontmatter），用于传递给 agent 作为执行方法论。 */
 async function readSkillBody(skillDir: string): Promise<string> {
   const p = path.join(SKILLS_DIR, skillDir, "SKILL.md");
-  try { return stripFrontmatter(await fs.readFile(p, "utf-8")); }
-  catch { return `# ${skillDir}`; }
+  try {
+    let md = await fs.readFile(p, "utf-8");
+    if (md.startsWith("---")) { const parts = md.split("---"); md = parts.slice(2).join("---").trim(); }
+    return md;
+  } catch { return `# ${skillDir}`; }
+}
+
+/** 将 SKILL.md body 中的 `## 输入` 占位段替换为实际参数值，形成自包含的 prompt。 */
+function fillSkillInput(skillBody: string, params: string): string {
+  const marker = "## 输入";
+  const idx = skillBody.indexOf(marker);
+  if (idx === -1) return skillBody + "\n\n" + marker + "\n" + params + "\n";
+
+  const afterMarker = skillBody.indexOf("\n## ", idx + marker.length);
+  if (afterMarker === -1) {
+    return skillBody.slice(0, idx) + marker + "\n" + params + "\n";
+  }
+  return skillBody.slice(0, idx) + marker + "\n" + params + "\n" + skillBody.slice(afterMarker);
 }
 
 // ─── Checkpoint / Resume ─────────────────────────────────────────────────────
@@ -208,6 +256,55 @@ async function loadCheckpoint(workDir: string): Promise<Checkpoint | null> {
   } catch { return null; }
 }
 
+function normalizeCheckpoint(cp: Checkpoint): number {
+  cp.question_pool = Array.isArray(cp.question_pool) ? cp.question_pool : [];
+  cp.phase3_layers_done = Array.isArray(cp.phase3_layers_done) ? [...new Set(cp.phase3_layers_done)] : [];
+  cp.phase = cp.phase ?? 0;
+  cp.phase1_done = Boolean(cp.phase1_done);
+  cp.phase4_done = Boolean(cp.phase4_done);
+  cp.started_at = cp.started_at ?? Date.now();
+  cp.updated_at = cp.updated_at ?? Date.now();
+
+  let resetRunning = 0;
+  for (const entry of cp.question_pool) {
+    const status = getWorkStatus(entry);
+    if (status === "running") {
+      resetRunning++;
+      setWorkStatus(entry, "pending");
+    } else {
+      entry.status = status;
+      entry.isDone = status === "done";
+      delete entry.workerId;
+      if (status !== "done") {
+        delete entry.started_at;
+        delete entry.finished_at;
+      }
+    }
+  }
+  return resetRunning;
+}
+
+async function reconcileAnswerProgress(workDir: string, cp: Checkpoint): Promise<{ recovered: number; reset: number }> {
+  let recovered = 0;
+  let reset = 0;
+
+  for (const entry of cp.question_pool) {
+    const af = path.join(workDir, `${entry.questionId}_${entry.layerId}_answer.md`);
+    const hasDoneSignal = existsSync(af) && await checkFileHasSignal(af, `[ANSWER_AGENT_DONE] ${entry.questionId}`);
+    const status = getWorkStatus(entry);
+
+    if (hasDoneSignal && status !== "done") {
+      setWorkStatus(entry, "done");
+      recovered++;
+    } else if (!hasDoneSignal && status === "done") {
+      setWorkStatus(entry, "pending");
+      reset++;
+    }
+  }
+
+  return { recovered, reset };
+}
+
 async function saveCheckpoint(workDir: string, cp: Checkpoint): Promise<void> {
   cp.updated_at = Date.now();
   await fs.writeFile(checkpointPath(workDir), JSON.stringify(cp, null, 2), "utf-8");
@@ -218,6 +315,7 @@ async function saveCheckpoint(workDir: string, cp: Checkpoint): Promise<void> {
 // ANSI escape helpers
 const C = { R: "\x1b[0m", G: "\x1b[32m", Y: "\x1b[33m", C: "\x1b[36m", B: "\x1b[34m", D: "\x1b[2m", W: "\x1b[37m", M: "\x1b[35m" };
 const BOLD = "\x1b[1m";
+const activeHorizonLayers = new Set<string>();
 
 function bar(filled: number, total: number, width: number, color: string, emptyColor: string = C.D): string {
   const blocks = Math.round((filled / Math.max(total, 1)) * width);
@@ -234,17 +332,19 @@ async function printProgress(workDir: string, ui: UserInput, phaseLabel: string,
   const elapsed = Date.now() - startMs;
   const pool = cp.question_pool;
   const totalQ = pool.length;
-  const doneQ = pool.filter(e => e.isDone).length;
+  const doneQ = pool.filter(isWorkDone).length;
+  const runningAnswer = pool.filter(e => getWorkStatus(e) === "running").length;
   const horizonDone = cp.phase3_layers_done.length;
-  const runningAnswer = (await execCapture("pgrep -fc 'answer_Q[0-9]' 2>/dev/null")) || "0";
-  const runningHorizon = (await execCapture("pgrep -fc 'horizon_[L]' 2>/dev/null")) || "0";
+  const runningHorizon = activeHorizonLayers.size;
 
   // Count per-layer
-  const layerStats: Record<string, { done: number; total: number }> = {};
-  for (const lid of LAYER_ORDER) layerStats[lid] = { done: 0, total: 0 };
+  const layerStats: Record<string, { done: number; running: number; total: number }> = {};
+  for (const lid of LAYER_ORDER) layerStats[lid] = { done: 0, running: 0, total: 0 };
   for (const e of pool) {
     layerStats[e.layerId].total++;
-    if (e.isDone) layerStats[e.layerId].done++;
+    const status = getWorkStatus(e);
+    if (status === "done") layerStats[e.layerId].done++;
+    if (status === "running") layerStats[e.layerId].running++;
   }
 
   const lines: string[] = [];
@@ -258,12 +358,12 @@ async function printProgress(workDir: string, ui: UserInput, phaseLabel: string,
   lines.push(`${BOLD}${C.C}║${C.R} P1 Question [${bar(p1done, 6, 18, C.G)}] ${p1done}/6  ${cp.phase1_done ? `${C.G}DONE${C.R}` : `${C.Y}...${C.R}`}`);
 
   // Phase 2
-  const p2Label = doneQ === totalQ && totalQ > 0 ? `${C.G}DONE${C.R}` : `${C.Y}RUN${C.R}`;
-  lines.push(`${BOLD}${C.C}║${C.R} P2 Answer   [${bar(doneQ, totalQ, 18, C.Y)}] ${String(doneQ).padStart(2)}/${String(totalQ).padEnd(2)} ${pct(doneQ, totalQ)} ${p2Label} ${C.D}(${runningAnswer.trim()} act)${C.R}`);
+  const p2Label = doneQ === totalQ && totalQ > 0 ? `${C.G}DONE${C.R}` : runningAnswer > 0 ? `${C.Y}RUN${C.R}` : `${C.D}WAIT${C.R}`;
+  lines.push(`${BOLD}${C.C}║${C.R} P2 Answer   [${bar(doneQ, totalQ, 18, C.Y)}] ${String(doneQ).padStart(2)}/${String(totalQ).padEnd(2)} ${pct(doneQ, totalQ)} ${p2Label} ${C.D}(${runningAnswer} act)${C.R}`);
 
   // Phase 3
-  const p3Label = cp.phase3_layers_done.length === 6 ? `${C.G}DONE${C.R}` : horizonDone > 0 ? `${C.C}RUN${C.R}` : `${C.D}WAIT${C.R}`;
-  lines.push(`${BOLD}${C.C}║${C.R} P3 Horizon  [${bar(horizonDone, 6, 18, C.C)}] ${horizonDone}/6  ${p3Label} ${C.D}(${runningHorizon.trim()} act)${C.R}`);
+  const p3Label = cp.phase3_layers_done.length === 6 ? `${C.G}DONE${C.R}` : runningHorizon > 0 ? `${C.C}RUN${C.R}` : `${C.D}WAIT${C.R}`;
+  lines.push(`${BOLD}${C.C}║${C.R} P3 Horizon  [${bar(horizonDone, 6, 18, C.C)}] ${horizonDone}/6  ${p3Label} ${C.D}(${runningHorizon} act)${C.R}`);
 
   // Phase 4
   const p4Label = cp.phase4_done ? `${C.G}DONE ✓${C.R}` : cp.phase3_layers_done.length === 6 ? `${C.C}WAIT${C.R}` : `${C.D}WAIT${C.R}`;
@@ -275,9 +375,18 @@ async function printProgress(workDir: string, ui: UserInput, phaseLabel: string,
     for (const lid of LAYER_ORDER) {
       const s = layerStats[lid];
       if (s.total === 0) continue;
-      const dotBar = Array.from({length: s.total}, (_, i) => i < s.done ? `${C.G}●${C.R}` : `${C.D}○${C.R}`).join("");
+      const dotBar = pool
+        .filter(e => e.layerId === lid)
+        .map(e => {
+          const status = getWorkStatus(e);
+          if (status === "done") return `${C.G}●${C.R}`;
+          if (status === "running") return `${C.Y}◐${C.R}`;
+          return `${C.D}○${C.R}`;
+        })
+        .join("");
       const check = s.done === s.total ? ` ${C.G}✓${C.R}` : "";
-      lines.push(`${BOLD}${C.C}║${C.R} ${lid} ${LAYER_DEFS[lid].name.padEnd(10)} [${dotBar}] ${s.done}/${s.total}${check}`);
+      const runningText = s.running > 0 ? ` ${C.Y}+${s.running} running${C.R}` : "";
+      lines.push(`${BOLD}${C.C}║${C.R} ${lid} ${LAYER_DEFS[lid].name.padEnd(10)} [${dotBar}] ${s.done}/${s.total}${runningText}${check}`);
     }
   }
 
@@ -289,12 +398,6 @@ async function printProgress(workDir: string, ui: UserInput, phaseLabel: string,
 
   // Clear screen and print
   process.stdout.write("\x1b[2J\x1b[H" + lines.join("\n") + "\n");
-}
-
-async function execCapture(cmd: string): Promise<string> {
-  return new Promise(resolve => {
-    exec(cmd, { timeout: 3000 }, (_err: any, stdout: string) => resolve((stdout || "").trim()));
-  });
 }
 
 // ─── Claude Subprocess Spawn ─────────────────────────────────────────────────
@@ -364,23 +467,21 @@ function waitForProc(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
 async function buildQuestionPrompt(lid: string, workDir: string, ui: UserInput): Promise<string> {
   const skillBody = await readSkillBody("learning-experiment-from-notes-question");
   const layer = LAYER_DEFS[lid];
-  const qs = layer.questions.map((q, i) => `- ${lid[1]}.${i + 1}: ${fillTemplate(q, ui)}`);
+  const qs = layer.questions.map((q, i) => `  - ${lid[1]}.${i + 1}: ${fillTemplate(q, ui)}`);
   const outFile = path.join(workDir, `${lid}_问题空间.md`);
 
-  return `${skillBody}\n\n---\n\n`
-    + `你是 Question Agent。\n`
-    + `层编号: ${lid}, 层名称: ${layer.name}, 覆盖: ${layer.scope}\n\n`
-    + `用户要素: 模型=${ui.modelLoad}, 后端=${ui.backend}, 请求=${ui.requestMode}, 计算=${ui.computeScenario}, 侧重=${ui.emphasis}\n\n`
-    + `该层预置问题:\n${qs.join("\n")}\n\n`
-    + `## 输出格式\n`
-    + `写入 ${outFile}，每个问题存储格式:\n`
-    + `\`\`\`\n`
-    + `## <question_id>\n`
-    + `**层**: ${lid}\n`
-    + `**问题**: <问题文本>\n`
-    + `**预关键词**: <逗号分隔>\n`
-    + `\`\`\`\n`
-    + `所有问题写完后末尾加 [QUESTION_AGENT_DONE] ${lid}`;
+  const params = [
+    `- 层编号: ${lid}`,
+    `- 层名称: ${layer.name}`,
+    `- 覆盖范围: ${layer.scope}`,
+    `- 输出文件: ${outFile}`,
+    `- 用户输入: 模型=${ui.modelLoad}, 后端=${ui.backend}, 请求=${ui.requestMode}, 计算=${ui.computeScenario}, 侧重=${ui.emphasis}`,
+    `- 预置问题:`,
+    qs.join("\n"),
+    `- 完成后在输出文件末尾写入 [QUESTION_AGENT_DONE] ${lid}`,
+  ].join("\n");
+
+  return fillSkillInput(skillBody, params);
 }
 
 async function phase1_questions(workDir: string, ui: UserInput, cp: Checkpoint, timeoutMs: number): Promise<WorkEntry[]> {
@@ -426,8 +527,8 @@ async function phase1_questions(workDir: string, ui: UserInput, cp: Checkpoint, 
     }
   }
 
-  // Build work pool from question spaces (NEVER scan answer files for resume —
-  // only progress.json is authoritative for completion status)
+  // Build work pool from question spaces. Answer completion is reconciled
+  // from DONE signals when an existing checkpoint is loaded.
   const pool: WorkEntry[] = [];
   for (const lid of LAYER_ORDER) {
     const f = path.join(workDir, `${lid}_问题空间.md`);
@@ -436,7 +537,7 @@ async function phase1_questions(workDir: string, ui: UserInput, cp: Checkpoint, 
     const matches = content.match(/Q\d\.\d+/g);
     if (matches) {
       for (const qid of [...new Set(matches)]) {
-        pool.push({ questionId: qid, layerId: lid, isDone: false });
+        pool.push({ questionId: qid, layerId: lid, status: "pending", isDone: false });
       }
     }
   }
@@ -449,7 +550,7 @@ async function phase1_questions(workDir: string, ui: UserInput, cp: Checkpoint, 
   return pool;
 }
 
-// ─── Phase 2: Answer Agents (3 workers) ──────────────────────────────────────
+// ─── Phase 2: Answer Agents (2 workers) ──────────────────────────────────────
 
 async function buildAnswerPrompt(qid: string, lid: string, workDir: string, ui: UserInput): Promise<string> {
   const skillBody = await readSkillBody("learning-experiment-from-notes-answer");
@@ -458,34 +559,33 @@ async function buildAnswerPrompt(qid: string, lid: string, workDir: string, ui: 
   const qsFile = path.join(workDir, `${lid}_问题空间.md`);
   const outFile = path.join(workDir, `${qid}_${lid}_answer.md`);
 
-  return `${skillBody}\n\n---\n\n`
-    + `你是 Answer Agent。模仿 obsidian-keyword-explain 搜索 vault 回答单问题。\n\n`
-    + `- 问题 ID: ${qid}\n- 层: ${lid} ${layer.name}\n- 模型: ${ui.modelLoad}\n- 后端: ${ui.backend}\n- 侧重: ${ui.emphasis}\n\n`
-    + `## 输入\n`
-    + `问题空间: ${qsFile}\n`
-    + `输出文件: ${outFile}\n\n`
-    + `## 侧重配置\n${JSON.stringify(emphasis, null, 2)}\n\n`
-    + `## 流程\n`
-    + `1. 读取 ${qsFile} 获取 ${qid} 的问题文本和预关键词\n`
-    + `2. 对关键词进行语义分割（仿 obsidian-keyword-explain Step 1）\n`
-    + `3. 四目录搜索（paper_secs/knowledge_notes/experiment_notes/idea_notes）\n`
-    + `4. 去重后通过 obsidian_get_note 读取笔记\n`
-    + `5. 按侧重组织答案，每个方法含: 笔记证据 + 是什么 + 方法细节 + 实现 + 实验环境\n`
-    + `6. 末尾标注所用上下文的 vault path 来源\n`
-    + `7. 写入 ${outFile}\n`
-    + `8. 末尾输出 [ANSWER_AGENT_DONE] ${qid}`;
+  const params = [
+    `- 问题 ID: ${qid}`,
+    `- 层: ${lid} ${layer.name}`,
+    `- 问题空间文件: ${qsFile}`,
+    `- 输出文件: ${outFile}`,
+    `- 模型负载: ${ui.modelLoad}`,
+    `- 后端平台: ${ui.backend}`,
+    `- 请求模式: ${ui.requestMode}`,
+    `- 计算场景: ${ui.computeScenario}`,
+    `- 侧重: ${ui.emphasis}`,
+    `- 侧重配置: ${JSON.stringify(emphasis)}`,
+    `- 完成后在输出文件末尾写入 [ANSWER_AGENT_DONE] ${qid}`,
+  ].join("\n");
+
+  return fillSkillInput(skillBody, params);
 }
 
 async function phase2_answers(workDir: string, ui: UserInput, pool: WorkEntry[], cp: Checkpoint, timeoutPerWorker: number): Promise<void> {
-  const remaining = pool.filter(e => !e.isDone).length;
-  console.log(`\n${"=".repeat(60)}\nPhase 2: Answer Agents (3 workers, ${remaining}/${pool.length} remaining)\n${"=".repeat(60)}\n`);
+  const remaining = pool.filter(e => !isWorkDone(e)).length;
+  console.log(`\n${"=".repeat(60)}\nPhase 2: Answer Agents (2 workers, ${remaining}/${pool.length} remaining)\n${"=".repeat(60)}\n`);
 
   if (remaining === 0) {
     console.log("  All questions already answered (resume). Skipping Phase 2.\n");
     return;
   }
 
-  const NUM_WORKERS = 3;
+  const NUM_WORKERS = 2;
   let progressTimer: ReturnType<typeof setInterval> | null = null;
 
   // Periodic progress display
@@ -495,11 +595,11 @@ async function phase2_answers(workDir: string, ui: UserInput, pool: WorkEntry[],
 
   async function worker(workerId: number) {
     while (true) {
-      const idx = pool.findIndex(e => !e.isDone);
+      const idx = pool.findIndex(e => getWorkStatus(e) === "pending");
       if (idx === -1) break;
 
       const entry = pool[idx];
-      entry.isDone = true; // Claim it (saved to checkpoint below before spawn)
+      setWorkStatus(entry, "running", workerId);
       cp.phase = 2;
       await saveCheckpoint(workDir, cp);
 
@@ -511,13 +611,15 @@ async function phase2_answers(workDir: string, ui: UserInput, pool: WorkEntry[],
       // Verify: process must exit cleanly AND output must contain DONE signal
       const verified = exitOk && existsSync(af) && await checkFileHasSignal(af, `[ANSWER_AGENT_DONE] ${entry.questionId}`);
       if (!verified) {
-        entry.isDone = false; // Undo claim — will be retried
+        setWorkStatus(entry, "pending");
+        await saveCheckpoint(workDir, cp);
         console.log(`  [W${workerId}] ✗ ${entry.questionId} (${entry.layerId}) — agent failed or no DONE signal, will retry`);
       } else {
+        setWorkStatus(entry, "done");
         await saveCheckpoint(workDir, cp);
       }
 
-      const left = pool.filter(e => !e.isDone).length;
+      const left = pool.filter(e => !isWorkDone(e)).length;
       const status = verified ? "✓" : "↻";
       console.log(`  [W${workerId}] ${status} ${entry.questionId} (${entry.layerId}) | remaining: ${left}`);
 
@@ -531,7 +633,7 @@ async function phase2_answers(workDir: string, ui: UserInput, pool: WorkEntry[],
 
   if (progressTimer) clearInterval(progressTimer);
 
-  const done = pool.filter(e => e.isDone).length;
+  const done = pool.filter(isWorkDone).length;
   console.log(`  Phase 2 done: ${done}/${pool.length} answers\n`);
 }
 
@@ -539,8 +641,8 @@ async function phase2_answers(workDir: string, ui: UserInput, pool: WorkEntry[],
 
 async function buildHorizonSummaryPrompt(lid: string, workDir: string, ui: UserInput): Promise<string> {
   const skillBody = await readSkillBody("learning-experiment-from-notes-horizon");
-  const emphasis = SIDE_EMPHASIS_MAP[ui.emphasis] ?? SIDE_EMPHASIS_MAP["全栈均衡"];
   const layer = LAYER_DEFS[lid];
+  const emphasis = SIDE_EMPHASIS_MAP[ui.emphasis] ?? SIDE_EMPHASIS_MAP["全栈均衡"];
   const qsFile = path.join(workDir, `${lid}_问题空间.md`);
   const outFile = path.join(workDir, `${lid}_horizon_summary.md`);
 
@@ -548,17 +650,18 @@ async function buildHorizonSummaryPrompt(lid: string, workDir: string, ui: UserI
     .filter(f => f.startsWith("Q") && f.includes(`_${lid}_answer.md`))
     .map(f => path.join(workDir, f));
 
-  return `${skillBody}\n\n---\n\n`
-    + `你是 Horizon Summary Agent。负责单层 ${lid} ${layer.name} 的分类总结。\n\n`
-    + `## 输入\n`
-    + `问题空间: ${qsFile}\n`
-    + `答案文件 (${answers.length} 个):\n${answers.map(f => `- ${f}`).join("\n")}\n\n`
-    + `## 输出\n${outFile}\n\n`
-    + `## 流程\n`
-    + `1. 读取问题空间和所有答案文件\n`
-    + `2. 按实验环境/方法类别对该层所有方法进行分类\n`
-    + `3. 输出分类表 + 方法摘要\n`
-    + `4. 末尾输出 [HORIZON_SUMMARY_DONE] ${lid}`;
+  const params = [
+    `- 层: ${lid} ${layer.name}`,
+    `- 问题空间文件: ${qsFile}`,
+    `- 答案文件 (${answers.length} 个):`,
+    answers.map(f => `  - ${f}`).join("\n"),
+    `- 输出文件: ${outFile}`,
+    `- 侧重: ${ui.emphasis}`,
+    `- 侧重配置: ${JSON.stringify(emphasis)}`,
+    `- 完成后在输出文件末尾写入 [HORIZON_SUMMARY_DONE] ${lid}`,
+  ].join("\n");
+
+  return fillSkillInput(skillBody, params);
 }
 
 async function phase3_horizon(workDir: string, ui: UserInput, cp: Checkpoint, timeoutPerWorker: number): Promise<void> {
@@ -592,10 +695,12 @@ async function phase3_horizon(workDir: string, ui: UserInput, cp: Checkpoint, ti
       const lid = layersTodo.shift()!;
       const prompt = await buildHorizonSummaryPrompt(lid, workDir, ui);
       const proc = spawnClaude(prompt, workDir, `horizon_${lid}`);
-      await waitForProc(proc, timeoutPerWorker);
+      activeHorizonLayers.add(lid);
+      const exitOk = await waitForProc(proc, timeoutPerWorker);
+      activeHorizonLayers.delete(lid);
 
       const hf = path.join(workDir, `${lid}_horizon_summary.md`);
-      const verified = existsSync(hf) && await checkFileHasSignal(hf, `[HORIZON_SUMMARY_DONE] ${lid}`);
+      const verified = exitOk && existsSync(hf) && await checkFileHasSignal(hf, `[HORIZON_SUMMARY_DONE] ${lid}`);
       if (verified) {
         cp.phase3_layers_done.push(lid);
         cp.phase3_layers_done = [...new Set(cp.phase3_layers_done)];
@@ -629,16 +734,20 @@ async function buildVerticalSummaryPrompt(workDir: string, ui: UserInput): Promi
 
   const outFile = path.join(workDir, "summary.md");
 
-  return `${skillBody}\n\n---\n\n`
-    + `你是 Vertical Summary Agent。负责跨层垂向梳理。\n\n`
-    + `## 输入 (${horizonFiles.length} 个 horizon summary):\n`
-    + `${horizonFiles.map(f => `- ${f}`).join("\n")}\n\n`
-    + `## 输出\n${outFile}\n\n`
-    + `## 流程\n`
-    + `1. 读取所有 horizon summary 文件\n`
-    + `2. 识别跨层 (L1→L2→L3→L4→L5→L6) 可串联的垂向方法组合\n`
-    + `3. 输出: 侧重声明 + 全栈关系图(mermaid) + 垂向组合逐层分析 + 端到端数据流 + 方法总结表 + 学习路径 + 证据索引\n`
-    + `4. 末尾输出 [VERTICAL_SUMMARY_DONE]`;
+  const params = [
+    `- Horizon Summary 文件 (${horizonFiles.length} 个):`,
+    horizonFiles.map(f => `  - ${f}`).join("\n"),
+    `- 输出文件: ${outFile}`,
+    `- 模型负载: ${ui.modelLoad}`,
+    `- 后端平台: ${ui.backend}`,
+    `- 请求模式: ${ui.requestMode}`,
+    `- 计算场景: ${ui.computeScenario}`,
+    `- 侧重: ${ui.emphasis}`,
+    `- 侧重配置: ${JSON.stringify(emphasis)}`,
+    `- 完成后在输出文件末尾写入 [VERTICAL_SUMMARY_DONE]`,
+  ].join("\n");
+
+  return fillSkillInput(skillBody, params);
 }
 
 async function phase4_vertical(workDir: string, ui: UserInput, cp: Checkpoint, timeoutMs: number): Promise<void> {
@@ -691,8 +800,14 @@ async function run(workDir: string, userInputText: string): Promise<number> {
   // ── Load or create checkpoint ──
   let cp = await loadCheckpoint(workDir);
   if (cp) {
+    const resetRunning = normalizeCheckpoint(cp);
+    const answerProgress = await reconcileAnswerProgress(workDir, cp);
+    await saveCheckpoint(workDir, cp);
     console.log(`\n${C.Y}═══ 检测到 checkpoint，恢复中... ═══${C.R}`);
-    console.log(`  上次运行到 Phase ${cp.phase}, ${cp.question_pool?.filter(e => e.isDone).length ?? 0}/${cp.question_pool?.length ?? 0} answers done`);
+    console.log(`  上次运行到 Phase ${cp.phase}, ${countDoneAnswers(cp)}/${cp.question_pool.length} answers done`);
+    if (resetRunning > 0) console.log(`  ${resetRunning} 个上次中断的 running answers 已重置为 pending`);
+    if (answerProgress.reset > 0) console.log(`  ${answerProgress.reset} 个缺少 DONE 信号的 answers 已重置为 pending`);
+    if (answerProgress.recovered > 0) console.log(`  ${answerProgress.recovered} 个带 DONE 信号的 answers 已恢复为 done`);
   } else {
     cp = {
       phase: 0,
@@ -714,8 +829,8 @@ async function run(workDir: string, userInputText: string): Promise<number> {
     console.log("Phase 1 already done (checkpoint). Skipping to Phase 2.");
   }
 
-  // Phase 2: Answer Agents (3 workers)
-  const undoneAnswers = cp.question_pool.filter(e => !e.isDone).length;
+  // Phase 2: Answer Agents (2 workers)
+  const undoneAnswers = cp.question_pool.filter(e => !isWorkDone(e)).length;
   if (undoneAnswers > 0) {
     await phase2_answers(workDir, ui, cp.question_pool, cp, 3_600_000 * 2);
   } else {
