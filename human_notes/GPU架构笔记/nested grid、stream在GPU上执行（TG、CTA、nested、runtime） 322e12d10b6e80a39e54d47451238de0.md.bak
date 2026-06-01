@@ -1,0 +1,303 @@
+# nested grid、stream在GPU上执行（TG、CTA、nested、runtime）
+
+METHOD AND SYSTEM FOR PROCESSING NESTED STREAM EVENTS
+
+THREAD GROUP SCHEDULER FOR COMPUTING ON A PARALLEL THREAD PROCESSOR
+
+CONTROLLING WORK DISTRIBUTION FOR PROCESSING TASKS
+
+SCHEDULING AND MANAGEMENT OF  COMPUTE TASKS WITH DIFFERENT EXECUTION PRIORITY LEVELS
+
+Hardware Compute Partitioning on NVIDIA GPUs for Composable Systems
+
+## 命令Stream（串行任务打包成命令Stream，减少CPU同步）
+
+CPU将**串行的任务打包成命令流并通过pushbuffer传递**，来去除频繁的CPU-GPU同步，提高CPU和GPU的协作效率。
+
+**pushbuffer传递串行执行的命令流Stream（cudaStream）。**
+
+应用可能需要定义**多个cudaStream协作（包含kernel嵌套调用）**，不同Stream中任务执行要满足cross-stream依赖，一般需要CPU使用cuda函数显式调度任务执行，让CPU和GPU频繁的同步等待。
+
+不同task group（channel）中不同Stream并发的执行模型不支持CTA**动态产生kernel grid**，引入GTMD queue和QTMD等结构来**解决for-if-do嵌套kernel**难以静态unrolling的问题，去除CPU干预。
+
+扩展架构支持线程组动态生成cudaStream，支持**CTA动态产生cudaStream**，扩展item到task和event，让调度满足**多个cudaStream之间依赖**。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%201.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%202.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%203.png)
+
+## Fig2、3、4、5（channel、TMD、CTA、线程组）
+
+**pushbuffer中命令流是cudaStream**。
+
+TMD group（链表，应用channel）是相同优先级的TMD，RR或greedy从不同task group中调度TMD，不同group一般是不同应用。
+
+TMU中若干task group属于硬件调度模块，也称为channel。
+
+所有线程组的GTMQ queue、QTMD和TMDQs是定义Stream的数据结构（类似CPU内存中pushbuffer），保存在显存，缓存在TMD cache。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%204.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%205.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%206.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%207.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%208.png)
+
+线程组warp是1个warp Ctx承载的线程负载，warp Ctx是SM执行warp的资源单位，warpSz是SIMT Cores执行SIMD指令的线程宽度。
+
+SM并发多个CTA，包含所有warp**按照“年龄”顺序调度发射**，因为SM的SIMT Cores的并行warp数和SM的并发warp数不同。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%209.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2010.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2011.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2012.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2020.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2021.png)
+
+**grid TMD（计算任务）、queue TMD（嵌套任务、图形任务）**
+
+grid TMD的CTA通过block定义，**grid TMD拆成CTA的三维阵列**。
+
+可配置TMD按CTA串行，TMD抢占和恢复。
+
+queue TMD初始化queue，queue中entry是输入数据vertices或子任务。queue TMD在满足条件后派发不同数量CTA处理queue中数据或子任务，即让CTA排队处理queue中数据。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2013.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2014.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2015.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2016.png)
+
+**CTA state**包含TMD年龄、抢占时的instr boundary或CTA boundary。
+
+**scheduler参数**是TMD往GPC调度的设置，TMD是grid还是queue，如何加入TMD group。
+
+WDU将queue中entry发给CTA执行，queue中每N个entry指派M个CTA，**queue定义了dataflow或多线程协作，常用于图形pipeline或dataflow任务**。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2017.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2018.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2019.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2020.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2021.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2022.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2023.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2024.png)
+
+## Fig4、5（CTA动态生成grid）
+
+支持nested parallel需要设计硬件功能（GPU执行pipeline）、软件运行时功能（底层向上接口，如父亲线程同步）、编程语言支持（应用编程接口）。
+
+运行时函数是辅助应用程序在硬件运行的函数，结合底层硬件接口实现某些功能。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2025.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2026.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2027.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2028.png)
+
+**pushbuffer中命令流是cudaStream**。
+
+grid TMD是计算grid任务，queue TMD是图形任务，Stream包含多个命令（不同任务）。
+
+计算task是一次kernel调用（grid），父亲CTA执行if、for、kernel嵌套可能**动态产生儿子grid。**产生的儿子grid执行完后，父亲CTA执行剩余。
+
+父亲CTA运行时产生儿子grid A。
+
+cuda runtime call是memory bar kernel，保证**内存一致**（无效当前Cache）。
+
+cudaRTLaunch将**儿子grid加入queue**，具体是MMU执行PCAS指令，让scheduler（queue）接受SM生成的grid TMD指针，而不是pushbuffer中的grid TMD指针。
+
+cudaThreadSync插入**barrier**让父亲线程等待儿子线程同步，**保存父亲Ctx**。插入barrier是因为**线程调用kernel后立刻返回**，不会等待调用完成。
+
+儿子grid A结束恢复父亲CTA。
+
+AtExit任务调用scheduler kernel，调度指向的CTA启动（某个之前挂起的CTA）。
+
+AtEntry任务调用restoration kernel，来**恢复父亲CTA的Ctx**，保护**内存一致**（之前Cache失效），让父亲跳出**barrier**。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2029.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2030.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2031.png)
+
+## Table2、3、4、5、6（for-if-do嵌套kernel的动态展开）
+
+kernel grid调用的嵌套，减少CPU参与判断和启动任务，main交互最外层kernel调用，深层kernel调用和其父亲交互。
+
+T2中，100个foo线程分别生成bar grid，并分别等待自己bar grid完成，main等待100个foo线程完成，总计执行100个foo线程和100个bar线程。
+
+T3中，只有第一个foo线程生成bar grid，并等待bar grid完成，main等待100个foo线程完成，总计执行100个foo线程和1个bar线程。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2032.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2033.png)
+
+block内所有foo线程等待父亲线程（block中第一个foo线程）创建父亲stream后，每个foo线程生成bar grid并将bar grid加入父亲stream（**100个bar grid在stream中串行**），所有foo线程等待父亲stream完成。总计100个foo线程和100个bar线程（处于1个父亲stream）。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2034.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2035.png)
+
+CPU程序main的for-if-do结构，需要CPU动态判断if是否执行if内的do任务，不能将for-if-do作静态unrolling成多个do-kernel线程。
+
+Tab6：最内层if(cond) do定义成if-kernel线程，for-if-do作unrolling为if-kernel<<<forSz>>>，但外层多个嵌套for-if-do的条件全部需要CPU参与，频繁的CPU-GPU同步影响性能。
+
+Tab7：每层for(forSz)-if-do作unrolling为if-kernel<<<forSz>>>调用，即生成if-kernel grid，if-kernel线程中if-do中嵌套for-if-do，对应if-kernel grid的动态生成。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2036.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2037.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2038.png)
+
+## Fig6、7、8（grid中生成grid、grid中生成Stream）
+
+命令流Stream中的计算命令流变成表层GTMD queue。每个GTMD调度到WDU并按CTA派发到SM（SM按CTA分配Ctx），即分配1个grid到SM执行。
+
+Fig6的GTMD queue和QTMD是管理任务（CTA）中嵌套kernel的父、子、系统任务的queues数据结构，Fig7-8中不同TMDQ是管理任务（线程组）中嵌套Stream的queues数据结构，类似pushbuffer中存储的命令流。
+
+每个TMDQ、GTMD queue、QTMD统称为**TMD group，不同TMD group优先级不同**。
+
+GTMD queue是grid TMD队列，分为**应用表层grid队列和嵌套里层grid队列**。
+
+应用表层grid队列，是驱动为应用静态生成的grid队列，包含main中表层的kernel调用。
+
+嵌套里层grid队列，是SM执行CTA时**动态产生**的grid，包含kernel中嵌套的kernel调用。
+
+QTMD是cuda kernel TMD队列，是scheduler和restoration的TMD队列。
+
+scheduler kernel指向某个之前挂起的CTA，调度挂起的CTA启动。
+
+restoration kernel为启动的CTA恢复Ctx，重置Cache，跳出barrier。
+
+不同kernel可能分别处于不同queue。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2039.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2040.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2047.png)
+
+nested depth：线程上面嵌套的父亲grid层数，CPU线程的深度是0。
+
+Fig7是CPU线程组（main线程）动态创建的cudaStream，每个Stream动态分配1个TMDQ管理并存储在CPU内存中（TMU需要访问CPU内存），因此main可以自由分配TMDQ。Fig8是GPU线程组（device线程）动态创建Stream，但GPU不能动态分配内存，因此提前在VRAM中静态分配TMDQ的内存并映射（TMU直接访问GPU内存）。
+
+queue task（Stream）包含若干GPU命令，Stream**分配一个TMDQ管理**，Stream中task串行执行。
+
+Fig6中任务grid按CTA执行，动态生成的grid大小和Stream个数是基于CTA确定，CTA可能分支发散到不同线程组，因此Fig7-8将CTA扩展到线程组。
+
+**执行图的不同深度上有各自的线程组（执行相同kernel的线程集合），作为线程组Ctx的若干TMDQ**（712-0/1/2等）。
+
+每个TMDQ指向所管理task stream中的task。
+
+task完成要求生成的儿子线程组也完成，如740-2需要等待740-1、780和790完成后启动。
+
+不同深度的线程组表示不同时候（SM/host）生成的任务，深度0的线程组是CPU创建的，TMDQ分别对应Fig6中的GTMQ或QTMD。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2041.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2042.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2043.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2044.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2045.png)
+
+线程组一般是warp，SM内若干线程并发，每个线程可能生成stream。
+
+**线程组用Ctx定义，Ctx是线程组负责的任务和分配的资源**，Ctx内线程共享Stream任务和TMDQ资源。CPU线程组的Ctx是CUDA Ctx的线程。GPU线程组的Ctx是CTA或一个深度内任意线程集合。
+
+CTA在SM运行中生成儿子grid，grid大小是CTA中调用儿子kernel的线程数×儿子kernel的调用grid，自身被挂起作为父亲CTA，通过TMDQs管理。**GPU线程组的TMDQ资源数固定且按grid静态分配，grid内线程组共享TMDQ资源**，线程组动态生成的Stream超过资源上限会共享TMDQ。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2046.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2047.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2048.png)
+
+## Fig9、10、11、12（多命令流并发的cross-stream依赖处理）
+
+不同cudastream的task并发，但要求按照一定顺序执行，来满足应用定义的**cross-stream依赖**。
+
+cudaEventCreate创造等待事件，cudaStreamWaitEvent将cudaStream绑定等待事件，cudaEventRecord将事件通知某cudaStream。
+
+过去：CPU通过cuda函数，显式调度任务执行来满足cross-stream依赖，同时避免死锁。
+
+现在：取消CPU的显示控制和中途干预，让线程使用cuda函数定义SE和PE事件，利用scheduler kernel和TMDQ调度任务，来满足cross-stream依赖。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2048.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2049.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2050.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2051.png)
+
+线程通过cudaEventCreate创造SE和WE，通过cudaEventRecord将SE加入cudaStream（TMDQ），通过cudaStreamWaitEvent将WE加入cudaStream来等待SE完成。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2052.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2053.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2054.png)
+
+**线程组定义为应用中协作的多个cudaStream**。在不考虑cudaStream，也不存在cross-stream时，线程组Ctx就是pushbuffer中命令流的计算TMD，因此将cudaStream的slot命名为PB（pushbuffer）。
+
+**线程组Ctx**包含管理**协作cudaStream（PB）**的TMDQ中末尾任务的指针last task。
+
+某个cudaStream中的线程组可能产生新cudaStream或grid，即动态产生新任务，改变线程Ctx在PB中定义的last task。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2055.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2056.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2057.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2044.png)
+
+cudaStream是任务负载，TMDQ是管理cudaStream的队列（线程组运行的Ctx资源）。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2058.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2045.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2046.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2059.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2060.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2061.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2062.png)
+
+scheduler kernel从对应TMDQ的队头取item（TMD、WED、SED），按照规则执行操作，让task执行满足cross-stream依赖。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2063.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%2064.png)

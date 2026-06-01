@@ -1,0 +1,201 @@
+# VAE、VQVAE、VQGAN：14、19-22
+
+## ICLR14：VAE（VI的神经网络架构）
+
+ICLR14：Auto-Encoding Variational Bayes
+
+### 传统自编码器
+
+Encoder输出样本x的编码f(x)=z。
+
+Decoder输出编码z的解码结果g(z)=y。
+
+希望y尽量等于x，学习x→z→x’的映射。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image.png)
+
+### VAE的动机和VI
+
+[https://zhuanlan.zhihu.com/p/348498294](https://zhuanlan.zhihu.com/p/348498294)
+
+传统自编码器的Decoder学习$x→z→x’$的恒等映射，**图像x的编码z遵循的分布未知**，很难采样到能生成图像的有效编码，因此传统Decoder**不擅长生成图片**。
+
+**隐变量模型**：设定分布$p(z)$，$p(z)$上的“点云”通过$p(x | z)$采样生成$p(x)$上的“点云”，$p(x)$上的“点云”通过$p(z | x)$采样生成$p(z)$上的“点云”，即$p(x | z)$是$p(z)$到$p(x)$的采样映射，$p(z | x)$是$p(x)$到$p(z)$的采样映射。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%201.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%202.png)
+
+**参数化$p(x | z)$，最大化$p(x)$的MLE优化方法**
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%203.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%204.png)
+
+$p(Z)$采样Z生成的样本Y不一定在样本X的分布中，因为$p(Z)$和$p(X)$在各自高维空间中是**稀疏的**，**难以找到配对的数据**训练**$p_θ(X | Z)$**。
+
+后验分布**$p_θ(Z | X)$能将样本分布$p(X)$采样映射到$p(Z)$**，即将$p(X)$中**”相似的“样本**映射到$p(Z)$中，使用**配对的$p_θ(Z | X)$采样Z’和样本X**学习条件分布**$p_θ(X | Z)$**。
+
+**后验分布$p_θ(Z | X)$的计算需要$p_θ(X)$，配对数据同样稀疏**。参数化后验概率的**近似$q_φ(Z | X)$，$q_φ(Z | X)$是优化的”启动器“。**
+
+变分推断模型提供了同时学习**$p_θ(X | Z)$和$q_φ(Z | X)$的方法**
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%205.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%206.png)
+
+**ELBO尽量大**，则$q(z)$对后验分布$p(z | x)$的近似程度更好，将ELBO分解成重建项$Eq(logp(x | z))$和正则项$KL(q(z) || p(z))$。
+
+> 重建项$Eq(logp_θ(x | z))$越大越好，让分布$q(z)$中采样$z$生成的$x'$接近真实值$x$，$q(z)$蕴含$x$更多信息$q(z)$。
+
+> 正则化项$KL(q(z) || p(z))$越小越好，让$q(z)$近似$p(z)$，让**”相似“的样本$x$映射到$p(z)$范围中**，减少$q(z)$由其他分布$p(y)$的样本$y$采样生成的可能。$q(z)$和$p(z)$一般不相等，因为总有其他分布$p(y)$的样本$y$采样生成到$p(z) =\int_{D^2} p(z | x) p(x)dx$ 。
+
+### VAE的训练
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%207.png)
+
+Encoder**参数φ**是学习的后验分布的近似Qφ，Decoder**参数θ**是学习不同样本Y=X在不同Z条件下的条件分布Pθ，**Eq**是在Z后验分布内取值进行解码的期望效果。
+
+Encoder和Decoder可**分开独立推理**：Encoder编码X得到的分布$q(Z)$接近$p(Z)$，是对样本X的编码；Decoder输入$p(Z)$采样$Z$，生成对应的结果Y≈X，是对代码Z的解码。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%208.png)
+
+### ELBO的理解和Eq计算（重参数化）
+
+**训练**时，用标准噪声定义$Z=N(μ_X，σ_X)$用于ELBO中采样$Eq$的计算，ELBO要求$N(μ_X，σ_X)$接近$N(0, 1)$，同时让$p(Y=X | Z)$的期望尽量大，以便每个样本X**在$p(Z)$中的编码z能够还原X**。
+
+**$p(Z)$定义**了所有样本X的可能源头，后验分布是样本x最可能的源头范围，条件分布是源头可能导致的样本范围。为了扩大Z的语义表示范围，要求拟合的后验近似先验，以便**先验Z能覆盖**所有X的源头，编码尽可能多的X。
+
+重参数化：$Eq(p(x | z))=\int p(x | z)q(z)dz$，没有解析式而**难以参数化计算**。为了计算$Eq(p(x | z))$，训练的前向过程中**从q(z)中采样z**。但采样算子无法计算梯度，因此将采样结果z’**额外参数化**为$z'=u_{q(z)}+N(0,1)$。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%209.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2010.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2011.png)
+
+## NIPS19、CVPR21、ICLR22：VQVAE和VQGAN(**Blurry**、**Posterior Collapse**)
+
+2021：VideoGPT: Video Generation using VQ-VAE and Transformers
+
+NIPS19：Generating Diverse High-Fidelity Images with VQ-VAE-2
+
+CVPR21：Taming Transformers for High-Resolution Image Synthesis
+
+ICLR22：VECTOR-QUANTIZED IMAGE MODELING WITH IMPROVED VQGAN
+
+### Blurry和Posterior Collapse
+
+*VAE的Loss惩罚Encoder q(z)远离p(z)，奖励Decoder p(x | z)重建输入x。* 
+
+**Blurry**是指Decoder不足以通过**有限维度的编码z**，还原出不同输入x，为了不被Loss惩罚，Decoder对相同编码z的不同模式x**取平均值**（深绿和浅绿都属于绿的编码），但这导致生成的图像模糊。
+
+*Blurry促使引入自回归Decoder，让编码z编码全局特征，**自回归Decoder**基于全局特征生成局部特征，以此获得足够的图像信息用于解码。*
+
+**Posterior Collapse或Lazy Latent**是指Decoder的解码能力太强大（如自回归模型Transformer），导致只需要之前生成的$x_<t$而不需要隐变量z就能生成$x_t$并完成重建。训练过程中**Decoder不依赖于隐变量z**，重建项无法增大，则Encoder**对任意输入，都输出$p(z)$**来减少Loss，**无法建立隐变量z和图像x的映射**。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2012.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2013.png)
+
+### Compressor和Generator
+
+***VQVAE**压缩和编码图像信息**Compressor**，**先验模型**生成图像信息**Generator***
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2014.png)
+
+VAE的自回归Decoder是解码和生成的综合，VQVAE将生成能力从Decoder中独立出来，以避免过强的生成能力影响Encoder的训练。
+
+VQVAE中Encoder负责编码图像到texture序列，Decoder负责解码texture序列到图像，先验模型负责生成尽量真实图像的texture序列。
+
+> Encoder输出在p(Z)中连续分布的编码Z，**量化成codebook中离散分布的编码序列E**，每个编码e对应图像中的一个**tile或patch。**
+
+> Decoder输入codebook编码序列E，每个编码解码出稍大的纹理tile/patch，最终**解码出图像**。
+
+> 使用先验模型（GPT）学习**生成图像的codebook编码序列**，推理时生成编码序列。
+
+处理**Posterior Collapse**：离散分布的编码逼迫Encoder**为每个tile/patch选择编码**，而无法“偷懒”选择VAE中的$p(Z)$。
+
+处理**Blurry**：每个tile/patch用一个编码表示全局特征，tile之间的局部特征用自回归模型学习并生成，**编码序列包含足够的图像信息**用于Decoder解码。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2015.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2016.png)
+
+### VQVAE的训练
+
+**codebook是可学习的Weights（E）**，将相似图像经过Encoder输出的Z是一个**聚类cluster**，每个Z cluster的中心是E的最优解。 
+
+自动梯度下降：将**codebook距离**加入Loss项，跟随VQVAE训练，但学习codebook时，Encoder不参与梯度传递（**frozen**）。
+
+手动EMA：对每个code e，计算每次训练的聚类中心avg，按照指数移动平均**EMA**方法更新e，EMA方法能结合过往数据和当前数据优化codebook。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2017.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2018.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2019.png)
+
+pixel-CNN作为prior的VQVAE架构，使用两层编码解码。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2020.png)
+
+VQVAE（Compressor）学习将图像**编码**成序列，将序列**解码**出图象的能力，VQVAE的Loss是：
+
+Decoder的重建loss衡量Decoder**解码编码序列**的能力。
+
+CodeBook的学习loss衡量code**表达Encoder输出**的效果。
+
+Encoder的量化loss衡量**Encoder输出被codebook覆盖**的情况。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2021.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2022.png)
+
+GPT（Generator）学习**生成真实图像的编码序列**，GPT训练过程是：
+
+为GPT生成数据：VQVAE包含的Encoder、CodeBook和Decoder冻结，使用图像数据集和Encoder生成所有图像的codebook编码序列。
+
+GPT训练：自回归模型GPT在训练中学习VQVAE生成的codebook编码序列，在推理时生成codebook序列并输入Decoder，Decoder将codebook编码序列解码出图像。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2023.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2024.png)
+
+### VQGAN对VQVAE的改进
+
+*VQGAN**基于VQVAE的架构**，更改Pixel Loss为**Perception Loss**，增加**判别器**鉴别图像是否模糊*
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2025.png)
+
+VQVAE的架构是为了解决Posterior Collapse和Blurry，**VQGAN的架构和VQVAE一致**，但**改进VQVAE的Loss**，进一步解决Blurry。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2026.png)
+
+VQGAN相比VQVAE，对Loss有两点改进：
+
+1、降低Pixel level差距在Loss中的重要性（二阶到一阶），将real和reconstruct图像的**特征差距**作为主要指标，将real图像和recons图像输入训练好的特征检测模型（如VGG），计算**检测模型激活值的差距**。
+
+2、增加判别器模型来检测图像是否模糊，将**判别器判定模糊**作为VQVAE的Loss惩罚项，逼迫VQVAE能编码并生成更平滑真实的图像。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2027.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2028.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2029.png)
+
+VQGAN的训练和VQVAE一样，包含Compressor（phase1、2）和Generator（phase 3）两个部分，不同的是Compressor训练过程**额外引入判别器对抗学习**来减少Blurry的出现，Compressor的Loss中重建项在pixel level的MSE基础上增加图像在视觉模型中**activation的MSE（LPIPS）。**
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2030.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2031.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2032.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2033.png)
+
+判别器的训练**baseline是VQGAN预热阶段的checkpoint**，之后VQGAN和判别器对抗训练。
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2034.png)
+
+![image.png](VAE%E3%80%81VQVAE%E3%80%81VQGAN%EF%BC%9A14%E3%80%8119-22/image%2035.png)

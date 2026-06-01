@@ -1,0 +1,121 @@
+# GPU Fast Sync HW / SW
+
+ref：FAST DATA SYNCHRONIZATION INPROCESSORS AND MEMORY
+
+ref：HARDWARE ACCELERATED SYNCHRONIZATION WITH ASYNCHRONOUS TRANSACTION SUPPORT
+
+## Fig1、2
+
+GPU架构
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%201.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%202.png)
+
+## Fig3、4、5、6
+
+CGA内的SM之间直接通过shared-mem通信，但容易成为性能瓶颈。
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%203.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%204.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%205.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%206.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%207.png)
+
+不同SM上不同线程的同步，生产者SM直接将数据写到消费者SM的Mem中（remote store），数据同步通过wait和arrive进行等待和唤醒，或者操作之间的memory order设置。
+
+但remote wait的实现开销很大。
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%208.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%209.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2010.png)
+
+远程存储STS+唤醒Arrive的组合指令，基于c-barrier和p-barrier同步的硬件实现开销可接受。
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2011.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2012.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2013.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2014.png)
+
+## Fig7、8、9
+
+STS+Arrv指令的datapath，Barrier的硬件实现
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2015.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2016.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2017.png)
+
+Barrier中的fence指令
+
+SM之间的数据交换模型/情景（*）：基于全局Mem的数据交换、基于shared-mem的SM2SM、L-Cache中介。
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2018.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2019.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2020.png)
+
+L-Cache中介的数据交换的SOL延迟
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2021.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2022.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2023.png)
+
+## Fig10、11、12、13
+
+GPU架构和扩展架构
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2024.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2025.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2026.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2027.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2028.png)
+
+## Fig4、5、6
+
+Barrier transaction
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%207.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2029.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2030.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2031.png)
+
+## Fig7、8
+
+Barrier transaction实现
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2032.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2033.png)
+
+## Fig9
+
+SM通信的调用栈
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2034.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2035.png)
+
+![image.png](GPU%20Fast%20Sync%20HW%20SW/image%2036.png)

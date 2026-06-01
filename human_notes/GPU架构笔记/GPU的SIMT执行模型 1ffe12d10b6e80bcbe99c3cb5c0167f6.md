@@ -1,0 +1,1533 @@
+# GPU的SIMT执行模型
+
+# 0 并发的背景
+
+**GPU让每个thread作SIMD的执行,即标量计算的thread打包成warp进行调度.**
+
+尽量让**不同线程的RR发射**进入pipeline来隐藏执行延迟，而不是相同线程的不同指令；
+
+**SIMD/SIMT增大数据处理粒度**，降低数据依赖导致**pipeline bubble**的概率；
+
+SIMD/SIMT的相同指令不显著增加线程的硬件控制/调度开销；
+
+线程因数据依赖阻塞发射时发射其余ready的线程指令；
+
+To provide Smooth animations and a **real-time** response, graphics processors are generally required to complete these operations for a new frame of pixel data at a minimum rate of about 30 Hz. As images become more realistic-with **more primitives, more detailed textures**, and so on-the **performance demands** on graphics processors increase.  
+
+To help meet these demands, some existing graphics processors implement a multithreaded architecture that exploits parallelism. As an example, during vertex processing, the same operations are usually performed for each vertex; similarly, during pixel processing, the same operations are usually performed for each sample location or pixel location. **Operations on the various vertices (or pixels) tend to be independent of operations on other vertices (pixels); thus, each vertex(pixel) can be processed as a separate thread executing a common program.** The common program provides a sequence of instructions to execution units in an execution core of the graphics processor; at a given time, different threads may be at different points in the program sequence. Since the execution time (referred to herein as latency) of an instruction may be longer than one clock cycle, the execution units are generally implemented in a **pipelined fashion so that a second instruction can be issued before all preceding instructions have finished**, as long as the second instruction does not require data resulting from the execution of an instruction that has not finished.
+
+In Such processors, the execution core is generally designed to **fetch instructions** to be executed for the different active threads in a **round-robin fashion (i.e., one instruction from the first thread, then one from the second, and so on)** and present each fetched instruction sequentially to an issue control circuit. The issue control circuit holds the fetched instruction until its source data is available and the execution units are ready, then issues it to the execution units. Since the threads are independent, round-robin issue reduces the likelihood that an instruction will depend on a result of a still executing instruction. Thus, **latency of an instruction in one thread can be hidden by fetching and issuing an instruction from another thread.** For instance, a typical instruction might have a latency of 20 clock cycles, which could be hidden if the core supports 20 threads.
+
+However, round-robin issue does not always hide the latency. For example, pixel processing programs often include instructions to fetch texture data from system memory. Such **an instruction may have a very long latency(e.g., over 100 clock cycles)**. After a texture fetch instruction is issued for a first thread, the issue control circuit may continue to issue instructions (including Subsequent instructions from the first thread that do not depend on the texture fetch
+instruction) until it comes to **an instruction from the first thread that requires the texture data.** This instruction cannot be issued until the texture fetch instruction completes. Accordingly, **the issue control circuit stops issuing instructions and waits for the texture fetch instruction to be completed** before beginning to issue instructions again. Thus,**“bubbles' can arise in the execution pipeline**, leading to idle time for the execution units and inefficiency in the processor.
+
+One way to reduce this inefficiency is by **increasing the number of threads that can be executed concurrently by the core**. This, however, is an expensive solution because each thread requires additional circuitry. For example, to accommodate the frequent thread Switching that occurs in this parallel design, **each thread is generally provided with its own dedicated set of data registers**. Increasing the number of threads increases the number of registers required, which can
+add significantly to the cost of the processor chip, the complexity of the design, and the overall chip area. Other circuitry for Supporting multiple threads, e.g., **program counter control logic that maintains a program counter for each thread**, also becomes more complex and consumes more area as the number of threads increases.
+
+It would therefore be desirable to provide an **execution core architecture that efficiently and effectively reduces the occurrence of bubbles in the execution pipeline without requiring Substantial increases in chip area.**
+
+# 1 SIMD和SIMT对比
+
+体系结构包含SIMD、多线程MT、同步多线程SMT、多核MC、SIMT等多种设计思想,这里聚焦SIMT.
+
+并发指多个任务同时提交给执行单元,并行指执行单元并行的方式执行任务.当并发数超过执行单元的并行度时,并发任务分批并行执行.
+
+**SIMD（单指令多数据），即：在同一时刻向多个数据元素执行同样的一条指令。**
+
+- 编程&编译时：单线程编程,打包向量化数据,调用计算对应的SIMD函数.
+- 运行时：单core中单一PC寄存器获取指令，将N份数据存储在向量寄存器里，**向量数据由多个ALU负责计算**.
+
+```cpp
+__m128 dst = _mm_mul_ps (__m128 a, __m128 b)
+FOR j := 0 to 3
+	i := j*32
+	dst[i+31:i] := a[i+31:i] * b[i+31:i]
+ENDFOR
+//将a, b中的32位浮点数相乘，结果打包给dst
+
+int main()
+{
+	float a[4] = { 1,2,3,4 };
+	float b[4] = { 5,6,7,8 };
+	float res[4];
+	__m128 A = _mm_loadu_ps(a);
+	__m128 B = _mm_loadu_ps(b);
+	__m128 RES = _mm_mul_ps(A, B);
+	_mm_storeu_ps(res, RES);
+	for(int i=0;i<4;i++)
+		printf("%.2f\n",res[i]);
+	return 0;
+}
+```
+
+> **[图片提取文字 (image.png)]:**
+> ## **SIMD**
+> 
+> 编程时……远行时
+> 
+> ![](_page_0_Figure_2.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image.png)
+
+**SIMT(单指令多线程)的运行时本质是SIMD,但将数据打包分发和分支执行等细节隐藏在编译和运行时，近似出MIMD的并行模式。**
+
+- 编程&编译时
+    - CPU串行执行/多核并行执行，GPU大量并行执行kernel函数(需要并行的函数)。
+    - SPMD（单程序多数据），即以**线程为单位进行并行**而线程内部串行。以**串行执行**的模式来编程kernel函数,并以**数据并行**的方式调用kernel函数。
+    - 编程时多线程并行（<<<块数目，每块线程数>>>），映射到GPU上的线程束（warps）。
+
+> **[图片提取文字 (image.png)]:**
+> ## Warps not Exposed to GPU Programmers
+> 
+> - CPU threads and GPU kernels
+>   - Sequential or modestly parallel sections on CPU
+>   - Massively parallel sections on GPU: Blocks of threads
+> 
+> Serial Code (host)
+> 
+> Parallel Kernel (device)
+> KernelA<<<nBlk, nThr>>>(args);
+> 
+> Serial Code (host)
+> 
+> Parallel Kernel (device)
+> KernelB<<<nBlk, nThr>>>(args);
+> 
+> ![](_page_0_Picture_8.jpeg)
+> 
+> Slide credit: Hwu & Kirk
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%201.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## From Blocks to Warps
+> 
+> - GPU cores: SIMD pipelines
+>   - Streaming Multiprocessors (SM)
+>   - Streaming Processors (SP)
+> - Blocks are divided into warps
+>   - SIMD unit (32 threads)
+> 
+> ![](_page_0_Figure_6.jpeg)
+> 
+> ![](_page_0_Picture_7.jpeg)
+> 
+> **NVIDIA** Fermi architecture
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%202.png)
+
+- 运行时
+    - 多线程并行的kernel中每条指令由多个线程束(warp)负责，每个warp进行SIMD计算,每个线程进行标量计算。
+    - warp中的每个线程基于唯一线程索引i，访问不同的内存位置，以不同的数据执行相同的指令。
+        
+        ```cpp
+        // 一个Warp中每个线程的执行流程（线程0-31）
+        //【指令 + 操作数 = 结果】的SIMD范式
+        i = 0 → y[0] = a*x*[0] + y[0]
+        i = 1 → y[1] = a**x[1] + y[1]
+        ...
+        i = 31 → y[31]= a*x[31]+ y[31]
+        ```
+        
+    - warp内每个线程的指令中寄存器编号相同，但**实际访问的物理寄存器不同**（不同的fragment）。
+
+```cpp
+// kernel函数
+__global__ void saxpy(int n, float a, float *x, float *y) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        y[i] = a * x[i] + y[i];
+    }
+}
+
+int main() {
+    float a = 2.0;
+    int n; // 向量长度
+    float *hx; // host向量x
+    float *hy; // host向量y
+    // 此处省略内存分配、元素赋值、长度指定
+       
+    // GPU内存分配
+    int vector_size = n * sizeof(float); // 向量数据大小
+    float *dx; // device向量x
+    float *dy; // device向量y
+    cudaMalloc(&dx, vector_size);
+    cudaMalloc(&dy, vector_size);
+    
+    // 将host向量内容拷贝到device向量
+    cudaMemcpy(dx, hx, vector_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(dy, hy, vector_size, cudaMemcpyHostToDevice);
+    
+    // 执行saxpy
+    int t = 256; // 每个thread block的线程数
+    int blocks_num = (n + t - 1) / t; // thread block数量
+    saxpy<<<blocks_num, t>>>(n, a, dx, dy);
+    
+    // 将device向量y内容（计算结果）拷贝到host向量y
+    cudaMemcpy(hy, dy, vector_size, cudaMemcpyDeviceToHost);
+    
+    // ... (剩余逻辑)
+    
+    return 0;
+}
+```
+
+> **[图片提取文字 (image.png)]:**
+> ## **MIMD**
+> 
+> ![](_page_0_Figure_1.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%203.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## 近似 MIMD
+> 
+> ![](_page_0_Figure_1.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%204.png)
+
+# 2 CUDA与编译
+
+## 编译过程
+
+CUDA程序的编译由NVCC（NVIDIA CUDA Compiler）完成。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%205.png)
+
+首先，NVCC完成预处理；随后分类代码为设备代码和主机代码，NVCC驱动传统的C/C++编译器主机代码的编译和汇编；对于设备代码，NVCC将其编译针对某架构的SASS，编译过程中涉及C --> PTX --> SASS的转化，但通常不显式表现出来，生成的PTX/SASS码也会被直接嵌入最终的可执行文件。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%206.png)
+
+运行期，GPU会优先查找可执行文件中是否有适合当前架构的SASS，如有则直接执行。若无，则GPU驱动（driver）会使用JIT（Just-In-Time）编译手段，将PTX码编译为当前架构对应的SASS再执行（前提是可执行文件必须包含PTX）。
+
+## CUDA编程
+
+grid、threadblk、warp、fragment等概念,映射关系.
+
+线程块直接划分的warp是static warp，运行时生成/merge的是动态warp.
+
+多个线程执行同一指令,编译和运行时指令中寄存器编号是逻辑编号,运行时根据threadId访问实际寄存器.
+
+# 3 GPU基本组成
+
+## GPU和SM
+
+**GPU的负载任务有两类,图形类计算(图形学相关函数)和基本代数类计算(代数函数),前者由Texture Unit和代数Core协作完成,后者一般由代数Core完成.**
+
+支持CUDA编程的Ampere架构GPU的执行单元的层次结构是:
+
+执行模块由多个Graphic Process Cluster(GPC)组成,每个GPC是一个控制、计算齐备的模块;
+
+每个GPC包含多个Texture/Thread Process Cluster(TPC),每个TPC包含2个SM,每个SM内包含多个Texture Unit和多个**Process Block/subCore**.
+
+> **[图片提取文字 (image.png)]:**
+> Abstract—Modern GPU Streaming Multiprocessors (SMs) have several warp schedulers, execution units, and register file banks. To reduce area and energy-consumption, recent generations divide SMs into sub-cores. Each sub-core contains a distinct warp scheduler, register file, and execution units, sharing L1 memory and scratchpad resources with sub-cores in the same SM. Although partitioning the SM into sub-cores decreases the area and energy demands of larger SMs, it comes at a performance cost. Warps assigned to the SM have access to a fraction of the SM's resources, resulting in contention and imbalance issues.
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%207.png)
+
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%208.png)
+
+早期的GPU(80系GPU)中Texture Unit和代数Core不共享同一级Cache,因此**Texture Unit和SM相互独立**,并且TPC以Texture为特征命名.**早期SM也没有划分成subCore，而是各种代数Unit。**
+
+目前GPU中Texture Unit和代数Core共享同一级Cache,因此将**Texture Unit划分进SM中**,并且TPC可以Thread为特征命名.
+
+> **[图片提取文字 (iShot_2025-06-18_15.24.46.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-18_15.24.46.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-18_15.24.46.png)
+
+GPU的组成简化为:
+
+- 高并行度的SM来提供GPU的高吞吐
+- 分层的存储模块(多级cache、DRAM/HBM)提供超大线程的数据访问
+- 其余接口模块(和CPU、GPU等)提供通信
+
+其中**SIMT的核心机制实现在GPU的SM单元**中,下图是Fermi、Kepler、Pascal、Volta架构GPU的模块图.
+
+> **[图片提取文字 (iShot_2025-06-09_15.55.27.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-09_15.55.27.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-09_15.55.27.png)
+
+Fermi
+
+> **[图片提取文字 (iShot_2025-06-09_15.51.16.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-09_15.51.16.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-09_15.51.16.png)
+
+Kepler
+
+> **[图片提取文字 (iShot_2025-06-09_15.53.09.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-09_15.53.09.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-09_15.53.09.png)
+
+Pascal
+
+> **[图片提取文字 (iShot_2025-06-09_15.49.38.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-09_15.49.38.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-09_15.49.38.png)
+
+Volta
+
+## SM基本组成
+
+SM是流式多处理器,逻辑上包含:
+
+- 算术功能单元(core)和纹理功能单元(Texture),均是执行SIMD指令的pipeline.
+- 将数据和译码后的指令路由到不同单元的通路(dispatch、crossbar)
+- 存储单元(寄存器、cache)
+- 控制单元:取指的warp-schedule、fetch,译码的decode、instr-issue,分支branch和冒险scoreboard参与取指和译码过程.
+
+SM和其所在在内部划分和封装,如Pascal及之后的架构中SM内将warp scheduler、dispatch、一组算术unit封装成处理块(process block),而texture unit邻近data cache独立存在SM中.
+
+下图是Fermi、Kepler、Pascal、Volta结构的SM逻辑结构图.
+
+> **[图片提取文字 (iShot_2025-06-09_16.03.17.png)]:**
+> ## aming
+> 
+> Warp Scheduler
+> 
+> Warp Scheduler
+> 
+> Dispatch Unit
+> 
+> Dispatch Unit
+> 
+> duces several make it not only the ut also the most
+> 
+> ## A cores
+> 
+> ![](_page_0_Picture_7.jpeg)
+> 
+> sed IEEE 754-1985
+> Fermi architecture
+> -2008 floating-point
+> multiply-add (FMA)
+> I double precision\ner a multiply-add
+> multiplication and
+> nding step, with no
+> 
+> ![](_page_0_Figure_9.jpeg)
+> 
+> ![](_page_0_Figure_10.jpeg)
+> 
+> Instruction Cache
+> 
+> Register File (32,768 x 32-bit)
+> 
+> ![](_page_0_Figure_11.jpeg)
+> 
+> **Interconnect Network** 
+> 
+> 64 KB Shared Memory / L1 Cache
+> 
+> **Uniform Cache**
+![iShot_2025-06-09_16.03.17.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-09_16.03.17.png)
+
+Fermi
+
+> **[图片提取文字 (iShot_2025-06-09_15.46.39.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-09_15.46.39.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-09_15.46.39.png)
+
+Kepler
+
+> **[图片提取文字 (iShot_2025-06-09_15.59.42.png)]:**
+> ## Instruction Cache
+> 
+> ![](_page_0_Figure_2.jpeg)
+> 
+> | 6.41  | CD ( | S. Davier | red I | Marin.  | ALC: UNKNOWN |
+> |-------|------|-----------|-------|---------|--------------|
+> | 10.00 | No.  | 111721    | gc-Ia | V15=241 | morv         |
+> |       |      |           |       |         |              |
+![iShot_2025-06-09_15.59.42.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-09_15.59.42.png)
+
+Pascal
+
+> **[图片提取文字 (image.png)]:**
+> ## **L1 Instruction Cache**
+> 
+> | L0 Instruction Cache |                                 |           |           |           |           |           |           |        |  |  |
+> |----------------------|---------------------------------|-----------|-----------|-----------|-----------|-----------|-----------|--------|--|--|
+> |                      |                                 | Wai       | p Sch     | edule     | r (32 t   | hread     | /clk)     |        |  |  |
+> |                      |                                 | Di        | spatch    | Unit      | (32 th    | read/d    | :lk)      |        |  |  |
+> |                      | Register File (16,384 x 32-bit) |           |           |           |           |           |           |        |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP        | FP64      |           |           |        |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP        | FP64      |           |           |        |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           |           |           |        |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           | TE        | ENSO      | R CORE |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           |           |           |        |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           |           |           |        |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           |           |           |        |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           |           |           |        |  |  |
+> | LD/<br>ST            | LD/<br>ST                       | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | SFU    |  |  |
+> 
+> |           | Warp Scheduler (32 thread/clk)  |           |           |           |           |           |           |          |  |  |
+> |-----------|---------------------------------|-----------|-----------|-----------|-----------|-----------|-----------|----------|--|--|
+> |           | Dispatch Unit (32 thread/clk)   |           |           |           |           |           |           |          |  |  |
+> |           | Register File (16,384 x 32-bit) |           |           |           |           |           |           |          |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP        | FP64      |           |           |          |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP        | FP64      |           |           |          |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           |           |           |          |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           | TI        | =NSO      | R CORE   |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           |           | -1430     | IN COINE |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           |           |           |          |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           |           |           |          |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           |           |           |          |  |  |
+> | LD/<br>ST | LD/<br>ST                       | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | SFU      |  |  |
+> 
+> **L0 Instruction Cache** 
+> 
+> | L0 Instruction Cache |                                 |           |           |           |           |                  |  |  |  |  |
+> |----------------------|---------------------------------|-----------|-----------|-----------|-----------|------------------|--|--|--|--|
+> |                      | Warp Scheduler (32 thread/clk)  |           |           |           |           |                  |  |  |  |  |
+> |                      | Dispatch Unit (32 thread/clk)   |           |           |           |           |                  |  |  |  |  |
+> |                      | Register File (16,384 x 32-bit) |           |           |           |           |                  |  |  |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           |                  |  |  |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP        | 64        |                  |  |  |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP        | 64        |                  |  |  |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           | TENSOR CORE      |  |  |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP        | 64        | TENSON CONE      |  |  |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP        | 64        |                  |  |  |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           |                  |  |  |  |  |
+> | INT32                | INT32                           | FP32      | FP32      | FP64      |           |                  |  |  |  |  |
+> | LD/<br>ST            | LD/<br>ST                       | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST ST SFU |  |  |  |  |
+> |                      |                                 |           |           |           |           | 400KD L4 Data Ca |  |  |  |  |
+> 
+> |           | Dispatch Unit (32 thread/clk)   |           |           |           |           |             |  |  |  |
+> |-----------|---------------------------------|-----------|-----------|-----------|-----------|-------------|--|--|--|
+> |           | Register File (16,384 x 32-bit) |           |           |           |           |             |  |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           |             |  |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP        | 64        |             |  |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP        | 64        |             |  |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           | TENSOR CORE |  |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           | TENSOR CORE |  |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FF        | 64        |             |  |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           |             |  |  |  |
+> | INT32     | INT32                           | FP32      | FP32      | FP64      |           |             |  |  |  |
+> | LD/<br>ST | LD/<br>ST                       | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/ LD/ SFU |  |  |  |
+> 
+> **L0 Instruction Cache** 
+> 
+> Warp Scheduler (32 thread/clk)
+> 
+> ## 192KB L1 Data Cache / Shared Memory
+> 
+> Tex Tex Tex
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%209.png)
+
+Ampere
+
+> **[图片提取文字 (iShot_2025-06-18_12.46.22.png)]:**
+> ## **L1 Instruction Cache**
+> 
+> ## **L0 Instruction Cache** Warp Scheduler (32 thread/clk) Dispatch Unit (32 thread/clk) Register File (16,384 x 32-bit) INT INT FP32 FP32 FP64 INT FP32 FP32 FP64 INT FP64 INT INT FP32 FP32 INT FP32 FP32 INT FP64 **TENSOR TENSOR** CORE CORE INT FP32 FP32 INT FP64 INT INT FP32 FP32 FP64 INT INT FP32 FP32 FP64 INT INT FP64 FP32 FP32 LD/ LD/ LD/ LD/ LD/ LD/ LD/ LD/ SFU ST ST
+> 
+> | Warp Scheduler (32 thread/clk)  |           |           |           |           |           |           |                |
+> |---------------------------------|-----------|-----------|-----------|-----------|-----------|-----------|----------------|
+> | Dispatch Unit (32 thread/clk)   |           |           |           |           |           |           |                |
+> | Register File (16,384 x 32-bit) |           |           |           |           |           |           |                |
+> | FP64                            | INT       | INT       | FP32      | FP32      | Н         |           |                |
+> | FP64                            | INT       | INT       | FP32      | FP32      |           |           |                |
+> | FP64                            | INT       | INT       | FP32      | FP32      |           |           | TENSOR<br>CORE |
+> | FP64                            | INT       | INT       | FP32      | FP32      |           | SOR       |                |
+> | FP64                            | INT       | INT       | FP32      | FP32      | CC        | RE        |                |
+> | FP64                            | INT       | INT       | FP32      | FP32      |           |           |                |
+> | FP64                            | INT       | INT       | FP32      | FP32      |           |           |                |
+> | FP64                            | INT       | INT       | FP32      | FP32      |           |           |                |
+> | LD/<br>ST ST                    | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | LD/<br>ST | SFU            |
+> 
+> **L0 Instruction Cache** 
+> 
+> Warp Scheduler (32 thread/clk)
+> 
+> **L0 Instruction Cache** 
+> 
+> ## Warp Scheduler (32 thread/clk) Dispatch Unit (32 thread/clk) Register File (16,384 x 32-bit) INT INT FP32 FP32 FP64 FP32 FP32 INT INT FP64 INT FP32 FP32 FP64 INT INT FP32 FP32 FP64 INT **TENSOR TENSOR** CORE CORE INT INT FP32 FP32 FP64 FP64 INT INT FP32 FP32 INT INT FP32 FP32 FP64 INT INT FP32 FP32 FP64 LD/ LD/ LD/ LD/ LD/ LD/ LD/ LD/ SFU ST ST ST ST ST ST ST ST
+> 
+> **L0 Instruction Cache** 
+> 
+> ![](_page_0_Figure_5.jpeg)
+> 
+> ## 128KB L1 Data Cache / Shared Memory
+> 
+> Tex Tex Tex
+![iShot_2025-06-18_12.46.22.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-18_12.46.22.png)
+
+Volta
+
+# 4 SM的model I(one-loop approximation)
+
+ref:[UW-CS758]
+
+## 执行流
+
+一阶近似的SM结构如下:GPU包含执行核心SIMT core和存储架构,每个SIMT core在NV中称为SM,包含前端逻辑和后端逻辑:
+
+- 前端:调度warp、fetch、decode、issue和branch
+- 后端:寄存器读写(读取操作数、写回结果)、SIMD的运算、访存
+
+> **[图片提取文字 (image.png)]:**
+> ## GPU Microarchitecture Overview
+> 
+> ![](_page_0_Picture_1.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2010.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Inside a SIMT Core
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> - SIMT front end / SIMD backend
+> - Fine-grained multithreading
+>   - Interleave warp execution to hide latency
+>   - Register values of all threads stays in core
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2011.png)
+
+其中SIMD的datapath可以视为多个lane,SIMD的运算宽度即并行计算的数据数量,也是lane的个数.
+
+**lane是寄存器堆的划分单位**，lane被分配给每个PU和每个LSU，让每个lane分配给1个线程，LSU组和PU组分别执行SIMT指令（warp中指令）。
+
+每个lane都设计成pipeline,SIMD的宽度可以小于warp的大小,每个warp的所有线程分批进入pipeline:
+
+- SIMD的lanes达到更高的时钟.
+- large warp等调度设计,让分支执行的资源利用率更高.
+
+> **[图片提取文字 (image.png)]:**
+> ## SIMD width and warp size
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> - The SIMD width may be smaller than the warp size
+> - If the SIMD is smaller, it can be run at a higher clock (potentially deeper pipeline).
+>   - E.g. Fermi was SIMD 16, Volta is SIMD 32.
+> - Research has exploited this difference in SIMD width and warp size to help mitigate control flow divergence
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2012.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Research Aside: Exploiting SIMD width to mitigate CF divergence
+> 
+> • SIMD Divergence Optimization through Intra-Warp Compaction [ISCA 2013]
+> 
+>  Key Idea: Skip cycles where the whole SIMD is masked off
+> 
+> ![](_page_0_Figure_3.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2013.png)
+
+一阶近似的SIMT core的执行逻辑是:
+
+不同warp执行指令一般不同,即不同warp执行相同的program,但执行进度相互独立.
+
+SIMT core每次调度一个warp(A)执行,即取指、译码(RF)、发射进入pipeline.
+
+- warp A的指令完成后才可能被再次fetch.
+- **该模型下,**pipeline中每个warp只允许执行一条指令.因此会**等待分支执行结束后**,才调度下一指令.
+- warp A执行指令时,可调度warp B执行.两个**warp执行使用不同units**.
+
+> **[图片提取文字 (image.png)]:**
+> ## A "One loop" Approximation
+> 
+> - Simple model for the GPU.
+> - In the beginning, all warps are eligible for fetch
+> - One warp is selected, enters the pipe.
+>   - While that warp is processing, another warp is selected and enters pipe
+>   - Warps do not become eligible for fetch again until current instruction completes. Only one instruction/warp in pipeline
+> 
+> ![](_page_0_Figure_6.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2014.png)
+
+## 基于运行栈的分支执行（PDOM机制）
+
+展示一个GPU端 kernel代码的运行时，kernel在while循环中对应两个if else分支，分别为t3是否等于t4，以及t5是否等于t4两个判断。
+
+分别给代码标记几个关键指令，分别为A、B、C、D 、E、F、G等几个关键点。
+
+其中A指令被一个warp内所有线程执行，而B、C、D、F分别对应的四个分支各自的执行指令， 而E和G处为指令位置称之为reconvergence point，该位置为分支处理完毕之后，**线程聚合后执行(提高资源利用率)**.
+
+E处是没有任何指令执行,即C和D两份分支处理完毕之后，聚合在一起的线程没有执行任何指令算法。
+
+对于上述例子，如果代码在同一个warp内执行,需要处理4种分支情况,即**多组线程分别执行不同的指令，出现线程束分化情况。**
+
+```cpp
+do {
+	t1 = tid*N; // A
+	t2 = t1 + i;
+	t3 = data1[t2];
+	t4 = 0;
+	if(t3 != t4) {
+		t5 = data2[t2]; // B
+		if( t5 != t4 ) {
+			x += 1; // C
+		} else {
+			y += 2; // D
+		}
+	//E
+	} else {
+		z += 3; // F
+	}
+	i++; // G
+} while( i < N );
+```
+
+**SIMT执行模式在warp内的所有线程都只能执行相同的指令或者不执行，而不能同时执行不同指令。**即遇到分支时，warp scheduler只能串行化调度不同分支来执行，直到所有分支都执行完毕。对代码示例的分析如下：
+
+- 假设一个GPU，warp大小为4，当上述kernel代码运行到A处时，所有的线程都运行，则标记位”A/1111“。
+- 当代码运行到if(t3 != t4) 时出现分支造成线程分化，假设第四个线程运行F分支，第一到三个线程运行B分支，则表示"F/0001"和”B/1110"。
+- B线程继续执行又遇到if( t5 != t4 )分支，第一个线程执行C，第二和三个线程执行D，表示为"C/1000"和"D/0110".
+- 当C和D执行完毕之后到E,线程又重新聚合，即"E/1110"。
+- 而在G处又出现了线程聚合，即"G/1111"。
+
+> **[图片提取文字 (image.png)]:**
+> ## SIMT Using a Hardware Stack
+> 
+> Stack approach invented in early 1980's
+> 
+> ![](_page_0_Figure_2.jpeg)
+> 
+> SIMT = SIMD Execution of Scalar Threads
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2015.png)
+
+**聚合后的指令执行可能依赖分支中执行结果**,故分支内指令应比聚合后指令提前执行.
+
+**SIMT栈的作用是给warp schedule提供当前调度的warp的指令流的走向（下一条、切换分支或同步）和线程执行的mask。**
+
+ref:[SYSTEMIS AND METHOD FORMANAGING DVERGENT THREADS IN A SIMD ARCHITECTURE]
+
+SIMT栈的运行时行为：
+
+decode时,若为branch指令,则阻塞当前warp的fetch,直到branch执行完成。branch执行完成后,监测到线程分束,压栈三项(join、分支A、分支B)的对应信息.
+
+fetch时读TOS的entry，若下一个PC（下一邻接指令PC或jump目的）等于entry中的rPC，则pop后读取新TOS的nPC进行取指.否则当前PC自动递增后取指。
+
+> **[图片提取文字 (iShot_2025-06-11_15.44.46.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-11_15.44.46.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-11_15.44.46.png)
+
+> **[图片提取文字 (iShot_2025-06-11_15.47.13.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-11_15.47.13.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-11_15.47.13.png)
+
+> **[图片提取文字 (iShot_2025-06-11_15.48.12.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![iShot_2025-06-11_15.48.12.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/iShot_2025-06-11_15.48.12.png)
+
+ref:[Dynamic Warp Formation: Efficient MIMD Control Flow on SIMD Graphics Hardware]
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> (a) Control Flow Graph of an Example Program
+> 
+> (b) Resource Utilization vs. Time for Reconvergence at Immediate Postdominator of B
+> 
+> |       | Next PC | Active Mask | Ret./Reconv. PC |
+> |-------|---------|-------------|-----------------|
+> | [     | G       | 1111        | -               |
+> |       | F       | 0001        | G               |
+> | TOS → | В       | 1110        | G               |
+> |       |         |             |                 |
+> 
+> (c) Stack based Reconvergence: Initial State
+> 
+> | _     | Next PC | Active Mask | Ret./Reconv. Po | С     |
+> |-------|---------|-------------|-----------------|-------|
+> |       | G       | 1111        | -               |       |
+> |       | F       | 0001        | G               |       |
+> | - [   | Е       | 1110        | G               | (i)   |
+> |       | D       | 0110        | Е               | (ii)  |
+> | TOS → | С       | 1000        | E               | (iii) |
+> 
+> (d) Stack based Reconvergence: After Divergent Branch
+> 
+> |       | Next PC | <b>Active Mask</b> | Ret./Reconv. PC | ) |
+> |-------|---------|--------------------|-----------------|---|
+> |       | G       | 1111               | -               |   |
+> |       | F       | 0001               | G               |   |
+> | TOS - | E       | 1110               | G               |   |
+> 
+> (e) Stack based Reconvergence: After Reconvergence
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2016.png)
+
+Before the threads execute the diverging branch at B, the state of the stack is as shown in Figure 4(c). When **the branch divergence is detected after executing B**, the stack is modified to the state shown in Figure 4(d).
+The changes that occur are the following:
+(1) The original top of stack (TOS) in Figure 4(c), also at (i) in Figure 4(d), has its next PC field modified to the instruction address of the reconvergence point E (this address could be specified through an extra field in the branch instruction);
+(2) A new entry (ii) is allocated onto the stack and initialized with the next PC value of the fall through of the branch (D) and a mask encoding, which processing elements evaluated the branch as “not-taken” (0110) along with the reconvergence point address (E);
+(3) A new entry (iii) is allocated onto the stack with the target address (C) of the branch, the mask (1000) encoding the processing element that evaluated the branch as “taken”, and the reconvergence point address (E).
+Whenever the new next PC of the top entry on the stack equals the reconvergence PC of the TOS entry, the top entry is immediately popped (before being used to fetch an instruction), and the value of the next PC field from the next entry in the stack is used to fetch the next instruction. Note that this mechanism easily supports complex “nested” branch hammocks, irreducible control flow [Muchnick 1997], as well as data-dependent loops.
+
+另一种实现在指令中设置**predicate位**来表示该指令被线程执行是否修改体系结构状态.
+
+- 如果是prediction，那么会产生br跳转指令，条件为真的线程跳转到if部分执行指令，其他线程stall。然后条件为假的线程跳转到else部分执行指令，其他线程stall。
+- 如果是predication，那么不产生br指令，if部分指令和else部分指令都会被所有线程执行，但是所有指令都带predicate，根据predicate是否为1决定是否修改状态（如寄存器的值）。也就是说虽然线程执行了if和else部分的所有指令，但是由于predicate的存在只有一个分支的指令生效。
+
+## 运行栈的不足(死锁)
+
+传统的硬件SIMT堆栈存在问题:
+
+- 依赖固定深度的硬件堆栈，每个线程束需独立维护堆栈，导致寄存器占用率攀升。
+- 堆栈通常只有4-8级最大深度，这就意味着如果程序控制流过于复杂，例如，在训练Transformer模型时，自注意力机制可能触发数十/上百层条件判断，远超堆栈容量。
+- 每次分支发散时，硬件需执行压栈，并在路径切换时弹栈。例如，一个包含5层嵌套if-else的着色器，需至少10次堆栈操作（进入和退出各一次）。随着程序变得复杂，此类操作越来越多，会造成显著的流水线延迟。
+- 由于堆栈的严格后进先出（LIFO）特性要求分支路径必须按嵌套顺序执行，很容易造成负载失衡甚至死锁。例如，在光线追踪中，部分线程可能因等待材质纹理读取而停滞，而其他线程已完成计算，但受限于堆栈顺序无法提前推进。
+
+下面一个例子能够说明SIMT mask 调度引起的deadlock问题，该例子为一个cuda用例来源于：[https://stackoverflow.com/questions/6426793/realistic-deadlock-example-in-cuda-opencl](https://stackoverflow.com/questions/6426793/realistic-deadlock-example-in-cuda-opencl)
+
+- 共享变量semaphore，初始化为0，同一个warp内的所有线程都可以访问到该变量。
+- 进入到循环中首先为了防止内存一致性问题，使用atomicCAS函数，如果semaphore值为0，则将其设置为1，pre值为0.然后如果此时其他线程也会调用`int prev=atomicCAS(&semaphore,0,1);` 指令.但是此时semaphore被第一个首先获取到的线程设置为1，那么此时semaphore值为1，不等于0，pre值为1。
+- 如果warp size大小为32，则其中一个线程获得锁进入分支（prev==0），另外31个线程继续循环。
+- 进入循环的第一个线程执行关键代码段(临界区资源)，运行完成之后将semaphore重新设置为0，并退出循环，其他31个线程又有一个线程能够进入到prev=0分支，剩余30个线程继续等待，如此进行反复运行，直到所有线程串行执行完毕。
+
+```cpp
+__global__ kernel() {
+	__shared__ int semaphore;
+	semaphore=0;
+	__syncthreads();
+	while (true) {
+		int prev=atomicCAS(&semaphore,0,1);
+		if (prev==0) {
+			//critical section
+			//...
+			semaphore=0;
+			break;
+		}
+		//atomic原子操作
+		//int atomicCAS(int* address, int compare, int val); 
+		//将address地址的值与compare比较，
+		//如果相等则将address地址的值设置为val，
+		//并返回address地址的旧值。
+	}
+
+```
+
+上述方法一般用来执行一些只**能由一个线程运行的代码段**，以防止产生数据不一致现象，但在GPU上会造成死锁：
+
+造成上述死锁deadlock问题原因恰是运行栈调度引起的。上述代码逻辑在CPU执行过程中没有问题，但是在GPU执行过程中由于出现分支，运行栈的调度原则是首先执行活跃数线程最多的分支，上述例子是首先执行分支为31个线程的情况**(没拿到锁的线程组)**，而一直循环，而另外一个prev返回0的分支一直由于上述31个线程一直处于循环之中而造成得不到调度，这样会一直处于一个deadlock状态，而无法继续向前执行。
+
+造成上述问题的根本原因就是在warp内的所有线程只有一个PC指针，无法同时执行其他命令，而这种SIMD模型正是GPU的核心所在.
+
+## 分支执行的优化
+
+- 动态warp整理DWF
+
+将不同warp中相同分支的线程整理成新的warp,来提高每个warp对资源的利用率.
+
+> **[图片提取文字 (image.png)]:**
+> ## Dynamic Warp Formation
+> 
+> (Fung MICRO'07)
+> 
+> ![](_page_0_Figure_2.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2017.png)
+
+但DWF存在两个问题:
+
+- 可能导致不规整的数据访问,增大访存延时.合并的不同warp的线程可能在相同的lane，导致寄存器访问冲突，引入stall。
+- 部分CUDA应用依赖warp的运行时static调度次序,因此DWF运行时改变warp调度次序会导致应用执行错误.
+
+> **[图片提取文字 (image.png)]:**
+> ## DWF Pathologies: Extra Uncoalesced Accesses
+> 
+> - Coalesced Memory Access = Memory SIMD
+>   - 1<sup>st</sup> Order CUDA Programmer Optimization
+> - Not preserved by DWF
+> 
+> ![](_page_0_Figure_4.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2018.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## DWF Pathologies: Implicit Warp Sync.
+> 
+>  Some CUDA applications depend on the lockstep execution of "static warps"
+> 
+> ```
+> Warp 0 Thread 0 ... 31
+> Warp 1 Thread 32 ... 63
+> Warp 2 Thread 64 ... 95
+> ```
+> 
+> E.g. Task Queue in Ray Tracing
+> 
+> ```
+> int wid = tid.x / 32;\nif (tid.x % 32 == 0) {
+>     sharedTaskID[wid] = atomicAdd(g_TaskID, 32);
+> 
+> Implicit
+> }
+> Warp
+> ```
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2019.png)
+
+- 线程块压实TBC:对DWF的改进
+
+规整的内存访问通常在coherent(一致执行)的代码段(线程块),因此以线程块为单位追踪所有线程的分支情况并进行动态warp不会增加额外的不规整访存;(对应large warp的设计思想)
+
+在分支后和聚合前**添加barrier指令**来运行时同步（static warp内线程的统一集合点）,同步后在线程块内将相同分支的线程合并成新的warp。聚合处同步可以恢复静态划分的warp，执行后续指令。
+
+> **[图片提取文字 (image.png)]:**
+> ## Observation
+> 
+> - Compute kernels usually contain divergent and non-divergent (coherent) code segments
+> - Coalesced memory access usually in coherent code segments
+>   - DWF no benefit there
+> 
+> ![](_page_0_Figure_4.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2020.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Thread Block Compaction
+> 
+> - Run a thread block like a warp
+>   - Whole block move between coherent/divergent code
+>   - Block-wide stack to track exec. paths reconvg.
+> - Barrier @ Branch/reconverge pt.
+>   - All avail. threads arrive at branch
+>   - Insensitive to warp scheduling
+> - Warp compaction
+>   - Regrouping with all avail. threads
+>   - If no divergence, gives static warp arrangement
+> 
+> ![](_page_0_Picture_10.jpeg)
+> 
+> Extra Uncoalesceu
+> 
+> Memory Access
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2021.png)
+
+DWF的例子：
+
+> **[图片提取文字 (image.png)]:**
+> ## Thread Block Compaction
+> 
+> ## PC RPC Active Threads E 1 2 3 4 5 6 7 8 9 10 11 12 D E - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - <
+> 
+> ```
+> A: K = A[tid.x];
+> B: if (K > 10)
+> C: K = 10;
+>    else
+> D: K = 0;
+> E: B = C[tid.x] + K;
+> ```
+> 
+> ```
+> 1 2 3 4
+> A
+>      5 6 7 8
+> A
+>      9 10 11 12
+> A
+>      1 2 7 8
+> C
+>      5 -- 11 12
+> C
+>      9 6 3 4
+> D
+>      -- 10 -- --
+> D
+>       1 2 3 4
+> E
+>       5 6 7 8
+> E
+>      9 10 11 12
+> E
+> ```
+> 
+> ```
+> 1 2 3 4
+> 5 6 7 8
+> 9 10 11 12
+> 5 -- 7 8
+> -- -- 11 12
+> 9 10 -- --
+> 1 2 7 8
+> 5 6 7 8
+> 9 10 11 12
+> ```
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2022.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## **Example 1** Code that exhibits branch divergence.
+> 
+> ```
+> t = threadIdx.x; // block A
+> flag = (t==1)||(t==6)||(t==7);\nif( flag )
+>     result = Y; // block B\nelse
+>     result = Z; // block C
+> return result; // block D
+> ```
+> 
+> ![](_page_0_Figure_2.jpeg)
+> 
+> **Figure 7.** High-level operation of thread block compaction.
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2023.png)
+
+## NV V100中的分支调度
+
+1、独立线程调度
+
+《NVIDIA TESLA V100 GPU ARCHITECTURE》中，NV将解决deadlock问题作为一个亮点，V100白皮书中指出了对上述问题对SIMT stack模块进行了改进：
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> ![](_page_0_Figure_2.jpeg)
+> 
+> ## 32 thread warp with independent scheduling
+> 
+> Volta (bottom) independent thread scheduling architecture block diagram compared to Pascal and earlier architectures (top). Volta maintains per-thread scheduling resources such as program counter (PC) and call stack (S), while earlier architectures maintained these resources per warp.
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2024.png)
+
+V100 中NV **为warp内每个线程都分配了一个PC指针和Stack**，但是这样同GPU 的SIMT执行模型有明显的冲突，因为这样每个线程都有自己的PC，岂不是和CPU没什么本质上的差别。
+
+为了解决上述问题，在V100内部调用中，硬件还是**基于warp这一单位进行调度线程**，V100内部中使用了a schedule optimizer硬件模块决定哪些线程可以在一个warp内进行调度(动态分支指令聚合)，**将相同的指令重新进行组织排布到一个warp内，执行SIMD模型**，以保证最大利用效率。下面为V100白皮书中的原话：
+
+V100可以将分支组织成一个sub-warp来保证处于同一分支的在同一个sub-warp内。
+
+> **[图片提取文字 (image.png)]:**
+> ```
+> if (threadIdx.x < 4) {
+> } else {
+>                                                                 Time
+> ```
+> 
+> Volta independent thread scheduling enables interleaved execution of statements from divergent branches. This enables execution of fine-grain parallel algorithms where threads within a warp may synchronize and communicate.
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2025.png)
+
+上述例子中有两个分支A和B ，X和Y，warp按照串行执行两个分支。上图中有一个明显改进就是 执行A之外 可以切换到执行X，这样做的好处可以**隐藏A内存操作延迟**，这样交替执行更能提高硬件利用率。
+
+**同时也可以发现两个分支的聚合点Z，并没有等待所有分支执行完毕之后再一起聚合执行，这是因为无法识别到Z是否依赖各自的结果，所以只能各自执行以便提高效率。如果有些算法需要聚合之后再同步执行Z，NV提供了另外一个函数__syncwarp()，可以是Z之后的代码进行聚合执行**，如下图所示：
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 23. Programs use Explicit Synchronization to Reconverge Threads in a Warp
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2026.png)
+
+2、解决SIMT栈中的死锁
+
+NV使用a convergence barrier方法来解决死锁问题，就是如果出现5中的**分支依赖**情况，**就需要创建一个a convergence barrier，来保证第一分支先执行后wait，其余分支先yield后执行，即拿到锁的线程阻塞其余线程.**
+
+为实现上述机制,warp需要为**每个线程**维护各自的entry信息，如下：
+
+- Barrier Participation Mask:用来跟踪维护哪些线程归属于哪个convergence barrier(某线程归属则置1)，因为在一个kernel中可能会存在多个分支，意味着会出现多个 convergence barrier.**线程根据Participation Mask和Barrier State相与结果进行等待**,直到所有线程都达到了common point(类似于reconvergence point).
+- Barrier State:跟踪哪些线程达到了convergence barrier状态(达到置0).
+- Thread State:记录线程状态，处于active状态还是处于block状态等。
+- Thread rPC: 线程要执行的下一个指令
+- Thread Active:记录线程是否处于激活状态。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2027.png)
+
+左述各个entry大小与warp相关，如果warp包含32个线程，则各自都有32个信息。
+该专利中给出了明确执行流程，通过 convergence barrier产生一个额外的等待分支，知道 convergence barrier执行之后才进行下一个分支执行。
+
+分支发散后相同分支的线程，根据指令中的wait、yiled、barrier等，尽快merge到同一个warp。
+
+# 5 SM的model II(two-loop & final)
+
+## fetch和issue过程分离调度
+
+SM的一阶近似model的行为是每次fetch不同warp的指令.正在执行的warp不被fetch和issue.
+
+二阶近似model支持一个warp的多个指令在pipeline中运行(in flights),即正在执行指令(分支指令除外)的warp可以被fetch.正在执行branch指令的warp不可被fetch.
+
+指令进入I-Buffer中对应warp的分区,等待不存在数据冒险后被调度进入发射器.
+
+I-Buffer中每个warp中的多个指令**顺序调度和发射.**发射器中多个指令等待获取操作数后发射到执行单元,**但指令不一定顺序获取操作数**,所以发射器不保证顺序发射.因此**若当前指令存在数据冒险,则阻塞I-Buffer上该warp的所有指令进入发射器.**
+
+**乱序发射**OoO指的是,**因为冒险被阻塞发射的前序指令的不阻塞后序指令的发射**.因此**GPU没有乱序发射**.乱序发射引入了指令的运行时/动态依赖,需要额外机制处理数据冒险.
+
+> **[图片提取文字 (image.png)]:**
+> ## Recall "one loop" approximation
+> 
+> - Select a warp to fetch switch to another warp in the next cycle. Do not issue from a warp until last instruction completes
+>   - Simplifies dependency tracking within a warp
+>   - When to switch?
+>   - Sidenote: recall that modern GPUs have multiple dispatch units per SM
+> 
+> ![](_page_0_Figure_5.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2028.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## "Two loop" approximation: Fetch+ Issue Scheduler
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> - Two decoupled warp schedulers
+>   - One at fetch, one at issue
+>   - Buffering decoded instructions allows us to obtain dependencies
+> - Scoreboard
+>   - Allows warps to have multiple instructions in flight
+> - Multiple SIMD functional units
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2029.png)
+
+当I-buffer中对应warp分区存在已发射指令**(entry的vacant=1)**时,warp scheduler选择该warp的nPC,从I-cache中fetch指令到该entry,.**执行分支指令的warp不可被选择**.
+
+issue scheduler从I-buffer中选择未发射(vacant=0)、不存在冒险(ready=1)的指令进入发射器,该指令在I-buffer中entry的ready置0,**等待获得操作数并发射后,vacant置1表示无效指令**.
+
+warp/线程内顺序发射指令,则数据依赖**只会阻塞该warp/线程**,其余warp/线程的指令可以调度和发射.
+
+**部分指令处理的逻辑上有需要分批或是多次处理的部分(replay schedule)。**比如constant memory做立即数时的cache miss，memory load时的地址分散，shared memory的bank conflict，atomic的地址conflict，甚至是普通的cache miss或是TLB的miss之类**。**
+
+> **[图片提取文字 (image.png)]:**
+> ## Fetch + Decode
+> 
+> - Arbitrate the I-cache among warps
+>   - Cache miss handled by fetching again later
+> - Fetched instruction is decoded and then stored in the I-Buffer
+>   - 1 or more entries / warp
+>   - Only warp with vacant entries are considered in fetch
+> 
+> ![](_page_0_Figure_6.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2030.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Instruction Issue
+> 
+> - Select a warp and issue an instruction from its I-Buffer for execution
+>   - Scheduling many potential algos:
+>     - Greedy-Then-Oldest (GTO)
+>     - Loose Round-Robin
+>     - Two level
+>   - Allow dual issue (superscalar)
+>   - Multiple warp schedulers
+>     - Can issue instructions from different warps to different pipelines in the same cycle
+>     - Statically divides warps among schedulers
+>   - To avoid stalling pipeline might keep instruction in I-buffer until know it can complete (replay)
+> 
+> ![](_page_0_Picture_11.jpeg)
+> 
+> ![](_page_0_Picture_12.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2031.png)
+
+## 数据冒险和ScoreBoard
+
+数据冒险包含RAW(后序指令read reg需要前序指令**先**write reg)、WAW(后序指令write reg需要前序指令**先**write reg)和WAR(后序指令write reg需要前序指令**先**read reg).通过scoreboard机制检测.
+
+关于WAR,线程中后发射的指令写入寄存器,和先发射指令读取寄存器的顺序讨论.
+
+如果**指令顺序和获取操作数顺序相同**(取决于issuer/dispatch是否阻塞存在WAR指令的collector),则不存在WAR冒险.
+
+否则不同指令收集操作数有快有慢(取决于GRF Banks的裁决单元)或发生cache miss,则后序指令可能比先序指令先集齐操作数而先发射从而提前将结果写入寄存器,就存在WAR冒险.
+
+> **[图片提取文字 (image.png)]:**
+> ## Design challenges in issue
+> 
+> - Now we have many decoded instructions
+>   - Multiple warps and multiple instructions per warp
+> - Need to find which warp instruction can be issued without violating dependencies
+>   - Recall in the CPU world: OoO execution, reservation stations, register renaming
+> 
+> GPUs don't do any of this: too expensive (area/energy). Implement in-order pipeline
+> 
+> But we still need to avoid RAW, WAW and WAR hazards
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2032.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Dealing with Hazards on GPUs
+> 
+> • WAR hazards do not exist, provided register file reads happen in order (which they do).
+> 
+> - RAW and WAW hazards are possible
+>   - True data dependencies must always wait for the register to be produced
+>   - Since writes are not guaranteed to happen in-order, output dependencies cause hazards
+> 
+> Solution to both RAW and WAW: In-order scoreboard
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2033.png)
+
+假设不考虑WAR,对每个线程/warp:
+
+需要记录已发射指令的目标寄存器到scoreboard,
+
+通过判断后序指令的源寄存器和目标寄存器和SB上记录的寄存器编号是否相同,来判断是否存在冒险.
+
+假设64个warp/64组线程并发,每个warp/线程的寄存器上下文是128个,则需要**8192bit(SB)**来记录寄存器是否“即将被修改”.另外,I-buffer中每个warp/线程中的下一个指令都等待检测,以便调度发射,每个指令至少4个寄存器需要检验,总计需要**256个port去并行访问**整个SB.
+
+> **[图片提取文字 (image.png)]:**
+> ## Review: In-order Scoreboard
+> 
+> - Scoreboard: a bit-array, 1-bit for each register
+>   - If the bit is not set: the register has valid data
+>   - If the bit is set: the register has stale data
+>     i.e., some outstanding instruction is going to change it
+> - Issue in-order: RD ← Fn (RS, RT)
+>   - If SB[RS] or SB[RT] is set → RAW, stall
+>   - If SB[RD] is set → WAW, stall
+>   - Else, dispatch to FU (Fn) and set SB[RD]
+> - Complete out-of-order
+>   - Update GPR[RD], clear SB[RD]
+> 
+> ![](_page_0_Figure_10.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2034.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## In-Order Scoreboard for GPUs?
+> 
+> • <u>Problem 1</u>: 64 warps, each with up to 128 (vector) registers per warp means scoreboard is 8192 bits.
+> 
+> - <u>Problem 2</u>: In a naïve implementation, warps waiting in the I-buffer have to check dependencies (in the scoreboard) every cycle.
+>   - Or arbitrate for scoreboard access
+> 
+> These are not an issue in single-threaded designs, but pose significant overhead in GPUs
+> 
+> 64 warps with 4 operands each: 256 port scoreboard!
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2035.png)
+
+可能的解决方式:
+
+- fetch后指令存入I-buffer中时读取SB中对应warp的目标寄存器,检测冒险,每个fetch每周期只调度1个warp进行fetch.
+- 指令写回寄存器时,去除SB中所在warp的对应指令的entry.
+- 在I-buffer中给每个指令**记录其是否存在冒险(ready),而不必时时检查.**
+
+scoreboard in GPU的可能实现:
+
+- 限制每个warp/线程的指令并行数(ILP),即SB为每个warp记录最多6个已发射指令的目标寄存器.
+- I-buffer中为每个指令增加6bit的flag,记录依赖情况.
+- 指令写回寄存器后,清除其在SB的entry,清除I-buffer中所在warp的对应依赖的flag.
+
+> **[图片提取文字 (image.png)]:**
+> ## In-Order Scoreboard for GPUs?
+> 
+> - One Solution
+>   - Read scoreboard when instructions write to I-buffer (not every cycle).
+>   - Write to scoreboard on writeback (normal timing)
+>   - Flag instructions with hazards as not ready in I-Buffer so not considered by scheduler
+> 
+> NVIDIA patent describes this.
+> 
+> Assumed implementation in GPGPU-Sim
+> 
+> ![](_page_0_Picture_6.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2036.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## GPU In-Order Scoreboard details
+> 
+> - Reduced size: Scoreboard tracks up to 6 registers per warp (out of 128) via identifiers.
+>   - Limited ILP so there will not be a lot of outstanding instructions per warp.
+> - I-buffer has a 6-entry bitvector to track pending regs: 1b per register dependency
+>   - Some instructions have 6 input operands
+> - When an instruction writes back, it clears its entry in the scoreboard, then clears all the dependency bits corresponding to the output register.
+> 
+> This is likely how Fermi-style GPUs implemented a scoreboard
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2037.png)
+
+右侧example中的SB和I-buffer中的**index-n和i-n均表示指令编号**,ILP=4,具体过程如下:
+
+- ld指令fetch后进入I-buffer前,查看SB后无需标记;**写入I-buffer后,SB在warp0分区中index0记录寄存器r7**;指令发射.
+- mul查看SB,无需标记;SB的index1写入r6;指令发射;写回时清除SB中index1的entry.
+- add查看SB,发现同index0的r7存在依赖,写入I-buffer时标记i0;SB的index2写入r8;等待发射;
+- ld写回,清除SB中index0的entry,并且清除I-buffer中warp0分区中的i0列的flag.
+
+> **[图片提取文字 (image.png)]:**
+> ## Example
+> 
+> ## Code
+> 
+> ```
+> ld r7, [r0]
+> mul r6, r2, r5
+> add r8, r6, r7
+> ```
+> 
+> ## Scoreboard
+> 
+> Index 0 Index 1 Index 2 Index 3
+> 
+> | Warp | 0 |
+> |------|---|
+> | Warp | 1 |
+> 
+> | - | - | r8 | - |
+> |---|---|----|---|
+> | - | - | -  | - |
+> 
+> ## **Instruction Buffer**
+> 
+> i0 i1 i2 i3
+> 
+> | Warp | 0 |
+> |------|---|
+> |------|---|
+> 
+> | add | r8, | r6, | r7 | 0 | 0 | 0 | 0 |
+> |-----|-----|-----|----|---|---|---|---|
+> |     |     |     |    |   |   |   |   |
+> 
+> Warp 1
+> 
+> •
+> 
+> When inserting into the ibuffer - reading the scoreboard is an associative lookup
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2038.png)
+
+## 编译生成指令的SB辅助信息
+
+编译会在指令中产生运行时SB机制的辅助信息、显式stall或ordering来简化硬件设计,
+
+**对于固定latency**的指令，通过调节control codes中的stall count，或者插入其他无关指令(编译ordering)，保证下一条相关指令发射前其输入已经就位；
+
+**对于不固定latency**的指令，通过显式的设置和等待scoreboard来保证结果已经可用。
+
+下面是指令示例,显示形式是类似R-R-:B------:R-:W-:-:S01这种，用冒号":"分隔开6个域：
+
+```cpp
+1: [----:B------:R-:W0:-:S04]    S2R R113, SR_CTAID.Y ;
+2: [----:B------:R-:W1:-:S04]    S2R R0, SR_CTAID.Z ;
+3: [----:B------:R-:W3:-:S01]    S2R R106, SR_TID.X ;
+4: [----:B1-----:R-:W-:-:S02]    IMAD.SHL.U32 R113, R113, 0x4, RZ ;
+5: [----:B-1----:R-:W-:Y:S03]    IMAD.SHL.U32 R0, R0, 0x4, RZ ;
+6: [R---:B------:R-:W-:-:S02]    IADD3 R107, R113.reuse, 0x1, RZ ;
+7: [R---:B------:R-:W-:-:S01]    IADD3 R109, R113.reuse, 0x2, RZ ;
+8: [R-R-:B------:R-:W-:-:S01]    IMAD R2, R113.reuse, c[0x0][0x1a8], R0.reuse ;
+9: [----:B------:R-:W-:-:S01]    IADD3 R111, R113, 0x3, RZ ;
+```
+
+- Register Reuse Cache（4bit，对应4个slot，有reuse就写R，没有就"-"）
+    
+    Register Reuse Cache有4bit。每个指令有4个slot，每个register的source operand的位置对应一个slot（predicate好像不算）。如果当前指令某个slot的register还会被下一个指令的同一个slot读取，那就可以reuse当前指令读取到的register内容。
+    
+    Reuse的作用主要就是减少GPR的读取，一来可以减少register bank conflict，二来应该也能省一点功耗。
+    
+    猜测：reuse cache的位置应该是位于所谓的operand collector。如果切换到别的warp，register是不同的fragment，那reuse cache就失效了。**所以reuse在当前warp的指令连续发射时有效**。
+    
+- Wait Dependency Barrier（B+6bit，每bit分别表示是否等待barrier号0-5，否则写“-”）
+    
+    Wait Dependency Barrier有6个bit，每个bit表示是否需要等待0-5号的dependency barrier。每个barrier代表该指令对前序指令的依赖.
+    
+- Read Dependency Barrier（3bit，R+设置的barrier号，不设置写“-”）
+    
+    Read dependency barrier是3bit的barrier编号，表示该指令对寄存器的读取需要**阻塞**后续指令发射,即建立barrier来解决WAR冒险。
+    
+- Write Dependency Barrier（3bit，W+设置的barrier号）
+    
+    Write dependency barrier也是3bit的barrier编号,表示该指令对寄存器的写入需要**阻塞**后续指令发射,即建立barrier来解决WAW和RAW冒险。如果一个指令的latency是确定的（或者有不太长的上限），通过设置的stall cycle暂停足够长时间就可以解除冒险,而不需要单独设置阻塞。
+    
+- Yield Hint Flag（1bit，“Y”表示yield，否则写“-”）
+    
+    Yield hint flag是1bit。如果Yield，就表示下一个cycle会优先发射其他warp的指令。reuse是需要连续发射同一个warp的指令的。所以reuse和yield是不会联用的。
+    
+    字段yield的作用就是保持各个warp之间的进度均衡，否则在barrier之类的指令(分支、同步)上会有较大的等待开销。
+    
+    SASS有一个专门的指令YIELD，类似多线程编程中的挂起。
+    
+- Stall Count（4bit，S+十进制的stall的cycle数）。
+    
+    Stall count有4bit，表示当前指令后需要stall指令发射的cycle数，然后再决定是不是要继续发射。
+    
+
+## GRF的并发访问(final model)
+
+每个线程的寄存器独立,需要为并行执行的线程提供寄存器的并发访问,需要大量读写端口.
+
+> **[图片提取文字 (image.png)]:**
+> ## Final stage of "how to build a GPU pipeline"
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> • Final scheduler used to arbitrate register file banks
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2039.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Register File problem: Size
+> 
+> - All context needs to kept resident
+>   - Some recent research on context switching, but still very expensive
+> - Modern GPUs: 256KB of register file
+> - Need to read multiple values from the register file every cycle to maintain pipeline throughput (FMA instruction: 4 operands – need 4 ports).
+> - Dual issue to multiple pipelines: need even more ports.
+> - Big, multi-ported structures are expense in area and energy.
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2040.png)
+
+NV中将GRF组织成多个bank,提供多bank的并行访问.
+
+相同线程/warp的寄存器一般需要同时访问,尽量分散在不同bank.
+
+每个执行单元通过Operand Collector来收集所需要的操作数.
+
+> **[图片提取文字 (image.png)]:**
+> ## Banked Register File
+> 
+> Strawman microarchitecture:
+> 
+> ![](_page_0_Figure_2.jpeg)
+> 
+> Register layout:
+> 
+> | Bank 0 | Bank 1 | Bank 2 | Bank 3 |
+> |--------|--------|--------|--------|
+> |        | •••    | ***    | ***    |
+> | w1:r4  | w1:r5  | w1:r6  | w1:r7  |
+> | w1:r0  | w1:r1  | w1:r2  | w1:r3  |
+> | w0:r4  | w0:r5  | w0:r6  | w0:r7  |
+> | w0:r0  | w0:r1  | w0:r2  | w0:r3  |
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2041.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Operand Collector
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> - Term "Operand Collector" appears in figure in NVIDIA Fermi Whitepaper
+> - Operand Collector Architecture (US Patent: 7834881)
+>   - Interleave operand fetch from different threads to achieve full utilization
+> 
+> ![](_page_0_Picture_5.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2042.png)
+
+指令并发访问的寄存器处于相同bank存在冲突;
+
+冲突的访问请求可串行访问,但导致延迟.
+
+可以将线程/warp的Id考虑到寄存器布局/寄存器分配来改善访问性能.
+
+> **[图片提取文字 (image.png)]:**
+> ## Register Bank Conflicts
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> - warp 0, instruction 2 has two source operands in bank
+>   1: takes two cycles to read.
+> - Also, warp 1 instruction 2 is same and is also stalled.
+> - Can use warp ID as part of register layout to help.
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2043.png)
+
+Operand Collector收集每个线程的操作数地址,裁决/调度出不冲突的读/写访问发送到GRF bank.
+
+**每个FU的每个线程分别设置Operand Collector,提供多线程对寄存器的并发访问.**
+
+通过将相同warp的不同寄存器分散在不同banks(swizzle)和访问调度能提升GRF的吞吐.
+
+> **[图片提取文字 (image.png)]:**
+> ## Operand Collector (1)
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> - Issue instruction to collector unit.
+> - Collector unit similar to reservation station in tomasulo's algorithm.
+> - Stores source register identifiers.
+> - Arbiter selects operand accesses that do not conflict on a given cycle.
+> - Arbiter needs to also consider writeback (or need read+write port)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2044.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Operand Collector (2)
+> 
+>  Combining swizzling and access scheduling can give up to ~ 2x improvement in throughput
+> 
+> ```
+> il: add r1, r2, r5
+> i2: mad r4, r3, r7, r1
+> ```
+> 
+> | Cycle         | Warp  | Instruction |       |                     |                     |                    |
+> |---------------|-------|-------------|-------|---------------------|---------------------|--------------------|
+> | 0             | w1    | i1:         | add   | r1 <sub>2</sub> , r | 2 <sub>3</sub> , r5 | 2                  |
+> | 1             | w2    | i1:         | add   | r1 <sub>3</sub> , r | 2 <sub>0</sub> , r5 | 3                  |
+> | 2             | w3    | i1:         | add   | r1 <sub>0</sub> , r | 2 <sub>1</sub> , r5 | 0                  |
+> | 3             | w0    | i2:         | mad   | r4 <sub>0</sub> , r | 3 <sub>3</sub> , r7 | 3, rl <sub>1</sub> |
+> |               | . 48  | Cycle       |       |                     |                     |                    |
+> |               | 1     | 2           | 3     | 4                   | 5                   | 6                  |
+> | Bank<br>N t o |       | w2:r2       |       | w3:r5               |                     | w3:r1              |
+> |               |       |             | w3:r2 |                     |                     |                    |
+> | <b>E</b> 2    |       | w1:r5       |       | w1:r1               |                     |                    |
+> | 3             | w1:r2 |             | w2:r5 | w0:r3               | w2:r1               | w0:r7              |
+> | EU            |       |             | w1    | w2                  | w3                  |                    |
+> 
+> | Bank 0 | Bank 1 | Bank 2 | Bank 3 |
+> |--------|--------|--------|--------|
+> |        |        |        |        |
+> | w1:r7  | w1:r4  | w1:r5  | w1:r6  |
+> | w1:r3  | w1:r0  | w1:r1  | w1:r2  |
+> | w0:r4  | w0:r5  | w0:r6  | w0:r7  |
+> | w0:r0  | w0:r1  | w0:r2  | w0:r3  |
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2045.png)
+
+# 6 SM的SIMT特性
+
+ref:[ETH-DDCA]
+
+fetch和issue是取指、译码过程,作用是**选择不同warp去fetch来进行线程/warp并发**,最终发射到不同的units并行或流水输入相同的units进行并行,提高资源利用率.
+
+fetch和issue之间插入I-buffer,则可**选择同一warp内的不同指令在不存在依赖后并发**.
+
+issue的指令需要收集源寄存器中的操作数后,进入执行单元的pipeline.
+
+## FGMT（细粒度多线程）的设计
+
+**不同线程（线程A、B）的指令交错发射而不会把线程内相邻指令发射进入pipeline**，因此不必考虑分支预测,利用局部性原理合并访存。
+
+warp-level FGMT:每个warp包含32个线程,**不同warp的指令交错发射进入SIMD的pipeline,让计算和访寸重叠**.
+
+注意:这个和large warp的设计不同,large warp是将warp内的线程分组发射进入SIMD的pipeline.(SIMD width小于warp size)
+
+**large warp和FGMT是独立的两种设计机制,可以同时实现.**
+
+> **[图片提取文字 (image.png)]:**
+> ## Fine-Grained Multithreading
+> 
+> - Idea: Fetch from a different thread every cycle such that no two instructions from a thread are in the pipeline concurrently
+>   - Hardware has multiple thread contexts (PC+registers per thread)
+>   - Threads are completely independent
+>   - No instruction is fetched from the same thread until the prior branch/instruction from the thread completes
+> - + No logic needed for handling control and data dependences within a thread
+> - + High thread-level throughput
+> - -- Single thread performance suffers
+> - -- Extra logic for keeping thread contexts
+> - -- Throughput loss when there are not enough threads to keep the pipeline full
+> 
+> ![](_page_0_Picture_10.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2046.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Multithreaded Pipeline Example
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> Slide credit: Joel Emer 76
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2047.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Warps and Warp-Level FGMT
+> 
+> - Warp: A set of threads that execute the same instruction (on different data elements) → SIMT (Nvidia-speak)
+> - All threads run the same code
+> - Warp: The threads that run lengthwise in a woven fabric ...
+> 
+> ![](_page_0_Figure_4.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2048.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Fine-Grained Multithreading: Basic Idea
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> Each pipeline stage has an instruction from a different, completely-independent thread
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2049.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Fine-Grained Multithreading of Warps
+> 
+> ```
+> for (i=0; i < N; i++)
+> C[i] = A[i] + B[i];
+> ```
+> 
+> - Assume a warp consists of 32 threads
+> - If you have 32K iterations, and 1 iteration/thread → 1K warps
+> - Warps can be interleaved on the same pipeline → Fine grained multithreading of warps
+> 
+> ![](_page_0_Figure_5.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2050.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Latency Hiding via Warp-Level FGMT
+> 
+> - Warp: A set of threads that execute the same instruction (on different data elements)
+> - Fine-grained multithreading
+>   - One instruction per thread in pipeline at a time (No interlocking)
+>   - Interleave warp execution to hide latencies
+> - Register values of all threads stay in register file
+> - FGMT enables long latency tolerance
+>   - Millions of pixels
+> 
+> ![](_page_0_Figure_8.jpeg)
+> 
+> Slide credit: Tor Aamodt
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2051.png)
+
+## SIMD单元（pipeline lane并行多周期实现SIMD）
+
+warper内每周期发射一个warp(32个线程)：这32个线程不是并行执行,而是分组进入SIMD的pipeline.
+
+每个lane是**标量**流水线,lane是成组的 一组lane是一个SIMD单元(SM中的1个处理块/warper)
+
+由于不同warp线程交错发射进入SIMD的pipeline（一组lane），**每个lane需要保存来自不同warp的线程指令pc和私有寄存器。**
+
+执行pipeline:warp scheduler是前端发射到buffer,之后从buffer中fetch、读取RF(译码)、执行、存储、写回.
+
+warper每周期发射一个指令(对应一个warp的32个线程),这个指令是32个线程的指令,分4个周期进入pipeline,每个周期并行执行8个线程(8个lane),正好对应8个LD/ST(SIMD的宽度)
+
+下一个周期发射下一个warp的指令,以此类推.
+
+即warper内的**并行执行的线程分属不同warp**,对应不同units(可能是8个LD/ST unit+8个FP64 unit+8个INT32 unit+4个SFU,有可能是其余组合)
+
+每个core有自己的数据通路,不同warp的指令和数据会分流到不同的core,这些数据通路是分类的,比如FP64组、INT32组等等,根据类别进行分流、而不是根据线程/core进行分流,为降低分流的开销(mux的复杂度是N*M)
+
+> **[图片提取文字 (image.png)]:**
+> ## High-Level View of a GPU
+> 
+> ![](_page_0_Figure_1.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2052.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## SIMD Execution Unit Structure
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> Slide credit: Krste Asanovic 105
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2053.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Warp Execution (Recall the Slide)
+> 
+> 32-thread warp executing ADD A[tid],B[tid] → C[tid]
+> 
+> ![](_page_0_Figure_2.jpeg)
+> 
+> Slide credit: Krste Asanovic 104
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2054.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Warp Instruction Level Parallelism
+> 
+> ## Can overlap execution of multiple instructions
+> 
+> - Example machine has 32 threads per warp and 8 lanes
+> - Completes 24 operations/cycle while issuing 1 warp/cycle
+> 
+> ![](_page_0_Figure_4.jpeg)
+> 
+> Slide credit: Krste Asanovic
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2055.png)
+
+## 动态分支指令聚合
+
+SIMD core每个stage（多个cycle）执行一个warp的相同指令，每个线程指定index来收集操作数。
+
+收集操作数——SIMD的stage执行是一个pipeline，迁移线程到不同lane需要在收集操作数之前指定改变后的index顺序，收集操作数之后不可迁移。
+
+> **[图片提取文字 (image.png)]:**
+> ## Dynamic Warp Formation/Merging
+> 
+> - Idea: Dynamically merge threads executing the same instruction (after branch divergence)
+> - Form new warps from warps that are waiting
+>   - Enough threads branching to each path enables the creation of full new warps
+> 
+> ![](_page_0_Figure_4.jpeg)
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2056.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Dynamic Warp Formation Example
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> Slide credit: Tor Aamodt
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2057.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Dynamic Warp Formation/Merging
+> 
+>  Idea: Dynamically merge threads executing the same instruction (after branch divergence)
+> 
+> ![](_page_0_Picture_2.jpeg)
+> 
+>  Fung et al., "Dynamic Warp Formation and Scheduling for Efficient GPU Control Flow," MICRO 2007.
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2058.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Hardware Constraints Limit Flexibility of Warp Grouping
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> Slide credit: Krste Asanovic 123
+![image.png](GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B/image%2059.png)

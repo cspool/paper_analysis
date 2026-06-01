@@ -1,0 +1,966 @@
+# NV GPU专利
+
+# 1 NV中并发线程的调度和发射
+
+ref:[ACROSS-THREAD OUT OF-ORDER INSTR DISPATCH IN A MT MP]
+
+下文中每个core对应NV中的一个SM core,每个线程对应NV中的一个warp(size=1),每个FU对应NV中的unit.当FU实现为SIMD的pipeline,对应NV中的多个unit.
+
+[NV 并发线程的调度和发射](NV%20%E5%B9%B6%E5%8F%91%E7%BA%BF%E7%A8%8B%E7%9A%84%E8%B0%83%E5%BA%A6%E5%92%8C%E5%8F%91%E5%B0%84%20214e12d10b6e80dda78cedb4a17d866f.md)
+
+## GPU并发线程
+
+**GPU的并发线程数=GPU的核心数*每个核心的并发线程数.**
+
+**每个线程的寄存器独立，核心的并发线程数由核心设置的寄存器数决定；**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image.png)
+
+## **顺序fetch线程内的指令**
+
+**每个线程内按控制流fetch,从I-cache中取指到I-buffer;**
+
+**dispatch从I-buffer中选择指令进入发射器.**
+
+![iShot_2025-06-11_19.34.13.png](NV%20GPU%E4%B8%93%E5%88%A9/iShot_2025-06-11_19.34.13.png)
+
+![iShot_2025-06-11_16.56.50.png](NV%20GPU%E4%B8%93%E5%88%A9/iShot_2025-06-11_16.56.50.png)
+
+**根据I-buffer中线程/warp的空位(valid=0的entry)情况,选择一个线程/warp来fetch.**
+
+## dispatch顺序调度线程内指令
+
+**I-buffer为每个线程至少保存1条指令,并且保证线程内的指令顺序调度.**
+
+**dispatch单元选择I-buffer中不存在数据依赖的指令,在获取操作数后发射.**
+
+**I-buffer中某线程存在空位后,可以从I-cache中fetch该线程的后续指令.(branch指令的vacant应该等待执行结束?)**
+
+**当指令被fetch进入I-buffer后,设置该entry的valid位为1,表示有效指令.**
+
+**dispatch单元从I-buffer中选择不存在数据依赖的指令进入发射器,发射后指令的entry的valid置0,不同线程/warp的指令发射顺序无约束.**
+
+**scoreboard检测指令的寄存器数据是否能被读取/写入,即是否存在依赖,给出ready标记指令可被选择进入发射器等待发射.**
+
+**编译期对指令进行重排(ordering),在存在依赖的指令之间插入不存在依赖的指令,来减少stall.**
+
+## 顺序issue线程内指令(partly OoO)
+
+**线程内不同指令之间可能存在依赖,存在依赖的指令发射被阻塞,并且阻塞所在线程在I-buffer内的指令进入发射器(顺序发射),dispatch单元选择其余线程的指令进入发射器.**
+
+**线程的指令不存在数据依赖后(ready=1),维持ready=1直到被选择进入发射器.**
+
+**发射后的指令进入issuer的buffer,等待收集齐操作数后发射.**
+
+**issuer中的指令收集齐操作数后立刻发送给执行单元.issuer不保证按照指令dispatch的顺序发射指令.**
+
+**指令从I-buffer中发射后,会置valid为1,ready为0,表示该指令会阻塞同线程的后续指令进入发射器,直到该指令获得操作数后执行才置valid为0,表示可以发射后续指令.**
+
+**由于指令获取操作数后发射的顺序不要求按照dispatch顺序,这样能保证线程内的指令顺序发射,避免数据冒险.**
+
+**当dispatch调度线程内多个指令(无冒险)进入发射器,issuer可乱序发射线程内的无冒险的指令.例如高优先级指令因为对应的FU被占用或等待操作数获取导致无法发射,可以发射低优先级但条件齐备的指令.**
+
+**dispatch的顺序发射,issuer的乱序发射本质是无冒险指令块的乱序执行,但因冒险而阻塞的前序指令阻塞后序指令发射.**
+
+**OoO是指因冒险被阻塞的前序指令不阻塞后序指令发射.因此GPU一般不支持OoO.**
+
+**dispatch在调度指令未完成发射前,调度后序指令进入发射器,这引入动态的指令依赖,需要额外的OoO发射机制.**
+
+## 执行单元(FU/Tensor)
+
+**执行单元是标量运算时,执行一个线程的标量指令;**
+
+**执行单元执行SIMD时,执行一个线程的SIMD指令,即一个warp的多个线程(标量指令).**
+
+**每个线程都有独立的寄存器,去除线程切换时的reg上下文切换.**
+
+**每个thread在FU上执行SIMD指令,对应每个warp的多个thread在多个core上分别执行标量指令.**
+
+**执行单元实现为pipeline,让指令每周期都可发射,而不必等待完成所需的延迟.设置特殊的执行单元(LD/ST等)执行特别指令.**
+
+## 不同类型线程在不同FU的并行(vertex vs. pixel threads)
+
+exp:vertex threads由texture unit执行, pixels threads由SM中(process block中)的FP、INT、Tensor core和LD/ST core负责执行.
+
+**相同/不同类型的不同线程的指令可任意次序交错运行.**
+
+![iShot_2025-06-12_16.38.06.png](NV%20GPU%E4%B8%93%E5%88%A9/iShot_2025-06-12_16.38.06.png)
+
+![iShot_2025-06-11_21.57.47.png](NV%20GPU%E4%B8%93%E5%88%A9/iShot_2025-06-11_21.57.47.png)
+
+**I-buffer中存在多个ready的指令,来自不同线程或来自相同线程,执行在不同或相同的FU.**
+
+**issuer可以并行/串行发射不同的ready(集齐操作数)的指令到不同的ready(可接受指令)的FU.**
+
+**issuer可以交错发射texture指令和vertex指令来提高FU1-3的利用率.**
+
+**执行长延迟指令的线程和其余指令的线程可按任意顺序发射/调度,从而隐藏长延迟指令.**
+
+# 2 NV的scoreboard机制
+
+ref:[TRACKING REGISTER USAGE DURING MULTTHREADED PROCESSING USING A SCOREBOARD HAVING SEPARATE MEMORY REGIONS AND STORING SEQUENTIAL REGISTER SIZE INDICATORS]
+
+**本专利中关于指令目标寄存器记录在scoreboard的时机是在发射后,并且发射后不会给I-Buffer中同线程的后序指令补充依赖,可能存在数据冒险.因为指令发射后去获取操作数后执行,该过程不保证按照发射顺序执行,所以发射后指令会乱序执行,遗漏指令依赖会导致数据冒险.**
+
+**理论上应该在指令进入I-Buffer前就将其目标寄存器记录在scoreboard中,因为I-Buffer中指令已经在等待mask归0后发射(乱序执行),所以后序指令应该和I-Buffer中同线程的指令检测依赖.**
+
+[NV scoreboard机制](NV%20scoreboard%E6%9C%BA%E5%88%B6%20215e12d10b6e8069a8b9dd252f75970d.md)
+
+## fetch和issue过程
+
+**SM主要包含取指和发射的dispatch、操作数存储的GRF和执行算术、访存指令的不同pipeline.**
+
+**dispatch中I-buffer中有24个栏目slot,缓存24个不同warp/线程的指令序列,每个栏目容纳2条指令;**
+
+**每条指令包含1个6bit的mask表示该指令是否依赖线程内前序指令的结果.**
+
+**当I-buffer中存在空白栏目,则fetch单元调度1个warp并根据其nPC从I-cache中取指.**
+
+**指令被fetch后,经过译码和ScoreBoard处理,得到译码信息(warp/线程信息、branch等)和数据依赖mask后一并缓存在I-Buffer.**
+
+**ScoreBoard处理将指令的源寄存器编号、目标寄存器编号和ScoreBoard中记录的执行中指令的目标寄存器编号比较,得到指令的依赖情况mask.**
+
+**指令缓存在I-Buffer前,将其目标寄存器记录在ScoreBoard中,因为在以后fetch的指令视角中该指令是前序执行的,即便尚未发射也需要对其检测依赖.**
+
+**dispatch单元中的issue单元检查I-Buffer中指令是否依赖执行中(in flights)的指令(mask≠0),并将无依赖的指令发射到GRF获取操作数后执行.**
+
+**发射前会检测ScoreBoard中该线程/warp的分区是否存在空位来记录发射指令的目标寄存器,若存在空位则发射并在ScoreBoard中记录目标寄存器(???应该在指令进入I-Buffer前就在ScoreBoard中记录其目标寄存器???),否则说明当前线程达到设定的ILP上限,等待出现空位后发射.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%201.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%202.png)
+
+## **scoreboard单元**
+
+**scoreboard有I-Buffer一致的24个栏目,每个栏目记录不同线程/warp中执行中指令的目标寄存器.每个栏目包含6项,每项表示1个执行中指令的目标寄存器(编号,大小).**
+
+**scoreboard的每个栏目设置执行的warp/线程编号,每个栏目记录不同warp/线程中发射并执行指令的目标寄存器.**
+
+**每个指令发射后将目标寄存器(编号,大小)记录在scoreboard中对应线程/warp的栏目中.(???应该在指令进入I-Buffer前就在ScoreBoard中记录其目标寄存器???)**
+
+**指令执行完成/写回后,将其在scoreboard中的栏目清除.**
+
+**目标寄存器(编号,大小)的存储格式能处理多目标寄存器的指令,比如texture fetch.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%203.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%204.png)
+
+**为了检测指令的依赖情况,对scoreboard中指令所在线程/warp栏目中每个项(in flights指令的目标寄存器),和指令的源寄存器、目标寄存器进行比较;**
+
+**若scoreboard对应栏目中某项的目标寄存器和指令寄存器任一项相等,则说明指令和该项的目标寄存器存在依赖,将mask的对应位置1.**
+
+**指令译码后进行scoreboard处理来检测依赖,输出依赖mask和指令一起存在I-Buffer.**
+
+**scoreboard中每项中目标寄存器的存储格式是{编号,大小},即低有效位表示大小,剩余位表示编号.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%205.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%206.png)
+
+**scoreboard单元中需要设置6个比较单元,来比较fetch的指令是否依赖其对应的线程/warp中每项记录的寄存器(对应in flights的指令).**
+
+## 指令发射进入GRF
+
+**当I-Buffer中存储的指令没有依赖(mask全0),并且指令对应线程在scoreboard的栏目中有空闲项(容纳发射指令的目标寄存器),指令可以发射.**
+
+**指令发射后,将其目标寄存器保存在其对应线程在scoreboard的栏目中的空闲项里.**
+
+**指令执行完成并写回后,清除其在scoreboard的栏目中的对应项(假设编号为x)的目标寄存器,并且将I-Buffer中其所在线程的栏目中指令的mask的对应位(第x位)置0.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%207.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%208.png)
+
+**上述线程可以是线程组/warp,每个线程组/warp按照warp编号进行指令调度和发射,以SIMD方式执行.**
+
+# 3 NV的GRF并发访问
+
+ref:[OPERAND COLLECTOR ARCHITECTURE]
+
+专利中的bank的writeback冲突指写端口冲突(读写独立port)或端口冲突(读写公共port),cycle-based冲突是WAW、WAR、RAW等数据依赖.前者通过Bank裁决单元和Dispatch调度发射解决,后者通过RFU中的SB机制进行顺序发射或者“前序阻塞后序”的乱序发射解决.
+
+专利中将decode、SB、collector、GRF Banks、dispatch封装成RF Unit,表示译码过程.其余专利中可能将decode、SB、collector、dispatch(issuer)封装成dispatcher Unit.
+
+**不同专利的技术重点不同,部分机制会简化设计(比如branch),对模块的逻辑划分不同,但fetch、decode(GRF)、execute的原理一致.**
+
+**Register Address Unit:运行时为每个线程分配实际寄存器,即将指令中虚拟寄存器编号映射为物理寄存器Bank中的地址,并将分配信息传递给RFU中的Register Distribution Unit.**
+
+[NV GRF的并发访问](NV%20GRF%E7%9A%84%E5%B9%B6%E5%8F%91%E8%AE%BF%E9%97%AE%20214e12d10b6e804ea6b4fe04f9cc1c53.md)
+
+## SM结构
+
+**SM的存储资源决定并发线程/warp的数量.**
+
+**Thread Control Unit负责管理SM的资源,来调度SM执行并行program.**
+
+**Thread Control Unit将并发program(并行输入和首指令PC),分包成单程序的多线程并发(MT).**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%209.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2010.png)
+
+**Thread Control Unit将MT程序的资源分配信息(如线程的寄存器数、寄存器在Banks的排布模式)发给Register Address Unit;**
+
+**将MT程序的首指令PC、输入发给Instr Unit.**
+
+**instruction unit对应NV的SM中的warp schedule,但每个warp只含1个线程(标量指令).**
+
+**instruction unit读取并行program的指令到本地cache.**
+
+**Instruction Unit执行线程的跳转、分支指令,并调度多个线程轮流执行.**
+
+**Instruction Unit的线程调度策略可能是静态的(如优先vertex指令),可能是动态的(基于资源使用率).**
+
+**程序指令可能基于1号/2号/…操作数在同一个Bank中(静态分配)的标准提前成组,Instruction Unit轮流从每个组中选择指令进行静态分配寄存器.即编译期优化寄存器分配.**
+
+**Instruction Unit选择一个线程的指令执行,发送给Register Address Unit.**
+
+**Register Address Unit提取每个指令的寄存器访问,转换成访问(读/写)地址(如Bank编号和地址).**
+
+**Register Address Unit将操作数的访问地址发送给RFU,RFU负责完成访问.**
+
+**RFU调度访问请求,以避免写回冲突(读/写端口冲突)和cycle-based(RAW、WAW、WAR)的冲突.**
+
+**RFU内设置scoreboard来追踪寄存器中操作数是否有效,决定何时读取,阻塞RAW和WAW冒险的指令.WAR冲突也通过阻塞发射解决.**
+
+**RFU完成指令的操作数收集后,发送给执行单元计算,完成后结果发送到RFU,准备写回.**
+
+## RFU的内部结构
+
+**Register Address Unit:运行时为每个线程分配实际寄存器,即将指令中虚拟寄存器编号映射为物理寄存器Bank中的地址,并将分配信息传递给RFU中的Register Distribution Unit.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2011.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2012.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2013.png)
+
+**RFU中的Collector Unit接收RAU发来的指令对操作数的读/写地址,为不同执行单元执行执行收集操作数,操作数可能来源寄存器Bank、data cache或其余存储.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2014.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2015.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2016.png)
+
+## RFU的操作数收集
+
+**Collector Unit为指令执行收集的操作数可能来源常量、立即数、寄存器或其余.**
+
+**Bank是单端口读写,从Bank读取1个操作数需要1个cycle.**
+
+**读取请求首先用1个cycle确定操作数的来源和执行相关的裁决.**
+
+**从SRAM(cache)中读取的延迟一般是2个cycle,读出数据经过路由和时序寄存器会增加延迟.**
+
+**SFU有2个,对应2个Collector来为2个指令并发发送4个操作数的读取请求;MACU有4个,对应4个Collector来为4个指令并发发送12个操作数的读取请求.Bank数量一般超过并行指令需要的操作数数量(4+16 banks > 4+12).**
+
+**为每个指令需要的操作数进行并发读取请求,以尽可能每个cycle能集齐指令的操作数,从而每个cycle能发射指令到执行单元.**
+
+**可为每个执行单元配备额外的Collector来并发其他的指令请求,补偿由于Bank冲突导致的指令操作数无法在1个cycle集齐.**
+
+**高优先级指令被优先满足寄存器访问请求,一般每个cycle集齐操作数并发射指令;**
+
+**由于Banks数目高于高优先级指令的操作数数量,每个cycle空闲的Bank可以满足低优先级指令的访问请求(“插空”),所以低优先级指令一般每3(假定)个cycle集齐操作数并发射指令.**
+
+**Bank Request Arbitration Unit解决对相同Bank的读端口冲突,Dispatch单元解决对相同Bank的写端口冲突.**
+
+**Collector单元接受指令的读请求和写请求,将读请求发给BRAU,Bank Request Arbitration Unit每个cycle裁决出对每个Bank完成的读取请求.**
+
+**多个单端口读单端口写的bank模拟一个多端口读写的memory.**
+
+**每个线程的寄存器在Banks中静态分配,每个指令的操作数集齐需要1~3个cycle.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2017.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2018.png)
+
+**执行单元共享一组bank相比每个执行单元独占bank能更灵活的读/写操作数,同时节省面积.**
+
+**设置另一组单次访问位宽更大的bank(单次延迟也更高)来模拟另一个多端口读写memory,让执行单元能读写并行线程组的操作数.**
+
+**操作数可能是指令的立即数或常量(全局常量),其中常量需要从data cache中获取.**
+
+**当收集操作数发生cache miss时,放弃发射和执行对应的指令,之后再重新调度和发射.**
+
+**为解决WAR冒险,未发射的指令(比如没获得操作数)阻塞与自己存在WAR冒险的指令发射.**
+
+**cache miss会触发cache去加载miss的常量(或常量line).**
+
+## SIMD的执行单元
+
+**执行单元可执行SIMD指令(N),执行线程组(标量计算指令),对应的Collector Set也收集线程组的数据(N).**
+
+**执行线程组有高效的访存(locality).**
+
+**执行SIMD计算(N)的执行单元的数目可能不足N,但通过倍频保持吞吐,能降低面积和布线.**
+
+**收集常量操作数时,线程组内线程执行不同分支指令时,不同指令可能访问不同常量,也可能通过动态寻址访问相同常量(可重定位代码),则这些访问会串行进行,增大延迟.**
+
+**dispatch单元从Collector Sets中裁决出集齐操作数的指令发射到执行单元.**
+
+**Operand Collector Sets、Dispatch单元和执行单元是一个流水线,SFU和MACU是2个流水线.**
+
+**执行单元的计算延迟确定,可确定将发射指令写回寄存器的时机,又因为执行中指令的写回时机确定,因此Dispatch单元能错开不同执行单元对相同Bank(第一组)发出写回请求的时机,避免写端口冲突.**
+
+**对第二组Banks(向量型数据Banks)的读写端口公用,dispatch B需要错开将执行单元B发射指令的写回时机和第二组Banks的读取时间段,避免写端口冲突.**
+
+**因为bank冲突(读端口冲突、写端口冲突)、dispatch冲突(多个集齐操作数的指令等待dispatch选择)、长延迟指令(阻塞依赖的指令)导致执行单元阻塞,阻塞执行单元对应的指令可能被Instruction Unit调度到不阻塞的执行单元执行.即两条SIMD的流水线.**
+
+**合理设置每个阶段的吞吐来充盈流水线:每个cycle发射新指令,每个cycle集齐操作数可供发射,每个cycle裁决出Bank或cache访问可进行操作数收集,即避免缓存读取请求和已读操作数.**
+
+## Banks读取请求裁决
+
+**RFU中Bank Request Arbitration Unit裁决出存储(寄存器Bank、cache等)读取请求,发送给对应存储,以进行操作数收集.**
+
+**裁决包含两阶段:按照策略从collector中选择读取请求，之后为每个bank选择读取请求.**
+
+**Bank Request Arbitration Unit的输出是每个Bank的读取请求.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2019.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2020.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2021.png)
+
+**SFU的collector包含两个操作数A、B的slot，单次最多发射4个读取请求（2个线程的A和B），即可能设置有2个SFU。**
+
+**MAC的collector包含三个操作数A、B、C的slot，单次最多发射12个读取请求（4个线程的A、B和C），即可能设置有4个MAC。**
+
+**Bank Request Arbitration Unit对应4+16个Banks,SFU的2个线程需要4个read和2个write,MAC的4个线程需要12个read和4个write,一共16个并发读取请求对应16个Banks.**
+
+**裁决单元在1个cycle中将16个读取请求派发到不同的Bank或搁置.**
+
+**裁决阶段一:从collector中选择读取请求，优先满足SFU指令的请求。**
+
+**裁决阶段一:从collector中选择读取请求，优先满足SFU的前提下,优先满足已被部分满足的指令的剩余操作数读取请求。**
+
+**裁决阶段二:为每个bank选择读取请求，若没有来自SFU的请求,则考虑来自MAC的请求,若都没有,则该Bank没有读取请求.**
+
+**裁决阶段二:为每个bank选择读取请求，优先满足已被部分满足的指令的剩余操作数读取请求,但Bank对寄存器的读取顺序不确定(避免bank conflict).**
+
+**裁决阶段二:为每个bank选择读取请求，若触发data cache miss,则放弃满足该请求(和指令执行).Instruction Unit稍后重新调度该指令获取操作数和发射.**
+
+**裁决阶段二:为每个bank选择读取请求，满足优先策略前提下,选择访问自身的请求进行满足.**
+
+**若一阶段选择的请求不访问自身,则看下一个Bank.**
+
+**dispatch单元从集齐指令操作数的collectors中选择指令发射到执行单元时，按照指令进入RFU的顺序发射以避免WAR冒险,即前序指令的寄存器读取会阻塞后序指令的发射.**
+
+**最近的NV在RFU中设置SB来检测WAR、RAW、WAW冒险，即编译期向指令添加信息辅助SB机制,让存在冒险指令的线程中所有指令发射被阻塞,不存在冒险指令的线程指令可乱序执行。**
+
+**dispatch单元顺序发射集齐操作数的指令来解决WAR冒险.**
+
+**dispatch端口发射指令,保证和执行中指令的写回时机错开,来避免写回冲突.**
+
+**从指令集齐操作数后被发射,到执行单元产生有效结果并写回的延迟是固定的,dispatch根据将发射指令的写回时机和已发射指令的写回时机是否重叠,判断是否存在写回冲突.**
+
+**由于裁决请求和Bank、Bank的读冲突和写冲突、dispatch冲突、外部访问,每个指令在GRF中的收集操作数过程延迟不定.GRF给指令发射单元提供信息来改善寄存器分配和指令发射.**
+
+**不存在写回冲突并且操作数集齐的指令可乱序执行.**
+
+**存在WAW、RAW依赖的线程的后续指令收集操作数被阻塞,操作数不可能集齐;**
+
+**存在WAR依赖的指令集齐操作数时,其依赖指令因为优先收集操作数,解决冒险,可乱序发射.**
+
+# 4 NV的运行栈的分支执行
+
+ref:[SYSTEMIS AND METHOD FORMANAGING DVERGENT THREADS IN A SIMD ARCHITECTURE]
+
+**专利中的分支指令,包含条件分支branch、无条件分支cal、prebreak、return、break等.**
+
+[NV 基于运行栈的分支执行](NV%20%E5%9F%BA%E4%BA%8E%E8%BF%90%E8%A1%8C%E6%A0%88%E7%9A%84%E5%88%86%E6%94%AF%E6%89%A7%E8%A1%8C%20217e12d10b6e80f283e8ccf9847fdf02.md)
+
+## GPU工作过程
+
+**host和GPU通过接口通信.GPU将收到的命令和数据传送到独立显存和前端.**
+
+**GPU的存储空间包含独立显存和部分host内存,存储空间用于存储GPU处理的数据和程序.**
+
+**独立显存和GPU绑定使用,GRF和GPU内计算单元绑定使用.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2022.png)
+
+**GPU的处理pipeline包含前端来翻译和格式化来自host的命令和数据,将其输出到IDX.IDX控制内核pipeline和光栅执行单元的执行,并将过程数据输入和输出到存储中.**
+
+**部分格式化命令将程序首地址和数据首地址提供给可编程内核pipeline,让其进行初始化过程.**
+
+**IDX、可编程内核pipeline和光栅处理单元通过和GPU存储(显存、host存储)之间的接口获得数据和指令.**
+
+**部分host存储和GPU共享,用于存储指令和数据,减少host和GPU之间的数据传输,提高访存效率.**
+
+**IDX单元将中间结果、输入和控制命令输出到内核pipeline,让可编程内核pipeline执行计算,完成程序功能.可编程内核pipeline和光栅处理单元协作实现程序功能.**
+
+**可编程内核pipeline可配置执行多种数据的操作(surfaces, primitives, vertices, pixels, or fragments),内核pipeline类似NV中的Graphic Process Cluster或Texture Process Cluster.**
+
+**内核pipeline的执行结果输出到光栅计算单元进行栅格计算,并将结果存储到显存.当host交付给GPU的程序执行完成后,输出控制将结果输出到host、net…**
+
+## 内核pipeline工作过程(**Graphic Process Cluster**)
+
+**IDX单元将分包后的数据和程序发给内核pipeline执行.**
+
+![iShot_2025-06-17_19.38.24.png](NV%20GPU%E4%B8%93%E5%88%A9/iShot_2025-06-17_19.38.24.png)
+
+**内核pipeline将数据存储在vertex input buffer(GRF/FIFO/cache),等待执行pipeline以多线程并行的方式处理.执行pipeline类似NV中的SM.**
+
+**SM(执行pipeline)和Texture Unit有两种协作方式:**
+
+**一种是以Texture Unit为主控来调度SM,执行pipeline从Texture Cache中获取指令和Texture Unit产生的图形数据,将一阶图形数据转换成二阶图形数据(顶点vertices),并将二阶图形数据进行坐标变换.**
+
+**一种是将Texture Unit并入SM,在SM内设置取指和发射逻辑,比如近来NV架构.**
+
+**SM(执行pipeline)将坐标变换后的图形数据输出(vertices)存储在输出Buffer(GRF/FIFO/Cache),图形输出经计算差值和梯度后一并输入到Raster Unit,Raster Unit将图形数据变成像素数据,存储在pixel input buffer.**
+
+**Pixel input buffer将像素数据按坐标输出到特定SM进行后续处理.每个SM(执行pipeline)被设置处理和输出特定位置的像素,类似于NV中不同线程块分派到不同SM.**
+
+**SM(执行pipeline)中可编程计算单元执行线程中的不同计算指令,将像素数据处理后输出到pixel output buffer(GRF/FIFO/Cache).**
+
+**处理后的像素数据从SM输出到Raster Analyser进行栅格计算.**
+
+**SM(execution pipelines)由Texture Cache中读取指令和图形数据,多遍通过SM执行完成图形计算的加速.SM的执行方式由Texture Unit控制完成图形函数,限制了通用性.**
+
+**SM对图形数据和像素数据的计算方式可用于执行多线程的并行计算.**
+
+**早期SM/近来SM中Process Block可看作多线程Core,多线程Core中多个线程使用不同的数据执行相同的操作/指令.但在线程存在分支时,不同线程对执行指令存在分歧.**
+
+## 基于硬件栈的多线程分支执行
+
+**提前保存控制流的指令信息(分支PC、聚合PC),防止进入分支后被覆写,以便取指时访问来执行正确的控制流.硬件栈记录控制流信息的方式会限制分支和嵌套的层数,需要通过编译器解决,但该方法很通用.**
+
+**线程因为分支或原子操作而异步,可能需要在程序不同指令处同步,来保证程序设计的同步.**
+
+**GPU可能并行处理24个不同的线程组/warp,每个warp包含32个线程,因此多线程Core可能同时处理多个warp.**
+
+**多线程Core需要为处理的每个warp记录激活mask和激活PC,激活mask的每一位表示某个线程是否激活(执行当前指令),激活PC表示当前执行的指令PC.**
+
+**多线程Core遇到branch指令时,将同步、分支PC、聚合PC等信息压栈,之后根据分支执行结果决定warp的激活mask和激活PC.激活的线程重复上述行为.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2023.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2024.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2025.png)
+
+**多线程Core通过对栈的push和pop,控制线程的分支执行、聚合和同步.**
+
+**在下一个分支到来前对不同分支的线程同步(恢复分支前线程的同步程度),能提高多线程Core中SIMD单元的利用率.通过栈中的同步Token实现机制.**
+
+**具体说,多线程Core检查分支指令中是否有set-sync标志.若存在set-sync标志,处理分支指令之前将sync的token压栈.当sync的token出栈时,最近因分支指令异步的线程重新同步.**
+
+**每个线程组/warp配有1个硬件栈,每个token包含执行流的信息,包含激活mask,token类型ID和nPC.**
+
+**硬件栈的压栈和弹栈方式能避免因分支嵌套导致的执行流被覆盖.**
+
+**硬件栈中token的信息能高效同步处于不同分支的不同线程.**
+
+**token中不记录rPC,通过rPC处指令的pop-syn标志完成分支/线程切换.和记录rPC的方法类似的是,静态的分支A→分支B的切换可能导致死锁.**
+
+**执行branch的线程结果不统一,导致线程分束,将包含不满足branch条件(走if分支,分支块首PC是branch的下一条PC)的线程信息的divergence token压栈,包含mask(not-taken)和下一条PC(not-taken).**
+
+**divergence token压栈后,多线程Core将激活mask设置为branch条件达成的线程(执行else分支的线程),将激活PC设置为branch的跳转PC,即else分支块的首指令.**
+
+**branch指令设置set-syn标识,会首先将syn的token压栈,包含执行branch时的激活mask,该mask记录执行branch的所有线程,也是聚合时需要同步的线程.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2026.png)
+
+**无条件跳转的call指令将return的PC作为token中的PC信息压栈,激活mask保持不变并记录在token.激活PC设置为call的目标PC.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2027.png)
+
+**pre-break指令用于设置loop中无条件跳转break的目标地址,即所有循环之后的指令PC,token中的PC设置为跳出目的的指令PC,激活mask保持不变并记录在token中,一般pre-break后面就是loop的首指令,激活PC是下一个PC.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2028.png)
+
+**栈中token的编码包含32位的激活mask,3位的token类型,22位的PC.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2029.png)
+
+## fetch和运行栈
+
+![iShot_2025-06-17_19.58.32.png](NV%20GPU%E4%B8%93%E5%88%A9/iShot_2025-06-17_19.58.32.png)
+
+**fetch指令是branch/call/prebreak时,根据具体类型和执行结果将不同token压栈,使用token信息更新激活mask和激活PC,使用激活PC继续取指.**
+
+**fetch指令是return/break时,将栈顶的token(call/prebreak)弹栈,使用token信息更新激活mask和激活PC,继续取指.call token的信息是过程返回后的指令PC,break token的信息是跳出循环后的指令PC,分别更新激活PC后完成指令功能.call/return和prebreak/break指令都不产生线程分束,因此激活mask不改变.**
+
+## 同步和线程切换
+
+**set-syn标志只能设置在条件分支branch、无条件分支prebreak和call指令.功能是在运行栈中设置路标(syn token),标识着执行该指令的所有线程需要在分支/过程中异步执行完时达到同步状态,syn token弹栈时表示异步线程都到达设置pop-syn的指令.**
+
+**return和break指令分别作为call和prebreak指令的配对指令,将栈中的call token和break token弹出,在过程返回前设置屏障来同步没有收益,所以不设置pop-syn,也不必要在过程返回时在设置未来的同步时机,所以不设置set-syn.**
+
+**pop-syn标志只能设置在非分支指令(branch、prebreak、call、return、break属于分支指令)中.设置pop-syn的指令需要等待线程同步后被执行，类似于在指令前添加屏障.**
+
+**执行到标志pop-syn的指令的线程需要判断其他线程是否到达该指令,等待set-syn中设置所有线程同步后才能执行后序指令.**
+
+**检测到指令设置pop-syn标志时,说明该指令执行前设置同步屏障.**
+
+**当栈顶是syn的token，说明异步线程已全部到达该屏障,恢复最近异步之前的同步状态;若不是syn的token，则说明其余线程没达到屏障,弹栈并使用其PC切换到其他线程执行.**
+
+**激活线程检测到pop-syn后将栈顶token弹栈,并使用其记录的nPC和激活mask.当栈中的token只剩下syn后,当前线程执行到rPC指令并检测到pop-syn标志,将syn弹栈并使用其指定的激活mask,此时因为分支发散而异步执行的线程重新同步,执行聚合后指令.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2030.png)
+
+## 例子
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2031.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2032.png)
+
+![iShot_2025-06-17_20.02.06.png](NV%20GPU%E4%B8%93%E5%88%A9/iShot_2025-06-17_20.02.06.png)
+
+**多线程Core(SM)以线程组调度和执行.执行分支时,每个线程组互相独立地执遍历分支,因此分束后的线程串行只在线程组内部,不执行分支指令的线程组不受影响.**
+
+# 5 聚合Barrier的分支执行
+
+ref:[EXECUTION OF DIVERGENT THREADS USING A CONVERGENCE BARRIER]
+
+**4中分支同步机制(运行栈和pop-syn)决定分支线程的静态调度和同步策略。warp内不同分支线程的切换以指令块为单位，即分支1的指令块完成后才能切换分支2。**
+
+**5和4一致的策略是尽早同步分束线程,但将分支执行中最重要的同步通过聚合屏障实现,从而将分支执行的机制和线程调度策略解耦合。**
+
+**vertice是图形的顶点,最基本的图元;**
+
+**primitive是图形的几何图元(顶点、线段、三角形、圆等元素),图形的基本组成;**
+
+**fragment是片元,光栅化的产物,是图元转变成的二维图像的像素点,每个像素包含颜色、深度、纹理;**
+
+**pixel是屏幕上图像的像素,包含像素点填充的色彩信息(RGB).**
+
+[NV 聚合Barrier的分支执行](NV%20%E8%81%9A%E5%90%88Barrier%E7%9A%84%E5%88%86%E6%94%AF%E6%89%A7%E8%A1%8C%2021ce12d10b6e80a8a1e3cf82d235dd6a.md)
+
+## 分束线程的同步
+
+**聚合barrier将相同分支的线程动态分组,提高SIMD单元的利用率.**
+
+**多线程并发的程序执行需要支持线程分束执行,提供YIELD指令让循环/不定指令数的线程挂起保证线程不会永远阻塞其余线程.**
+
+**聚合barrier将分束的异步线程同步,比基于运行栈的静态优先级的异步线程调度和同步更加灵活.**
+
+**基于聚合Barrier的分支管理机制和线程调度机制解耦,两个机制独立工作.**
+
+**分支管理是指分支切换,线程调度是指线程切换.**
+
+**分支运行栈机制中,分束切换的实现机制决定了warp中线程的静态切换策略.即先执行分支A的代码块(分束线程A),阻塞后执行分支B的代码块(分束线程B),最后同步.**
+
+**聚合Barrier机制中,只要求分束线程在聚合处同步,即分支A的指令(分束线程A)和分支B的指令(分束线程B)在到达Barrier之前可任意交错执行,在Barrier处同步.**
+
+**聚合Barrier机制中,将warp和分束线程都视为线程组来调度,线程的切换策略和分支切换实现无关.**
+
+**编译时识别出程序中单出入口的代码块,该代码块内部可能出现分束.**
+
+**在代码块的单出入口指令处,插入聚合barrier让线程同步.即离开代码块前将分束的线程同步,以同步进入下一个代码块.**
+
+**单出入口代码块的入口可能对应程序的有向控制流图中1个支配节点,出口可能对应程序的有向控制流图中1个尾支配节点.**
+
+**执行程序中entry处指令的线程会参加聚合Barrier,SM中的scheduler单元记录聚合Barrier和参加线程.**
+
+**该过程的实现机制是,编译时在entry处指令前插入ADD指令,ADD指令指明聚合barrier的名字,执行ADD指令的线程加入该命名的聚合Barrier.每个命名的聚合Barrier对应1个标记向量寄存器,标记参与Barrier的线程.**
+
+**ADD对应WAIT指令,WAIT指令指明聚合barrier的名字,表示参与该命名聚合屏障的线程在此同步.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2033.png)
+
+**程序中不同分束的线程指令分别在不同的SIMD单元上并行执行,而不是基于运行栈的调度串行.但资源使用率并没有提高,只是不同分支的线程调度更灵活,能让相同指令的线程更早同步.**
+
+At step 115, a first path through the program is executed by a first divergent portion of the participating threads (e.g., threads that participate in the convergence barrier). The first path through the program may be different than one or more other paths taken by other threads of the participating threads. Each different path through the region of the program is a divergent path.
+
+At step 120, a second path through the program is executed by a second divergent portion of the participating threads that are ready for execution. The second divergent portion of the participating threads is different than the first divergent portion of the participating threads. In one embodiment, **the first divergent portion of the participating threads is executed by a first core within a parallel processing unit, and the second divergent portion of the participating threads is simultaneously executed by a second core within the parallel processing unit.** Additional paths through the program may be executed by other divergent portions of the participating threads. In the extreme, each participating thread may execute a different path through the program so that for N threads, the execution is N-way divergent.
+
+**分束的线程执行退出点指令,线程状态从ready变成blocked.**
+
+**分束的线程执行WAIT指令,并且WAIT指定的聚合Barrier和线程执行ADD时参与的Barrier名字相同,线程状态从ready变成blocked.**
+
+**SM中的scheduler通过命名Barrier的参与线程是否都到达同Barrier名的WAIT指令,即处于blocked状态,来检测聚合Barrier处线程是否达到同步.**
+
+**程序可能有多个退出点(break,return),即程序中指令块可能是单入口多出口的.**
+
+**线程退出程序段后不再参与聚合Barrier,状态可能变成exited,可能不变.**
+
+**线程执行YIELD指令或线程满足YIELD条件(超时)时,状态变成yielded(检测同步时等效blocked).**
+
+**YIELD指令可能被编译器插入,让达到聚合Barrier的线程休眠,从而增大调度未达到聚合Barrier线程的机会.**
+
+**scheduler检测到聚合Barrier中全部线程达到同步,则清除Barrier,并唤醒Barrier处全部线程.聚合Barrier处的线程成组,在SIMD单元上同步执行.**
+
+**scheduler检测到聚合Barrier处线程未达到同步,则将参与线程中的剩余分束调度执行.**
+
+## PPU/GPU的组成
+
+**并行处理器PPU通过多线程并发来隐藏访存延迟,比如GPU.**
+
+**GPU被设计成处理三维图形graphic数据的图形处理pipeline,来生成显示设备上的二维图像image数据.GPU可用于处理高并发的通用计算任务(GPGPU).**
+
+**PPU包含I/O接口、host接口、前端单元、调度单元、任务分派单元、hub、互联单元Xbar、并行处理GPC、分区单元.**
+
+**PPU的I/O接口通过系统总线和host或其他设备建立联系,通过分区单元连接存储设备(显存).**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2034.png)
+
+**I/O接口用于PPU和host或各种设备通过系统总线或其他设备进行通信.**
+
+**I/O接口将从host收到的数据包发给host接口译码,得到配置PPU的命令.host接口将host对PPU的配置命令传送到PPU的不同部分.**
+
+**host端程序将对PPU的任务负载编码成命令流(PPU指令和数据),存储在共享buffer供PPU执行负载.**
+
+**流是一系列按顺序执行的命令,比如线程.不同的流可能无序或并发地执行命令,来提高资源利用率.**
+
+**PPU中的前端根据host传递的命令指针去buffer中获取指令和数据,然后发送到PPU的不同部件.**
+
+**前端将命令流定义的任务负载发送到scheduler进行管理和调度,scheduler管理任务的状态(派发执行的GPC编号、任务的执行状态、调度优先级等).**
+
+**scheduler选择一堆任务启动并发,发送给任务分派单元distribution进行任务派发.**
+
+**distribution单元为每个GPC设置1个pending池和1个active池来完成任务的并发,pending池记录ready的任务,active池running的任务.**
+
+**scheduler调度、启动和管理线程的并发,distribution和GPC执行和完成线程的并发,scheduler和distribution是分层的控制设计.**
+
+**Xbar是片上互联网络,完成PPU上不同部件的通信/路由.**
+
+**scheduler管理任务,distribution分派、切换任务到GPC执行以并发.**
+
+**GPC的处理结果可能通过片上网络Xbar发送给其他GPC计算,也可能通过分区单元存到内存供后续计算.分区单元数量等于内存芯片数量.**
+
+## PPU/GPU的图形处理
+
+**host处理器执行PPU的（图形）驱动内核,内核提供给host程序将操作卸载到PPU上执行的编程接口(API).**
+
+**host程序通过API调用驱动，编译生成执行任务（图形计算）的PPU配置命令,并流式输出到PPU.**
+
+**驱动内核配置GPU来执行图形任务，封装成接口，上层应用/OS调用驱动接口，完成图形加速。**
+
+**驱动完成的任务类似cuda中的kernel program定义的任务，但抽象层次不同。驱动编写指令并提供执行图形计算的API；kernel基于runtime API在运行时执行kernel编译后的指令（编译时可能使用驱动API），编程不到指令级别。**
+
+**cuda中kernel和host程序在编译时，host程序将对kernel函数的调用转为对runtime中API的调用，并将host、kernel、runtime编译（汇编）、链接后生成host的可执行文件。**
+
+**host code调用runtime API进行kernel注册（将kernel code地址传给runtime）、kernel调用等（runtime负责GPU加载、启动、结束等）。**
+
+**每个任务包含多个线程组,即多个warp.线程块是执行任务的若干线程组/warp.同组/warp的线程通过共享存储交换数据.每个warp一般包含32个线程.**
+
+**GPC包含pipeline管理单元、pre-raster操作单元(PROP)、Raster引擎、任务分派路由WDX、内存管理单元和若干Texture Processing Cluster.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2035.png)
+
+**GPC中pipeline控制器管理被分配的任务在TPC(SM、图元引擎)或其他模块(PROP、Raster Engine)的执行.**
+
+**PROP将经过Raster引擎光栅化和TPC着色的数据进行优化(色彩融合、地址变换)后路由到分层模块的ROP单元.**
+
+**Raster引擎执行光栅化操作(三维建模数据转二维屏幕数据),包含若干功能单元.**
+
+**Raster引擎将转换后的顶点(vertices)数据进行一系列处理后,输出片元(fragment)到TPC中的fragment shader(Texture unit + SM).**
+
+**TPC包含图元引擎(primitive)、SM、Texture单元和多Pipe控制器MPC.**
+
+**MPC将数据和操作分发到对应的执行单元,如将vertices数据路由到图元引擎得到相关属性,将需要着色(shader)的数据交给SM执行.**
+
+**SM中的texture单元加载texture map(纹素阵列)并取样,采样的texture数据在SM中进行着色.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2036.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/496b34b0-2d74-4e84-9319-fd2c8b56eb30.png)
+
+**SM由大量的可编程SP/pipeline组成,以SIMT的模式并发执行大量线程.**
+
+**MMU作为GPC和分区模块的接口,提供虚拟地址到物理地址变换、内存保护和裁决内存访问的功能.**
+
+## SM的组成
+
+**SM包含指令cache、多个scheduler、GRF、若干处理Core、若干SFU、若干LD/ST单元、片上网络和共享内存/L1 Cache.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2037.png)
+
+**任务由PPU顶层分派单元分派到GPC,被GPC分派到某个TPC执行,任务中着色程序分派到TPC中的SM执行.SM中多线程并发执行该任务,scheduler调度线程组/warp执行的指令,即调度不同线程组/warp并发执行任务.scheduler中dispatch单元每个周期将不同warp的指令发射到不同功能单元(Core、SFU、LD/ST).**
+
+**若scheduler中配置两个dispatch单元,则每周期发射1个warp中2个指令.**
+
+**SM的GRF临时存储操作数.GRF可能按照执行单元划分,也可能按照warp划分.**
+
+**GRF按照执行单元划分是指线程的不同操作数存储在不同Bank;按照warp划分是指每个warp/线程的存储映射到1个Bank.**
+
+**SM可能包含192个Core、32个SFU、32个LSU.**
+
+**Core可能包含单精度浮点的pipeline执行浮点运算和定点运算,双精度浮点的pipeline执行双精度浮点运算.SFU执行特殊函数计算.LSU执行从共享内存和寄存器之间的ld/st指令.**
+
+**SM的片上网络将任意执行单元和任意寄存器/共享内存建立连接.**
+
+**共享内存/L1 Cache是片上存储阵列,可以分区成共享内存和L1 Cache,或者只作为共享内存或L1 Cache.**
+
+## 图形处理的过程
+
+**PPU可以是GPU,GPU接收的命令一般是处理图形数据的着色程序.**
+
+**图形数据是图元的集合,图元包含点、线、三角、方形、三角带(连着的三角形).**
+
+**图元数据是组成图元的顶点(建模空间坐标系中)和图元中每个顶点的属性.**
+
+**GPU处理图元数据,生成帧缓存(显示器的像素数据).**
+
+**应用将显示的建模数据(顶点和属性)写在存储中,建模数据定义了显示可见的对象.**
+
+**应用调用驱动内核的API,发出将建模数据进行渲染和显示的请求**
+
+**驱动内核读取建模数据,将处理建模数据所需操作以命令流输出.**
+
+**命令可能引用不同的着色程序在SM上执行,包括vertex、hull、domain、geometry和pixel的着色.**
+
+**不同SM可以并发执行不同的着色程序,组成pipeline完成建模数据到显示时帧缓存数据的转换和渲染.**
+
+**第一组SM配置执行vertex的着色程序,将处理后的vertex数据写到L2 Cache或存储;**
+
+**处理后的vertex数据经过Raster引擎光栅化(三维建模数据转二维屏幕数据),得到片元数据fragment;**
+
+**第二组SM配置执行片元数据的着色程序,处理后的fragment进行混合blend后写入帧缓存.**
+
+**帧缓存数据传送到显示设备显示图像.**
+
+**PPU可能存在于个人电脑、服务器、移动设备、电子相机、手持电子设备等.**
+
+**PPU可能封装成独立芯片,也可能和CPU、MMU、DAC等封装成SoC芯片.**
+
+**PPU芯片可能和存储芯片(GDDR5)组装成显卡(板级封装),显卡使用PCIe接口和南桥或北桥建立连接.**
+
+**PPU可能作为集成GPU,封装在主板上chipset中(北桥).**
+
+**南桥和北桥都是芯片组chipset,分别负责低速信号和高速信号的处理和传输.**
+
+## 聚合Barrier机制
+
+**通过线程屏障同步不同分支且未退出的线程,从而管理线程分束,提高SIMD core利用率.线程同步后,以SIMD模式逐指令执行.**
+
+**聚合Barrier是体系结构管理线程分束的机制向上提供的编程抽象.**
+
+**聚合Barrier代表指令执行时相关硬件的关联操作.相关硬件包含scheduler、命名聚合Barrier的标志寄存器,关联操作由编程指令和硬件机制控制执行.**
+
+**聚合Barrier一般有两个关联操作:ADD指令和WAIT指令.**
+
+**ADD指令将当前激活的线程加入一个ADD指令命名的聚合Barrier,WAIT指令阻塞线程执行直到参与聚合Barrier的线程全部到达.**
+
+**编译器在可能存在线程分束的控制流区间(代码块)的入口处插入ADD指令,在该区间的出口处插入WAIT指令,理想情况是控制流分区是单入口,线程在内部分束,在出口同步(后进入下一个块).**
+
+**每个控制流分区被编译器分配唯一的聚合Barrier.不同warp的命名Barrier相互独立.**
+
+**聚合Barrier的名字(ID)和状态信息需建立映射,可被不同机制实现(纯硬件映射、编译器分配、软件调度等).**
+
+Conceptually, each control flow region in the program is assigned a unique convergence barrier (or other type of barrier) by the compiler. In one embodiment, N different names are available, and state information may be stored for each one of the N different convergence barriers. However, in some embodiments, a mechanism may be required to map logical barriers (the number of which is unbounded) to hardware resources such as registers (which are finite). There are multiple techniques for handling the mapping (e.g., with a memory-backed cache, with compiler-managed allocation, with software-managed scheduling, etc.).
+
+**线程组/warp同步进入代码区间,并通过ADD指令配置聚合Barrier,ADD指令可能不在代码区间入口.**
+
+**执行ADD指令的线程参与ADD指定的命名Barrier,代码区间内部线程分束执行,最终执行到WAIT指令.**
+
+**WAIT指令阻塞参与命名Barrier的线程,直到Barrier被释放,scheduler调度其余线程组执行.**
+
+**当所有参与命名Barrier的线程到达WAIT指令,即线程状态是Blocked时,命名Barrier被释放.**
+
+**线程执行OPT-OUT指令,退出所在代码分区,则该线程退出该命名Barrier.**
+
+**线程执行exit指令,生命周期结束,线程状态变为exited,该线程可能不会退出该命名Barrier,相对的warp scheduler检测是否释放Barrier时忽略exited的线程.**
+
+Typically, a group of threads will enter a region synchronized and configure a convergence barrier based on an ADD instruction included at the entry point to the region. In one embodiment, threads may execute an ADD instruction that is not at the entry point to the region and participate in the convergence barrier. The ADD instruction indicates that a thread executing the ADD instruction participates in a convergence barrier named by the ADD instruction. Then, when executing instructions within the region, the threads may take different execution paths through the region. Eventually, each of the threads will reach a WAIT instruction at the end of the region. At the WAIT instruction, the threads are suspended until the convergence barrier releases, and the scheduler unit 410 selects another set of threads to execute. The convergence barrier releases when all threads that participated in the convergence barrier arrive at the WAIT instruction and have a status of blocked. However, one or more threads participating in the convergence barrier may exit the region and terminate participation in the convergence barrier by executing an OPT-OUT instruction included in a divergent path of the region. In one embodiment, threads that execute an EXIT instruction change from a ready state to an exited state but do not explicitly terminate participation in the convergence barrier. Instead, the scheduler unit 410 ignores threads that participate in a barrier and have a state of exited but have not arrived at the convergence barrier.
+
+**参与Barrier的线程可能执行YILED指令,则检测是否释放Barrier时不考虑yielded状态的线程.**
+
+**yielded的线程也不必要执行WAIT指令,当命名Barrier释放时,yielded线程也退出Barrier.**
+
+**yielded线程在退出Barrier时可唤醒，或存在其他同步机制.**
+
+One or more other threads participating in the convergence barrier may execute a YIELD instruction included in another divergent path of the region, and threads that have arrived at the convergence barrier need not wait for the yielding threads to release the convergence barrier. Likewise, the yielding threads need not necessarily execute the WAIT instruction. Regardless, once the convergence barrier is cleared, the yielding threads no longer participate in the convergence barrier.
+
+**分离的线程子集能参加聚合Barrier,如果线程子集在任一方执行WAIT指令前执行ADD指令.**
+
+**分离的线程子集需要在任一方执行WAIT指令之前,将自身加入聚合Barrier;**
+
+**先到WAIT指令处的线程阻塞,直到两个线程子集都到达WAIT指令.**
+
+**基于运行栈的分支执行和前述场景中执行ADD的线程都是同步的（成组的）,此处分离的线程子集是异步执行ADD指令.**
+
+**实际场景是代码块内从不同入口进入的分束线程也能进行同步,运行栈的分支执行只对warp内线程进行同步,并且发生在父亲线程组直接分束的线程之间.**
+
+Disjoint subsets of threads may participate in a convergence barrier if both subsets of threads execute an ADD instruction specifying the convergence barrier before either subset of threads executes the WAIT instruction. In this case, both subsets of threads will add themselves to the convergence barrier before either one of the subsets of threads reaches the convergence barrier. The subset of threads that reaches the WAIT instruction first will block on the convergence barrier until the other subset of threads arrives. **This type of re-convergence behavior is not possible when a stack-based divergence mechanism is used.**
+
+## Scheduler的线程调度
+
+**scheduler的目标是确保控制流的推进和执行分束线程以尽快聚合.**
+
+**scheduler为每个聚合Barrier和warp中每个线程维护状态信息.**
+
+**barrier participation mask表示warp中参与某个barrier的线程(如0-31).当线程执行ADD指令时,mask中对应位置1,当Barrier释放或某个线程执行OPT-OUT指令时,线程对应的位置0.**
+
+**Barrier释放后,参与Barrier的线程的thread state从blocked或yielded变成ready,表示可被scheduler调度.**
+
+FIG. 4B illustrates convergence barrier state, in accordance with one embodiment. The scheduler unit 410 functions to achieve two objectives: ensuring forward progress and executing divergent paths such that they converge as soon as possible. To support these objectives, state information is maintained for each convergence barrier and each thread in a warp. The state information may be stored in registers. A barrier participation mask 425 indicates the threads in a warp that participate in a convergence barrier. In one embodiment, a single bit is stored for each thread in the warp. Bits corresponding to threads that participate in the convergence barrier are set in the barrier participation mask 425 when an ADD instruction is executed. The bits corresponding to the threads that participate in the convergence barrier are cleared when the convergence barrier is cleared (or when a corresponding thread executes an OPT-OUT instruction). **When the convergence barrier is cleared, the thread state for threads participating in the barrier is changed from either blocked or yielding to ready.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2038.png)
+
+**Barrier state是最近被scheduler调度执行的线程ID,以便scheduler实现线程时间片轮转.**
+
+**Barrier state包含yield计数器来记录激活线程执行的YIELD指令.当计数器超过阈值,执行Yield操作,并且释放聚合Barrier.(降低YIELD频率,让yielded线程尽量同步成组)**
+
+Barrier state 430 may also include an identifier of the last thread that was selected for execution by the scheduler unit 410 so that round-robin scheduling may be implemented by the scheduler unit 410. Barrier state 430 may also include a yield counter that counts the number of YIELD instructions that have been executed by the active threads. **In one embodiment, when the yield counter crosses a threshold, the Yield action is performed to release the convergence barrier and the yield counter is reset.**
+
+**warp中每个线程被维护Thread state,包含Ready、Blocked、Yielded、Exited、Ready-、Blocked+.**
+
+- Ready state: thread ready for execution.
+- Blocked state (1-N): Thread is not eligible for execution because it is blocked on a convergence barrier. The state specifies the barrier number that a thread is blocked on.
+- Yielded state: Thread has voluntarily yielded its execution by executing the YIELD instruction. The scheduler unit 410 can move the yielded thread to ready state and the thread can be scheduled again. Also, convergence barriers should not wait for a yielded thread to be released.
+- Exited state: thread has executed an EXIT instruction.
+- Ready- state: thread has executed a NANOSLEEP instruction and remains in this state until the thread is scheduled again, or until the sleep timer expires.
+- Blocked+ state: thread is blocked on a barrier and the scheduler unit 410 requires all threads participating in the barrier to be synchronized, **including yielded threads**. In one embodiment, this state is entered when a WAIT instruction is executed for threads participating in a specific number of convergence barrier (e.g., convergence barrier 15).
+
+**Thread active表示该线程是否已经被scheduler选择执行,只有Ready状态的线程可能被选择.**
+
+**Thread rPC在线程离开Active状态被写入,记录线程下次调度执行时的指令PC.**
+
+**scheduler创建新的激活mask时使用rPC(动态warp?).**
+
+Thread active 460 indicates whether the thread is active, i.e., selected by the scheduler unit 410 for execution. Only threads in the Ready state may be active. Thread rPC 445 stores a program counter that is written by the scheduler unit 410 when the thread leaves the active mask. When the thread is not active, the rPC stores the program counter of an instruction that the thread will execute when unblocked. **The rPC is read when a new active mask is constructed by the scheduler unit 410.**
+
+**scheduler调度不同warp/线程组执行,保证任务进程的推进.SIMD的执行模式让warp内多个线程同时执行一条指令,因此直接调度不同线程执行非常复杂.**
+
+**当warp内出现线程分束,采用周期切换不同分支的线程来推进任务,但会产生性能开销和利用率降低.因此SM的调度目标是尽快同步分束的线程.**
+
+**scheduler初始选择线程组/warp并发送到SIMD core执行.线程组被选择后同步顺序执行指令,直到遇到分支指令或者控制权回到scheduler(阻塞、cache miss).**
+
+**线程执行分支指令并分束后,处于相同分支的线程继续执行,其余分支线程被scheduler阻塞(Ready).**
+
+The scheduler unit 410 is responsible for picking a new set of threads at the same PC that are not waiting on a convergence barrier and loading them onto the SIMD datapath. Once the new set of threads is selected by the scheduler unit 410, the selected threads are run until they diverge or transfer control back to the scheduler unit 410. When the threads execute a divergent branch, the threads will no longer all be at the same PC and cannot continue to execute concurrently. At this time, some threads that took the same path will continue executing, and all other threads will be suspended by the scheduler unit 410.
+
+**scheduler记录因分束被阻塞的线程的下一条指令PC(在rPC中),以便稍后恢复.**
+
+**scheduler会周期性调度(RR)不被聚合Barrier阻塞的线程(Ready)去SIMD core执行.**
+
+**scheduler的分束调度目标是尽快让分束线程同步,切推进任务过程.**
+
+The scheduler unit 410 will remember the PC of the suspended threads so that execution of the suspended threads may be resumed later. In one embodiment, the scheduler unit 410 may also periodically switch the currently active threads with any other threads that are not waiting on a convergence barrier. The divergent path logic of the scheduler unit 410 attempts to simultaneously maximize opportunities for divergent threads to synchronize and not violate the forward progress guarantee.
+
+**scheduler优先调度深层嵌套的分支,并且优先调度拥有规整控制流代码块的线程,所有规整的控制路径调度完后(active),再以RR的策略调度不规整的路径(出现OPT-OUT和YIELD指令).**
+
+**因为不规整的路径对SIMD core的利用率一般较低，并且不会在聚合Barrier处阻塞其余线程,因此优先级较低.**
+
+**深嵌套优先次序的机制是将因分束被阻塞的线程ID存入栈中,当scheduler调度新线程时,弹出栈顶的线程,调度该线程执行(以及相同PC的线程),栈为空则以RR策略调度其他线程.**
+
+In one embodiment, the scheduler unit 410 implements a scheduling policy where structured control flow blocks are scheduled in depth-first order. Once all structured paths have been scheduled, unstructured paths (corresponding to OPT-OUT and YIELD) are scheduled in a round-robin manner. The depth-first order is determined by saving, in a stack, an identifier of a thread that is disabled on a divergent branch. When the scheduler unit 410 switches to another thread, the scheduler unit 410 pops the entry from the top of the stack and schedules the popped thread corresponding to the identifier (along with all other threads at the same PC). If the stack is empty, the scheduler unit 410 picks a new thread in round-robin order.
+
+## 简单控制流
+
+**控制流图中的node表示顺序指令的代码块,edge表示分支指令.**
+
+**规整的控制流定义为任一诱导子图(“选点必选点间的所有边”)都是单入口和单出口的.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2039.png)
+
+**scheduler可能优先选择持有最少active线程的分支路径去执行,因为理论执行时间更短,其次选择直通(自增PC)的分支路径执行.**
+
+In the node 501, threads are added to the convergence barrier B0 at the entry point to the region of the program. The barrier participation mask 425 is updated to indicate that the threads participate in the convergence barrier B0. The threads may diverge when the branch instruction (BRA) is executed. For example, while executing @P0 BRA, the threads that have the predicate P0 will take the branch, while the threads that do not have the predicate P0 set will take the fall-through path. A first divergent path is the node 503 and a second divergent path is the node 502. In one embodiment, the scheduler unit 410 selects one of the two divergent paths to execute ending in the WAIT instruction in the node 504, at which point the active threads will block on the convergence barrier B0 and the remaining threads will execute the other divergent path. **In one embodiment, the scheduler unit 410 selects the divergent path with the fewest number of active threads (according to thread active 460) to execute first.** When the number of active threads is equal, the scheduler unit 410 may select the fall-through path (e.g., node 502). After the selected divergent path is executed, the other divergent path will execute through the WAIT instruction, and the convergence barrier will be released. Finally, all of the original threads will resume execution after the WAIT instruction.
+
+**控制流可能出现任意的嵌套逻辑,内层同步后的线程可以在外层和其他线程进行同步.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2040.png)
+
+In the node 510, threads are added to the convergence barrier B0 at the entry point to the region of the program. The barrier participation mask 425 for the convergence barrier B0 is updated to indicate that the threads participate in the convergence barrier B0. The convergence barrier B0 synchronizes threads at an outer if/else block at the exit point of the region of the program. The threads participating in the convergence barrier B0 may diverge when the branch instruction (BRA) is executed. A first divergent path is the node 512 and a second divergent path is the node 511. A first set of divergent threads that take the first divergent path may include zero threads or up to all threads that participate in the convergence barrier B0. A second set of divergent threads that take the second divergent path includes the remaining threads that participate in the convergence barrier B0.
+
+In the node 512 of the second divergent path, the second set of divergent threads are added to a convergence barrier B1 corresponding to an inner if/else block within the region of the program. The barrier participation mask 425 for the convergence barrier B1 is updated to indicate that the threads participate in the convergence barrier B1. The second set of divergent threads that participate in the convergence barriers B0 and B1 may diverge when the branch instruction (BRA) in the node 512 is executed. A third divergent path is the node 515 and a fourth divergent path is the node 514. The convergence barrier B1 synchronizes the threads in the second set of divergent threads at the WAIT instruction in the node 516 of the region of the program.
+
+The scheduler unit 410 selects either the first or second divergent path to execute ending at either the WAIT instruction in the node 518 or the WAIT instruction in the node 516, respectively. When the second set of divergent threads executing the third and fourth divergent paths have both executed to reach the convergence barrier B1, the convergence barrier B1 is released and the threads in the second set of divergent threads resume SIMD execution until they reach the convergence barrier B0 in node 518. The barrier participation mask 425 for the convergence barrier B1 is updated to indicate that the convergence barrier B1 is cleared. When all of the threads participating in the convergence barrier B0 have executed the WAIT instruction in the node 518, the convergence barrier B0 is released. The barrier participation mask 425 for the convergence barrier B0 is updated to indicate that the convergence barrier B0 is cleared. Finally, all of the threads in the first and second sets of divergent threads resume execution after the WAIT instruction in the node 518.
+
+## 函数调用的同步
+
+**函数调用的同步,在函数入口指令插入ADD指令,在return处插入WAIT指令.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2041.png)
+
+**内联函数调用等价分支.使用函数指针的函数调用通过branch指令实现,在代码块入口插入ADD指令,在代码块返回处同步.**
+
+Inline function calls are equivalent to branches. Function calls that use function pointers are implemented using a branch instruction (BRX). For example, BRX R0 causes each thread to branch to a location that is determined by the per-thread register value R0. In node 520, threads are added to the convergence barrier B0 at the entry point to the region of the program. The barrier participation mask 425 for the convergence barrier B0 is updated to indicate the threads that participate in the convergence barrier B0. The convergence barrier B0 synchronizes threads after the function calls complete. The threads participating in the convergence barrier B0 may diverge when the branch instruction is executed.
+
+**不同线程的函数调用的目标PC可能不同(寄存器的值不同),则不同分支在代码块返回处同步.**
+
+A first divergent path is the node 522, and a second divergent path is the nodes 521 and 525. Each set of divergent threads that takes one of the divergent paths may include zero threads or up to all threads that participate in the convergence barrier B0. The threads participating in the convergence barrier each execute one of the divergent paths and wait for all of the participating threads to reach the convergence barrier at node 526. When all of the participating threads execute the WAIT instruction at node 526, the barrier participation mask 425 for the convergence barrier B0 is updated to indicate that the convergence barrier B0 is cleared.
+
+## YIELD指令(循环)
+
+**聚合Barrier能尽早同步线程,减少SIMD的空闲时间.**
+
+**但WAIT指令会阻塞线程直到同步,如果未同步线程因为环形依赖无法到达,则会导致死锁(运行栈的例子).**
+
+**比如执行循环的线程一直等待资源才能跳出循环,而资源被其他线程占用,而由于scheduler的深度优先策略（每次都处于栈顶）每次调度执行循环的线程(等待资源的线程).**
+
+**循环分支的代码块中插入YIELD指令,以解决死锁.**
+
+**执行YIELD指令将线程状态变成yielded,并且线程被阻塞.通过YIELD指令,能让执行循环等待资源的线程挂起,让其余线程调度执行后释放资源,解决死锁.**
+
+**线程处于yielded状态表示线程参与的聚合Barrier在判定同步时不需要考虑自身,即只要参与Barrier的所有非yielded状态的线程达到同步,Barrier就可被释放.**
+
+**Barrier被释放时,因为部分线程处于yielded状态,线程组内同步的线程数未占满,降低SIMD的使用率.**
+
+FIG. 5D illustrates a control flow graph of a region of a program with divergent loop control flow, in accordance with one embodiment. Note that as described thus far, convergence barriers provide a way for scheduling threads that reduce SIMD idle time, but they do not necessarily provide a forward progress guarantee. This is because the WAIT operation will block some threads until other threads arrive at the WAIT instruction. If the other threads do not arrive for some reason (e.g., they are waiting for yet another set of threads in a way that forms a circular dependency), then the waiting threads block indefinitely. To address the indefinite blocking issue, in one embodiment, the YIELD instruction is inserted into the region of the program with divergent loop control flow. Threads that execute the YIELD instruction change their state from ready to yielded. The yielded state indicates that any convergence barrier waiting for the threads to arrive may be released when all non-yielding threads participating in the convergence barrier have reached the convergence barrier. Threads that execute the YIELD instruction will also be suspended by clearing the thread active 460 for each yielding thread. While releasing the convergence barrier does allow for forward progress, releasing the convergence barrier when all of the threads are not at the convergence barrier skips an opportunity for divergent threads to synchronize, reducing SIMD efficiency.
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2042.png)
+
+As shown in FIG. 5D, each node 530, 532, 534, 536, and 538 in the control flow graph represents a block of one or more instructions that are executed in sequence without any branches. An edge connecting two nodes represents a branch or a fall-through path. In node 530, threads are added to the convergence barrier B1 at the entry point to the region of the program. The threads may diverge when the branch instruction (BRA) is executed. A first divergent path branches around the loop to node 538 and a second divergent path is through nodes 532, 534, and 536. A first set of divergent threads that take the first divergent path may include zero threads or up to all threads that participate in the convergence barrier B1. A second set of divergent threads that take the second divergent path includes the remaining threads that participate in the convergence barrier B1.
+
+Threads in the first set of divergent threads block on the WAIT instruction in node 538 and wait for the threads in the second set of divergent threads to execute through the loop when a YIELD instruction is not included in node 532. As each thread in the second set of divergent threads exits the loop, the exiting threads block on the WAIT instruction in node 538. When all of the threads in the second set of divergent threads have exited the loop, the threads in the first set of divergent threads and the threads in the second set of divergent threads are synchronized and resume execution being converged.
+
+**执行YIELD指令的线程状态变成yielded,线程被阻塞来让其他线程执行,不会参与下一个聚合Barrier.**
+
+**scheduler保证每个分支的线程都有机会执行,因此可能使用RR策略(每个分支都属于规整代码块).**
+
+**编译器通过插入YIELD指令让一个分支线程挂起,从而不会无限执行.**
+
+**编程时显式在边界条件处挂起线程能减少不必要的YIELD指令.**
+
+**编译器可能在无法在静态确定个数的指令中完成的执行路径中插入YIELD指令.**
+
+**编译器可能在任何回跳的branch指令前插入YIELD指令,保证其余线程能够推进.**
+
+**编译器可能在从内存中加载的指令前插入YIELD指令,因为延迟不定.**
+
+**YIELD指令导致线程错过同步成组的机会.保守执行方式下,yielded线程最终会执行到聚合Barrier,此时Barrier内其余线程已经前行,该线程对SIMD core的使用率低.**
+
+**减少yielded线程错过同步次数的优化思路有:**
+
+**1、对于只被yielded线程阻塞释放的屏障,只有当scheduler选择参与该屏障的线程执行时,才释放屏障,即尽可能让线程成组.**
+
+**2、释放只被yielded线程阻塞释放的屏障后,将yielded状态的线程变为ready,即原地成组.**
+
+**3、软件做YIELD优化,设定YIELD指令的执行频率,即scheduler累计识别到YIELD指令到一定次数才执行YIELD指令.**
+
+## 不规整的控制流
+
+**不规整的控制流包含多入口和(或)多出口.聚合Barrier通过OPT-OUT指令来掌控多出口的控制流.**
+
+**OPT-OUT指令允许参加聚合Barrier的线程退出Barrier而线程不阻塞.**
+
+**编译器将多出口中的一个设置为主出口并插入WAIT指令,其余出口插入OPT-OUT指令.**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2043.png)
+
+In node 540, threads are added to the convergence barrier B0 at the entry point to the region of the program. The threads may diverge when the branch instruction (BRA) is executed. A first divergent path branches around an outer loop to node 556 and a second divergent path continues through nodes 542, 544, and 546. A first set of divergent threads that take the first divergent path may include zero threads or up to all threads that participate in the convergence barrier B0. A second set of divergent threads that take the second divergent path includes the remaining threads that participate in the convergence barrier B0.
+
+In node 544, the threads in the second set of divergent threads are added to the convergence barrier B1 at the entry point to an inner loop within the region of the program. The threads may diverge when the branch instruction (BRA) in node 544 is executed. A third divergent path branches around the inner loop to node 552 and a fourth divergent path continues to node 546. A third set of divergent threads that take the third divergent path may include zero threads or up to all threads that participate in the convergence barrier B1. A fourth set of divergent threads that take the fourth divergent path includes the remaining threads that participate in the convergence barrier B1.
+
+Threads in the fourth set of divergent threads that take an early exit path are a fifth set of divergent threads that explicitly opt out of the inner loop on a fifth divergent path through node 560. The threads in the fifth set of divergent threads execute an OPT-OUT instruction in node 560 and exit the convergence barrier B1. **When the OPT-OUT instruction is executed, the thread state 440 remains unchanged and remains ready**. However, since the threads in the fifth set of divergent threads still need to synchronize on the convergence barrier B0 at node 556, the threads in the fifth set of divergent threads continue to node 554. The remaining threads in the fourth set of divergent threads that do not take the early exit path through node 560 eventually execute the WAIT instruction at node 552 and are blocked at the convergence barrier B1 or execute a YIELD instruction in node 546. When the remaining threads in the fourth set of divergent threads that are not yielding synchronize at the convergence barrier B1, the convergence barrier B1 is cleared and the remaining threads proceed to node 554.
+
+**一个yielded的线程只能被一个聚合Barrier释放时变为ready,并退出Barrier.**
+
+**In one embodiment, any of the remaining threads that were yielding when the convergence barrier B1 is cleared transition from the yielding state to the ready state.** A yielding thread only yields for one convergence barrier. As each thread reaches node 556 and executes the WAIT instruction at the convergence barrier B0, the thread is blocked until all of the threads have executed the WAIT instruction. When all of the threads participating in the convergence barrier B0 are blocked, the convergence barrier B0 is cleared and the threads execute subsequent instructions in a SIMD manner.
+
+## Scheduler检验同步
+
+**参与Barrier的线程到达对应名字Barrier的指令,并且参与线程状态是阻塞.**
+
+**到达Barrier且被阻塞的线程的rPC相同并且是Barrier处指令的PC。**
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%2044.png)
+
+**参加Barrier的线程执行opt-out指令后，从Barrier mask中清除，并且状态变为exited.**
+
+**参与Barrier但状态是yielded的线程在检查是否同步时被忽略.**
+
+**当线程执行YIELD指令，状态变为yielded但仍参与Barrier.当大部分指令分束到存在YIELD指令的分支，YIELD指令不会执行.因为YIELD指令是防止小部分线程一直执行.**
+
+**scheduler在Barrier指令处发现参与Barrier的非yielded线程都blocked，则判定达成同步，并改变参与Barrier的线程状态到ready（包括yielded）.**
+
+**当线程执行的指令访问内存（长延迟操作），在其后插入nanosleep指令短暂阻塞该线程，让其余线程执行，能提高资源使用率.**
+
+**scheduler跟踪nanosleep指定的时间，计时满后将线程状态恢复成ready.**

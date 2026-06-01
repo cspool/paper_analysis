@@ -1,0 +1,187 @@
+# GPU channel for nested、TSG、QM
+
+MULTI-CHANNEL TIME SLICE GROUPS
+
+Hardware Compute Partitioning on NVIDIA GPUs
+
+Hardware Compute Partitioning on NVIDIA GPUs for Composable Systems
+
+MULTI-CHIP GRAPHICS PROCESSING UNIT APPARATUS, SYSTEM, AND METHOD
+
+Demystifying NVIDIA GPU Internals to Enable Reliable GPU Management
+
+QUEUE MANAGER FOR STREAMING MULTIPROCESSOR SYSTEMS
+
+WORK-QUEUE-BASED GRAPHICS  PROCESSING UNIT WORK CREATION
+
+## GPU channel（nested）
+
+CPU提交工作到GPU的通道是work queue（称为channel），GPU前端读取work queue来获取命令流Stream。因此，CPU和GPU都需要访问channel，设计同步管理机制，hyperQ中将原本只有1个的channel，增加到32个硬件管理的共享channel。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%201.png)
+
+**channel是管理CPU和GPU前端间传输数据的容器，传输依赖物理链路，因此channel有数量上限。**work queue管理经过channel传输的命令Stream，因此channel可以称为work queue。
+
+work queue受内存分配限制，channel受传输链路限制，因此不同Stream可能共享work queue（nested Stream超过queue），不同Stream可能共享channel（false Dependency&HyperQ）。
+
+pushbuffer就是work queue，管理GPU执行命令流Stream，work queue一般使用entry的链表实现，entry类型包含互斥Event、同步Event和任务TMD指针等。
+
+应用决定不同pushbuffer的优先级，决定不同Stream优先级。多优先级管理需要存在多个channel。因为channel发射速率显著快于TMU、WDU和SM完成任务的速度，所以TMU可以设计多个task group调度多个优先级Stream的任务。
+
+强调：**channel**是基于传输链路的传输概念，**work queue**是存在于内存中的管理传输命令的队列，**task groups**是存在于TMU中的硬件模块。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%202.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%203.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%204.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%205.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%206.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%207.png)
+
+CPU channel管理CPU卸载到GPU的任务，GPU channel管理GPU运行中生成的任务（TMDQ、GTMD queue、QTMD），**channel是管理CPU和GPU前端间传输数据的容器**。
+
+work queue中entry可能是任务启动（TMD指针）、WFI阻塞、Acquire等待锁、Release释放锁。
+
+**WFI（wait-for-idle的抢占类型）**要求work queue**等待已启动任务完成**，完成后继续下一个entry，让GPU轮流执行CPU卸载任务和动态生成任务。
+
+CPU work queue释放锁，让GPU执行GPU work queue中的命令。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%208.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%209.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2010.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/df0e1e67-2d1b-488c-be1c-01843ec9e9d5.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2011.png)
+
+GPU work queue获得锁，执行动态生成的命令。CPU channel和GPU channel轮流执行命令。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2012.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2013.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2014.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2015.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2016.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2017.png)
+
+## TSG（同Ctx的多channel）
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2018.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2019.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2020.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2021.png)
+
+应用包含多个Stream，这些Stream共享Ctx（VM），Stream是任务TMD（grid/queue）的队列，Stream称为逻辑channel。
+
+物理channel是GPU接受Stream的通道，runlist是不同逻辑channel轮流独占物理channel的顺序。
+
+TSG支持同样Ctx下的多Stream，并发调度到单个物理channel，HyperQ后多个物理channel独立调度不同Stream。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2022.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2023.png)
+
+主机接口是一个runlist处理器，按照runlist轮流调度channel或TSG，TSG是同Ctx的多channel时间片（如同单channel）。
+
+channel map包含channel索引和Ctx信息，runlist包含channel顺序或TSG顺序，runlist中entry结束需要Ctx切换。  
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2024.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2025.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2026.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2027.png)
+
+channel调度、TSG调度、Ctx切换
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2028.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2029.png)
+
+TSG占有时间片内，channel切换不用切换Ctx，当TSG提前完成或全部阻塞时（浪费GPU当前工作时间），可提前切换到runlist的下一个channel，需要切换Ctx。
+
+计算、图形、Copy Cluster一般独立并发处理TSG内不同channel，但图形和计算 Cluster执行相互阻塞，SCG的SM主控并轮转policy能解决。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2030.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2031.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2032.png)
+
+TMU的**channel管理Stream**中的任务（no，channel是接受通道，pushbuffer是传输中介），一个Stream只能属于一个应用，因此**channel被应用独占**。
+
+将**channel分时**，每个时间片的channel属于一个应用的Stream，TO后下一个Stream抢占channel。让GPU轮流读取不同应用的pushbuffer（顺序为**runlist**），轮流抢占channel来管理自己的Stream。
+
+HyperQ中设置多个channel，每个**TSG占用的channel**视为一个整体，被下一个应用抢占或耗尽时被一起抢占。TSG按照时间划分资源，和任务执行的颗粒度不完全匹配。
+
+![image.png](meeting-26%2003%2024/image.png)
+
+![Screenshot from 2026-03-24 11-30-04.png](meeting-26%2003%2024/Screenshot_from_2026-03-24_11-30-04.png)
+
+![image.png](meeting-26%2003%2024/image%201.png)
+
+![image.png](meeting-26%2003%2024/image%202.png)
+
+HyperQ增加多个channel（前端接口），无False依赖的传输多个Stream，MPS将多个应用的Stream打包，共享一个应用Ctx，被GPU视为一个应用运行。
+
+![image.png](meeting-26%2003%2024/image%203.png)
+
+![image.png](meeting-26%2003%2024/image%204.png)
+
+## QM管理模块间的命令传输
+
+命令queue作为输入Stream和输出Stream的中介，平衡不同速率。命令queue的管理算法固化在GPU的ROM中。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2033.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2034.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2035.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2036.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2037.png)
+
+QM和MPC、L1Cache、SM、Engines交互和管理命令。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2038.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2039.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2040.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2041.png)
+
+QM管理LD、ST的命令和数据。QM负责教host的图形命令流传递到目标Engine。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2042.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2043.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2044.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2045.png)
+
+命令queue包含命令和负载的pair，每个pair对应数据queue的entry。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2046.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2047.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%2048.png)

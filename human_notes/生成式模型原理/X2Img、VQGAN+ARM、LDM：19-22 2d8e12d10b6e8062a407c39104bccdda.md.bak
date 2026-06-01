@@ -1,0 +1,287 @@
+# X2Img、VQGAN+ARM、LDM：19-22
+
+## Text2Img、Img2Img
+
+### 文本、图片作为条件生成
+
+VQVAE类模型生成图像是生成编码或纹理序列后解码出图像，Diffusion类模型生成图像是随机噪声多步去噪生成图像。文生图的目标是按照文本描述生成图像，则VQVAE类模型推理的直观改变是**按照文本描述生成纹理序列**，Diffusion类模型推理的直观改变是**按照文本描述控制去噪**过程。
+
+VQVAE中GPT生成的texture序列是图像tile信息的”空间“序列，Diffusion中生成轨迹是含噪声图像逐渐去除噪声的”时间“过程。texture”空间“序列和生成”时间“序列都是**以过去状态为条件**逐个生成，在生成每个texture code或预测去除的噪声时，**增加文本信息作为额外条件**，以便生成符合文本描述的图像。
+
+### NAACL19：BERT（ARM）
+
+NAACL19：BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image.png)
+
+[CLS]是句子开头，[SEP]是句子分隔符，类似标点符号，表示句子之间结构信息。
+
+输入层将输入转为Token+Segment+Position，输出层连接预训练任务，或下游任务用于微调。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%201.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%202.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%203.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%204.png)
+
+LLM所用Transformer架构区别
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%205.png)
+
+pre-training task
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%206.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%207.png)
+
+pre-training过程
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%208.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%209.png)
+
+fine-tune过程
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2010.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2011.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2012.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2013.png)
+
+不同任务的fine-tuning
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2014.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2015.png)
+
+### ICLR19：BigGAN（label2img）
+
+ICLR19：LARGE SCALE GAN TRAINING FOR HIGH FIDELITY NATURAL IMAGE SYNTHESIS
+
+BigGAN标准架构
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2016.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2017.png)
+
+BigGAN标准架构，**不同分辨率的输入有不同的ResBlk深度**
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2018.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2019.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2020.png)
+
+BigGAN-deep架构，对不同分辨率的输入有不同的ResBlk深度
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2021.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2022.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2023.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2024.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2025.png)
+
+### PMLR21：**Zero-Shot（**text2img**）**
+
+PMLR21：**Zero-Shot Text-to-Image Generation**
+
+text2img：**隐变量分布p(z, y)，条件分布和后验分布都以caption y和z的pair作为条件**，其他同VQVAE+GPT。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2026.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2027.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2028.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2029.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2030.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2031.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2032.png)
+
+### NIPS20：**Net2Net Translation（BERT+BigGAN）**
+
+NIPS20：**Network-to-Network Translation with Conditional Invertible Neural Networks**
+
+*motivation*
+
+**现有模型协作**是对特定domain重新训练或微调：GPT辅助VQVAE进行文生图，VQVAE学习图片编码和解码，编码是patch的空间序列，GPT根据VQVAE的编码案例，学习生成patch序列。
+
+现有多模态模型相比单模态的训练开销显著增大，而单模态如GPT的训练开销已经耗尽几乎所有资源。为每个domain训练新的模型开销过大，因此需要寻找新的“**计算方法**”（Bitter Lesson）。
+
+**Bitter Lesson**：寻找**合适的数据计算方法**来构建AI，相比基于人类知识构建AI更有用：如NLP中基于人类语言学知识构建的算法，效果不如基于隐马尔可夫链和统计学构建DNN来“计算”数据；如CV中基于人类认知中图像特征（边缘、SIFT特征等）构建的算法，效果不如基于卷积和其变体构建DNN来“计算“数据。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2033.png)
+
+训练**trade-off**：增强自身**domain**的表达能力 vs. 向其他domain模型的**信息迁移能力**
+
+**论文**认为不同domain模型的输入和输出是**”统一概念“的不同隐变量表达**，相同概念的不同隐变量表达可以**相互转换（Domain Transfer）**。基于合适的Domain Transfer方法，模型能够自由拼接。
+
+*多模型协作模式*
+
+Model A过程中输出的”概念”，通过domain transfer方法**“对齐”**到Model B过程中输入的“概念”，让训练好的模型类似“插件”自由拼接，而**不需要重新端到端训练，只需要训练domain transfer方法**。
+
+文本生成模型(BERT)输出**图像的文本隐变量表示**，图像生成模型(BigGAN)输入**图像的编码隐变量表示**，BERT输出和BigGAN输入是图像内容物”概念“的不同隐变量表达。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2034.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2035.png)
+
+ 
+
+*Domain Transfer方法*
+
+BackBone A + Transfer + Head B架构中，zΦ是BackBone输出“概念”的隐变量表达，zΘ是Head输入“概念”的隐变量表达，模型A和B对**相同“概念”的理解相同**，找到**转换隐变量表达z**的方法。
+
+相同概念在任一domain中存在多种表达z，所以zΦ和zΘ的关系由**联合分布p(zΘ, zΦ)**表达，zΦ到zΘ的映射是**一对多的条件分布**p(zΘ | zΦ)，引入随机变量v，建立**zΦ到zΘ的一一映射zΘ=τ(v | zΦ)**。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2036.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2037.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2038.png)
+
+采样v表达**“概念”已知**条件下的z表达的不确定性，所以src-domain中zΦ表达的“概念”在tar-domain中的表达zΘ，是采样v的函数，但是**v不包含zΦ所表达“概念”的信息**。
+
+因此在zΘ=τ(v | zΦ)或v=τ-1(zΘ | zΦ)定义的关系中，**v和zΦ相互无关** ，即以zΦ为条件的条件分布**p(v | zΦ)近似v的先验分布q(v)**。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2039.png)
+
+domain transfer函数τ是：**zΦ作为“概念”已知**的条件下，zΘ和残差采样v之间的映射。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2040.png)
+
+*基于Transfer Model的多模型协作实验*
+
+BERT+Transfer+BigGAN中，**训练Transfer Model而不用微调或重新训练BERT和BigGAN**。
+
+不同src domain和不同tar domain的模型组合，完成不同目标任务。
+
+text2img：BERT（BackBone）+ BigGAN（Head），BackBone输出Caption上下文，迁移到BigGAN输入的图像编码。 
+
+segment2img（3a）：segmentation NN（BackBone）+ 自编码器（Head），BackBone输出语义分割的**结果**，迁移到自编码器输入的图像编码。
+
+segment2img（3b）：segmentation NN（BackBone）+自编码器（Head），BackBone输出语义分割的**logit分布**，迁移到自编码器输入的图像编码，说明logit去除对语义分割无用的信息（颜色）。
+
+edge2img（3c）：Sobel Filter（edge x）+ ResNet（BackBone）+ 自编码器（Head），BackBone输出**edge图像的识别结果**，迁移到自编码器输入的图像编码。
+
+img inpainting（3d）：（masked x）+ ResNet（BackBone）+ 自编码器（Head），BackBone输出**被遮挡图像的识别结果**，迁移到自编码器输入的图像编码。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2041.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2042.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2043.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2044.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2045.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2046.png)
+
+超分辨率重建：低分辨率自编码器的**编码结果**，**迁移**到高分辨率自编码器**解码输入**。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2047.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2048.png)
+
+## CVPR22、NIPS21：Stable Diffusion（LDM）
+
+CVPR22：High-Resolution Image Synthesis with Latent Diffusion Models
+
+NIPS21：Score-based Generative Modeling in Latent Space
+
+### LDM的动机
+
+pixel空间的DM有高昂的训练开销和较慢的推理速度，LDM将**pixel space映射到latent space**后训练和推理，处理训练难推理慢的问题。
+
+生成式模型一般方法是：
+
+生成式对抗（GAN）**难以优化且训练过程不稳定**，难以捕捉完整的数据分布，出现**模式崩溃 (mode-collapse)** 现象，“结构”上生成空白；
+
+变分自编码（VAE）**生成样本的质量通常不如GANs**，存在Blurry和Posteior Collapse问题；
+
+自回归模型（ARM）对计算资源需求极高。串行采样，**推理速度缓慢**。如果不结合**压缩技术（编码，VQVAE+ARM）**，通常仅限于低分辨率图像；
+
+扩散模型（Diffusion）在**pixel空间**操作，训练消耗巨大，早期会花费大量参数来建模**感知上不重要的细节**（如高频噪声），而这些细节对语义理解贡献较少，使用视觉Transformer (ViT) 架构直接处理像素时，随着维度的增加，**模型性能会迅速且灾难性地下降**。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2049.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2050.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2051.png)
+
+**高分辨**生成模型通过**2-stage方法（VQVAE+ARM）**组合模型，提高效率和性能：
+
+VQVAE在stage 2采用**ARM Generator**学习生成图像的texture sequence（prior）；
+
+VQGAN将VQVAE中stage-1中Compressor改为感知特征的距离**LPIPS**，并增加判别器**对抗**学习；
+
+Net2Net**迁移**不同domain的“概念”表达来**拼接模型**；
+
+Zero-Shot采用VAVAE+ARM架构对**caption-图片的pair**进行编码和解码生成。
+
+**VQVAE+ARM的trade-off：**学习高压缩率的编码序列需要大量的参数，因为每个编码的图像信息很多，学习低压缩率的编码序列需要大量的计算（串行计算），延迟很高。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2052.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2053.png)
+
+之前的Latent Space Diffusion Denoising方法需要考虑VAE和Denoising的训练优先级，确保Encoder输出分布和Denoising输入分布接近（domain transfer）。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2054.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2055.png)
+
+### VQGAN+Conv-UNet
+
+**LDM的改进**：使用Conv-UNet适当伸缩到高维的图像latent space，Conv-UNet+VQGAN端到端训练**调整感知压缩表达中的信息量**。
+
+LDM的压缩方式：**VQGAN**（感知Loss、对抗学习、patch分块）。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2056.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2057.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2058.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2059.png)
+
+LDM：latent space的训练方式和pixel space一致，将过程中**pixels x改为latent z**。
+
+VQGAN+ARM采用Transformer生成高度压缩的patch code，VQGAN+Conv-UNet使用**面向图形特化**的Conv-UNet（Inductive Bias）生成含噪编码zt。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2060.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2061.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2062.png)
+
+Inductive Bias：模型构建使用的假设。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2063.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2064.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2065.png)
+
+### 条件LDM
+
+将图片caption或语义Map y、隐变量zt和时间t作为联合条件，和DDPM一致训练。
+
+UNet + Attention将条件y引入Diffusion（而不是直接concate）：**τθ(y)**将条件y编码成隐变量参与K和V的计算，φi(zt)是预测噪声εθ的隐变量参与Q的计算，**条件y决定含噪表达zt的成分值域V和索引K**，**噪声εθ决定含噪表达zt从值域中组成的方式Q**。
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2066.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2067.png)
+
+![image.png](X2Img%E3%80%81VQGAN+ARM%E3%80%81LDM%EF%BC%9A19-22/image%2068.png)

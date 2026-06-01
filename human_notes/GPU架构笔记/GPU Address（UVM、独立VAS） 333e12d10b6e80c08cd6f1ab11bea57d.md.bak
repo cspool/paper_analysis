@@ -1,0 +1,91 @@
+# GPU Address（UVM、独立VAS）
+
+EFFICIENT MEMORY VIRTUALIZATION IN MULTI - THREADED PROCESSING UNITS
+
+Supporting x86-64 Address Translation for 100s of GPU Lanes
+
+独立VAS允许多个grid TMD并发执行，而不需要因为共享VAS限制单个TMD执行，提高使用率。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%201.png)
+
+## UVM和独立VAS
+
+应用的host侧进程和TMD都使用统一虚拟内存UVM，虚拟内存是通过虚拟地址访问内存的物理页，统一虚拟内存是通过不同区间的虚拟地址分别访问不同device内存的物理页。host和TMD的虚拟地址空间指向所有device memory，当不同虚拟空间中地址映射相同物理页时，实现不同进程（host、TMD）的内存共享。
+
+**TMD**有**独立的虚拟地址空间ASID**和对应的页表PT，**页表PT**建立**子虚拟地址空间和统一内存物理页**的映射关系。TLB是页表项PTE的缓存。MMU包含ASID表管理ASID和PT的映射，TMD的页表。
+
+应用抢占channel**一般**需要配置**GPU Ctx（VM Ctx）**，将应用Ctx中的所有页表加载到MMU，SME抢占时，可能保留其他SME的应用Ctx。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%202.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%203.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%204.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%205.png)
+
+ASID Table Entry将TMD地址空间的索引ASID映射到页表的索引PDBID，PT Entry将VA映射到PA，TLB Entry将TMD空间中VA映射到PA。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%206.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%207.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%208.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%209.png)
+
+TMD中虚拟地址翻译：ASID找到子虚拟空间的页表索引PDBID，VA经过页表翻译成PA。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2010.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2011.png)
+
+## 不同VAS并发
+
+不同TMD有独立的虚拟地址空间VAS，映射到GPU Memory的不同物理页。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2012.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2013.png)
+
+关于VAS的TMD分配优化：**Deep Allocation**要求grid TMD中所有CTA处于尽量少的SM，提高TLB Cache和Data Cache的使用效率。因为不同TMD使用的物理页隔离而完全没有局部性，会无效很多TLB entry和data entry。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2014.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2015.png)
+
+不同VAS的并发执行，VA2PA的Mapping，Deep Scheduling。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2016.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2017.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2018.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2019.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2020.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2021.png)
+
+## 不同地址空间支持的Example
+
+UVM之前，地址空间独立，分别使用host地址和device地址，分别new分配host内存和cudaMalloc分配device内存，分别进行显式传输（h2d、d2d、d2h），完成后分别释放。
+
+编程繁琐，显式在device内存上分配IO Buffer，影响实际device程序可用的内存空间。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2022.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2023.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2024.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2025.png)
+
+统一虚拟内存允许device程序直接使用host地址，隐式从host内存上加载物理页（一份内存分配），而不需要分配2个IOBuffer后使用cudaMemcpy。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2026.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2027.png)

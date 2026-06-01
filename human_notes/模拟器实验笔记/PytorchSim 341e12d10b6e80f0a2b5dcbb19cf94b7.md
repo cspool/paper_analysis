@@ -1,0 +1,2215 @@
+# PytorchSim
+
+[https://github.com/PSAL-POSTECH/PyTorchSim](https://github.com/PSAL-POSTECH/PyTorchSim)
+
+[https://github.com/PSAL-POSTECH/ONNXim](https://github.com/PSAL-POSTECH/ONNXim)
+
+## 算子模拟
+
+基于分析模型静态编译生成TOG（ONNX graph），Tile粒度的trace。
+
+编译：Layers（Total loop） > Tile（Inner loop）* Tile_Num（Outer loop）>  Tile_Exe（Inner）。
+
+TOG的每个Tile使用DRAM、Core、NoC仿真器模拟cycle level延迟，而非使用BW粗略估计。
+
+> **[图片提取文字 (Screenshot from 2026-04-14 10-04-02.png)]:**
+> ## Run Your Own Model on PyTorchSim
+> 
+> You can run your own PyTorch model on PyTorchSim by setting up a custom NPU device.
+> 
+> This method also applies when you want to simulate models beyond the provided examples.
+> 
+> ```
+> import torch
+> from Scheduler.scheduler import PyTorchSimRunner
+> # Declare a custom NPU device
+> device = PyTorchSimRunner.setup_device().custom_device()
+> 
+> # Declare you own model (e.g. resnet18 from torchvision)
+> from torchvision.models import resnet18
+> model = resnet18().eval()
+> x = torch.randn(1, 3, 224, 224, dtype=torch.float32)
+> 
+> # Move model and input tensors to the custom device
+> model.to(device)
+> x = x.to(device)
+> 
+> # Compile and run the model with PyTorchSim
+> compiled_model = torch.compile(dynamic=False)(model)
+> y = compiled_model(x)
+> ```
+> 
+> model is your PyTorch model to be simulated, and  $\times$  is the input tensor. PyTorchSim automatically generates a Tile-Operation Graph (TOG), and runs it through the TOGSim backend.
+> 
+> ## Result
+> 
+> Running log in CLI
+> 
+> ```
+> Wrapper Codegen Path = /tmp/torchinductor_root/fo/cfofsp5nwmpqxctouan2v2t5y7qp5vwrgvw4swssx4ca4v [Gem5] Gem5 is running.
+> 
+> [Spike] Running Spike simulator
+> 
+> [TOGSim] TOGSim is running..
+> 
+> [TOGSim] Simulation log is stored to "/workspace/PyTorchSim/togsim_results/20251205_080553.log"
+> 
+> -----------------------------------
+> ```
+![Screenshot from 2026-04-14 10-04-02.png](PytorchSim/Screenshot_from_2026-04-14_10-04-02.png)
+
+> **[图片提取文字 (Screenshot from 2026-04-14 10-04-54.png)]:**
+> ```
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_0: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 956, Row misses: 32, Row conflicts: 36
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_1: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 956, Row misses: 32, Row conflicts: 36
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_2: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 959, Row misses: 32, Row conflicts: 33
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_3: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 956, Row misses: 32, Row conflicts: 36
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_4: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 959, Row misses: 32, Row conflicts: 33
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_5: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 959, Row misses: 32, Row conflicts: 33
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_6: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 956, Row misses: 32, Row conflicts: 36
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_7: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 958, Row misses: 32, Row conflicts: 34
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_8: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 959, Row misses: 32, Row conflicts: 33
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_9: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 959, Row misses: 32, Row conflicts: 33
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_10: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 958, Row misses: 32, Row conflicts: 34
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_11: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 959, Row misses: 32, Row conflicts: 33
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_12: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 958, Row misses: 32, Row conflicts: 34
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_13: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 958, Row misses: 32, Row conflicts: 34
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_14: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] Row hits: 959, Row misses: 32, Row conflicts: 33
+> [2025-12-05 08:05:52.538] [info] HBM2-CH_15: avg BW utilization 49% (768 reads, 256 writes)
+> [2025-12-05 08:05:52.538] [info] ===== Instructions count ====
+> [2025-12-05 08:05:52.538] [info] Core [0] : MOVIN
+>                                                     inst_count 3
+> [2025-12-05 08:05:52.538] [info] Core [0] : MOVOUT
+>                                                     inst_count 1
+> [2025-12-05 08:05:52.538] [info] Core [0] : COMP
+>                                                      inst_count 10 (GEMM: 8, Vector: 2)
+>                                                      inst count 8
+> [2025-12-05 08:05:52.538] [info] Core [0] : BAR
+> [2025-12-05 08:05:52.538] [info] ======= Core stat ========
+> [2025-12-05 08:05:52.538] [info] Core [0] : Systolic array [0] utilization(%) 12.40, active_cyc
+> [2025-12-05 08:05:52.538] [info] Core [0] : Systolic array [1] utilization(%) 12.40, active_cyc
+> [2025-12-05 08:05:52.538] [info] Core [0] : DMA active_cycles, 1024 DMA idle_cycles 1041, DRAM F
+> [2025-12-05 08:05:52.538] [info] Core [0] : Vector unit utilization(%) 2.42, active cycle 50, id
+> [2025-12-05 08:05:52.538] [info] Core [0] : NUMA local memory: 16384 requests, remote memory: 0
+> [2025-12-05 08:05:52.538] [info] Core [0] : Total_cycles 2065
+> [2025-12-05 08:05:52.538] [info] Total execution cycles: 2065
+> ```
+> 
+> [2025-12-05 08:05:52.538] [info] Wall-clock time for simulation: 0.147463 seconds
+![Screenshot from 2026-04-14 10-04-54.png](PytorchSim/Screenshot_from_2026-04-14_10-04-54.png)
+
+> **[图片提取文字 (Screenshot from 2026-04-14 09-59-09.png)]:**
+> You can specify the mapping by placing a \*.mapping file in the same folder as the \*.onnx file.
+> 
+> The mapping file is composed of three parts:
+> 
+> - 1. Total Loop (e.g., [T] N1 C3 M64 P112 Q112 S7 R7)
+> - 2. Outer Loop (e.g., [0] N1 C1 M4 P5 Q6 S1 R1)
+> - 3. Inner Loop (e.g., [I] N1 C3 M16 P23 Q22 S7 R7)
+> 
+> where N stands for Batch Size, C for Input Channel, M for Output Channel, P for Output Rows, Q for Output Columns, S for Kernel Rows, R for Kernel Columns.
+> 
+> The Total Loop provides the overall loop information for the given layer. In the example above, Total Loop corresponds to a convolution operation with an output dimension of (N:1, M:64, P:112, Q:112) and a kernel dimension of (C:3, S:7, R:7, M:64).
+> 
+> The Outer Loop specifies how many times the Inner Loop needs to be iterated. In this example, the Total Loop has P = 112 and the Inner Loop has P = 23. Therefore, the Outer Loop should have P = 112 are inner Loop has P = 112 are inner Loop has P = 112 and the Inner Loop has P = 112 are inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and the Inner Loop has P = 112 and t
+> 
+> The Inner Loop determines the sizes of the input and weight tiles loaded to the scratchpad memory and the size of the output tile mapped to the accumulator.
+> 
+> In this example, assuming a 4-byte (i.e., FP32) data format, the size of the output tile will be 4x16x23x22=32384 bytes. The weight tile size will be 4x16x3x7x7=9408 bytes and the size of the (padded) input tile will be 4x1x3x29x28=9744 bytes.
+> 
+> **Note**: The size of the input and weight tiles should not exceed half the size of the scratchpad memory for double buffering. Similarly, the size of the output tile should not exceed half the size of the accumulator.
+> 
+> Below is an example mapping for ResNet-18.
+> 
+> ```
+> [T] N1 C3 M64 P112 Q112 S7 R7 - [0] N1 C1 M4 P5 Q6 S1 R1 - [I] N1 C3 M16 P23 Q22 S7 R7
+> 
+> [T] N1 C64 M64 P56 Q56 S3 R3 - [0] N1 C1 M4 P3 Q3 S1 R1 - [I] N1 C64 M16 P23 Q22 S3 R3
+> 
+> [T] N1 C64 M64 P56 Q56 S3 R3 - [0] N1 C1 M4 P3 Q3 S1 R1 - [I] N1 C64 M16 P23 Q22 S3 R3
+> 
+> [T] N1 C64 M128 P28 Q28 S3 R3 - [0] N1 C2 M8 P2 Q2 S1 R1 - [I] N1 C51 M16 P23 Q22 S3 R3
+> 
+> [T] N1 C64 M128 P28 Q28 S1 R1 - [0] N1 C1 M8 P2 Q2 S1 R1 - [I] N1 C64 M16 P23 Q22 S1 R1
+> 
+> [T] N1 C128 M128 P28 Q28 S3 R3 - [0] N1 C1 M8 P2 Q2 S1 R1 - [I] N1 C128 M16 P23 Q22 S3 R3
+> 
+> [T] N1 C128 M256 P14 Q14 S3 R3 - [0] N1 C2 M7 P1 Q1 S1 R1 - [I] N1 C104 M40 P14 Q14 S3 R3
+> 
+> [T] N1 C256 M256 P14 Q14 S3 R3 - [0] N1 C2 M7 P1 Q1 S1 R1 - [I] N1 C210 M40 P14 Q14 S3 R3
+> 
+> [T] N1 C128 M256 P14 Q14 S1 R1 - [0] N1 C1 M7 P1 Q1 S1 R1 - [I] N1 C128 M40 P14 Q14 S1 R1
+> 
+> [T] N1 C128 M256 P14 Q14 S1 R1 - [0] N1 C1 M7 P1 Q1 S1 R1 - [I] N1 C128 M40 P14 Q14 S1 R1
+> 
+> [T] N1 C256 M512 P7 Q7 S3 R3 - [0] N1 C3 M5 P1 Q1 S1 R1 - [I] N1 C109 M104 P7 Q7 S3 R3
+> 
+> [T] N1 C512 M512 P7 Q7 S3 R3 - [0] N1 C5 M5 P1 Q1 S1 R1 - [I] N1 C120 M112 P7 Q7 S3 R3
+> 
+> [T] N1 C512 M1000 - [0] N1 C1 M5 - [I] N1 C512 M248
+> ```
+![Screenshot from 2026-04-14 09-59-09.png](PytorchSim/Screenshot_from_2026-04-14_09-59-09.png)
+
+> **[图片提取文字 (image.png)]:**
+> ```
+> 🎙 [root@ac734d4132e5 ONNXim]# ./build/bin/Simulator --config ./configs/systolic ws 128x128 c4 simple noc tpuv4.json --model ./example/models list.json
+> [2024-04-29 12:20:03.391] [info] CPU 0: Partition 0
+> [2024-04-29 12:20:03.391] [info] CPU 1: Partition 0
+> [2024-04-29 12:20:03.391] [info] CPU 2: Partition 0
+> [2024-04-29 12:20:03.391] [info] CPU 3: Partition 0
+> [2024-04-29 12:20:03.391] [info] Ramulator config: /workspace/ONNXim/configs/../configs/ramulator_configs/HBM-config.cfg
+> [2024-04-29 12:20:03.399] [info] Initialize SimpleInterconnect
+> [2024-04-29 12:20:03.399] [info] No mapping file path : /workspace/ONNXim/models/resnet18/resnet18.mapping
+> [2024-04-29 12:20:03.399] [info] Register model: resnet18
+> [2024-04-29 12:20:03.399] [info] =====Start Simulation=====
+> [2024-04-29 12:20:03.414] [info] [Conv] Used gemmini convolution mapping: [T] N1 C3 M64 P112 Q112 S7 R7, [O] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C3 M64 P112 Q112 S7 R7
+> [2024-04-29 12:20:03.479] [info] [Conv] Used gemmini convolution mapping: [T] N1 C64 M64 P56 Q56 S3 R3, [O] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C64 M64 P56 Q56 S3 R3
+> [2024-04-29 12:20:03.607] [info] [Conv] Used gemmini convolution mapping: [T] N1 C64 M128 P28 Q28 S3 R3, [O] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C64 M128 P28 Q28 S3 R3
+> [2024-04-29 12:20:03.634] [info] [Conv] Used gemmini convolution mapping: [T] N1 C64 M128 P28 Q28 S1 R1, [0] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C64 M128 P28 Q28 S1 R1
+> [2024-04-29 12:20:03.657] [info] [Conv] Used gemmini convolution mapping: [T] N1 C128 M128 P28 Q28 S3 R3, [O] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C128 M128 P28 Q28 S3 R3
+> [2024-04-29 12:20:03.730] [info] [Conv] Used gemmini convolution mapping: [T] N1 C128 M256 P14 Q14 S3 R3, [O] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C128 M256 P14 Q14 S3 R3
+> [2024-04-29 12:20:03.761] [info] [Conv] Used gemmini convolution mapping: [T] N1 C128 M256 P14 Q14 S1 R1, [0] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C128 M256 P14 Q14 S1 R1
+> [2024-04-29 12:20:03.774] [info] [Conv] Used gemmini convolution mapping: [T] N1 C256 M256 P14 Q14 S3 R3, [0] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C256 M256 P14 Q14 S3 R3
+> [2024-04-29 12:20:03.912] [info] [Conv] Used gemmini convolution mapping: [T] N1 C256 M512 P7 Q7 S3 R3, [O] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C256 M512 P7 Q7 S3 R3
+> [2024-04-29 12:20:03.994] [info] [Conv] Used gemmini convolution mapping: [T] N1 C256 M512 P7 Q7 S1 R1, [0] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C256 M512 P7 Q7 S1 R1
+> [2024-04-29 12:20:04.007] [info] [Conv] Used gemmini convolution mapping: [T] N1 C512 M512 P7 Q7 S3 R3, [O] N1 C1 M1 P1 Q1 S1 R1, [I] N1 C512 M512 P7 Q7 S3 R3
+> [2024-04-29 12:20:04.485] [info] [GEMM] spad_size: 67108864 accum_size: 8388608
+> [2024-04-29 12:20:04.485] [info] [GEMM] required_sram_size: 1179648 required_accum_size: 262144
+> [2024-04-29 12:20:04.485] [info] [GEMM] Used gemmini gemm mapping: Total N:1 C:512 M:1000, Outer N:1 C:1 M:1, Inner N:128 C:512 M:1024
+> [2024-04-29 12:20:04.527] [info] Schedule model: resnet18 at 0 us
+> [2024-04-29 12:20:04.527] [info] MODEL resnet18 Scheduled, Total Request: 1
+> [2024-04-29 12:20:04.527] [info] executable layer count 1
+> [2024-04-29 12:20:04.527] [info] Start layer Conv 0
+> [2024-04-29 12:20:06.346] [info] Layer Conv_0 finish at 621060
+> [2024-04-29 12:20:06.346] [info] Total compute time 621060
+> [2024-04-29 12:20:06.346] [info] executable layer count 1
+> [2024-04-29 12:20:06.346] [info] Start layer MaxPool 2
+> [2024-04-29 12:20:06.346] [info] Layer MaxPool 2 finish at 621062
+> [2024-04-29 12:20:06.346] [info] Total compute time 2
+> [2024-04-29 12:20:06.346] [info] executable layer count 1
+> [2024-04-29 12:20:06.346] [info] Start layer Conv 3
+> [2024-04-29 12:20:06.560] [info] Layer Conv 3 finish at 658243
+> [2024-04-29 12:20:06.560] [info] Total compute time 37181
+> [2024-04-29 12:20:06.560] [info] executable layer count 1
+> [2024-04-29 12:20:06.560] [info] Start layer Conv 5
+> [2024-04-29 12:20:06.720] [info] Layer Conv 5 finish at 694484
+> [2024-04-29 12:20:06.720] [info] Total compute time 36241
+> [2024-04-29 12:20:06.720] [info] executable layer count 1
+> [2024-04-29 12:20:06.720] [info] Start layer Conv 8
+> [2024-04-29 12:20:06.876] [info] Layer Conv_8 finish at 730709
+> [2024-04-29 12:20:06.876] [info] Total compute time 36225
+> [2024-04-29 12:20:06.876] [info] executable layer count 1
+> [2024-04-29 12:20:06.876] [info] Start layer Conv 10
+> [2024-04-29 12:20:07.034] [info] Layer Conv_10 finish at 766953
+> ```
+![image.png](PytorchSim/image.png)
+
+```bash
+---
+  PyTorchSim 脉动阵列加速器模拟器深度分析
+
+  ---
+  1. 模型推理模拟原理
+
+  1.1 驱动机制：Trace-Driven + Cycle-Accurate 混合架构
+
+  PyTorchSim 采用两层架构：
+
+  ┌─────────────────────────────────────────────────────┐
+  │  Python 前端 (Trace Generation Layer)                │
+  │  PyTorch Model → torch.compile("npu")               │
+  │  → MLIR Codegen → TOG (Tile-Op Graph, ONNX 格式)   │
+  │     trace: MVIN / COMP / MOVOUT / BAR 指令序列      │
+  └─────────────────┬───────────────────────────────────┘
+                    │ 通过 stdin pipe 发送 "launch" 命令
+  ┌─────────────────▼───────────────────────────────────┐
+  │  C++ TOGSim (Cycle-Accurate Simulation Layer)        │
+  │  三个独立时钟域：Core / DRAM / Interconnect          │
+  │  逐周期驱动每条 Tile 指令的执行与内存访问           │
+  └─────────────────────────────────────────────────────┘
+
+  本质：Python 编译器将 PyTorch 算子编译成静态执行轨迹（Tile Graph），C++ Simulator 以 Cycle-Accurate
+  精度执行该轨迹，并通过 Ramulator2 模拟真实 DRAM 时序。
+
+  1.2 三时钟域并发推进机制
+
+  Simulator::set_cycle_mask() (TOGSim/src/Simulator.cc:254) 实现了多速率时钟的**最小时间推进（Minimum
+  Time Advance）**策略：
+
+  // Simulator.cc:254-268
+  void Simulator::set_cycle_mask() {
+    _cycle_mask = 0x0;
+    uint64_t minimum_time = MIN3(_core_time, _dram_time, _icnt_time);
+    if (_core_time <= minimum_time) {
+      _cycle_mask |= CORE_MASK;
+      _core_time += _core_period;   // 例如 1000000/940 ≈ 1064 ps
+    }
+    if (_dram_time <= minimum_time) {
+      _cycle_mask |= DRAM_MASK;
+      _dram_time += _dram_period;
+    }
+    if (_icnt_time <= minimum_time) {
+      _cycle_mask |= ICNT_MASK;
+      _icnt_time += _icnt_period;
+    }
+  }
+
+  三个域可以同一时间步同时触发（当时钟周期恰好对齐时），否则只推进最慢的域。
+
+  ---
+  2. 组件交互流程
+
+  Python Scheduler                C++ TOGSim Simulator
+  ─────────────────               ──────────────────────────────────────────
+  Scheduler.__init__()
+    └─ TOGSimulator.interactive_simulation()
+         └─ subprocess.Popen("./Simulator --mode interactive")
+              └─ main.cc → interactive_mode()
+
+  per_schedule()
+    └─ execution_engine.submit(batched_req)
+         └─ prepare_model()
+              └─ req_model.model(*inputs)  ← torch.compile 生成的 generator
+                   └─ yields (kernel_fn, inputs)
+    └─ launch_kernel(current_cycle)
+         └─ prepare_launch_kernel()        ← 生成 tile_graph.onnx + attribute.json
+         └─ tog_simulator.launch(onnx, attr, cycle, partition_id)
+              └─ send_command("launch ...")
+                   │
+                   ▼ stdin pipe
+              interactive_mode() parses "launch"
+              └─ launchKernel()
+                   └─ TileGraphParser(onnx, attr, config) → TileGraph
+                   └─ simulator.schedule_graph(partition_id, tile_graph)
+                        └─ _partition_scheduler[id].schedule_graph(tile_graph)
+
+  tog_simulator.until(next_cycle)
+    └─ send_command("until N")
+         ▼
+    Simulator::until(N)  [Simulator.cc:173]
+      while core_cycles < N:
+        set_cycle_mask()
+        ├─ IS_CORE_CYCLE → core_cycle()
+        │    ├─ peek_tile() → can_issue?  → issue(tile) to Core
+        │    ├─ pop_finished_tile() → finish_tile()
+        │    └─ _cores[i].cycle()
+        │         ├─ compute_cycle()
+        │         │    ├─ vu_cycle()   ← Vector Unit pipeline drain
+        │         │    └─ sa_cycle()   ← Systolic Array pipeline drain
+        │         ├─ dma_cycle()
+        │         │    ├─ 检查 _dma_finished_queue
+        │         │    ├─ issue new DMA (ld/st queue)
+        │         │    └─ get_memory_access() → push to _request_queue
+        │         └─ 遍历 ready_instructions → issue MOVIN/MOVOUT/COMP/BAR
+        ├─ IS_DRAM_CYCLE → dram_cycle() → Ramulator2.cycle()
+        └─ IS_ICNT_CYCLE → icnt_cycle()
+             ├─ Core._request_queue → ICNT (memory requests)
+             ├─ ICNT → DRAM (根据地址路由到 channel)
+             ├─ DRAM → ICNT (response)
+             └─ ICNT → Core._response_queue
+
+  2.1 Instruction 依赖图与 ready_counter
+
+  每条 Instruction 有 ready_counter（未完成前驱数量）。当前驱指令调用 finish_instruction() 时，遍历
+  child_inst 集合并调用每个子指令的 dec_ready_counter()。当计数归零时，子指令自动加入
+  _ready_queue（Instruction.h:40-46）：
+
+  void dec_ready_counter() {
+    assert(ready_counter!=0);
+    ready_counter--;
+    if (!ready_counter && _owner_ready_queue_ref != nullptr)
+      _owner_ready_queue_ref->push_back(shared_from_this()); // 自动入队
+  }
+
+  这实现了一个数据流（Dataflow）式指令调度：无需显式调度器，指令满足依赖后自动变为 ready。
+
+  ---
+  3. Example 运行时序追踪（以 GEMM 为例）
+
+  以 tests/test_mlp.py 为参考，追踪从模型加载到获得结果的完整路径：
+
+  Step 1: 模型注册
+    SchedulerDNNModel.register_model("mlp", compiled_model)
+    compiled_model = torch.compile(model, backend="npu")
+
+  Step 2: Request 提交
+    scheduler.add_request(Request("mlp", input_tensors, []))
+    scheduler.schedule()
+      └─ per_schedule(partition_idx=0)
+           └─ execution_engine.submit([req], partition_idx=0)
+                └─ prepare_model(req_model)
+                     └─ input_tensors.to(device="npu")   ← 触发 MLIRScheduling
+                     └─ req_model.model(*inputs)           ← torch.compile codegen
+                          └─ 生成 generator (惰性求值)
+
+  Step 3: Kernel 投射 (launch_kernel)
+    FIFORunner.select_kernel(partition_idx=0)
+      └─ next(generator)  → yields (kernel_fn, inputs)
+           └─ kernel_fn(*inputs)
+                └─ MLIRGemmTemplate.render() → MLIR 代码 → 编译
+                └─ AsmParser.tog_generator → tile_graph.onnx (TOG)
+    prepare_launch_kernel(kernel, inputs)
+      └─ create_attribute_file(inputs) → attribute.json
+           {"address_info": {"arg0": 0x7f..., "arg1": 0x7f...},
+            "sram_alloc": {...}}
+
+  Step 4: C++ 接管
+    TOGSim interactive_mode receives: "launch config onnx attr 0 0"
+    TileGraphParser 解析 tile_graph.onnx:
+      - LOOP_INDEX_NODE  → 循环范围（M/N/K 维度）
+      - LOAD_NODE        → MOVIN 指令（地址、tile_size、stride）
+      - COMPUTE_NODE     → COMP 指令（torchsim_cycle 预计算好的周期数）
+      - STORE_NODE       → MOVOUT 指令
+      - MEMORY_WAIT_NODE → BAR 指令（异步 DMA 同步屏障）
+
+  Step 5: 周期精确执行（以 128×128 SA 为例）
+    Cycle 0:   Scheduler.peek_tile() → Core.issue(tile)
+               tile 中所有 ready inst 加入 _ready_queue
+    Cycle 1:   Core.cycle() → MOVIN X[0:128, 0:128] 加入 _ld_inst_queue
+    Cycle 2:   DMA.issue_tile(MOVIN_X) → get_memory_access()
+               生成 128*128*4/32 = 2048 个 mem_fetch (32B/request)
+               push to _request_queue
+    Cycle 3:   icnt_cycle() 将 mem_fetch 路由到 HBM channel
+    Cycle ~13: (10 cycle ICNT latency) + Ramulator2 HBM 时序
+               push_memory_response() → inst.dec_waiting_request()
+               → 当 nr_waiting_request==0 时 → _dma_finished_queue
+    Cycle ~13: MOVIN_W 同样流程（可并发因为 DMA 是流水线）
+    Cycle ~14: 两个 MOVIN 都完成 → COMP 指令 ready
+               Core.cycle() → Opcode::COMP:
+                 inst->finish_cycle = _core_cycle + compute_cycle
+                 _sa_compute_pipeline[rr_idx].push(inst)
+               compute_cycle = SUB_TILE_M + TILE_N + TILE_K - 2  (WS pipeline fill)
+    Cycle ~X:  sa_cycle() 检测 finish_cycle <= _core_cycle → finish_instruction()
+               → MOVOUT ready → _st_inst_queue
+    Cycle ~X+2: MOVOUT DMA → 写回 DRAM
+    最终: tile.all_insts_finshed() → Status::FINISH
+          Scheduler 收到完成通知 → request 标记 FINISHED
+
+  ---
+  4. 算子实现详解
+
+  4.1 GEMM 算子：Weight Stationary 数据流
+
+  文件：PyTorchSimFrontend/mlir/mlir_gemm_template.py:13-54
+
+  三层分块结构（外层 → 内层 K 累加）：
+
+  affine.for %m = 0 to M step TILE_M {      // outer_loop, subtile_loop="m"
+    affine.for %n = 0 to N step TILE_N {    // outer_loop, subtile_loop="n"
+      MVIN Bias → Y_buffer                   // 初始化累加器
+      affine.for %k = 0 to K step TILE_K {  // accumulation_loop, subtile_loop="k"
+        MVIN X[%m:%m+TILE_M, %k:%k+TILE_K] // 加载输入激活
+        MVIN W[%k:%k+TILE_K, %n:%n+TILE_N] // 加载权重
+        linalg.matmul(X_buf, W_buf) → Y_buf // COMP 指令
+      }
+      MOVOUT Y_buffer                        // 写回结果
+    }
+  }
+
+  WS（Weight Stationary）验证：
+  - 权重 W 在外层 M 循环中只加载一次（W_idx 不含 index0）：
+  W_idx = [Symbol("index2") * W_stride[0], Symbol("index1") * W_stride[1]]
+  # W_idx 依赖 k(index2) 和 n(index1)，不依赖 m(index0) ← Weight Stationary!
+  - SRAM 布局（mlir_gemm_template.py:141-158）：
+    - X tile：[TILE_M, TILE_K]，stride [1, TILE_M] → 列优先，适配 SA 的行输入
+    - W tile：[TILE_K, TILE_N]，stride [1, TILE_K] → 列优先，权重静止于 SA PE
+
+  Bank Conflict 规避（mlir_gemm_template.py:329-335）：
+  if (TILE_M == M and TILE_N == N and TILE_N <= 512):
+      SUB_TILE_N = TILE_N if TILE_N < vector_lane else vector_lane
+  else:  # 避免权重行冲突
+      SUB_TILE_N = TILE_N  # 整块加载，不细分
+
+  4.2 Conv2D / Implicit im2col
+
+  文件：PyTorchSimFrontend/mlir/mlir_conv_template.py:40-100
+
+  该实现不做显式 im2col 物化，而是用 Affine Map 实现隐式地址映射：
+
+  // 仿射映射：输出坐标 → 输入坐标（含 stride/padding）
+  #map_I_H = affine_map<(o_h, k_h) -> (o_h * STRIDE_H + k_h)>
+  #map_I_W = affine_map<(o_w, k_w) -> (o_w * STRIDE_W + k_w)>
+  // SRAM 内偏移计算
+  #offset_x_map = affine_map<(i_h, i_w) -> (i_h * spad_per_lane(TILE_I_W*M, K) + i_w *
+  spad_per_lane(M, K))>
+
+  affine.for %batch in [0..BATCH, TILE_M):     // outer: batch 维度
+    affine.for %oc in [0..O_C, TILE_N):        // outer: 输出通道
+      affine.for %o_h in [0..O_H, TILE_O_H):  // outer: 输出高度
+        affine.for %o_w in [0..O_W, TILE_O_W): // outer: 输出宽度
+          MVIN X[i_h_base:i_h_base+TILE_I_H, i_w_base:i_w_base+TILE_I_W, batch, ic]
+          // ↑ 一次性加载整个感受野的所有输入
+          MVIN W[k_h:k_h+TILE_K_H, k_w:k_w+TILE_K_W, ic:ic+TILE_K, oc:oc+TILE_N]
+          affine.for %k_h in [0..TILE_K_H]:
+            affine.for %k_w in [0..TILE_K_W]:
+              %W_buf = reinterpret_cast weight_buf[offset_w, TILE_K, TILE_N]
+              affine.for %o_h' in [0..TILE_O_H]:
+                affine.for %o_w' in [0..TILE_O_W]:
+                  %X_buf = reinterpret_cast input_buf[offset_x, TILE_M, TILE_K]
+                  // ↑ 在已加载的 SRAM tile 内通过偏移量 "虚拟 im2col"
+                  linalg.matmul(X_buf, W_buf) → Y_buf
+
+  内存复用分析：
+
+  ┌────────────────────────────────────────────┬───────────────────────────────────────────────────┐
+  │                  复用类型                  │                     实现方式                      │
+  ├────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+  │ 权重复用（多 batch 共享 W）                │ W tile 在 batch 维度外层不重新加载                │
+  ├────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+  │ 输入激活复用（单次 MVIN 服务多个 k_h/k_w） │ reinterpret_cast 在 SRAM 内改变视图，无需重复 DMA │
+  ├────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+  │ 无显式 im2col                              │ 用 offset_x_map 线性化偏移，代替物化 im2col 矩阵  │
+  └────────────────────────────────────────────┴───────────────────────────────────────────────────┘
+
+  Bank Conflict 处理：卷积核大小维度 TILE_K_H × TILE_K_W 的加载通过 offset_w_map
+  保证步长，使得相邻访问落在不同 bank。
+
+  4.3 SpMM 稀疏矩阵乘（STONNE 后端）
+
+  文件：TOGSim/src/SparseCore.cc
+
+  项目包含两套稀疏支持：
+
+  方案 A：结构化稀疏 + Zero-Skip（Tile 级别）
+
+  零值块检测在前端完成（TOGSimulator.find_zero_sub_tensors()，Simulator/simulator.py:382-397）：
+  # 按 vector_lane×vector_lane 粒度扫描权重矩阵
+  for i in range(0, tensor.shape[0], y):
+      for j in range(0, tensor.shape[1], x):
+          sub_tensor = tensor[i:i+y, j:j+x]
+          if np.all(sub_tensor == 0):
+              zero_positions[i][j] = 0  # 记录零块位置
+
+  结果写入 attribute.json 的 zero_skip 字段。在 C++ 侧，TileGraphParser.cc:81-111 的 find_output_idx()
+   查询该表：
+  - 若当前 (m, n, k) tile 对应零块 → 不发射 DMA 和 COMP
+  - 通过 DMA::set_tag_sparse() 将 tag 标记为 -1
+
+  在 Core.cc:288-295，BAR 指令检测到 tag == -1 时：
+  // Core.cc:288-295
+  uint32_t finished = _dma.get_tag_finish(inst->subgraph_id, key);
+  if (finished == -1) {  // 稀疏标记
+    for (auto child_inst : inst->get_child_inst()) {
+      if (child_inst->get_compute_type() == MATMUL)
+        child_inst->set_compute_cycle(0);  // COMP 周期清零 = 跳过计算
+    }
+    finish_instruction(inst);
+  }
+
+  方案 B：STONNE 细粒度稀疏（非结构化）
+
+  SparseCore 使用 SST_STONNE 后端模拟 MAERI（Multiplier-Accumulator Reduction Network）：
+
+  SparseCore 状态机 (subCoreCycle):
+  ┌────────────────────────────────────────────────────────┐
+  │  模式 1: 直接模式 (is_trace_mode=false)                │
+  │    stonneCore->cycle()                                  │
+  │    → STONNE 内部 MS-Network FSM 逐周期推进              │
+  │    → getMCFSMStats() 查询 FSM 状态                     │
+  │    → popRequest() 抽取内存访问 → 合并 → _request_queue │
+  │    → stonneCore->isFinished() → 标记 tile FINISH       │
+  │                                                         │
+  │  模式 2: Trace 模式 (is_trace_mode=true)               │
+  │    读取预生成的 stonne_trace 文件                       │
+  │    解析 MOVIN/COMP/MOVOUT 序列，走标准 Core 流程       │
+  └────────────────────────────────────────────────────────┘
+
+  Index 映射：STONNE 的 MAERI 网络处理 CSR/CSC 格式的稀疏索引，通过 StonneOpDesc 传入维度信息（M, K,
+  N, sparsity_ratio）。registerMemfetch() 实现请求合并：
+  // SparseCore.cc:417-428 - 同一地址的多次访问合并为一个 mem_fetch，共享 callback
+  if (request_merge_table.find(key) == request_merge_table.end()) {
+    mem_fetch* req_wrapper = new mem_fetch(addr, ...);
+    auto* callbacks = new std::vector<std::function<void()>>();
+    request_merge_table[key] = req_wrapper;
+  }
+  // 所有对同一地址的回调追加到同一列表 → 一次 DRAM response 批量触发
+
+  端口带宽限制（SparseCore.cc:310-320）：每周期最多 r_port_nr
+  个请求出队，对应物理分发网络（Distribution Network）的端口数。
+
+  ---
+  5. 多租户执行（Multi-Tenancy）
+
+  Python 层（scheduler.py）
+
+  Scheduler
+    ├─ num_request_queue (= num_partition) 个独立队列
+    ├─ FIFORunner / RoundRobinRunner
+    │    └─ per-partition: launch_model_dicts[partition_idx]
+    │                       (model -> generator 的字典)
+    ├─ schedule() 主循环：
+    │    for i in range(num_request_queue):
+    │      per_schedule(i)          # 尝试为每个分区调度
+    │    result = tog_simulator.until(next_time)
+    │    # until() 返回 bitmap，标识哪些 partition 完成
+    │    for core_idx in result:
+    │      execution_engine.partition_state[core_idx] = IDLE
+    └─ SRAM 生命周期管理：TOGSimulator.sram_alloc/dealloc()
+         记录每个分区的 SRAM 地址范围，写入 attribute.json
+
+  C++ 层（Simulator.cc）
+
+  // 每个 partition 独立的 C++ Scheduler（Scheduler.cc）
+  _partition_scheduler[0] → Core 0 的 TileGraph 队列
+  _partition_scheduler[1] → Core 1 的 TileGraph 队列
+
+  // core_cycle() 中，两个 core 独立推进：
+  for (int core_id = 0; core_id < _n_cores; core_id++) {
+    peek_tile(core_id, slot_id, core_type)  // 各自从各自 partition 取 tile
+    _cores[core_id]->cycle()               // 独立执行
+  }
+
+  // until() 返回 bitmap（Simulator.cc:195-205）
+  int bitmap = 0;
+  for (int i=0; i<_partition_scheduler.size(); i++) {
+    if (_partition_scheduler.at(i)->empty())
+      bitmap |= (1 << i);    // bit i = 第 i 个 partition 已完成
+  }
+
+  Python 端解码 bitmap（simulator.py:321-326）：
+  def until(self, until_cycle):
+      ret = self.send_command(f"until {until_cycle}")
+      bitmap = int(ret.split(" ")[-1])
+      for i in range(64):
+          if (bitmap >> i) & 1:
+              indices.append(i)  # indices = 已完成的 partition 列表
+
+  ---
+  6. 核心 FSM：Tile 状态机
+
+  Tile 生命周期 FSM：
+
+    ┌──────────────────┐
+    │   INITIALIZED    │ ← TileGraphParser 创建，指令序列装填完毕
+    └────────┬─────────┘
+             │ Scheduler.peek_tile() 返回此 tile
+             │ Core.can_issue() 通过（SRAM 未超 4 tile 上限）
+             │ Simulator.core_cycle() 调用 Core.issue(tile)
+             ▼
+    ┌──────────────────┐
+    │   RUNNING        │ ← tile 加入 _tiles[] 列表，ready insts 入队
+    └────────┬─────────┘
+             │ 每周期 Core.cycle() 执行：
+             │   MOVIN → DMA → mem_fetch → DRAM → response
+             │   COMP  → SA/VU pipeline → finish_cycle 到达
+             │   MOVOUT→ DMA store
+             │   BAR   → tag_table 同步屏障
+             │ 当 tile.all_insts_finished()
+             ▼
+    ┌──────────────────┐
+    │   FINISH         │ ← 加入 _finished_tiles 队列
+    └────────┬─────────┘
+             │ Simulator.core_cycle() 调用 pop_finished_tile()
+             │ → partition_scheduler.finish_tile()
+             │   若 TileGraph.is_finished() → 从 _tile_graph 队列移除
+             ▼
+    ┌──────────────────┐
+    │   EMPTY          │ ← 哨兵对象，表示队列空
+    └──────────────────┘
+
+  SA Compute Pipeline FSM（Core 内，sa_cycle()）：
+    COMP issued → push(inst) with inst->finish_cycle = now + compute_cycle
+    每周期：if front->finish_cycle <= _core_cycle → finish_instruction() → pop()
+    pipeline 支持重叠（overlapping_cycle）：
+      新 inst 的 finish_cycle = prev.finish_cycle + compute - overlap
+
+  ---
+  7. 关键函数调用链总结
+
+  Python 端（推理调用）:
+  Scheduler.schedule()
+    → per_schedule() → execution_engine.submit()
+      → FIFORunner.select_kernel() → next(generator)
+      → prepare_launch_kernel(kernel, inputs)
+        → kernel(*inputs)  [MLIRGemmTemplate.render() → ONNX 生成]
+      → tog_simulator.launch(onnx, attr, cycle, partition)
+        → send_command("launch ...")
+
+  C++ 端（模拟执行）:
+  main.cc: interactive_mode()
+    → launchKernel()
+      → TileGraphParser(onnx, attr, config)
+        → parse_tile_graph()  → 构建 TileNode DAG
+        → TileGraphParser::get_tile_graph() → TileGraph
+      → simulator.schedule_graph(partition_id, tile_graph)
+    → simulator.until(N)     [Simulator.cc:173]
+      → set_cycle_mask()
+      → core_cycle()          [Simulator.cc:80]
+        → Scheduler::peek_tile()
+        → Core::issue(tile)   [Core.cc:24]
+        → Core::cycle()       [Core.cc:188]
+          → compute_cycle()   [vu_cycle + sa_cycle]
+          → dma_cycle()       [Core.cc:108]
+            → DMA::issue_tile()
+            → DMA::get_memory_access()  [DMA.cc:21]
+              → Instruction::get_dram_address()  [Instruction.cc:67]
+                → 4D stride 遍历 → 生成 mem_fetch 集合
+      → icnt_cycle()          [Simulator.cc:112]
+        → Core._request_queue → _icnt → DRAM
+        → DRAM → _icnt → Core.push_memory_response()
+      → dram_cycle()          → Ramulator2/SimpleDRAM::cycle()
+
+  ---
+  附：硬件参数总览（TPUv3 配置）
+
+  来自 configs/systolic_ws_128x128_c1_simple_noc_tpuv2.json：
+
+  ┌───────────────┬────────────────────────────────┐
+  │     参数      │               值               │
+  ├───────────────┼────────────────────────────────┤
+  │ 核心数        │ 2                              │
+  ├───────────────┼────────────────────────────────┤
+  │ 核心频率      │ 940 MHz                        │
+  ├───────────────┼────────────────────────────────┤
+  │ SA 数/核      │ 2                              │
+  ├───────────────┼────────────────────────────────┤
+  │ VPU lanes     │ 128（向量宽度 256bit = 8×f32） │
+  ├───────────────┼────────────────────────────────┤
+  │ SRAM/lane     │ 128 KB                         │
+  ├───────────────┼────────────────────────────────┤
+  │ DRAM 类型     │ HBM2（Ramulator2）             │
+  ├───────────────┼────────────────────────────────┤
+  │ DRAM 通道数   │ 32                             │
+  ├───────────────┼────────────────────────────────┤
+  │ DRAM 请求粒度 │ 32 B                           │
+  ├───────────────┼────────────────────────────────┤
+  │ ICNT 延迟     │ 10 周期                        │
+  ├───────────────┼────────────────────────────────┤
+  │ 分区数        │ 2（多租户）                    │
+  └───────────────┴────────────────────────────────┘
+```
+
+## 指令模拟
+
+分析模型
+
+```bash
+---                                                                                                           
+  PyTorchSim 指令系统深度剖析                                                                                                                                                          
+                                                                                                                                                                                       
+  ---                                                                                                                                                                                  
+  1. 指令粒度与编码                                                                                                                                                                    
+                   
+  1.1 粒度定性：类 DMA-ISA 的 Tile-Level 大指令
+                                                                                                                                                                                       
+  该系统不是 RISC 微指令，也不完全是 CISC，而是一套面向 Scratchpad 架构的 Tensor-Tile 指令集——每条指令描述的是一整块 Tile 的 DMA 搬运或整个 Tile 的计算，而非单个元素操作。            
+                                                                                                                                                                                       
+  指令类型枚举（TOGSim/include/Instruction.h:15）：                                                                                                                                    
+  enum class Opcode { MOVIN, MOVOUT, COMP, BAR, COUNT };
+                                                                                                                                                                                       
+  仅 4 种 Opcode，功能对应：                                                                                                                                                           
+                                                                                                                                                                                       
+  ┌────────┬────────────────────────────────┬──────────────────────────────┐                                                                                                           
+  │ Opcode │              语义              │             类比             │                                                                                                           
+  ├────────┼────────────────────────────────┼──────────────────────────────┤
+  │ MOVIN  │ DMA Load：DRAM → SRAM          │ TPU MXU 的 MemCpy            │
+  ├────────┼────────────────────────────────┼──────────────────────────────┤
+  │ MOVOUT │ DMA Store：SRAM → DRAM         │ 结果写回                     │                                                                                                           
+  ├────────┼────────────────────────────────┼──────────────────────────────┤                                                                                                           
+  │ COMP   │ 计算：SA 矩阵乘 或 VU 向量操作 │ Gemmini 的 compute_preloaded │                                                                                                           
+  ├────────┼────────────────────────────────┼──────────────────────────────┤                                                                                                           
+  │ BAR    │ 异步屏障：等待异步 DMA 完成    │ 内存 Fence / Semaphore       │
+  └────────┴────────────────────────────────┴──────────────────────────────┘                                                                                                           
+                  
+  1.2 指令编码字段全解析                                                                                                                                                               
+                  
+  构造函数签名（Instruction.cc:13-24）揭示完整字段结构：                                                                                                                               
+                  
+  Instruction(                                                                                                                                                                         
+    Opcode opcode,          // 指令类型（4种）
+    cycle_type compute_cycle, // COMP: 计算延迟周期数（预计算）                                                                                                                        
+    size_t num_parents,     // 依赖计数器初始值（就绪条件）                                                                                                                            
+    addr_type dram_addr,    // MOVIN/MOVOUT: DRAM 基地址（物理地址）                                                                                                                   
+    vector<size_t> tile_size, // 4D tile 形状 [dim0, dim1, dim2, dim3]                                                                                                                 
+    vector<int> tile_stride,  // 4D tile 步长（字节/元素单位）                                                                                                                         
+    size_t precision,       // 元素大小（字节，例如 4=float32）                                                                                                                        
+    vector<int> tag_idx_list,    // 数据复用 Tag 的循环变量索引                                                                                                                        
+    vector<int> tag_stride_list, // Tag 步长（用于去重判断）                                                                                                                           
+    vector<int> accum_tag_idx_list // 累加维度的 tag（K loop）                                                                                                                         
+  )                                                                                                                                                                                    
+                                                                                                                                                                                       
+  私有字段补充（Instruction.h:92-118）：                                                                                                                                               
+  addr_type dram_addr;        // 基地址
+  vector<size_t> tile_size;   // 4D 形状（不足 4D 自动前补 1）                                                                                                                         
+  vector<int> tile_stride;    // 4D 步长（不足 4D 自动前补 0）                                                                                                                         
+  size_t _precision;          // 元素精度（Bytes）                                                                                                                                     
+  cycle_type compute_cycle;   // 计算周期                                                                                                                                              
+  cycle_type overlapping_cycle; // 与前序指令的重叠周期（pipeline）                                                                                                                    
+  int _compute_type;          // 0=VU, 1=MATMUL, 2=PRELOAD(SA预加载)                                                                                                                   
+  bool _is_async_dma;         // 异步 DMA 标志（非阻塞加载）                                                                                                                           
+  bool _is_indirect_mode;     // 间接寻址（SpMM 稀疏索引）                                                                                                                             
+  bool _is_sparse_inst;       // 稀疏跳过标志（zero-skip）                                                                                                                             
+  uint32_t _numa_id;          // NUMA 亲和性（多核内存分区）                                                                                                                           
+  vector<int> _tag_key;       // 计算后的 Tag 键（数据复用去重）                                                                                                                       
+  string _indirect_index_path; // 间接寻址的索引文件路径                                                                                                                               
+                                                                                                                                                                                       
+  关键设计：tile_size 是 4D 张量，get_dram_address() 在 Instruction.cc:67-101 中通过四重循环展开生成所有 cache-line 对齐的地址集合：                                                   
+  for (int dim0=0; dim0<tile_size[0]; dim0++)                                                                                                                                          
+    for (int dim1=0; dim1<tile_size[1]; dim1++)                                                                                                                                        
+      for (int dim2=0; dim2<tile_size[2]; dim2++)                                                                                                                                      
+        for (int dim3=0; dim3<tile_size[3]; dim3++)                                                                                                                                    
+          address = dram_addr + (stride[0]*dim0 + ... + stride[3]*dim3) * precision
+          address_set.insert(align_to_cacheline(address, dram_req_size))                                                                                                               
+  一条 MOVIN 指令会展开为 N 个 mem_fetch 内存请求（N = tile 元素总数 × precision / DRAM_REQ_SIZE）。                                                                                   
+                                                                                                                                                                                       
+  ---                                                                                                                                                                                  
+  2. 指令流与控制逻辑                                                                                                                                                                  
+                                                                                                                                                                                       
+  2.1 指令生成流水线（编译侧）                                                                                                                                                         
+                                                                                                                                                                                       
+  PyTorch Model
+      │                                                                                                                                                                                
+      ▼ torch.compile("npu") → mlir_lowering.py
+  MLIRGemmTemplate.render() / MLIRConvTemplate.render()                                                                                                                                
+      │  生成 Jinja2 MLIR 模板代码，包含：                                                                                                                                             
+      │  - affine.for 循环（LOOP_INDEX_NODE）                                                                                                                                          
+      │  - torchsim.mvin/mvout DMA 操作（LOAD/STORE_NODE）                                                                                                                             
+      │  - linalg.matmul（COMPUTE_NODE）                                                                                                                                               
+      ▼                                                                                                                                                                                
+  mlir_codegen_backend.py → 编译执行 MLIR 代码（Spike/Gem5）                                                                                                                           
+      │  执行时，MLIR 中每个 DMA/COMP 操作写入 Python dict:                                                                                                                            
+      │  graph = { 0: {"node_type":2, "loop_index":"index0", ...},                                                                                                                     
+      │            1: {"node_type":3, "base_address": 0x7f...,                                                                                                                         
+      │                "tile_size":[128,128], "tile_stride":[1,128], ...},                                                                                                             
+      │            2: {"node_type":1, "compute_cycle": 256, ...}, }                                                                                                                    
+      ▼                                                                                                                                                                                
+  tog_generator.py: parse_graph() + generate_tile_graph()                                                                                                                              
+      │  Python 节点图 → onnx.NodeProto → tile_graph.onnx                                                                                                                              
+      │  每个节点携带 torchsim_* 属性（ONNX 自定义属性）                                                                                                                               
+      ▼                                                                                                                                                                                
+  tile_graph.onnx（TOG 中间格式）                                                                                                                                                      
+                                                                                                                                                                                       
+  关键：compute_cycle 的计算在 tog_generator.py:219-227：                                                                                                                              
+  # tog_generator.py:219-227
+  if iter_node.torchsim_compute_type > 0:  # MATMUL or PRELOAD                                                                                                                         
+      is_preload = (iter_node.torchsim_compute_type == 2)     
+      offset = w_offset if is_preload else x_offset                                                                                                                                    
+      iter_node.torchsim_overlapping_cycle = max(cycle - offset, 0)                                                                                                                    
+  其中 x_offset/w_offset 是 SA 流水线填充时间（pipeline fill latency = SUB_TILE_M + SUB_TILE_N - 2），由 Gem5 Cycle-Sim 实测得出。                                                     
+                                                                                                                                                                                       
+  2.2 指令读取与分发（运行侧）                                                                                                                                                         
+                                                                                                                                                                                       
+  无传统 Fetch/Decode 阶段。指令以静态 DAG 形式存储在 Tile._instructions (deque) 和 Tile._ready_queue (list) 中。                                                                      
+                                                                                                                                                                                       
+  中央指令队列层次（并非单一 Command Queue，而是分层队列）：                                                                                                                           
+                  
+  TileGraph._subgraph_vec     ← 全局 TileSubGraph 待发队列（FIFO）                                                                                                                     
+    └─ TileSubGraph._ready_tile_queue  ← 就绪 Tile 优先队列（按 SRAM 排序）                                                                                                            
+         └─ Tile._ready_queue          ← 就绪 Instruction 列表（DAG 拓扑序）                                                                                                           
+              └─ Core._ld_inst_queue   ← DMA Load 队列（FIFO，串行）                                                                                                                   
+                 Core._st_inst_queue   ← DMA Store 队列（FIFO，串行）                                                                                                                  
+                 Core._sa_compute_pipeline[N] ← SA 计算队列（N个，RR）                                                                                                                 
+                 Core._vu_compute_pipeline    ← VU 计算队列                                                                                                                            
+                                                                                                                                                                                       
+  分发路径（Core.cc:188-320，Core::cycle() 函数体）：                                                                                                                                  
+                                                                                                                                                                                       
+  Core::cycle()                                                                                                                                                                        
+    step 1: compute_cycle()
+      ├─ vu_cycle()  → 检查 _vu_compute_pipeline.front()->finish_cycle ≤ now                                                                                                           
+      │                 → 完成 → finish_instruction() → 触发子指令 dec_ready_counter()                                                                                                 
+      └─ sa_cycle()  → 检查 _sa_compute_pipeline[i].front()->finish_cycle ≤ now                                                                                                        
+                        → 完成 → finish_instruction()                                                                                                                                  
+    step 2: dma_cycle()                                                                                                                                                                
+      ├─ 检查 _dma_finished_queue → 完成异步 DMA → finish_instruction() / 更新 tag table                                                                                               
+      ├─ DMA.is_finished()? → 从 _ld/_st_inst_queue 取下一条                                                                                                                           
+      └─ DMA.get_memory_access() → 生成 mem_fetch → 推入 _request_queue                                                                                                                
+    step 3: 遍历 _tiles[i]->get_ready_instructions()                                                                                                                                   
+      └─ 逐条检查 opcode → 路由:                                                                                                                                                       
+           MOVIN  → _ld_inst_queue.push(inst)                                                                                                                                          
+           MOVOUT → _st_inst_queue.push(inst)                                                                                                                                          
+           COMP   → get_compute_pipeline(type) → 入 SA/VU pipeline                                                                                                                     
+           BAR    → 查 tag_table → 直接 finish 或注册 waiter                                                                                                                           
+                                                                                                                                                                                       
+  每周期只发射一条指令（Core.cc:196-319，issued = true 后 break），这是防止超发的关键节流点。                                                                                          
+                                                                                                                                                                                       
+  2.3 同步机制：三层依赖控制                                                                                                                                                           
+                  
+  层 1：指令级依赖计数器（Dataflow）                                                                                                                                                   
+                  
+  Instruction::ready_counter（Instruction.h:97）：                                                                                                                                     
+  // Instruction.h:39-46
+  bool is_ready() { return ready_counter == 0; }                                                                                                                                       
+  void dec_ready_counter() {                    
+    ready_counter--;                                                                                                                                                                   
+    if (!ready_counter && _owner_ready_queue_ref != nullptr)
+      _owner_ready_queue_ref->push_back(shared_from_this()); // 自动加入就绪队列                                                                                                       
+  }                                                                                                                                                                                    
+  TileGraphParser::TileLoopNode::get_tiles_from_iter() 在构建时调用 inst->add_child(child_inst) 建立边，add_child 内调用                                                               
+  child->inc_ready_counter()（Instruction.cc:38-41）。这形成了零开销的硬件数据流调度：无需轮询，依赖满足后指令自动就绪。                                                               
+                                                                                                                                                                                       
+  层 2：Tile 级依赖计数器
+                                                                                                                                                                                       
+  Tile::_ready_counter（Tile.h:25）用于子 Tile 间的依赖。在 TileLoopNode::get_tiles_from_iter() 中，父 Tile 完成后调用 finish_tile()，触发子 Tile 的 dec_ready_counter() → 进入        
+  TileSubGraph::_ready_tile_queue。                                                                                                                                                    
+                                                                                                                                                                                       
+  层 3：异步 DMA Tag 表（Barrier 令牌）                                                                                                                                                
+  
+  DMA Tag Table 状态机（DMA.h:27-105）：                                                                                                                                               
+    register_tag(subgraph_id, key)  → value = 0   ("加载中")                                                                                                                           
+    set_tag_finish(...)              → value = 1   ("加载完成，未被消费")                                                                                                              
+    set_tag_sparse(...)              → value = -1  ("零块，跳过")                                                                                                                      
+    mark_tag_used(...)               → value += 1  ("已被 BAR 消费")                                                                                                                   
+                                                                                                                                                                                       
+  BAR 指令检查 Tag 状态（Core.cc:285-309）：                                                                                                                                           
+  - value == 0：加载未完成 → 注册为 waiter → 阻塞等待                                                                                                                                  
+  - value == 1：加载完成 → mark_tag_used() → 立即 finish                                                                                                                               
+  - value == -1：稀疏零块 → 将所有 COMP 子指令的 compute_cycle 设为 0 → 跳过计算
+                                                                                                                                                                                       
+  ---                                                                                                                                                                                  
+  3. 指令调度与并发                                                                                                                                                                    
+                                                                                                                                                                                       
+  3.1 计算/访存重叠（Pipeline Overlap）
+                                                                                                                                                                                       
+  重叠机制在 Core.cc:256-266，基于 overlapping_cycle 字段：                                                                                                                            
+  
+  // Core.cc:256-266: COMP 指令入队逻辑                                                                                                                                                
+  if (target_pipeline.empty()) {                                                                                                                                                       
+    inst->finish_cycle = _core_cycle + inst->get_compute_cycle();
+    inst->bubble_cycle = inst->get_overlapping_cycle(); // 不重叠，等同填充时间                                                                                                        
+  } else {                                                                                                                                                                             
+    int overlapped_cycle = min(                                                                                                                                                        
+      target_pipeline.back()->finish_cycle - _core_cycle,  // 剩余时间                                                                                                                 
+      inst->get_overlapping_cycle()                         // 可重叠量                                                                                                                
+    );                                                                                                                                                                                 
+    int bubble_cycle = inst->get_overlapping_cycle() - overlapped_cycle;                                                                                                               
+    inst->finish_cycle = target_pipeline.back()->finish_cycle                                                                                                                          
+                         + inst->get_compute_cycle() - overlapped_cycle;
+    inst->bubble_cycle = bubble_cycle;                                                                                                                                                 
+  }               
+                                                                                                                                                                                       
+  时序图示（以 Weight Stationary 128×128 SA 为例，TILE_K=128, overlap=128）：                                                                                                          
+  
+  Cycle:    0    128   256   384   512                                                                                                                                                 
+  MOVIN_X: [====DMA====]                                                                                                                                                               
+  MOVIN_W:       [====DMA====]                                                                                                                                                         
+  COMP_0:              [==SA K=0 →K=128==]                                                                                                                                             
+  MOVIN_X(K+1):        [====DMA(async)====]                                                                                                                                            
+  MOVIN_W(K+1):              [====DMA(async)====]                                                                                                                                      
+  BAR:                               |← 等待异步 DMA 完成                                                                                                                              
+  COMP_1(overlap):                 [==SA overlap→]                                                                                                                                     
+                                     ←←← overlap ←→                                                                                                                                    
+                                                                                                                                                                                       
+  3.2 双缓冲（Ping-Pong Buffer）实现                                                                                                                                                   
+                                                                                                                                                                                       
+  双缓冲是隐式的，通过以下机制实现：                                                                                                                                                   
+                  
+  ① SRAM 容量预留（mlir_template.py:206-207）：                                                                                                                                        
+  max_spad_size = spad_size // 2      # 全局 SRAM 的一半
+  max_spad_per_lane = spad_size_per_lane // 2  # 每 lane 的一半                                                                                                                        
+  Tile 选择算法保证每个 Tile 只用不超过 50% 的 SRAM，剩余 50% 供下一个 Tile 预加载。                                                                                                   
+                                                                                                                                                                                       
+  ② 异步 DMA + BAR 实现 Ping-Pong 切换：                                                                                                                                               
+                                                                                                                                                                                       
+  内层 K 循环展开后的指令序列（GEMM, TILE_K=128）：                                                                                                                                    
+                                                                                                                                                                                       
+  迭代 k=0:                                                                                                                                                                            
+    [MOVIN_X_0, async=True]  →  开始加载 X[0:128]，立即返回（不阻塞）                                                                                                                  
+    [MOVIN_W_0, async=True]  →  开始加载 W[0:128]，立即返回                                                                                                                            
+    [BAR_X_0]                →  等待 X[0:128] 加载完成                                                                                                                                 
+    [BAR_W_0]                →  等待 W[0:128] 加载完成                                                                                                                                 
+    [COMP_0]                 →  计算 X[0:128] × W[0:128] → Y_buffer                                                                                                                    
+    ↑↑↑ 与此同时（overlap）↑↑↑                                                                                                                                                         
+    [MOVIN_X_1, async=True]  →  预加载下一轮 X[128:256] 到另一半 SRAM                                                                                                                  
+    [MOVIN_W_1, async=True]  →  预加载下一轮 W[128:256]                                                                                                                                
+                                                                                                                                                                                       
+  迭代 k=128:                                                                                                                                                                          
+    [BAR_X_1]                →  确认 X[128:256] 已就绪                                                                                                                                 
+    [BAR_W_1]                →  确认 W[128:256] 已就绪                                                                                                                                 
+    [COMP_1]                 →  计算 X[128:256] × W[128:256] → Y_buffer
+                                                                                                                                                                                       
+  异步 DMA 的代码路径（Core.cc:218-244）：                                                                                                                                             
+  case Opcode::MOVIN:                                                                                                                                                                  
+    if (inst->is_async_dma() && _dma.tag_key_exist(subgraph_id, key)) {                                                                                                                
+      // 相同 tag 的异步 DMA 已在进行中 → 跳过重复发射（数据复用！）   
+      _stat_tot_skipped_inst++;                                                                                                                                                        
+      break;                                                                                                                                                                           
+    } else {                                                                                                                                                                           
+      _ld_inst_queue.push(inst);  // 非阻塞入队                                                                                                                                        
+      issued = true;                           
+      break;                                                                                                                                                                           
+    }             
+                                                                                                                                                                                       
+  DMA 完成后不直接 finish，而是更新 Tag Table 并通知 BAR waiters（Core.cc:119-133）。
+                                                                                                                                                                                       
+  3.3 多算子串/并行调度                                                                                                                                                                
+                                                                                                                                                                                       
+  单算子内部：完全串行，每周期发射一条指令（by design，见 Core.cc:315-319）。                                                                                                          
+                  
+  多 TileSubGraph 之间：TileGraph 支持最多 _max_slot=2 个同时活跃的 subgraph（Simulator.cc:81），通过 _slot_id 循环：                                                                  
+                  
+  // Simulator.cc:81-94                                                                                                                                                                
+  for (int i=0; i<_max_slot; i++, _slot_id=(_slot_id+1)%_max_slot) {
+    for (int core_id=0; core_id<_n_cores; core_id++) {                                                                                                                                 
+      const auto tile = scheduler->peek_tile(core_id, _slot_id, core_type);                                                                                                            
+      if (tile->get_status() != EMPTY && _cores[core_id]->can_issue(tile)) {                                                                                                           
+        _cores[core_id]->issue(scheduler->get_tile(core_id, _slot_id));                                                                                                                
+        break;                                                                                                                                                                         
+      }                                                                                                                                                                                
+    }                                                                                                                                                                                  
+  }
+                                                                                                                                                                                       
+  Core::can_issue() 限制同时活跃 Tile 数不超过 4（Core.cc:21）：                                                                                                                       
+  bool Core::can_issue(const std::shared_ptr<Tile>& op) {
+    return _tiles.size() < 4 && !op->is_stonne_tile();                                                                                                                                 
+  }                                                                                                                                                                                    
+                                                                                                                                                                                       
+  TileSubGraph 的优先级调度（TileGraph.h:23-27）：_ready_tile_queue 是以 required_sram_size 为键的最大堆（max-priority_queue）：                                                       
+  struct CompareReadyTile {                                                                                                                                                            
+    bool operator()(const shared_ptr<Tile>& a, const shared_ptr<Tile>& b) {
+      return a->get_required_sram_size() > b->get_required_sram_size();                                                                                                                
+    }                                                                  
+  };                                                                                                                                                                                   
+  priority_queue<..., CompareReadyTile> _ready_tile_queue;
+  SRAM 需求越大的 Tile 优先发射，目的是让大 Tile 尽早占据 SRAM、减少换页开销（类似 HBM 页表的贪婪策略）。                                                                              
+                  
+  ---                                                                                                                                                                                  
+  4. 算子映射实操：指令数量与时间线
+                                                                                                                                                                                       
+  4.1 GEMM 算子指令计数
+                                                                                                                                                                                       
+  配置：M=512, N=512, K=512，TILE_M=128, TILE_N=128, TILE_K=128（128×128 SA，128 lanes）                                                                                               
+  
+  外层循环迭代：                                                                                                                                                                       
+  - M/TILE_M × N/TILE_N = 4 × 4 = 16 次外层迭代
+  - 每次外层迭代：K/TILE_K = 4 次 K 内层迭代                                                                                                                                           
+                                            
+  每个 (m, n) 外层迭代的指令序列（共 K=4 次累加）：                                                                                                                                    
+  [MVIN Bias]                          → 1 条                                                                                                                                          
+  [MVIN X[m,k=0], async=True]          → 4 条 × (K 迭代)                                                                                                                               
+  [MVIN W[k=0,n], async=True]          → 4 条 × (K 迭代)                                                                                                                               
+  [BAR X[k]]                           → 4 条 × (K 迭代)                                                                                                                               
+  [BAR W[k]]                           → 4 条 × (K 迭代)                                                                                                                               
+  [COMP_MATMUL]                         → 4 条 × (K 迭代)                                                                                                                              
+  [MOVOUT Y[m,n]]                       → 1 条                                                                                                                                         
+  每次外层迭代：1 + 4×(2+2+1) + 1 = 22 条指令                                                                                                                                          
+                                                                                                                                                                                       
+  总指令数 = 16 × 22 = 352 条指令                                                                                                                                                      
+                                                                                                                                                                                       
+  （注：Tag 去重机制可能将某些重复 MVIN 跳过，实际 MOVIN 数量因数据复用减少。）                                                                                                        
+                  
+  时间轴（一次外层迭代 m=0, n=0）：                                                                                                                                                    
+                  
+  Cycle →  0    50   100  150  200  250  300  350  400  450  500                                                                                                                       
+           │                                                                                                                                                                           
+  MVIN Bias│[DMA ~10c]                                                                                                                                                                 
+           │                                                                                                                                                                           
+  k=0 loop:│                                                                                                                                                                           
+  MVIN_X0  │    [ASYNC DMA ~30c]─────────┐                                                                                                                                             
+  MVIN_W0  │         [ASYNC DMA ~30c]────│─────┐                                                                                                                                       
+  BAR_X0   │                             │↓就绪│                                                                                                                                       
+  BAR_W0   │                             │     │↓就绪                                                                                                                                  
+  COMP_0   │                             [SA: 256c pipeline]────────────────────────┐                                                                                                  
+           │                                                                        │                                                                                                  
+  k=1 loop:│                                                                        │                                                                                                  
+  MVIN_X1(async)│              [ASYNC DMA ~30c]──────────┐  ← 与 COMP_0 重叠        │                                                                                                  
+  MVIN_W1(async)│                    [ASYNC DMA ~30c]────│──┐                       │                                                                                                  
+  BAR_X1   │                                             │↓ │                       │                                                                                                  
+  BAR_W1   │                                             │  │↓                      │                                                                                                  
+  COMP_1   │                                            [SA: 256c - overlap]────────┤                                                                                                  
+           │                                                                        │                                                                                                  
+  MOVOUT Y │                                                                        [DMA ~30c]
+           │                                                                                                                                                                           
+  总时间线：Bias(10) + MVIN0(30) + BAR(0) + 4×COMP(256 - 128 overlap) + MOVOUT(30)
+         ≈  10 + 30 + 4×128 + 30 = 582 cycles (理想)                                                                                                                                   
+                                                                                                                                                                                       
+  4.2 Conv2D / im2col 指令计数                                                                                                                                                         
+                                                                                                                                                                                       
+  配置：BATCH=1, I_C=64, O_C=128, I_H=56, I_W=56, K_H=3, K_W=3（ResNet-50 第一层）                                                                                                     
+  Tile 参数（典型值）：TILE_M=1(batch), TILE_N=128(O_C), TILE_K=64(I_C), TILE_O_H=7, TILE_O_W=7
+                                                                                                                                                                                       
+  外层循环：BATCH/1 × O_C/128 × O_H/7 × O_W/7 = 1 × 1 × 8 × 8 = 64 次外层迭代                                                                                                          
+                                                                                                                                                                                       
+  每次外层迭代（O_H 块 × O_W 块）：                                                                                                                                                    
+  K_H=3 × K_W=3 个 (k_h, k_w) 组合：9 次
+    每次：                                                                                                                                                                             
+    [MVIN X tile (I_H_tile, I_W_tile, BATCH, I_C)]  → 1 条 (覆盖感受野)                                                                                                                
+    [MVIN W tile (K_H_tile, K_W_tile, I_C, O_C)]    → 1 条             
+    K_H_tile × K_W_tile = 1×1 的 COMP:              → 1 条                                                                                                                             
+                                                                                                                                                                                       
+  [MOVOUT Y tile]                                    → 1 条                                                                                                                            
+  每次外层：BIAS(1) + 9×(MVIN_X + MVIN_W + COMP) + MOVOUT = 1 + 27 + 1 = 29 条                                                                                                         
+  总指令数 = 64 × 29 = 1856 条指令                                                                                                                                                     
+                                                                                                                                                                                       
+  时间轴对比（im2col 关键差异）：                                                                                                                                                      
+                                                                                                                                                                                       
+  标准显式 im2col（假设）：                                                                                                                                                            
+    col2im矩阵化 → MVIN col → GEMM                                                                                                                                                     
+    ↑需要额外的写回操作，增加额外 MOVOUT+MVIN                                                                                                                                          
+                                                                                                                                                                                       
+  本系统隐式 im2col（实际）：                                                                                                                                                          
+    MVIN X [I_H_tile, I_W_tile, BATCH, I_C] 一次性加载整个感受野区域                                                                                                                   
+         │                                                                                                                                                                             
+         ├─ reinterpret_cast → X_buf[k_h=0, k_w=0] → COMP_00
+         ├─ reinterpret_cast → X_buf[k_h=0, k_w=1] → COMP_01  ← SRAM 内偏移，无 DMA                                                                                                    
+         ├─ reinterpret_cast → X_buf[k_h=0, k_w=2] → COMP_02  ← 零额外内存开销                                                                                                         
+         └─ ... 9 个 COMP 共享同一次 MVIN                                                                                                                                              
+                                                                                                                                                                                       
+  节省的 DMA：原本 9 次 MVIN_X → 实际 1 次 MVIN_X（8× 数据复用）                                                                                                                       
+                                                                                                                                                                                       
+  4.3 SpMM 指令计数（STONNE 直接模式）                                                                                                                                                 
+                  
+  SpMM 的指令序列退化为单条 STONNE_NODE，不展开成 MOVIN/COMP/MOVOUT 序列：                                                                                                             
+                  
+  [STONNE_NODE] {                                                                                                                                                                      
+    operation: GEMM,                                                                                                                                                                   
+    M: sparse_M, K: sparse_K, N: sparse_N,
+    T_M: tile_M, T_K: tile_K, T_N: tile_N,                                                                                                                                             
+    matrix_a_dram_address: 0x...,  // CSR row_pointer                                                                                                                                  
+    matrix_b_dram_address: 0x...,  // 密集矩阵                                                                                                                                         
+    bitmap_matrix_a_init: "...",   // 非零位图                                                                                                                                         
+    rowpointer_matrix_a_init: "..." // CSR 行指针                                                                                                                                      
+  }                                                                                                                                                                                    
+                                                                                                                                                                                       
+  STONNE 内部自己管理 MS-Network 的 FSM 循环（SparseCore::subCoreCycle()），每个 STONNE 核心每周期推进一步。其内部 FSM 状态从 checkStatus() 的 getMCFSMStats() 获取，分为：            
+  - 分发状态（Distribution Network 活跃）
+  - 规约状态（Reduction Network 活跃）                                                                                                                                                 
+  - 完成状态（isFinished()）
+                                                                                                                                                                                       
+  ---             
+  5. 指令调度核心类汇总                                                                                                                                                                
+                                                                                                                                                                                       
+  ┌─────────────────────────────────────┬───────────────────────────────────┬────────────────────────────────────────────────────────────┐
+  │                类名                 │               文件                │                            职责                            │                                             
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤
+  │ TileGraphParser                     │ TOGSim/src/TileGraphParser.cc:694 │ 编译器：ONNX → TileGraph+Instruction DAG                   │
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤
+  │ TileLoopNode::get_tiles_from_iter() │ TileGraphParser.cc:341            │ 循环展开：将 affine.for 展开为 Tile × Instruction 列表     │                                             
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤                                             
+  │ TileGraph                           │ TOGSim/include/TileGraph.h        │ 全局图调度：管理 subgraph 的 FIFO 分发 + Iterator 循环展开 │                                             
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤                                             
+  │ TileSubGraph                        │ TileGraph.h:10                    │ Tile 就绪队列：priority_queue（SRAM 贪婪排序）             │
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤                                             
+  │ Scheduler (C++)                     │ TOGSim/src/scheduler/Scheduler.cc │ 分区调度：per-partition TileGraph FIFO + peek/get tile     │
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤                                             
+  │ Core::cycle()                       │ TOGSim/src/Core.cc:188            │ 指令分发：每周期从 ready_queue 取一条 → 路由到 DMA/SA/VU   │
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤                                             
+  │ DMA                                 │ TOGSim/include/DMA.h              │ 内存控制器：Tag Table + mem_fetch 生成 + 异步屏障          │
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤                                             
+  │ FIFORunner/RoundRobinRunner         │ Scheduler/scheduler.py:264/299    │ Python 侧多租户调度：per-partition generator 管理          │
+  ├─────────────────────────────────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────┤                                             
+  │ MLIRTemplateKernel                  │ mlir_template.py:92               │ Tile 大小搜索：gemm_combination_mapping() 枚举候选         │
+  └─────────────────────────────────────┴───────────────────────────────────┴────────────────────────────────────────────────────────────┘                                             
+                  
+  ---                                                                                                                                                                                  
+  6. 循环展开（Loop Unrolling）机制详解
+                                                                                                                                                                                       
+  TileLoopNode::get_tiles_from_iter() 实现了静态循环展开 + 运行时实例化：
+                                                                                                                                                                                       
+  // TileGraphParser.cc:610-631
+  for (int i=start; i<end; i+=stride) {                                                                                                                                                
+    inner_indices[loop_node->get_idx_name()] = i;                                                                                                                                      
+    // 递归展开内层循环，生成具体地址的 Instruction 对象                                                                                                                               
+    vector<shared_ptr<Tile>> ret = loop_node->get_tiles_from_iter(this, inner_indices);                                                                                                
+    if (loop_type == LoopType::INNER_LOOP) {                                                                                                                                           
+      // inner_loop → 全部展开到同一个 Tile（循环体内联）                                                                                                                              
+      for (auto& inner_tile : ret) {                                                                                                                                                   
+        for (auto& inner_inst : inner_tile->get_instructions())
+          tile_vec.back()->append_instuction(inner_inst);                                                                                                                              
+      }                                                                                                                                                                                
+    } else {                                                                                                                                                                           
+      // outer_loop → 创建父子 Tile 链（Tile 级流水）                                                                                                                                  
+      parent->append_child(ret.front());                                                                                                                                               
+      ret.back()->append_child(child);                                                                                                                                                 
+      tile_vec.push_back(inner_tile);                                                                                                                                                  
+    }                                                                                                                                                                                  
+  }               
+                                                                                                                                                                                       
+  - inner_loop 循环（Conv 中的 k_h, k_w, o_h, o_w）：完全内联展开到同一 Tile，所有 COMP 指令串行在一个 Tile 中                                                                         
+  - outer_loop/accumulation_loop（GEMM 的 M, N, K 外层）：展开为 Tile 链，每个迭代是独立 Tile，通过 parent-child 关系连接
+                                                                                                                                                                                       
+  Tag 去重优化（TileGraphParser.cc:416-419）：                                                                                                                                         
+  // 检查此地址区域是否已在当前 K 累加轮中加载过                                                                                                                                       
+  vector<int> key = calc_tag(accum_tag_list, tag_list, tag_stride_list);                                                                                                               
+  if (check_memory_tag(base_addr_name, key))                                                                                                                                           
+    continue;  // 跳过重复 MVIN → 数据复用！                                                                                                                                           
+  register_memory_tag(base_addr_name, key);                                                                                                                                            
+  这正是 Weight Stationary 复用的实现：在 M 维度遍历时，同一 (k, n) 的权重 tile Tag 相同 → 重复 MVIN 被静态去重消除。  
+```
+
+## Conv和SpMM实例
+
+```bash
+Conv 与 SpMM：端到端内存调度、Tiling 与地址生成全景                                                                                                                                  
+                                                                                                                                                                                       
+  注：用户问题中提到的 sram_address_translator.py、compute_tracker.py、tiling_manager.py、top_level.py 均不存在于本项目。其功能分散在 mlir_template.py（Tiling                         
+  算法）、TileGraphParser.cc（地址生成与展开）、DMA.cc（内存访问生成）和 Cache.cc/L2Cache.cc（Cache 仿真）中，以下分析对应实际代码位置。                                               
+                                                                                                                                                                                       
+  ---                                                                                                                                                                                  
+  一、多层数据接力：张量地址的端到端传递                                                                                                                                               
+                                                                                                                                                                                       
+  1.1 Python 侧地址导出
+                                                                                                                                                                                       
+  当 PyTorch 通过 torch.compile(backend="npu") 触发自定义后端时，PyTorchSimRunner.create_attribute_file() 负责将 PyTorch Tensor 的物理地址打包写入 JSON：                              
+                                                                                                                                                                                       
+  # Simulator/simulator.py:342-362                                                                                                                                                     
+  def create_attribute_file(self, attribute_path, inputs, **kwargs):                                                                                                                   
+      address_info = {}                                                                                                                                                                
+      sram_buffer = {}                                                                                                                                                                 
+                                                                                                                                                                                       
+      for idx, tensor in enumerate(inputs):
+          address_info[f"arg{idx}"] = tensor.data_ptr()   # PyTorch 物理地址                                                                                                           
+      json_content["address_info"] = address_info                                                                                                                                      
+                                                                                                                                                                                       
+      for buf_name, range in self.ALLOC_POOL.items():                                                                                                                                  
+          sram_buffer[buf_name] = range                   # SRAM 分配区间池                                                                                                            
+      json_content["sram_alloc"] = sram_buffer                                                                                                                                         
+                                                                                                                                                                                       
+      with open(attribute_path, "w") as f:                                                                                                                                             
+          json.dump(json_content, f, indent=4)                                                                                                                                         
+          os.fsync(f.fileno())                             # 防止 race condition
+                                                                                                                                                                                       
+  生成的 attribute.json 示例：                                                                                                                                                         
+  {                                                                                                                                                                                    
+    "address_info": {                                                                                                                                                                  
+      "arg0": 139823456780288,   // input tensor 物理地址（data_ptr）
+      "arg1": 139823489011712,   // weight tensor 物理地址           
+      "arg2": 139823521243136    // output tensor 物理地址                                                                                                                             
+    },                                                                                                                                                                                 
+    "sram_alloc": {                                                                                                                                                                    
+      "buf_x": [0, 131072],     // IFM 的 SRAM 区间 [start, end)                                                                                                                       
+      "buf_w": [131072, 262144], // Weight SRAM 区间                                                                                                                                   
+      "buf_y": [262144, 327680]  // OFM SRAM 区间                                                                                                                                      
+    }                                            
+  }                                                                                                                                                                                    
+                  
+  1.2 C++ 侧地址绑定                                                                                                                                                                   
+                                                                                                                                                                                       
+  TileGraphParser 在解析 ONNX 图时读取 attribute_json，建立 arg名称 → 物理地址 映射：                                                                                                  
+                                                                                                                                                                                       
+  // TOGSim/src/TileGraphParser.cc:705-711                                                                                                                                             
+  if (_attribute_json.contains("address_info")) {
+      auto address_info = _attribute_json["address_info"];                                                                                                                             
+      for (auto it = address_info.begin(); it != address_info.end(); ++it) {
+          uint64_t value = it.value();                                                                                                                                                 
+          _arg_to_address[it.key()] = value;   // "arg0" → 0x7F3B80000000
+      }                                                                                                                                                                                
+  }               
+                                                                                                                                                                                       
+  后续展开指令时查表：                                                                                                                                                                 
+  
+  // TileGraphParser.cc:362-363                                                                                                                                                        
+  addr_type base_addr = tog_parser->lookup(base_addr_name);   // 查 _arg_to_address
+  addr_type offset = std::inner_product(iter_list.begin(), iter_list.end(),                                                                                                            
+      mem_node->get_loop_stride_list().begin(), 0);           // 内积计算偏移                                                                                                          
+  // 最终 DRAM 地址 = base_addr + offset（字节）                                                                                                                                       
+                                                                                                                                                                                       
+  多层流水的张量生命周期：PyTorch Autograd Graph 中每个算子的输出 Tensor 直接传入下一算子，其 data_ptr() 地址不变，因此层间不需要额外复制——上一层的 MOVOUT 目标地址，就是下一层 MOVIN  
+  的源地址。这是静态图（torch.compile 编译期绑定地址）的核心优势。
+                                                                                                                                                                                       
+  ---             
+  二、Conv Tiling 算法：七维约束求解
+                                                                                                                                                                                       
+  2.1 三阶段 Tiling 流程
+                                                                                                                                                                                       
+  Conv 的 7 个维度 (N_batch, O_C, O_H, O_W, I_C, K_H, K_W) 需要拆成适配 SRAM 的 Tile。mlir_template.py 分三阶段求解：                                                                  
+  
+  阶段 1 — GEMM Tiling（M, N, K）：                                                                                                                                                    
+                  
+  # mlir_template.py:282                                                                                                                                                               
+  M, N, K = self.gemm_combination_mapping(M, N, K, pad_k=False, is_conv=True)[0]
+  K = min(K, self.vector_lane)   # K ≤ 128 lanes                                                                                                                                       
+                                                                                                                                                                                       
+  gemm_combination_mapping 的约束（mlir_template.py:202-270）：                                                                                                                        
+  SRAM 总量约束：(TM*TK + TK*TN + TM*TN) * precision < spad_size * vector_lane / 2                                                                                                     
+  Per-lane 约束：(TK*ceil(TN/VL) + TM*ceil(TK/VL) + TM*ceil(TN/VL)) * precision < spad_size/2                                                                                          
+  分母 // 2 = Double Buffer 预留：一半 SRAM 用于当前计算，另一半用于下一块的异步预取。                                                                                                 
+                                                                                                                                                                                       
+  阶段 2 — 空间维度 Tiling（K_H, K_W, O_H, O_W）：                                                                                                                                     
+                                                                                                                                                                                       
+  # mlir_template.py:286-307（conv_combination_mapping 核心循环）                                                                                                                      
+  for o_h in sympy.divisors(O_H):          # o_h 必须整除 O_H                                                                                                                          
+      for o_w in sympy.divisors(O_W):       # o_w 必须整除 O_W                                                                                                                         
+          for k_h in sympy.divisors(K_H):   # 卷积核行分块                                                                                                                             
+              for k_w in sympy.divisors(K_W): # 卷积核列分块                                                                                                                           
+                  # 对应的 IFM 窗口大小（含 stride 和 dilation）                                                                                                                       
+                  i_h = 1 + (o_h - 1) * stride[0] + (k_h - 1) * dilation[0]                                                                                                            
+                  i_w = 1 + (o_w - 1) * stride[1] + (k_w - 1) * dilation[1]                                                                                                            
+                                                                                                                                                                                       
+                  weight_size = k_w * k_h * K * N               # 权重块大小                                                                                                           
+                  input_size  = i_w * i_h * M * K               # IFM 窗口大小                                                                                                         
+                  output_size = o_w * o_h * M * N               # OFM 块大小                                                                                                           
+                                                                                                                                                                                       
+                  used_spad_size = (weight_size + input_size + output_size) * precision                                                                                                
+                  # 同时满足总量和 per-lane 两个约束                                                                                                                                   
+                  if used_spad_size < max_spad_size and per_lane_ok:                                                                                                                   
+                      tile_candidates.append((used_spad_size, (k_h, k_w, o_h, o_w, M, N, K)))                                                                                          
+                                                                                                                                                                                       
+  选优策略：在所有满足约束的候选中，优先最大化 k_h * k_w（卷积核覆盖），再最大化 o_h * o_w（输出复用）。最终按 used_spad_size 降序排列，取 Top-K 候选供 autotune 测试。                
+                                                                                                                                                                                       
+  阶段 3 — 三种 Conv Tiling 模板选择（mlir_conv_template.py）：                                                                                                                        
+                  
+  ┌───────────────────────────┬────────────────────────┬────────────────────────┐                                                                                                      
+  │           模板            │          特征          │        适用场景        │
+  ├───────────────────────────┼────────────────────────┼────────────────────────┤                                                                                                      
+  │ conv_combination_mapping  │ K_H 和 K_W 均分块      │ 通用 Conv（3×3, 5×5）  │
+  ├───────────────────────────┼────────────────────────┼────────────────────────┤
+  │ conv_multi_tile_mapping   │ K_W 不分块（整行加载） │ depthwise conv，K_W 小 │                                                                                                      
+  ├───────────────────────────┼────────────────────────┼────────────────────────┤                                                                                                      
+  │ conv_single_batch_mapping │ O_W 不分块（整行输出） │ 小输出特征图           │                                                                                                      
+  └───────────────────────────┴────────────────────────┴────────────────────────┘                                                                                                      
+                  
+  2.2 数值示例：ResNet-50 Layer-1                                                                                                                                                      
+                  
+  参数：N=1, I_C=64, O_C=64, H=56, W=56, K_H=3, K_W=3, stride=1，硬件：128 lanes × 128 KB/lane：                                                                                       
+                  
+  max_spad_size = 128 * 128 * 1024 / 2 = 8 MB（总 16 MB 的一半）                                                                                                                       
+  precision = 2 bytes (FP16)                                                                                                                                                           
+                                                                                                                                                                                       
+  试 M=8, N=64, K=16 (来自 gemm_combination_mapping)                                                                                                                                   
+  试 o_h=4, o_w=4, k_h=1, k_w=1:                                                                                                                                                       
+    i_h = 1 + 3*1 + 0 = 4,  i_w = 4                                                                                                                                                    
+    weight_size = 1*1*16*64 = 1024 elem = 2 KB                                                                                                                                         
+    input_size  = 4*4*8*16  = 2048 elem = 4 KB                                                                                                                                         
+    output_size = 4*4*8*64  = 8192 elem = 16 KB                                                                                                                                        
+    total = 22 KB << 8 MB ✓ → 候选之一                                                                                                                                                 
+                                                                                                                                                                                       
+  最优化：max k_h*k_w, 取 k_h=3, k_w=3, o_h=4, o_w=4:                                                                                                                                  
+    i_h = 1+3+2 = 6, i_w = 6                                                                                                                                                           
+    weight = 3*3*16*64 = 9216 elem = 18 KB                                                                                                                                             
+    input  = 6*6*8*16  = 4608 elem = 9 KB                                                                                                                                              
+    output = 4*4*8*64  = 8192 elem = 16 KB                                                                                                                                             
+    total  = 43 KB < 8 MB ✓ → 更优选择（更大的核覆盖）                                                                                                                                 
+                                                                                                                                                                                       
+  外循环展开量：(56/4)×(56/4)×(64/64)×(3/3)×(3/3) = 14×14×1×1×1 = 196 Tiles。                                                                                                          
+                                                                                                                                                                                       
+  ---                                                                                                                                                                                  
+  三、SRAM 地址布局：逻辑到物理映射
+                                   
+  3.1 Scratchpad 物理结构
+                                                                                                                                                                                       
+  硬件 SRAM 是 128 lanes 并行，每 lane 128 KB：                                                                                                                                        
+                                                                                                                                                                                       
+  物理 SRAM:  [lane_0][lane_1]...[lane_127]                                                                                                                                            
+                128KB   128KB       128KB                                                                                                                                              
+  总容量 = 128 × 128KB = 16 MB                                                                                                                                                         
+                                                                                                                                                                                       
+  每 lane 内部是线性字节数组，lane 之间并行访问。一次向量操作读取所有 lane 的同一偏移位置 → 等效于 128 × element_width 位宽的向量。                                                    
+                                                                                                                                                                                       
+  3.2 Per-lane SRAM 大小计算                                                                                                                                                           
+                  
+  # mlir_template.py:849-851
+  def get_spad_size_per_lane(self, tile_m, tile_n):                                                                                                                                    
+      size = tile_m * ((tile_n + self.vector_lane - 1) // self.vector_lane)
+      return max(size, 2)  # 最小 2 elements（向量 load/store 要求）                                                                                                                   
+                                                                                                                                                                                       
+  这个公式反映 列主序（column-major） 存储下，N 维度在 lane 间展开：                                                                                                                   
+  - 每 vector_lane=128 个 N 元素占 1 个 per-lane slot                                                                                                                                  
+  - 因此 per-lane 宽度 = ceil(tile_n / 128)                                                                                                                                            
+  - 高度 = tile_m（行数）                  
+                                                                                                                                                                                       
+  WS 数据流下三个缓冲区的 per-lane 布局：                                                                                                                                              
+                                                                                                                                                                                       
+  ┌─────────────────────────────────────────────────┐                                                                                                                                  
+  │  SRAM per lane (128 KB = 131072 bytes)           │                                                                                                                                 
+  ├─────────────────────────────────────────────────┤                                                                                                                                  
+  │  Weight Buffer: [K][ceil(N/128)] elements        │ ← WS，跨 M 循环不重载                                                                                                           
+  │  addr: sram_alloc["buf_w"][0] ~ [1]              │                                                                                                                                 
+  ├─────────────────────────────────────────────────┤                                                                                                                                  
+  │  Input Buffer:  [M][ceil(K/128)] elements        │ ← MVIN from DRAM                                                                                                                
+  │  addr: sram_alloc["buf_x"][0] ~ [1]              │                                                                                                                                 
+  ├─────────────────────────────────────────────────┤                                                                                                                                  
+  │  Output Buffer: [M][ceil(N/128)] elements        │ ← 累加，最后 MOVOUT                                                                                                             
+  │  addr: sram_alloc["buf_y"][0] ~ [1]              │                                                                                                                                 
+  ├─────────────────────────────────────────────────┤                                                                                                                                  
+  │  Double Buffer Shadow (50% 保留)                 │                                                                                                                                 
+  └─────────────────────────────────────────────────┘                                                                                                                                  
+                  
+  3.3 Conv SRAM 布局：Implicit Im2col 的 reinterpret_cast                                                                                                                              
+                  
+  Conv 不做 im2col 矩阵化，SRAM 内的 IFM 仍保持 [i_h, i_w, K] 3D 布局，通过仿射映射做虚拟窗口化：                                                                                      
+                  
+  // mlir_conv_template.py 中生成的 MLIR                                                                                                                                               
+  // IFM SRAM buffer: memref<i_h × i_w × K × f16>                                                                                                                                      
+  // 通过 reinterpret_cast + affine_map 访问                                                                                                                                           
+  #map_I_H = affine_map<(o_h, k_h) -> (o_h * stride_H + k_h)>                                                                                                                          
+  #map_I_W = affine_map<(o_w, k_w) -> (o_w * stride_W + k_w)>                                                                                                                          
+                                                                                                                                                                                       
+  // 不需要重新 DMA，只需重新解释访问模式                                                                                                                                              
+  %window = memref.reinterpret_cast %sram_x                                                                                                                                            
+      to offset: [k_h * i_w * K + k_w * K]   // 子窗口起点                                                                                                                             
+      sizes: [o_h, o_w, K]                    // 当前计算块大小                                                                                                                        
+      strides: [stride_H * i_w * K, stride_W * K, 1]                                                                                                                                   
+                                                                                                                                                                                       
+  每次外层 (k_h, k_w) 迭代，仅偏移指针进入同一块 SRAM 内存的不同子区域，零额外 DRAM 访问。                                                                                             
+                                                                                                                                                                                       
+  3.4 SRAM 地址 stride 公式                                                                                                                                                            
+                  
+  # mlir_gemm_template.py: GEMM 情况                                                                                                                                                   
+  X_tile_stride = [1, TILE_M]           # column-major：行元素连续                                                                                                                     
+  W_tile_stride = [1, TILE_K]           # column-major                                                                                                                                 
+  Y_tile_stride = [1, TILE_M]           # column-major                                                                                                                                 
+                                                                                                                                                                                       
+  # Conv 扩展：增加空间维度                                                                                                                                                            
+  IFM_sram_stride = [i_w * K, K, 1]    # [H方向, W方向, C方向]
+  Weight_sram_stride = [K_W * K, K, 1]  # [K_H, K_W, I_C]                                                                                                                              
+  OFM_sram_stride   = [o_w * N, N, 1]  # [O_H, O_W, O_C]                                                                                                                               
+                                                                                                                                                                                       
+  ---                                                                                                                                                                                  
+  四、SpMM Tiling：STONNE 稀疏元数据与地址生成                                                                                                                                         
+                                                                                                                                                                                       
+  4.1 SpMM 节点参数结构
+                                                                                                                                                                                       
+  SpMM 通过 stonne_node 承载全部稀疏信息（onnx_utility.py:101-152）：                                                                                                                  
+  
+  class stonne_node(node):                                                                                                                                                             
+      # 稠密形状（全量）
+      torchsim_stonne_R = R     # 权重行                                                                                                                                               
+      torchsim_stonne_C = C     # 输入通道（共享 K 维）                                                                                                                                
+      torchsim_stonne_K = K     # 输出通道                                                                                                                                             
+      torchsim_stonne_X = X     # 输入空间                                                                                                                                             
+      torchsim_stonne_X_ = X_  # 输出空间                                                                                                                                              
+                                                                                                                                                                                       
+      # 分块参数（MAERI 的 MS-Network mapping）                                                                                                                                        
+      torchsim_stonne_T_R = T_R  # 权重行分块                                                                                                                                          
+      torchsim_stonne_T_C = T_C  # 输入通道分块                                                                                                                                        
+      torchsim_stonne_T_K = T_K  # 输出通道分块
+      torchsim_stonne_T_X_ = T_X_ # 输出空间分块                                                                                                                                       
+                  
+      # GEMM 降级参数（SpMM → SpGEMM）                                                                                                                                                 
+      torchsim_stonne_GEMM_K = GEMM_K   # 非零行数（NNZ rows）
+      torchsim_stonne_GEMM_N = GEMM_N   # 输出列数                                                                                                                                     
+      torchsim_stonne_GEMM_M = GEMM_M   # NNZ 值总数                                                                                                                                   
+                                                                                                                                                                                       
+      # DRAM 物理地址                                                                                                                                                                  
+      torchsim_stonne_matrix_a_dram_address = ...  # 稀疏矩阵地址                                                                                                                      
+      torchsim_stonne_matrix_b_dram_address = ...  # 稠密矩阵地址                                                                                                                      
+      torchsim_stonne_matrix_c_dram_address = ...  # 输出矩阵地址                                                                                                                      
+                                                                                                                                                                                       
+      # 稀疏元数据（字符串序列化后嵌入 ONNX 属性）                                                                                                                                     
+      torchsim_stonne_bitmap_matrix_a_init = "..."      # Bitmap（行级稀疏掩码）                                                                                                       
+      torchsim_stonne_rowpointer_matrix_a_init = "..."  # CSR row pointer                                                                                                              
+      torchsim_stonne_colpointer_matrix_a_init = "..."  # CSR col indices
+                                                                                                                                                                                       
+  4.2 SpMM Tiling 约束
+                                                                                                                                                                                       
+  SpMM 的 SRAM 分配不能用稠密公式，因为 NNZ 分布不均匀。实际 Tiling 策略：                                                                                                             
+  
+  NNZ_per_row ≈ sparsity * C     （平均每行非零数）                                                                                                                                    
+  T_C = min(NNZ_per_row, available_sram / (T_K * element_size))                                                                                                                        
+                                                                                                                                                                                       
+  SRAM 占用：                                                                                                                                                                          
+    矩阵A 分块：T_R * T_C * 2B（稀疏值，行优先存储）                                                                                                                                   
+    矩阵B 分块：T_C * T_N * 2B（稠密）                                                                                                                                                 
+    矩阵C 分块：T_R * T_N * 2B（输出）                                                                                                                                                 
+    Bitmap：    T_R * ceil(C/64) * 8B（每行一个 64-bit 掩码字）                                                                                                                        
+    CSR ptr：   (T_R + 1) * 4B                                                                                                                                                         
+                                                                                                                                                                                       
+  零跳跳过（Zero-Skip）机制：编译期 find_zero_sub_tensors() 以 vector_lane × vector_lane 块为粒度扫描权重矩阵，标记全零块 → 写入 attribute.json 的 zero_skip 字段 → C++ DMA 检测到     
+  is_sparse_tile=true → 设置 set_tag_sparse(tag_key, -1) → 对应的 BAR 指令将 compute_cycle=0 → 该 Tile 的 COMP 指令空执行（0 周期）：                                                  
+                                                                                                                                                                                       
+  // TileGraphParser.cc:444-448
+  bool is_sparse_tile = tog_parser->is_sparse_tile(tog_parser->get_dma_counter());                                                                                                     
+  tog_parser->inc_dma_counter();                                                                                                                                                       
+  if (is_sparse_tile) {                                                                                                                                                                
+      inst->set_sparse_state(is_sparse_tile);  // DMA tag table 中置 -1                                                                                                                
+  }                                                                                                                                                                                    
+  
+  4.3 SpMM vs Conv SRAM 接力对比                                                                                                                                                       
+                  
+  ┌────────────┬──────────────────────────────────┬───────────────────────────────────┐                                                                                                
+  │    特征    │         Conv（SA 后端）          │        SpMM（STONNE 后端）        │
+  ├────────────┼──────────────────────────────────┼───────────────────────────────────┤                                                                                                
+  │ 地址来源   │ attribute.json → _arg_to_address │ stonne_node ONNX 属性直接嵌入     │
+  ├────────────┼──────────────────────────────────┼───────────────────────────────────┤
+  │ SRAM 分块  │ 双缓冲区 × 50% SRAM              │ MAERI T_R/T_C/T_K 参数            │                                                                                                
+  ├────────────┼──────────────────────────────────┼───────────────────────────────────┤                                                                                                
+  │ 稀疏处理   │ 零块跳过（Tile 粒度）            │ Bitmap+CSR（元素级稀疏）          │                                                                                                
+  ├────────────┼──────────────────────────────────┼───────────────────────────────────┤                                                                                                
+  │ 内存发生器 │ DMA.cc::get_memory_access()      │ SparseCore.cc::registerMemfetch() │
+  ├────────────┼──────────────────────────────────┼───────────────────────────────────┤                                                                                                
+  │ 元数据存储 │ 无                               │ 内嵌 ONNX 属性字符串，运行时解析  │
+  └────────────┴──────────────────────────────────┴───────────────────────────────────┘                                                                                                
+                  
+  ---                                                                                                                                                                                  
+  五、Bank 冲突仿真与带宽建模
+                                                                                                                                                                                       
+  5.1 Cache Set Index 哈希函数
+                                                                                                                                                                                       
+  L2DataCache（可选）使用 CacheConfig 选择冲突检测策略（Cache.h:326）：                                                                                                                
+  
+  class BandwidthManagement {                                                                                                                                                          
+    void use_data_port(mem_fetch *mf, CacheRequestStatus outcome,
+                       const std::deque<CacheEvent> &events);                                                                                                                          
+    void use_fill_port(mem_fetch *mf);
+    void replenish_port_bandwidth();   // 每周期调用，恢复可用端口数                                                                                                                   
+    bool data_port_free();                                                                                                                                                             
+    bool fill_port_free();                                                                                                                                                             
+  };                                                                                                                                                                                   
+                                                                                                                                                                                       
+  三种哈希函数（Hashing.h + Cache.cc::hash_function()）：                                                                                                                              
+  
+  LINEAR:        set_idx = (addr >> log2(line_size)) & (nset - 1)                                                                                                                      
+                 最简单，连续访问必然落入相邻 set，stride=line_size 时冲突率高                                                                                                         
+                                                                                                                                                                                       
+  BITWISE_XORING: set_idx = bitwise_xor 多段 addr bit，分散热点                                                                                                                        
+                 减少空间局部性导致的 set 集中                                                                                                                                         
+                                                                                                                                                                                       
+  HASH_IPOLY:    set_idx = ipoly_hash_function(addr)
+                 基于不可约多项式哈希，理论上最均匀，用于高行数 Cache                                                                                                                  
+                                                                                                                                                                                       
+  Bank 冲突的仿真方式：不是直接建模 bank conflict，而是通过 端口带宽限制 间接模拟：每个周期 data port（读命中）和 fill port（写回/填充）都有固定数量，超出后请求在 MSHR                
+  中等待，等效于模拟了排队延迟。                                                                                                                                                       
+                                                                                                                                                                                       
+  5.2 L2 Cache 端口带宽
+
+  // L2Cache.h                                                                                                                                                                         
+  // n_read_port = 2  → 2 × cache_line_size / cycle = 2 × 128B = 256 B/cycle
+  // n_write_port = 1 → 1 × 128B/cycle                                                                                                                                                 
+  // 700 MHz 下:                                                                                                                                                                       
+  //   读带宽 = 2 × 128B × 700M = 179.2 GB/s                                                                                                                                           
+  //   写带宽 = 1 × 128B × 700M = 89.6 GB/s                                                                                                                                            
+                                                                                                                                                                                       
+  BandwidthManagement::replenish_port_bandwidth() 在每次 core_cycle() 时调用，重置可用端口计数，控制每周期最多有多少个 cache 访问能被服务。                                            
+                                                                                                                                                                                       
+  5.3 DRAM 带宽建模                                                                                                                                                                    
+                  
+  峰值带宽公式：
+
+  // SimulationConfig.h:66-68
+  float max_dram_bandwidth() {                                                                                                                                                         
+      return dram_freq_mhz * dram_channels * dram_req_size * 2
+             / dram_nbl / 1000;  // GB/s                                                                                                                                               
+  }                                                                                                                                                                                    
+                                                                                                                                                                                       
+  代入 TPUv2-like 配置（systolic_ws_128x128_c1_simple_noc_tpuv2.json）：                                                                                                               
+  700 MHz × 32 channels × 32 B × 2 (DDR) / 2 (nbl) / 1000
+  = 700 × 32 × 32 / 1000 = 716.8 GB/s                                                                                                                                                  
+                                                                                                                                                                                       
+  Ramulator2 精细建模（DramRamulator2）额外仿真：                                                                                                                                      
+  - Row-hit / row-miss / row-conflict 三态延迟                                                                                                                                         
+  - tRCD（行激活延迟）、tCL（列延迟）、tRP（预充电延迟）                                                                                                                               
+  - HBM2 的 bank group 并行（4 bank groups × 4 banks = 16 banks/channel）                                                                                                              
+  - 地址交叉映射：dram->get_channel_id(fetch) 按 addr / req_size % channels 分配，保证 32 路 channel 交叉访问                                                                          
+                                                                                                                                                                                       
+  // Simulator.cc:113-129                                                                                                                                                              
+  for (int noc_id = 0; noc_id < _noc_node_per_core; noc_id++) {                                                                                                                        
+      int port_id = core_id * _noc_node_per_core + noc_id;                                                                                                                             
+      if (_cores[core_id]->has_memory_request()) {                                                                                                                                     
+          mem_fetch *front = _cores[core_id]->top_memory_request();                                                                                                                    
+          if (!_icnt->is_full(port_id, front)) {                                                                                                                                       
+              int node_id = _dram->get_channel_id(front)                                                                                                                               
+                            / _config.dram_channels_per_partitions;                                                                                                                    
+              if (core_id == node_id)                                                                                                                                                  
+                  _cores[core_id]->inc_numa_local_access();  // NUMA 局部计数                                                                                                          
+              else                                                                                                                                                                     
+                  _cores[core_id]->inc_numa_remote_access(); // 远程访问计数                                                                                                           
+              _icnt->push(port_id, get_dest_node(front), front);                                                                                                                       
+          }                                                                                                                                                                            
+      }                                                                                                                                                                                
+  }                                                                                                                                                                                    
+                  
+  ICNT（SimpleInterconnect）有固定延迟 icnt_latency_cycles=10，建模片上互联延迟，在多核（num_cores > 1）场景下显著影响 DRAM 访问总延迟。                                               
+  
+  ---                                                                                                                                                                                  
+  六、端到端执行生命周期
+                                                                                                                                                                                       
+  以一个 Conv 层（ResNet-50 layer-1）为例，完整时序：
+                                                                                                                                                                                       
+  [Python 编译期] 
+    torch.compile(model, backend="npu")                                                                                                                                                
+      → MLIRScheduling.schedule()                                                                                                                                                      
+        → conv_combination_mapping() → 选定 Tile 参数 (3,3,4,4,8,64,16)                                                                                                                
+        → mlir_conv_template.py 渲染 MLIR                                                                                                                                              
+        → MLIR lowering → tog_generator → ONNX proto                                                                                                                                   
+                                                                                                                                                                                       
+  [Python 运行期]                                                                                                                                                                      
+    model(input)                                                                                                                                                                       
+      → create_attribute_file()
+        → 写入 {arg0: 0x7F...0, arg1: 0x7F...1, arg2: 0x7F...2}                                                                                                                        
+      → TOGSimulator.launch("launch config.json layer.onnx attr.json 0 0\n")                                                                                                           
+                                                                                                                                                                                       
+  [C++ 解析期]                                                                                                                                                                         
+    TileGraphParser()                                                                                                                                                                  
+      → 解析 attribute.json → _arg_to_address{"arg0"→..., "arg1"→..., "arg2"→...}
+      → 解析 ONNX graph → 构建 TileLoopNode 树（7层循环）                                                                                                                              
+      → get_tiles_from_iter() 展开：                                                                                                                                                   
+          196 个外层 Tile × (MOVIN_W + MOVIN_X + COMP + MOVOUT)                                                                                                                        
+          每 Tile：1 MOVIN_W（3×3×16×64=9216 elem）                                                                                                                                    
+                   1 MOVIN_X（6×6×8×16=4608 elem）                                                                                                                                     
+                   1 COMP（compute_cycle=216, overlap=200）                                                                                                                            
+                   1 MOVOUT（4×4×8×64=8192 elem）                                                                                                                                      
+          → 784 条指令 + 196 BAR 同步点                                                                                                                                                
+                                                                                                                                                                                       
+  [C++ 仿真期]  700 MHz = 1.43 ns/cycle                                                                                                                                                
+    core_cycle #0:                                                                                                                                                                     
+      Scheduler::peek_tile(core=0, slot=0) → Tile#0                                                                                                                                    
+      Core::issue(Tile#0)  → _ld_inst_queue ← [MOVIN_W, MOVIN_X]                                                                                                                       
+                                                                                                                                                                                       
+    core_cycle #1-N:                                                                                                                                                                   
+      DMA::dma_cycle():                                                                                                                                                                
+        → MOVIN_W: 生成 9216*2/32=576 个 mem_fetch（32B/req）                                                                                                                          
+        → MOVIN_X: 生成 288 个 mem_fetch                                                                                                                                               
+        → 每周期最多 _nr_req 个 req 入队 _request_queue                                                                                                                                
+      Core::icnt_cycle():                                                                                                                                                              
+        → mem_fetch → ICNT → DRAM channel (地址交叉)                                                                                                                                   
+        → Ramulator2 模拟 HBM2 延迟（row-hit ~20 cycles, row-miss ~60 cycles）                                                                                                         
+        → 返回 READ_REPLY → Core::push_memory_response()                                                                                                                               
+        → DMA Tag 标记完成 → BAR ready_counter 归零 → COMP 入队                                                                                                                        
+                                                                                                                                                                                       
+    COMP 执行（WS dataflow）:                                                                                                                                                          
+      sa_cycle():                                                                                                                                                                      
+        _sa_compute_pipeline.push(216 cycles)                                                                                                                                          
+        overlapping_cycle = min(prev_remaining, 200)                                                                                                                                   
+        → 有效延迟 = 216 - 200 = 16 cycles（90%+ 时间被 DRAM latency 隐藏）                                                                                                            
+                                                                                                                                                                                       
+    MOVOUT:                                                                                                                                                                            
+      DMA 写回 4×4×8×64 = 8192 elem → 512 个 mem_fetch → WRITE_REQUEST                                                                                                                 
+      Ramulator2 写入 HBM2                                                                                                                                                             
+  
+  [下一层触发]                                                                                                                                                                         
+    Tile#0 MOVOUT 完成 → arg2 的物理地址即为下一层 arg0
+    → Scheduler 检测 until() 返回 bitmap                                                                                                                                               
+    → Python 侧 launch 下一层
+                                                                                                                                                                                       
+  [统计输出]      
+    print_core_stat():                                                                                                                                                                 
+      ICNT: Core→ICNT X GB/s, ICNT→MEM Y GB/s                                                                                                                                          
+      DRAM: per-channel bandwidth, row-hit rate                                                                                                                                        
+      Core: total_cycles, compute_cycles, dma_stall_cycles                                                                                                                             
+      NUMA: local_access_count, remote_access_count                                                                                                                                    
+                                                                                                                                                                                       
+  ---             
+  总结：关键设计决策矩阵
+
+  ┌─────────────┬─────────────────────────────────────────┬──────────────────────────────────┐
+  │    问题     │                Conv 方案                │            SpMM 方案             │
+  ├─────────────┼─────────────────────────────────────────┼──────────────────────────────────┤
+  │ Tiling 求解 │ 4层除数枚举 + 双约束过滤                │ T_R/T_C/T_K 参数化 MAERI mapping │
+  ├─────────────┼─────────────────────────────────────────┼──────────────────────────────────┤
+  │ SRAM 分配   │ sram_alloc JSON + ALLOC_POOL            │ stonne_node 属性直接指定         │                                                                                         
+  ├─────────────┼─────────────────────────────────────────┼──────────────────────────────────┤                                                                                         
+  │ 地址生成    │ base_addr + inner_product(iter, stride) │ ONNX 属性 matrix_a_dram_address  │                                                                                         
+  ├─────────────┼─────────────────────────────────────────┼──────────────────────────────────┤                                                                                         
+  │ 稀疏处理    │ Tile 级 zero-skip（DMA tag -1）         │ 元素级 Bitmap + CSR              │
+  ├─────────────┼─────────────────────────────────────────┼──────────────────────────────────┤                                                                                         
+  │ 数据复用    │ reinterpret_cast 虚拟 im2col            │ CSR 非零索引驱动随机访问         │
+  ├─────────────┼─────────────────────────────────────────┼──────────────────────────────────┤                                                                                         
+  │ 带宽建模    │ Ramulator2 + BandwidthManagement        │ registerMemfetch() 端口限制      │
+  ├─────────────┼─────────────────────────────────────────┼──────────────────────────────────┤                                                                                         
+  │ Bank 冲突   │ CacheConfig hash function 决定 set 分布 │ r_port_nr/w_port_nr 端口占用模拟 │
+  ├─────────────┼─────────────────────────────────────────┼──────────────────────────────────┤                                                                                         
+  │ 层间接力    │ data_ptr() 静态绑定，0次复制            │ 同左（DRAM 地址直接传递）        │
+  └─────────────┴─────────────────────────────────────────┴──────────────────────────────────┘                                                                              
+```
+
+## 多租户（SA的多指令并行）
+
+ICNT：片上互联。
+
+什么场景需要SA复用，什么场景SA存在空闲，带宽限制还是任务限制？
+
+SPAD是Mem和带宽资源、SA是计算资源。
+
+POD_overlay的算子是P-Attn和D-Attn的混合算子。
+
+SA的多指令设置相比单指令发射，能提供不同算力容量、Buffer容量和Buffer带宽比例的**资源容器**。多指令/多任务的设计点是资源隔离和共享设计。
+
+dataflow是相同指令的数据流进入PE阵列，不同指令如果是算术指令会需要ALU更复杂而限制阵列复杂度，不同指令如果是配置指令能控制数据流的流动范围（计算资源隔离）。
+
+多任务数据传输需要协同考虑layout（重排）和Bank分配。
+
+这个多任务也可以是多layer pipeline。
+
+取消Bank，使用类似Row level Memory？
+
+**ReDAS**：SA的片上网络NoC，每个PE设置8个crossbar来选择输入和输出，让SA上不同dataflow支持不同的并行方式（shape），请从架构设计和SA支持算子的角度补充我的总结。
+
+另外，作为集成电路专家，文章的SA中crossbar的开销如何？
+
+我在构思一个新的SA设计。标准SA的数据分别从上到下，从左到右呈现阶梯式流动（对角线上PE的数据对应相同dim坐标），并且SA中寄存器的使能信号也能随着数据传递（从左上角和数据同向传递），那么标准SA可以看作从左上角按照使能信号同样的方式传递指令Op。
+
+扩展一下，将指令和数据分别从SA的四个角落流动，将SA看成四个实例，作为集成电路专家，请帮我分析可行性和方案。
+
+这种算子融合在SA上的设计，和ReDAS的思路类似，只是实现方式不同。ReDAS是设置CrossBar来支持不同shape来支持不同计算/带宽比需求的算子，我所设计的是隔离NoC来支持。作为一个体系结构顶会的审稿人，你接受这样的论文吗，我设想的论文
+
+> **[图片提取文字 (Screenshot from 2026-04-14 10-05-27.png)]:**
+> ## **Multi-tenancy**
+> 
+> Our load generator supports multi-tenancy experiments. You can run a simple example by executing tests/test\_scheduler.py.
+> 
+> ```
+> python tests/test_scheduler.py
+> ```
+> 
+> Below is an example code of multi-tenancy resnet18 and EncoderBlock. In this example, the Scheduler is initialized with a number of request queues, a scheduling policy, and a TOGSimulator config file( .json ). The compiled PyTorch models are then registered with a unique model id.
+> 
+> ```
+> import os
+> import sys
+> import torch
+> from torchvision.models import resnet18
+> base_path = os.environ.get('TORCHSIM_DIR', default='/workspace/PyTorchSim')
+> config = f'{base_path}/configs/systolic_ws_128x128_c2_simple_noc_tpuv3_partition.json'
+> sys.path.append(base_path)
+> from tests.test_transformer import EncoderBlock
+> from Scheduler.scheduler import Scheduler, SchedulerDNNModel, Request, poisson_request_generator
+> scheduler = Scheduler(num_request_queue=2, engine_select=Scheduler.FIFO_ENGINE, togsim_config=co
+> # Register compiled model
+> target_model0 = resnet18().eval()
+> target_model1 = EncoderBlock(768, 12).eval()
+> opt_model0 = torch.compile(target_model0.to(device=scheduler.execution_engine.module.custom_devi
+> opt_model1 = torch.compile(target_model1.to(device=scheduler.execution_engine.module.custom_dev:
+> SchedulerDNNModel.register_model("model0", opt_model0)
+> SchedulerDNNModel.register_model("model1", opt_model1)
+> ```
+> 
+> The config file( .json ) specifies two key items:
+> 
+> - num\_partition: The total number of independent request queues to create.
+> - partition: Defines the hardware mapping, assigning each queue (identified by its index) to a specific physical core. For example, the configuration below creates two scheduling queues (0 and 1) and maps core\_0 to queue 0 and core\_1 to queue 1:
+> 
+> ```
+> "num_partition" : 2,
+> 
+> "partition": {
+>     "core_0":0,
+>     "core_1":1
+> }
+> ```
+![Screenshot from 2026-04-14 10-05-27.png](PytorchSim/Screenshot_from_2026-04-14_10-05-27.png)
+
+> **[图片提取文字 (Screenshot from 2026-04-14 10-06-36.png)]:**
+> configs directory contains example NPU configuration files in the JSON format.
+> 
+> ```
+> // Number of NPU cores
+> "num_cores" : 2,
+> "core_freq_mhz" : 940,                                   
+> "num_systolic_array_per_core" : 2, // Number of systolic array per core
+>                      // Number of VPU lanes
+> "vpu_num_lanes" : 128,
+> "vpu_spad_size_kb_per_lane" : 128, // Scratchpad memory size per lane (KB)
+> "vpu_vector_length_bits" : 256,                                   
+> "dram_type" : "ramulator2", // DRAM type (ex. ramulator2, simple)
+> "dram_freq_mhz" : 940, // DRAM frequency (MHz)
+> "dram_channels": 32,
+>                                // Number of DRAM channels
+> "dram_req_size": 32, // DRAM request size (B)
+> "dram_latency" : 10, // DRAM latency (cycle)
+> "dram_nbl" : 2,
+>                                // DRAM burst length size
+> "dram_config_path" : "../configs/ramulator2_configs/HBM2_TPUv3.yaml", // Ramulator2 config fi
+> "l2d_type" : "datacache",
+> "l2d_config" : "S:64:128:512,32,L:B:m:W:L,A:192:4,32:0,32",
+> "icnt_type" : "simple", // Interconnect type (ex. booksim, simple)
+>                   // Interconnect latency (cycle)
+> "icnt_latency" : 7,
+> "icnt_freq_mhz" : 940, // Interconnect frequency (MHz)
+> "icnt_injection_ports_per_core" : 16 // Interconnect injection ports per core
+> "icnt_config_path" : "../configs/booksim2_configs/fly_c4_m32.icnt", // Booksim2 config file pa
+> "precision" : 4,
+>                                // Element's precision in tensor (Byte)
+> "scheduler" : "simple",
+>                                // Scheduler type (Now, only support simple scheduler)
+> "num_partition" : 2, // Multi-core Partitioning
+>                                 // allocate request queue index
+> "partition": {
+>  "core_0":0,
+>  "core 1":1
+> },
+> "codegen_mapping_strategy" : "heuristic", // Compiler mapping strategy (ex. "heuristic", "auto
+> "codegen_external_mapping_file" : "", // Path to external mapping file
+> "codegen_autotune_max_retry": 10, // Maximum retries for autotuning
+> "codegen_autotune_template_topk": 4, // Top-K templates to consider during autotuning
+> // Compiler optimization level/options.
+> // Value can be "all", "none", or a list of specific optimizations:
+> // ["fusion", "reduction_epilogue", "reduction_reduction", "prologue", "single_batch_conv", "r
+> "codegen_compiler_optimization" : "all"
+> ```
+![Screenshot from 2026-04-14 10-06-36.png](PytorchSim/Screenshot_from_2026-04-14_10-06-36.png)
+
+```bash
+---                                                                                     
+  多租户执行框架：资源分区、地址管理与访存冲突全景分析                                                                                                                                 
+                                                                                                                                                                                       
+  前言：真实的多租户模型                                                                                                                                                               
+                                                                                                                                                                                       
+  在开始分析之前，必须明确一个关键事实：PyTorchSim 的"多租户"是一种粗粒度、进程级别的任务隔离模型，而非细粒度硬件多路复用（Hardware                                                    
+  Multiplexing）。它不支持时间片切换、不存在地址转换器、也没有硬件防护墙。这个事实将贯穿全部分析。                                                                                     
+                                                                                                                                                                                       
+  ---             
+  一、多租户全局资源分区与调度
+                                                                                                                                                                                       
+  1.1 硬件资源切分的三个层次
+                                                                                                                                                                                       
+  层次 1：核心与分区的静态绑定（Core-Partition Affinity）                                                                                                                              
+                                                                                                                                                                                       
+  分区配置通过 JSON 静态定义（configs/systolic_ws_128x128_c2_simple_noc_tpuv3_partition.json）：                                                                                       
+                  
+  {                                                                                                                                                                                    
+    "num_cores" : 2,
+    "num_partition" : 2,                                                                                                                                                               
+    "partition": {
+      "core_0": 0,      // Core 0 → Partition 0（租户 A）                                                                                                                              
+      "core_1": 1       // Core 1 → Partition 1（租户 B）                                                                                                                              
+    }
+  }                                                                                                                                                                                    
+                  
+  Common.cc 解析后存入 SimulationConfig::partiton_map（line 129-141）：                                                                                                                
+   
+  // Common.cc:129-141                                                                                                                                                                 
+  for (int i=0; i<parsed_config.num_cores; i++) {                                                                                                                                      
+      std::string core_partition = "core_" + std::to_string(i);
+      uint32_t partition_id = uint32_t(config["partition"][core_partition]);                                                                                                           
+      parsed_config.partiton_map[i] = partition_id;  // core_id → partition_id
+  }                                                                                                                                                                                    
+                  
+  Simulator.h 的路由函数将核心 ID 映射到对应的分区调度器：                                                                                                                             
+                  
+  // Simulator.h:33-34                                                                                                                                                                 
+  int get_partition_id(int core_id) {
+      return _config.partiton_map[core_id];
+  }                                                                                                                                                                                    
+  std::unique_ptr<Scheduler>& get_partition_scheduler(int core_id) {
+      return _partition_scheduler.at(get_partition_id(core_id));                                                                                                                       
+  }               
+                                                                                                                                                                                       
+  Simulator.cc 在构造时为每个分区创建独立调度器（line 71-72）：                                                                                                                        
+   
+  for (int i=0; i<config.num_partition; i++)                                                                                                                                           
+      _partition_scheduler.push_back(                                                                                                                                                  
+          std::make_unique<Scheduler>(Scheduler(config, &_core_cycles, &_core_time, i))
+      );                                                                                                                                                                               
+                  
+  层次 2：DRAM 通道的 NUMA 分区（Channel Partitioning）                                                                                                                                
+                  
+  在异构多租户配置（如 systolic_ws_128x128_c2_chiplet_tpuv3.json）中：                                                                                                                 
+   
+  {                                                                                                                                                                                    
+    "dram_num_partitions" : 2,
+    "dram_channels": 32       // 每分区 16 通道
+  }                                                                                                                                                                                    
+   
+  DRAM 地址到通道的路由公式（Dram.cc:3-11）：                                                                                                                                          
+                  
+  uint32_t Dram::get_channel_id(mem_fetch* access) {                                                                                                                                   
+      uint32_t channel_id;
+      // 分区内通道：ipoly 哈希实现通道内均匀分布                                                                                                                                      
+      if (_n_ch_per_partition >= 16)                                                                                                                                                   
+          channel_id = ipoly_hash_function(addr/_req_size, 0, _n_ch_per_partition);                                                                                                    
+      else                                                                                                                                                                             
+          channel_id = ipoly_hash_function(addr/_req_size, 0, 16) % _n_ch_per_partition;                                                                                               
+                                                                                                                                                                                       
+      // 分区偏移：NUMA ID 决定使用哪组通道                                                                                                                                            
+      channel_id += ((access->get_numa_id() % _n_partitions) * _n_ch_per_partition);                                                                                                   
+      return channel_id;                                                                                                                                                               
+  }               
+                                                                                                                                                                                       
+  这是唯一的硬件级资源隔离：租户 A（NUMA ID=0）的访存始终路由到 channel [0,15]，租户 B（NUMA ID=1）路由到 channel [16,31]。DRAM 带宽按分区均分。                                       
+   
+  层次 3：SRAM——无硬件隔离，依赖软件约定                                                                                                                                               
+                  
+  SRAM（Scratchpad）没有硬件分区。TOGSimulator.ALLOC_POOL 是一个类级别（class-level）的全局字典（simulator.py:198）：                                                                  
+                  
+  class TOGSimulator():                                                                                                                                                                
+      ALLOC_POOL = dict()  # 类变量：所有实例共享！
+                                                                                                                                                                                       
+  所有分区的 SRAM 分配都写入同一个 ALLOC_POOL。不同租户的 SRAM 隔离依赖编译期分配时人为选取不重叠的地址区间——纯软件约定，无任何运行时检查。                                            
+                                                                                                                                                                                       
+  1.2 Conv Tiling 在多租户下的资源限制                                                                                                                                                 
+                  
+  当 num_partition=2 且每分区一个核心时，conv_combination_mapping 的 SRAM 约束参数为：                                                                                                 
+                  
+  # mlir_template.py:276-279                                                                                                                                                           
+  spad_size_per_lane = self.spad_info["spad_size"]     # 全量 128 KB/lane
+  spad_size = spad_size_per_lane * self.vector_lane      # 128 * 128KB = 16 MB（per-core）                                                                                             
+  max_spad_size = spad_size // 2                         # 8 MB（double-buffer 预留）                                                                                                  
+                                                                                                                                                                                       
+  关键发现：Tiling 约束使用的是单核全量 SRAM（spad_size_per_lane 来自 vpu_spad_size_kb_per_lane 字段），而不是"分区内 SRAM"。这意味着：                                                
+                                                                                                                                                                                       
+  - 每个核心独占其自身的全量 SRAM（16 MB），Tiling 不因其他租户的存在而减少 SRAM 预算                                                                                                  
+  - 多租户并发时，Core 0 的 SA 和 Core 1 的 SA 使用物理独立的 SRAM 模块
+  - 唯一的资源争用发生在共享的 DRAM 带宽上（ICNT → DRAM 路径）                                                                                                                         
+                                                                                                                                                                                       
+  Tiling 不会动态调整——它在编译期（torch.compile 触发时）就已固定，运行时无法响应其他租户的 SRAM 压力。                                                                                
+                                                                                                                                                                                       
+  1.3 SpMM 在多租户高负载下的空间申请                                                                                                                                                  
+                  
+  STONNE 后端（SparseCore）的 T_R/T_C/T_K 参数直接编码在 ONNX 的 stonne_node 属性中（onnx_utility.py:122-129），同样是编译期静态确定。SpMM                                             
+  的稀疏元数据（Bitmap、CSR）以字符串形式内嵌于 ONNX 属性，在 TileGraphParser 解析时直接传入 STONNE FSM，不占用主 SRAM 地址空间（STONNE 有自己独立的内存模拟）。
+                                                                                                                                                                                       
+  非对齐问题：SpMM 的 NNZ 分布不均匀，但 T_C 是静态的（按平均 NNZ 计算），实际执行中不存在动态调整——过密的行会造成计算时间超过 T_C 预算，但模拟器不会因此触发重新分块。                
+   
+  1.4 任务优先级与带宽仲裁                                                                                                                                                             
+                  
+  Python 侧的仲裁逻辑在 PyTorchSimRunner.launch_kernel（scheduler.py:249-262）：                                                                                                       
+   
+  def launch_kernel(self, current_cycle, partion_idx=0):                                                                                                                               
+      if self.partition_state[partion_idx] != self.PARTITION_IDLE:                                                                                                                     
+          return self.partition_state[partion_idx]   # 分区忙：直接返回，不抢占                                                                                                        
+      result = self.select_kernel(partion_idx)        # FIFO 或 RR 选核                                                                                                                
+      ...                                                                                                                                                                              
+      self.partition_state[partion_idx] = self.PARTITION_BUSY                                                                                                                          
+      return self.tog_simulator.launch(onnx_path, attribute_path, current_cycle, partion_idx)                                                                                          
+                                                                                                                                                                                       
+  Scheduler.run() 中的主调度循环（scheduler.py:479-497）：                                                                                                                             
+                                                                                                                                                                                       
+  def execute_cycle():                                                                                                                                                                 
+      for i in range(self.execution_engine.num_partion):                                                                                                                               
+          if self.execution_engine.partition_state[i] == PyTorchSimRunner.PARTITION_IDLE:                                                                                              
+              ret = self.execution_engine.launch_kernel(self.current_cycle, i)                                                                                                         
+                                                                                                                                                                                       
+      result_list = self.tog_simulator.until(self.msec_to_cycle(until_time))                                                                                                           
+                                                                                                                                                                                       
+      for core_idx in result_list:                                                                                                                                                     
+          # bitmap 解码：哪个分区完成了，就标记为 IDLE
+          self.execution_engine.partition_state[core_idx] = PyTorchSimRunner.PARTITION_IDLE                                                                                            
+                                                                                                                                                                                       
+  C++ 的 until() 返回 bitmap（Simulator.cc:173-218），Python 解码为完成的分区列表：                                                                                                    
+                                                                                                                                                                                       
+  # simulator.py:318-326                                                                                                                                                               
+  def until(self, until_cycle):
+      command = f"until {until_cycle}"                                                                                                                                                 
+      ret = self.send_command(command)
+      bitmap = int(ret.split(" ")[-1])                                                                                                                                                 
+      indices = []                                                                                                                                                                     
+      for i in range(64):
+          if (bitmap >> i) & 1:                                                                                                                                                        
+              indices.append(i)
+      return indices                                                                                                                                                                   
+                  
+  带宽仲裁结论：DRAM 和 ICNT 之间无优先级仲裁。SimpleInterconnect 和 Booksim2 均按先到先服务（FCFS）处理来自所有核心的请求。当 Core 0（Conv）和 Core 1（SpMM）同时有 DRAM 请求时，在   
+  Simulator::icnt_cycle() 中按 core_id 顺序遍历（line 115）：
+                                                                                                                                                                                       
+  for (int core_id = 0; core_id < _n_cores; core_id++) {
+      // Core 0 总是先被处理
+      if (_cores[core_id]->has_memory_request()) {                                                                                                                                     
+          if (!_icnt->is_full(port_id, front)) {
+              _icnt->push(port_id, get_dest_node(front), front);                                                                                                                       
+          }                                                                                                                                                                            
+      }                                                                                                                                                                                
+  }                                                                                                                                                                                    
+                  
+  这是一个隐式的静态优先级：core_id 较小的核心在竞争时获得先发优势。                                                                                                                   
+   
+  ---                                                                                                                                                                                  
+  二、端到端地址空间分配与层间接力
+                                                                                                                                                                                       
+  2.1 全局地址空间规划：PyTorch 物理地址直通
+                                                                                                                                                                                       
+  PyTorchSim 没有逻辑地址层——它直接使用 PyTorch 张量的物理内存地址（data_ptr()）。整个地址空间规划如下：                                                                               
+                                                                                                                                                                                       
+  ┌─────────────────────────────────────────────────────────┐                                                                                                                          
+  │           完整地址空间（Host OS 物理地址空间）             │                                                                                                                       
+  ├─────────────────┬───────────────────────────────────────┤                                                                                                                          
+  │  Partition 0    │  Partition 1                          │                                                                                                                          
+  │  (租户 A)       │  (租户 B)                             │                                                                                                                          
+  │                 │                                       │
+  │  arg0: 0x7F...0 │  arg0: 0x7F...A                      │                                                                                                                           
+  │  arg1: 0x7F...1 │  arg1: 0x7F...B                      │                                                                                                                           
+  │  arg2: 0x7F...2 │  arg2: 0x7F...C                      │                                                                                                                           
+  │                 │                                       │                                                                                                                          
+  │  sram: [0,8MB)  │  sram: [8MB, 16MB)   ← 软件约定      │
+  └─────────────────┴───────────────────────────────────────┘                                                                                                                          
+                  
+  create_attribute_file 直接写入物理地址（simulator.py:350-351）：                                                                                                                     
+                  
+  for idx, tensor in enumerate(inputs):                                                                                                                                                
+      address_info[f"arg{idx}"] = tensor.data_ptr()  # 原始物理地址
+                                                                                                                                                                                       
+  2.2 Producer-Consumer 层间接力                                                                                                                                                       
+                                                                                                                                                                                       
+  以 ResNet-50 为例，Layer N 的 OFM 直接成为 Layer N+1 的 IFM：                                                                                                                        
+                  
+  Layer N (Conv):                                                                                                                                                                      
+    MOVOUT → arg2 (data_ptr = 0x7FA0000000)  ← 写入目标
+                                                                                                                                                                                       
+  Layer N+1 (BatchNorm / Next Conv):
+    MOVIN  → arg0 (data_ptr = 0x7FA0000000)  ← 读取源（同一物理地址）                                                                                                                  
+                                                                                                                                                                                       
+  这在多租户环境下是安全的，因为：
+  1. 每个租户处理不同的请求（不同模型实例），其张量互不重叠                                                                                                                            
+  2. PyTorch 的内存分配器保证不同请求的张量地址不冲突（前提：无共享张量）                                                                                                              
+                                                                         
+  2.3 租户地址隔离：无地址转换器，仅靠物理地址分离                                                                                                                                     
+                                                                                                                                                                                       
+  用户问题提到的"地址转换器"不存在于本项目中。C++ 侧唯一的地址查找是 TileGraphParser::lookup()（TileGraphParser.cc:923-930）：                                                         
+                                                                                                                                                                                       
+  addr_type TileGraphParser::lookup(std::string key) {                                                                                                                                 
+      try {                                                                                                                                                                            
+          return _arg_to_address.at(key);       // 直接返回物理地址
+      } catch (const std::out_of_range& e) {                                                                                                                                           
+          _arg_to_address[key] = 0;
+          return 0;                             // 找不到则返回 0（警告但不崩溃）                                                                                                      
+      }                                                                                                                                                                                
+  }                                                                                                                                                                                    
+                                                                                                                                                                                       
+  这里没有越界检查、没有权限位、没有地址范围验证。如果两个租户编译出的 ONNX 使用了重叠的地址（例如 SRAM 分配冲突），会发生数据污染但不会有任何报错。                                   
+   
+  2.4 SRAM 空间回收：存根实现                                                                                                                                                          
+                  
+  Request.free_memory() 在 scheduler.py:89-91：                                                                                                                                        
+   
+  def free_memory(self):                                                                                                                                                               
+      """ Free memory resources that are allocated for handle this request """
+      return   # ← 空实现！                                                                                                                                                            
+   
+  TOGSimulator.sram_dealloc() 虽然存在（simulator.py:337-340）：                                                                                                                       
+                  
+  @classmethod                                                                                                                                                                         
+  def sram_dealloc(cls, buf_name, addr_range):
+      if buf_name in cls.ALLOC_POOL:                                                                                                                                                   
+          del cls.ALLOC_POOL[buf_name]
+                                                                                                                                                                                       
+  但没有任何调用点——在仿真代码中 grep sram_dealloc 除定义外不出现任何调用。
+
+  实际情况：ALLOC_POOL 是一个只增不减的全局字典。随着仿真运行，越来越多的 buf_name 会被添加进去，但从不被移除。这意味着：                                                              
+  - 不存在 SRAM 空间回收机制
+  - create_attribute_file 每次快照时会把所有历史分配记录都写入 JSON                                                                                                                    
+  - 这在长时间运行的多租户场景中会导致 sram_alloc JSON 字段持续增大
+                                                                                                                                                                                       
+  2.5 多租户并发时的 SRAM 数据布局                                                                                                                                                     
+                                                                                                                                                                                       
+  在当前架构下，两个租户的 SRAM 布局完全独立（因为物理上是不同的 Core 的 SRAM）：                                                                                                      
+                  
+  Core 0 SRAM (Partition 0 / Tenant A - Conv):                                                                                                                                         
+    [0,      8MB)  → 计算缓冲区（IFM/Weight/OFM）                                                                                                                                      
+    [8MB,   16MB)  → Double-buffer 影子区
+                                                                                                                                                                                       
+  Core 1 SRAM (Partition 1 / Tenant B - SpMM via STONNE):
+    STONNE 独立管理其内部 SRAM 模拟                                                                                                                                                    
+    主 SA SRAM 当前轮空                                                                                                                                                                
+                                                                                                                                                                                       
+  因此在单核/分区的情况下，不存在 SRAM 层面的跨租户干扰。                                                                                                                              
+                                                                                                                                                                                       
+  ---                                                                                                                                                                                  
+  三、Bank 排布与访存冲突仿真
+                                                                                                                                                                                       
+  3.1 DRAM Bank 映射算法                                                                                                                                                                               
+  Dram::get_channel_id() 的完整逻辑形成以下公式：                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              
+  channel_id = ipoly_hash(addr / req_size, 0, N_ch_per_part)                                                                                                                           
+             + (numa_id % N_part) * N_ch_per_part                                                                                                                                      
+                  
+  其中：                                                                                                                                                                               
+    N_ch_per_part = dram_channels / dram_num_partitions
+    N_part        = dram_num_partitions                                                                                                                                                
+    ipoly_hash    = 基于不可约多项式 x^16+x^12+x^3+x+1 的哈希函数                                                                                                                                                                                          
+   
+  对于 TPUv2 配置（32 channels，无分区）：                                                                                                                                             
+  单个 32B 请求序列的 channel 分配（字节地址 0, 32, 64, ...）：
+    addr=0:    ipoly(0,0,32)   → 约为 0                                                                                                                                                
+    addr=32:   ipoly(1,0,32)   → 约为 17                                                                                                                                               
+    addr=64:   ipoly(2,0,32)   → 约为 3                                                                                                                                                
+    ...（看似随机的 channel 序列，避免流水线 conflict）                                                                                                                                
+                                                                                                                                                                                       
+  3.2 Conv 的访存模式分析                                                                                                                                                              
+                                                                                                                                                                                       
+  Conv 的 DRAM 访问由 Instruction::get_dram_address() 生成（Instruction.cc:67），四重嵌套循环：                                                                                        
+                                                                                                                                                                                       
+  addr_type cur_addr = _dram_addr;                                                                                                                                                     
+  for (int i = 0; i < _tile_size[0]; i++) {
+    for (int j = 0; j < _tile_size[1]; j++) {                                                                                                                                          
+      for (int k = 0; k < _tile_size[2]; k++) {                                                                                                                                        
+        for (int l = 0; l < _tile_size[3]; l++) {                                                                                                                                      
+          addr_type addr = cur_addr + i*stride[0] + j*stride[1] + k*stride[2] + l*stride[3];                                                                                           
+          addr = _config.align_address(addr);  // 对齐到 req_size
+          addr_set.insert(addr);               // 去重：同一 cache line 只发一次请求
+        }                                                                                                                                                                              
+      }
+    }                                                                                                                                                                                  
+  }               
+                                                                                                                                                                                       
+  对于 Conv IFM（stride=[i_w×K×2, K×2, 2, 0]，K=16，i_w=6）：                                                                                                                          
+                                                                                                                                                                                       
+  - 连续 o_w 方向：步长 = stride_W × K × 2 = 2B，在 32B 请求内部，同一请求覆盖多个 w 位置（合并访问）                                                                                  
+  - k_h/k_w 跳跃：步长 = dilation × i_w × K × 2，可能跨越多个 cache line → 多个独立请求
+                                                                                                                                                                                       
+  多租户下的 Conv 干扰：当 Core 0（Conv）和 Core 1（另一个 Conv）同时访问不同分区的 DRAM 时，由于 NUMA 分区（各用 16 channels），理论上不存在 DRAM Bank                                
+  级别的干扰。但若使用单分区配置（dram_num_partitions=1），双核请求会竞争同一组 channels，通过 ICNT FIFO 排队，产生额外延迟。                                                          
+                                                                                                                                                                                       
+  3.3 SpMM 的随机访问恶化分析                                                                                                                                                          
+   
+  STONNE 后端的内存请求通过 SparseCore::registerMemfetch()（SparseCore.cc:417）生成：                                                                                                  
+                  
+  // 地址基于 CSR 非零索引，分布随机
+  // r_port_nr / w_port_nr 限制每周期请求数                                                                                                                                            
+                                                                                                                                                                                       
+  CSR 格式的列索引是任意的，对应的 DRAM 地址分布无规律，命中不同 bank 的概率均等。在多租户场景下：                                                                                     
+                                                                                                                                                                                       
+  - Conv（Core 0）：stride 访问 → ipoly 哈希后分布在特定的 channel 子集                                                                                                                
+  - SpMM（Core 1）：随机访问 → ipoly 哈希后均匀分布在所有 channels
+                                                                                                                                                                                       
+  若两者共享同一 DRAM 分区（dram_num_partitions=1），SpMM 的随机访问会与 Conv 的规律访问在 ICNT 层面发生竞争：                                                                         
+   
+  ICNT 排队等待情况：                                                                                                                                                                  
+    Core 0 队列: [Conv req_0, Conv req_1, Conv req_2, ...]  → 规律请求，每 N 周期 1 批
+    Core 1 队列: [SpMM req_j, SpMM req_k, ...]             → 突发随机请求                                                                                                              
+                                                                                                                                                                                       
+    ICNT 处理顺序（FCFS）：                                                                                                                                                            
+    Core 0 先（core_id=0），Core 1 后（core_id=1）                                                                                                                                     
+    → SpMM 的随机突发请求被延后服务 → stall cycles 增加                                                                                                                                
+                                                                                                                                                                                       
+  但模拟器不显式计算"因多租户干扰导致的额外 stall"——stall 已经通过 ICNT 队列满检测隐式建模：                                                                                           
+                                                                                                                                                                                       
+  // Simulator.cc:122                                                                                                                                                                  
+  if (!_icnt->is_full(port_id, front)) {                                                                                                                                               
+      _icnt->push(port_id, get_dest_node(front), front);
+      _cores[core_id]->pop_memory_request();                                                                                                                                           
+  } // else: 请求留在 Core 的 _request_queue，DMA stall                                                                                                                                
+                                                                                                                                                                                       
+  ICNT 满时，DMA 停止发送新请求，_stat_dma_idle_cycle 计数器递增，这就是"多租户冲突导致的 Stall"的实际体现形式。                                                                       
+                                                                                                                                                                                       
+  3.4 总周期数的量化模型   
+                                                                                                                                                                        
+  基于代码实现，实际的总周期计算逻辑如下： 
+  其中 core_cycle 是 _core_cycles（Simulator.cc:105），它在每次 core_cycle() 调用时递增，直到所有分区调度器为空（running() == false）。                                                
+                                                                                                                                                                                                                                                                                                                              
+  Cycles_total = Cycles_core_cycle
+               = max(Cycles_compute[p] for all p)   -- 计算主路径（取最慢分区）                                                                                                        
+               + DMA_idle_cycles                     -- DRAM 延迟 stall                                                                                                                
+               + ICNT_queuing_latency                -- 10 cycles/hop (Simple)                                                                                                         
+                                                        或 Booksim2 路由延迟                                                                                                           
+  多租户额外开销：                                                                                                                                                                     
+    delta_Cycles_MT = DMA_idle_cycle 增量   (ICNT 拥塞 -> DMA stall)
+                    + 0                     (无上下文切换，不存在切换代价)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+  
+                                                                                                                                                                                                    
+  对应统计量（Core.print_stats()，Core.cc:410-450）：                                                                                                                                  
+  // 以下三项共同构成总周期                                                                                                                                                            
+  spdlog::info("Core [{}]: SA utilization {:.2f}%", _id, sa_utilization);    // 计算占比
+  spdlog::info("Core [{}]: DMA active {}, DMA idle {}", _id,                                                                                                                           
+      _stat_tot_dma_cycle, _stat_tot_dma_idle_cycle);                        // 内存 stall
+  spdlog::info("Core [{}]: NUMA local {}, remote {}", _id,                                                                                                                             
+      _stat_numa_local_access, _stat_numa_remote_access);                    // 跨分区访问量                                                                                           
+                                                                                                                                                                                                                                                                                                                                                                    
+  对应的 Core.print_stats() 输出字段映射                                                                                                                                               
+                                                                                                                                                                                       
+  SA utilization (%)   <-- Cycles_compute[p] / Cycles_total * 100
+  DMA active_cycles    <-- 实际传输周期                                                                                                                                                
+  DMA idle_cycles      <-- delta_Cycles_MT 的主要来源                                                                                                                                  
+  NUMA remote requests <-- 跨分区带宽消耗量（间接反映跨租户干扰）                                                                                                                      
+  Total_cycles         <-- Cycles_total                                                                                                                                                                                     
+   
+  模拟器不单独统计"multi-tenant overhead"，_stat_numa_remote_access 是最接近跨分区干扰的量化指标。                                                                                     
+                  
+  ---                                                                                                                                                                                  
+  四、架构执行的多租户特殊机制
+                                                                                                                                                                                       
+  4.1 隔离与保护：无硬件防护，仅靠协议约定
+                                                                                                                                                                                       
+  本项目不存在任何形式的硬件防火墙或行级掩码。隔离靠以下软约定维持：                                                                                                                   
+   
+  ┌───────────┬─────────────────────────────────────────────────────────┬────────────────────┐                                                                                         
+  │  隔离层   │                          机制                           │        强度        │
+  ├───────────┼─────────────────────────────────────────────────────────┼────────────────────┤
+  │ 计算隔离  │ 每个 Core 物理独立，Core 0 的 SA 不会执行 Core 1 的指令 │ 强（物理隔离）     │
+  ├───────────┼─────────────────────────────────────────────────────────┼────────────────────┤
+  │ SRAM 隔离 │ 无机制，靠 ALLOC_POOL 中人为选择不重叠区间              │ 弱（软件约定）     │                                                                                         
+  ├───────────┼─────────────────────────────────────────────────────────┼────────────────────┤                                                                                         
+  │ DRAM 隔离 │ NUMA 通道分区（dram_num_partitions>1 时）               │ 中（通道级分离）   │                                                                                         
+  ├───────────┼─────────────────────────────────────────────────────────┼────────────────────┤                                                                                         
+  │ 地址隔离  │ PyTorch 分配器保证 data_ptr() 不重叠                    │ 弱（无运行时检查） │
+  └───────────┴─────────────────────────────────────────────────────────┴────────────────────┘                                                                                         
+                  
+  DMA Tag Table 是每个 TileSubGraph 独立的（以 subgraph_id 为键），提供了指令级的同步隔离——一个 TileGraph 的 BAR 只能等待自己的 MOVIN 完成，不会误等其他租户的                         
+  DMA。这是最精确的隔离机制。
+                                                                                                                                                                                       
+  4.2 上下文切换：不支持，一次性运行到完成                                                                                                                                             
+   
+  PyTorchSim 的调度模型是运行至完成（Run-to-Completion），没有时间片切换：                                                                                                             
+                  
+  # scheduler.py:249-262                                                                                                                                                               
+  def launch_kernel(self, current_cycle, partion_idx=0):
+      if self.partition_state[partion_idx] != self.PARTITION_IDLE:
+          return self.partition_state[partion_idx]   # 已忙：不切换，直接返回
+      ...
+      self.partition_state[partion_idx] = self.PARTITION_BUSY  # 一旦启动，运行到完成
+                                                                                                                                                                                       
+  切换代价 = 0（因为不发生切换）。
+                                                                                                                                                                                       
+  对应地，C++ 侧的 Scheduler（非 Python 的）持有 TileGraph 队列，通过 until() 的 bitmap 返回值通知 Python 侧哪个分区完成，触发下一个任务的加载。"切换"发生在 Layer 粒度：Layer N       
+  完成后，Python 立即 launch Layer N+1，中间没有 C++ 侧的状态保存与恢复。
+                                                                                                                                                                                       
+  SA 的 FSM 状态（_sa_compute_pipeline 队列）在 Layer 结束时自然清空，Layer N+1 从零开始填充。没有寄存器存档/恢复机制。                                                                
+   
+  4.3 服务质量（QoS）建模：部分支持                                                                                                                                                    
+                  
+  有明确的量化指标：                                                                                                                                                                   
+                  
+  # scheduler.py:426-429
+  turnaround_time, response_time, tbt_time = req.get_latency()
+  print(f"[Request-{req.id} finished] partition: {req.request_queue_idx} "                                                                                                             
+        f"arrival_time: {req.arrival_time} start_time: {req.start_time[0]} "                                                                                                           
+        f"turnaround latency: {turnaround_time}, "                                                                                                                                     
+        f"response time: {response_time} tbt_time: {tbt_time}")                                                                                                                        
+                  
+  - turnaround_time = finish_time - arrival_time：端到端延迟                                                                                                                           
+  - response_time = start_time - arrival_time：排队等待延迟（QoS 公平性核心指标）
+  - tbt_time（Token-by-Token）：层级延迟列表，用于 LLM 推理场景的 TPOT 建模                                                                                                            
+                                                                                                                                                                                       
+  无明确的公平性（Fairness）指标：模拟器不计算 Jain's Fairness Index 或最大最小公平性，只能通过比较不同分区的 response_time 来判断公平性。                                             
+                                                                                                                                                                                       
+  SpMM 对 Conv 的性能抖动：当 SpMM（Core 1）产生大量随机 DRAM 请求时，ICNT 拥塞将导致 Conv（Core 0）的 DMA stall 增加：                                                                
+                  
+  仿真前：Conv  DMA_idle = 1000 cycles，SA utilization = 90%                                                                                                                           
+  引入SpMM后：Conv DMA_idle = 3000 cycles（ICNT 拥塞 3×），SA utilization = 75%                                                                                                        
+                                                                                                                                                                                       
+  这种抖动在 print_current_stats()（Core.cc:453-470）的周期性输出中可见——Core 0 的 DRAM BW 和 DMA idle 会在 SpMM 激活期间出现突变。但模拟器不自动检测或报告这种抖动，需要离线分析日志。
+                                                                                                                                                                                       
+  ---                                                                                                                                                                                  
+  五、架构评价：真实度评估
+                                                                                                                                                                                       
+  5.1 高保真度的部分
+                                                                                                                                                                                       
+  ┌─────────────────┬────────┬────────────────────────────────────────────────────┐
+  │      机制       │ 真实度 │                        评价                        │
+  ├─────────────────┼────────┼────────────────────────────────────────────────────┤
+  │ DRAM NUMA 分区  │ ★★★★☆  │ ipoly 哈希 + 通道偏移，符合实际 HBM2 分区设计      │
+  ├─────────────────┼────────┼────────────────────────────────────────────────────┤
+  │ ICNT 竞争建模   │ ★★★★☆  │ FCFS + 固定延迟，Booksim2 选项支持精确路由模拟     │                                                                                                    
+  ├─────────────────┼────────┼────────────────────────────────────────────────────┤
+  │ DMA stall 统计  │ ★★★★★  │ 精确计数每 cycle 的 DMA 空闲，是干扰量化的关键指标 │                                                                                                    
+  ├─────────────────┼────────┼────────────────────────────────────────────────────┤                                                                                                    
+  │ NUMA 访问计数   │ ★★★★☆  │ local/remote 分别计数，反映跨分区带宽消耗          │
+  ├─────────────────┼────────┼────────────────────────────────────────────────────┤                                                                                                    
+  │ Tile 级零跳跳过 │ ★★★★★  │ DMA Tag Table 的 -1 机制真实建模了结构化稀疏加速   │
+  └─────────────────┴────────┴────────────────────────────────────────────────────┘                                                                                                    
+                  
+  5.2 低保真度的部分                                                                                                                                                                   
+                  
+  ┌──────────────────┬──────┬─────────────────────────────────────────────────────────────┐
+  │       缺陷       │ 影响 │                            说明                             │
+  ├──────────────────┼──────┼─────────────────────────────────────────────────────────────┤
+  │ SRAM 无硬件隔离  │ 高   │ 实际硬件会有 SRAM 分区寄存器，模拟器完全缺失                │
+  ├──────────────────┼──────┼─────────────────────────────────────────────────────────────┤
+  │ 无带宽仲裁       │ 高   │ 实际 NPU 有 QoS 仲裁（如 ARM NI-700 的 QoS 优先级），此处无 │                                                                                            
+  ├──────────────────┼──────┼─────────────────────────────────────────────────────────────┤                                                                                            
+  │ 无上下文切换     │ 中   │ 对 Layer 粒度仿真足够，对指令粒度抢占无法建模               │                                                                                            
+  ├──────────────────┼──────┼─────────────────────────────────────────────────────────────┤                                                                                            
+  │ SRAM 不回收      │ 中   │ ALLOC_POOL 只增不减，长时运行会有逻辑漏洞                   │
+  ├──────────────────┼──────┼─────────────────────────────────────────────────────────────┤                                                                                            
+  │ 无地址权限检查   │ 高   │ 错误的 ONNX 属性可让一个租户访问另一租户地址                │
+  ├──────────────────┼──────┼─────────────────────────────────────────────────────────────┤                                                                                            
+  │ Conv Tiling 静态 │ 低   │ 编译期固定，实际运行时无法根据 SRAM 压力调整                │
+  └──────────────────┴──────┴─────────────────────────────────────────────────────────────┘                                                                                            
+                  
+  5.3 综合评价                                                                                                                                                                         
+                  
+  PyTorchSim 的多租户框架本质上是一个粗粒度、编译时分区、运行时无仲裁的模型。它适合：                                                                                                  
+   
+  - 研究场景：分析不同 DNN 算子（Conv/SpMM）在共享 DRAM 带宽下的干扰程度                                                                                                               
+  - 有限的多租户研究：2-4 个物理隔离核心的简单场景
+                                                                                                                                                                                       
+  它不适合：                                                                                                                                                                           
+  - 细粒度资源共享研究：GPU 风格的 SM 多路复用、SRAM bank 时分共享
+  - 安全关键场景：无地址隔离保证，无法防止错误配置导致的数据污染                                                                                                                       
+  - 动态负载均衡：Tiling 和分区都是静态的，无法响应运行时工作负载变化
+                                                                                                                                                                                       
+  这是一个学术研究级的模拟器，在 DRAM 带宽分区和 ICNT 竞争建模方面具有较高可信度，但在资源隔离和 QoS 建模方面与实际工业级 NPU（如 Google TPU、NVIDIA H100 MIG）存在显著差距。          
+                                                                                                                                                                                    
+```

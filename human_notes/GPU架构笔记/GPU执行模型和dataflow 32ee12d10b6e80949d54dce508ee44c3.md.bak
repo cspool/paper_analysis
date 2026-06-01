@@ -1,0 +1,143 @@
+# GPU执行模型和dataflow
+
+## 负载&Ctx、资源划分
+
+GPU资源可以按空间划分（SS）、时间划分（TS）。负载定义了执行所需的资源和其目标状态。
+
+线程（模型）是逻辑上的负载，Ctx是逻辑负载实际执行的环境/资源（指令、数据、存储、隔离）。
+
+### GPU资源的调度和管理
+
+GPU提供给OS卸载device程序的运行环境称为VM Ctx（视为OS管理的处理器），CPU侧进程干涉GPU（DMA、抢占等）是对VM Ctx产生影响。GPU作为vGPU，分时切换VM Ctx，轮流服务不同guest。
+
+多个应用共享VM Ctx进行并发时（MPS），任一应用干涉GPU而对VM Ctx产生影响，可能干扰到其他应用（一起被抢占，内存恶意修改）。
+
+GPU划分为多个MIG，每个MIG为一个guest （可以相同）卸载device程序提供独立的VM Ctx，对不同VM Ctx的影响互不干扰。MIG超卖成vGPU（云计算）。
+
+每个SysPipe中的channels管理一个应用或MPS定义的Streams，MIG或GPU按照SysPipe物理划分成若干个SMC Engines，不同SME分别独立管理不同应用或MPS定义的任务。SMC Engines执行MPS时，”同时管理多应用的上下文“。
+
+SME接受runlist作为逻辑负载，分时执行TSG，每个TSG定义SME中channels要管理的Stream。
+
+### 资源分层
+
+vGPU/VM
+
+内存（partition）、GPC（SM）、SysPipe。
+
+SME
+
+SysPipe中的TMU（channels）、WDU（task2CTA）。
+
+GPC：GPC内pipeline manager、SM array Ctrl（MPCs）、SM array、DSMEM NoC、L1.5-Cache。
+
+SM
+
+SIMD Lanes：SMEM/L1D、SIMD Cores、RF Banks、Dispatcher（Cores、OC）、Scheduler（SB、Barrier）、I-Cache（L0&L1I）。
+
+内存
+
+L2-Cache、内存控制器、VRAM partition。
+
+### 负载在GPU的运行
+
+逻辑上负载有VM（vGPU）、应用、线程。
+
+架构的负载执行模型是调度粒度，有任务TMD、CTA、warp。
+
+GPU中按内存划分出MIG，不同MIG运行不同VM，VM或vGPU独占MIG的内存。
+
+MIG中按SysPipe划分出SME，不同SME运行不同TSG，TSG独占TMU中channels。MIG中逻辑划分一些GPC
+
+TSG中不同Stream占用不同channel（task group）管理，不同channel的TMD按优先级并发调度到WDU中task pool。
+
+WDU解析task pool中TMD（grid/queue），并将任务按CTA阵列/队列逐渐派发到GPC/SM。
+
+SM并发多个CTA，按warp派发到SIMD Cores执行指令，每个线程有独立寄存器Ctx，共享SMEM。
+
+**MIG的执行时间**划分时间片，每个时间片分配给1个VM，多个VM**共享memory partition**。
+
+**SME的执行时间**划分时间片，每个时间片分配给1个channel，1个runlist**独占**1个SME。
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2040.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2041.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2042.png)
+
+**并发的上下文Ctx切换，Ctx范围是如何界定的？？？**
+
+本质上，CUDA指令定义了数据在GPU架构上的操作，传输和计算等。
+
+不同负载Ctx，都是负载定义的任务和需要独占的资源（并行或并发）。
+
+## PagedAttn
+
+[https://zhuanlan.zhihu.com/p/681018057](https://zhuanlan.zhihu.com/p/681018057)
+
+### 想法
+
+KV Cache按token长度划分为KV Block存储，提高VRAM利用率。
+
+![image.png](GPU%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B%E5%92%8Cdataflow/image.png)
+
+![image.png](GPU%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B%E5%92%8Cdataflow/image%201.png)
+
+设计抢占支持多请求推理，分为Swap和reCompute。
+
+不同于GPU原生的抢占（channel），多请求抢占本质是不同输入，但pipeline相同。
+
+Swap将被抢占请求的部分block从VRAM驱逐到CPU内存，释放空间。
+
+reCompute直接放弃被抢占请求的部分block，恢复时重新计算。
+
+并行采样中不同Sample的Log-block共享Phy-block和COW，束搜索过程的prefix和system prompt共享Log-block，动态释放Log-block。
+
+Phy-block和Log-block都是虚拟地址索引，Phy-block指向分配的物理页，Log-block指向Phy-block来进行共享，当出现分歧时动态分配新的Phy-block（COW），并被Log-Block指向。
+
+动态分配和释放的物理页应该是预先分配足够大的虚拟空间（很多物理页），在运行时分配指针，这样不需要实际改变GPU页表和Cache（动态malloc开销），而只需要改变指针指向即可。
+
+![image.png](GPU%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B%E5%92%8Cdataflow/image%202.png)
+
+![image.png](GPU%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B%E5%92%8Cdataflow/image%203.png)
+
+![image.png](GPU%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B%E5%92%8Cdataflow/image%204.png)
+
+## GPU的性能、dataflow增加通用
+
+GPU的基本并行单元（Core）是SM，将应用（pipeline）的每个任务grid按照CTA调度派发到SM。
+
+SIMT提供同步接口来管理分支和数据依赖（dataflow），按SIMD指令执行，架构是SIMD Lanes。
+
+block按warp发射执行， 不同warp交错发射，是传输和计算的overlap（schedule）。
+
+grid是block阵列，block调度到SM执行，每个block定义所需的RF和SMEM资源（Tile）。
+
+混合batch是打包不同负载输入，共用一个grid，但有不同资源倾向的block。GPU将传输、存储、计算打包成SM，调度和执行block，但block可能浪费SM计算或传输资源，因为不能把恰当配比的block派发到SM。
+
+LC+BE是切换应用，抢占GPU/MIG的channel，及时抢占BE应用来释放资源，及时启动LC应用。
+
+架构支持指令集，SM/Core管理子任务/分块的执行，任务分成多块调度到Core执行。
+
+GPU的SIMD指令集，支持线程编程模型的通用性，SM设计SIMD pipeline执行SIMD指令。
+
+TC支持粗粒度计算指令，绑定若干线程，执行MMA的pipeline。
+
+TMA支持粗粒度传输指令，绑定若干线程，执行TC加载的pipeline。
+
+将SM的SIMD pipeline改为ReCfg dataflow Core，多个Core组成更大的ReCfg网络。整合内存访问和数据计算为数据流。
+
+SIMD pipeline和dataflow SA的区别是？指令序列 vs 粗粒度指令。SM指令控制SIMD Lanes的行为，但SA的每个cell设置指令控制cell行为。
+
+SIMD指令按序执行，线程内/不同线程的计算和传输指令交错。数据流则等效将传输合并，计算合并，因此只存在粗粒度控制。
+
+ReCfg dataflow是为了复用资源执行不同运算。多任务灵活占用不同cell，相比单任务，需要修改什么架构？
+
+能否将数据和操作组织成dataflow和opflow提前静态编译后同步输入和执行（SA内的带宽相对宽裕，因为共享用户少？），而非指令数据分离而Migration需要路由Ctx数据。
+
+什么多任务？DiT多请求的GEMM和Conv？
+
+im2col和ld控制的优势是独立硬件模块，脱离于指令SIMD的pipeline，形成异步。
+
+面向应用的资源使用率，带宽、存储、计算资源的比例一般固定，但任务运行有不同比例的资源需求特征，对此，SIMD和dataflow/Spatial有和区别？TurboQuant算法层面达到量化的精度极限（信息熵定义）。
+
+prefetch、pagefault、uvm是多卡统一内存引入的问题，dataflow能否解决多卡统一内存动机，成为另一种思路？或者一致性的其他解法。

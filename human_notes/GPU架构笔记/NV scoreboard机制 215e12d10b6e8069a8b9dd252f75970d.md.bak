@@ -1,0 +1,101 @@
+# NV scoreboard机制
+
+ref:[TRACKING REGISTER USAGE DURING MULTTHREADED PROCESSING USING A SCOREBOARD HAVING SEPARATE MEMORY REGIONS AND STORING SEQUENTIAL REGISTER SIZE INDICATORS]
+
+**本专利中关于指令目标寄存器记录在scoreboard的时机是在发射后,并且发射后不会给I-Buffer中同线程的后序指令补充依赖,可能存在数据冒险.因为指令发射后去获取操作数后执行,该过程不保证按照发射顺序执行,所以发射后指令会乱序执行,遗漏指令依赖会导致数据冒险.**
+
+**理论上应该在指令进入I-Buffer前就将其目标寄存器记录在scoreboard中,因为I-Buffer中指令已经在等待mask归0后发射(乱序执行),所以后序指令应该和I-Buffer中同线程的指令检测依赖.**
+
+## fetch和issue过程
+
+**SM主要包含取指和发射的dispatch、操作数存储的GRF和执行算术、访存指令的不同pipeline.**
+
+FIG. 2 illustrates one of the processing units 124 in additional detail. The processing unit illustrated in FIG. 2, referenced herein as 200, is representative of any one of the processing units 124 shown in FIG. 1. The processing unit 200 includes an instruction dispatch unit 212 for issuing an instruction to be executed by the processing unit 200, a register file 214 that stores the operands used in executing the instruction, and a pair of execution pipelines 222, 224. The first execution pipeline 222 is configured to carry out math operations, and the second execution pipeline 224 is configured to carry out memory access operations. In general, the latency of instructions executed in the second execution pipeline 224 is much higher than the latency of instructions executed in the first execution pipeline 222. When the instruction dispatch unit 212 issues an instruction, the instruction dispatch unit 212 sends pipeline configuration signals to one of the two execution pipelines 222, 224. If the instruction is of the math type, the pipeline configuration signals are sent to the first execution pipeline 222. If the instruction is of the memory access type, the pipeline configuration signals are sent to the second execution pipeline 224. The execution results of the two execution pipelines 222, 224 are written back into the register file 214.
+
+**dispatch中I-buffer中有24个栏目slot,缓存24个不同warp/线程的指令序列,每个栏目容纳2条指令;**
+
+**每条指令包含1个6bit的mask表示该指令是否依赖线程内前序指令的结果.**
+
+**当I-buffer中存在空白栏目,则fetch单元调度1个warp并根据其nPC从I-cache中取指.**
+
+**指令被fetch后,经过译码和ScoreBoard处理,得到译码信息(warp/线程信息、branch等)和数据依赖mask后一并缓存在I-Buffer.**
+
+**ScoreBoard处理将指令的源寄存器编号、目标寄存器编号和ScoreBoard中记录的执行中指令的目标寄存器编号比较,得到指令的依赖情况mask.**
+
+**指令缓存在I-Buffer前,将其目标寄存器记录在ScoreBoard中,因为在以后fetch的指令视角中该指令是前序执行的,即便尚未发射也需要对其检测依赖.**
+
+FIG. 3 is a functional block diagram of the instruction dispatch unit 212 of the instruction processing section 200. The instruction dispatch unit 212 includes an instruction buffer 310 with a plurality of slots. The number of slots in this exemplary embodiment is 24 and each slot can hold up to two instructions and a multi-bit dependency mask for each of the instructions. The multi-bit dependency mask for an instruction provides an indication as to whether the instruction needs to use (depends on) a register that is currently busy. If any one of the slots has a space for another instruction, a fetch 312 is made from memory into an instruction cache 314. After the fetch 312, the instruction undergoes a decode 316 and scoreboard processing 321. During the scoreboard processing 321, register identifiers (IDs) of source and destination registers specified in the instruction are compared with the register IDs stored in a scoreboard memory 322, and a multi-bit value that represents the aggregate comparison result is generated as an output. This output is added to the instruction buffer 310 as the multi-bit dependency mask along with the instruction. In addition, the register ID of the destination register specified in the instruction is added to the scoreboard memory 322. Additional details of scoreboard processing 321 are provided below with reference to FIG. 7.
+
+**dispatch单元中的issue单元检查I-Buffer中指令是否依赖执行中(in flights)的指令(mask≠0),并将无依赖的指令发射到GRF获取操作数后执行.**
+
+**发射前会检测ScoreBoard中该线程/warp的分区是否存在空位来记录发射指令的目标寄存器,若存在空位则发射并在ScoreBoard中记录目标寄存器(???应该在指令进入I-Buffer前就在ScoreBoard中记录其目标寄存器???),否则说明当前线程达到设定的ILP上限,等待出现空位后发射.**
+
+The instruction dispatch unit 212 further includes an issue logic 320. The issue logic 320 examines the instructions and their multi-bit dependency masks stored in the instruction buffer 310 and issues an instruction out of the instruction buffer 310 that is not dependent on any of the instructions in flight (e.g., an instruction having a dependency mask equal to zero), provided that there is available memory space in the scoreboard memory 322 to store the register ID of a destination register specified in the instruction. If not, the issue logic 320 does not issue the instruction until memory space in the scoreboard memory 322 becomes available. In conjunction with the issuance out of the instruction buffer 310, the issue logic 320 sends pipeline configuration signals to the appropriate execution pipeline.
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%201.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%202.png)
+
+## **scoreboard单元**
+
+**scoreboard有I-Buffer一致的24个栏目,每个栏目记录不同线程/warp中执行中指令的目标寄存器.每个栏目包含6项,每项表示1个执行中指令的目标寄存器(编号,大小).**
+
+FIG. 4 is a conceptual diagram showing the contents of a scoreboard memory 322. The scoreboard memory is divided into M regions, where M is equal to the number of slots in the instruction buffer 310. Each of the M regions is allocated to a different thread and indexed in accordance with that thread's ID, and has six storage areas. Each of the six storage areas has a space for storing a register ID 410 and a space for storing a size indicator 420. The scoreboard memory 322 may be configured to reserve more than six, or less than six, storage areas per thread. If the scoreboard memory 322 is configured with an insufficient number of storage areas per thread, instructions will often have to wait for one of the storage areas to clear before being issued, thus creating a bottleneck at the instruction issuing stage. If the scoreboard memory 322 is configured with too many storage areas per thread, some of the storage areas will often remain unused, thus wasting valuable memory resources.
+
+**scoreboard的每个栏目设置执行的warp/线程编号,每个栏目记录不同warp/线程中发射并执行指令的目标寄存器.**
+
+**每个指令发射后将目标寄存器(编号,大小)记录在scoreboard中对应线程/warp的栏目中.(???应该在指令进入I-Buffer前就在ScoreBoard中记录其目标寄存器???)**
+
+**指令执行完成/写回后,将其在scoreboard中的栏目清除.**
+
+FIG. 5 is a flow diagram that illustrates the steps carried out by a processing unit 124 to track register usage by multiple threads. In step 510, each of the M regions of the scoreboard memory 322 is allocated to a different thread and indexed in accordance with that thread's ID. Thereafter, instructions for the different thread groups are issued and executed (step 512). As each instruction is issued, the register ID of the destination register specified in the issued instruction is stored in the region of the scoreboard memory 322 that has been allocated to the issued instruction's thread (step 514). If there are more than one destination registers specified in the issued instruction, the register ID of the first destination register specified in the issued instruction is stored in the region of the scoreboard memory 322 that has been allocated to the issued instruction's thread. The register ID is stored in the next empty storage area in that region along with a size value indicative of the number of destination registers specified in the issued instruction. In step 516, as each issued instruction completes its execution, the storage area used for that instruction is cleared.
+
+**目标寄存器(编号,大小)的存储格式能处理多目标寄存器的指令,比如texture fetch.**
+
+By storing the size indicator in the scoreboard memory 322, an instruction such as a texture fetch instruction which often specifies a sequential string of registers (e.g., R0, R1, R2, R3) can be represented in the scoreboard memory 322 with a single register entry (e.g., R0) and a size indicator (e.g., 4). Thus, instead of having four storage spaces allocated to a thread being consumed by registers specified in a single instruction, only one storage space is consumed. The present invention may, however, be practiced without storing the size indicator. In such an embodiment, all register IDs stored in the scoreboard memory 322 will be representative of a single register.
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%203.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%204.png)
+
+**为了检测指令的依赖情况,对scoreboard中指令所在线程/warp栏目中每个项(in flights指令的目标寄存器),和指令的源寄存器、目标寄存器进行比较;**
+
+**若scoreboard对应栏目中某项的目标寄存器和指令寄存器任一项相等,则说明指令和该项的目标寄存器存在依赖,将mask的对应位置1.**
+
+FIG. 6 is a conceptual diagram showing the scoreboard memory 322 as an input of comparison units 610. A comparison unit 610 is provided for each of the six storage areas allocated to a memory region and is supplied a register ID and size indicator from the corresponding storage area. The memory region from which the register IDs and size indicators are supplied to the comparison units 610 is the memory region allocated to the thread of **the instruction that is undergoing the scoreboard processing 321.** The other inputs to the comparison units 610 are the register IDs of source and destination registers specified in the instruction. The output 620 of the comparison units 610 is a multi-bit (in this example, 6-bit) value. This multi-bit value is also known and referred to herein as a dependency mask. Each bit of the multi-bit value corresponds to an output of one of the comparison units 610.
+
+**指令译码后进行scoreboard处理来检测依赖,输出依赖mask和指令一起存在I-Buffer.**
+
+FIG. 7 is a flow diagram that illustrates the steps carried out during the scoreboard processing 321 after an instruction is decoded. In step 710, the region of the scoreboard memory 322 that has been allocated to the instruction's thread is accessed and the register IDs and their corresponding size indicators stored in this region are retrieved. Then, a separate comparison is made for each of these register IDs with the register IDs of the source and destination registers specified in the instruction (step 712). In step 714, a 6-bit dependency mask is generated from the comparisons carried out in step 712. For each of the comparisons, if there is a match of the register ID stored in the scoreboard memory 322 with any of the register IDs of the source and destination registers specified in the instruction, an output having a bit value of 1 is generated. If there is no match of the register ID stored in the scoreboard memory 322 with any of the register IDs of the source and destination registers specified in the instruction, an output having a bit value of 0 is generated. In step 716, the set of six single-bit outputs from the comparisons carried out in 712 is stored in the instruction buffer 310 with the instruction.
+
+**scoreboard中每项中目标寄存器的存储格式是{编号,大小},即低有效位表示大小,剩余位表示编号.**
+
+During the comparisons in step 712, if the size indicator corresponding to a register ID stored in the scoreboard memory 322 is equal to 2, the least significant bit of the register IDs being compared is masked and not compared. If the size indicator is equal to 4, the two least significant bits of the register IDs being compared are masked and not compared. If the size indicator is equal to 1, a normal comparison is made, i.e., there is no masking of the bits and all of the bits of the register IDs being compared are compared.
+
+When performing the comparisons described above, 0, 1, or 2 least significant bits of the single register entry are masked in accordance with the size indicator and not compared. If the size indicator is 1, no bits are masked. If the size indicator is 2, one bit is masked. If the size indicator is 4, two bits are masked. As a result, a comparison of a single register entry R0 with a size indicator of 4 (e.g., 00000XX, where X represents the masked bits) against any of the registers R0 (0000000), R1 (0000001), R2 (0000010), R3 (0000011) will indicate a match. For this technique to work correctly, however, instructions that specify a sequential string of destination registers are required to begin their sequence at multiples of 4 starting with R0 (e.g., R0, R4, R8, etc.). For further improvement, a texture fetch instruction may be required to specify a single sequence of registers as both source and destination registers.
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%205.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%206.png)
+
+**scoreboard单元中需要设置6个比较单元,来比较fetch的指令是否依赖其对应的线程/warp中每项记录的寄存器(对应in flights的指令).**
+
+FIG. 8 is a block diagram of one of the comparison units 610 shown in FIG. 6 using which step 712 of the flow diagram in FIG. 7 is carried out. The comparison unit 610 compares register IDs of source and destination registers specified in an instruction (labeled in FIG. 8 as Register ID Nos. 1-4) with a register ID stored in one of the storage areas allocated for the instruction's thread in the scoreboard memory 322. A bank of comparators 810 is provided to perform the comparison. If there is a match, the comparator 810 outputs a 1 value. If there is no match, the comparator 810 outputs a 0 value. The outputs of the comparators 810 are supplied to an OR gate 820 which outputs an aggregate OR result as the comparison result. A comparison result of 0 indicates there are no matches. A comparison result of 1 indicates there is at least one match.
+
+## 指令发射进入GRF
+
+**当I-Buffer中存储的指令没有依赖(mask全0),并且指令对应线程在scoreboard的栏目中有空闲项(容纳发射指令的目标寄存器),指令可以发射.**
+
+**指令发射后,将其目标寄存器保存在其对应线程在scoreboard的栏目中的空闲项里.**
+
+**指令执行完成并写回后,清除其在scoreboard的栏目中的对应项(假设编号为x)的目标寄存器,并且将I-Buffer中其所在线程的栏目中指令的mask的对应位(第x位)置0.**
+
+FIG. 9 is a flow diagram that illustrates the steps carried out to update the scoreboard memory when an instruction is issued out of the instruction buffer and executed. In step 910, an instruction is issued out of the instruction buffer if: (i) the 6-bit dependency mask stored with the instruction has a zero value; and (ii) there is an available storage area in the region of the scoreboard memory 322 allocated to this instruction's thread. When the instruction is issued, the scoreboard memory 322 is updated by storing the register ID of the destination register specified in the issued instruction in the available storage area in the region of the scoreboard memory 322 allocated to this instruction's thread (step 912). If there are more than one destination registers specified in the issued instruction, the register ID of the first destination register specified in the issued instruction is stored in the available storage area in the region of the scoreboard memory 322 allocated to this instruction's thread. A size value indicative of the number of destination registers specified in the issued instruction is stored with the register ID. The issued instruction is then executed in one of the execution pipelines 222, 224, and when its execution completes (step 914), the scoreboard memory 322 is updated again (step 916). This time, the data stored in connection with step 912 are cleared from the scoreboard memory 322. **Also, in step 918, the dependency masks stored in the instruction buffer 310 with the instructions to be issued are updated to reflect the change in the scoreboard memory 322.** For example, if the third slot in Thread T0's region is cleared, then all of the instructions belonging to Thread T0 and stored in the instruction buffer 310 will have the third bits of their corresponding dependency masks set to zero.
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%207.png)
+
+![image.png](NV%20GPU%E4%B8%93%E5%88%A9/image%208.png)
+
+**上述线程可以是指线程组/warp,每个线程组/warp按照warp编号进行指令调度和发射,以SIMD方式执行.**
+
+For simplicity of illustration, a thread as used in the above description of the embodiments of the present invention represents a single thread of instructions. The present invention is also applicable to embodiments where like threads are grouped together and the same instruction from this group, also referred to as a convoy, is processed through multiple parallel data paths using a single instruction, multiple data (SIMD) processor.

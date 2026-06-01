@@ -1,0 +1,355 @@
+# GPU的抢占Preemption和Timeslice（WFI/drain、switch）
+
+# Program Execution And Preemption
+
+ref：SOFTWARE-ASSISTED INSTRUCTION LEVEL, EXECUTION PREEMPTION
+
+### 总结
+
+[https://developer.nvidia.com/docs/drive/drive-os/7.0.3/public/drive-os-linux-sdk/embedded-software-components/embedded_software_components.html](https://developer.nvidia.com/docs/drive/drive-os/7.0.3/public/drive-os-linux-sdk/embedded-software-components/embedded_software_components.html)
+
+wait-for-idle抢占的time-slicing（**短时高优先级进程设置wait-for-idle禁止抢占**）：等待pipeline空闲，之后切换其他应用，要求pipeline能快速drain，不适合长延迟应用。
+
+stall-switch抢占的time-slicing（CTA-level和instr-level）：阻塞不同深度的任务发射，保存不同深度的Ctx，切换新Ctx。
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%201.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2029.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2030.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2026.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2031.png)
+
+**并发的上下文Ctx切换**
+
+上下文Ctx是channel中任务在GPU分配资源上的运行时镜像。
+
+不同channel按照时间片TS轮流执行，需要切换不同的channel Ctx。
+
+stream并发是channel Ctx内同时派发不同Stream的CTA，不用切换channel Ctx。
+
+SM内的warp并发，不用切换channel Ctx，并且SM内并发warp的Ctx同时存在，不用切换。
+
+**旧channel到达timeslice，新channel抢占GPU过程**
+
+1、GPU驱动提前在显存VRAM分配**Ctx buffer**空间。
+
+2、主机接口从Runlist中选择新channel，**抢占**旧channel的Ctx占据的资源，**前端和各层trap handler控制**抢占过程。
+
+3、**GPU停止**context处理、**保存**context到内存、**重置**Engine/SM、**加载**上下文、**恢复**任务启动。
+
+4、GPU完成抢占后，前端向主机接口发送**ACK**，让主机接口切换新channel执行。
+
+stall & switch**抢占的原理**
+
+暂停不同深度层次上（TMU和GPC、SM）上的任务调度和资源分配（CTA或warp）。
+
+等待对应深度上资源空闲，即TMU和GPC已调度CTA或SM已发射指令完成后释放资源。
+
+“暂停-等待空闲”是因为**GPU高并发，不能追踪和控制特定任务，以资源为handler**，等待资源上任务完成，或者放弃任务。
+
+资源空闲后，保存旧Ctx，加载新Ctx并且开始执行。
+
+**硬件控制的CTA level或者指令level抢占**
+
+**停止**context处理的行为
+
+1、前端停止接收host卸载的任务、发出preemption信号。
+
+2、各层scheduler收到preemption后停止调度任务，各层scheduler执行**trap handler**程序。
+
+CTA level：前端停止为GPC和SM调度任务，尝试**等待GPC内CTA释放**（drain），**timer**超时后转为指令level抢占。
+
+指令level：SM停止调度warp，**等待访存指令和其他已发射指令完成（drain）**。
+
+等待资源idle而不打断的场合：中断和错误处理过程、快速的图形任务（属于WFI）。
+
+3、前端等待Context停止后，发出**context freeze**信号，在save和restore过程中冻结SM。
+
+**保存**context到内存，**重置**资源模块的行为。
+
+1、**CTA level**的context是TMU中每个GPC运行的CTA级状态，因为下游GPC已经被排空（drained），**无需保存GPC/SM内部状态**。
+
+2、**指令level**的context是任务从TMU调度到SM指令发射的**全栈**。context完成后trap handler退出所有活动线程，强制使SM和GPC进入**空闲**状态。
+
+SM的GRF、SM内DSMEM（共享内存）、SM的调度器MPC。
+
+GPC的pipeline manager、GPC的GRF，**将GPC level缓存（L1.5 cache）写回内存并失效**。
+
+**加载**上下文，**恢复**任务启动的行为
+
+1、CTA level的context-restore mode：由于没有底层状态需要加载，被抢占的CTAs会直接按照之前被抢占的顺序（preempted order）被重新发射执行。
+
+2、指令level的context-restore mode
+
+Pipeline manager配置SM进入**preemption-restore-begin模式**，使其处于暂停状态。
+
+**精准原址恢复**：为确保资源不超限，之前被抢占的 CTA 会被精确发送回**同一个SM内的同一个物理CTA slot**，线程组也被恢复到**同一个物理线程组ID**。
+
+SM 恢复所有寄存器、屏障（barriers）、程序计数器（PC）和活动掩码等，随后退出restore模式并恢复执行。
+
+**软件辅助的指令level抢占**
+
+和硬件控制的指令level抢占一样，都不需要等待SM内CTA空闲，但是实现方式不同，让SM中运行的CTA跳转到trap handler（PC强制）。
+
+trap handler首先运行**preemption-save kernel**来保存指令level上下文。
+
+基于上下文指针，生成最高优先级的**preemption TMD（被抢占任务的封装）插入前端队列**，之后执行**退出**，**“假装CTA已经完成”**。
+
+恢复上下文时，preemption TMD最先调度到SM执行。
+
+preemption TMD执行**preemption-restore kernel**，将硬件状态和寄存器恢复。
+
+preemption TMD**恢复执行**CTA未完成的指令。
+
+CTA正常运行结束时，preemption TMD调用**AtExit**，释放TMD和context占据的资源**。**
+
+**指令level抢占的不同实现**
+
+**硬件控制**：恢复时，硬件必须将之前被抢占的CTA精确发射回**原来执行它的同一个SM内的同一个物理CTA槽位（分配完全相同资源）**，甚至warp也要使用相同的物理warp ID，保证资源不超限。
+
+**软件辅助**：抢占时，将被抢占CTA包装成最高优先级的**抢占TMD**。恢复时，这个TMD作为优先级极高的任务被前端调度器调度，随后执行`preemption-restore kernel`来恢复上下文。解除CTA、warp对底层资源的强绑定。
+
+软件辅助指令级抢占的设计初衷，是为了在**复用CTA级抢占的硬件控制流**的基础上，通过软件（子任务生成和exit指令）跳过耗时的排空阶段，不需要增加极其复杂的纯硬件指令级卸载逻辑。
+
+## Fig 系统图（TMU、GPC、SM、CTA、TG）
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%202.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%203.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2027.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%204.png)
+
+**channel**是任务的指针集合，任务可能包含多个channel，**runlist**是channel的有序列表；
+
+**CPU控制preemption，channel** preempt、**runlist** preempt将被抢占的任务指针写入channel reg和runlist reg；
+
+不同任务的**timeslice**不同（**dense、sparse**），主机没有新任务会通知GPU front end；
+
+当**timeslice**结束或任务完成时，**切换context**并切换任务；
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%205.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%206.png)
+
+## Fig 4 context切换过程
+
+**host**选择新的context，指示**front end启动和控制context抢占过程**，包含五个phase：
+
+**停止**当前context上的处理：**CTA level**停止为GPC、SM分配任务，**指令level**停止SM中指令调度和发射，若遇到中断和错误，则等待其完成；
+
+>**保存**当前context到内存；
+
+>**重置**engine；
+
+>**加载**新的context；
+
+>**启动**新context的处理；
+
+完成context抢占后，front end向host发送**ACK**；
+
+抢占过程中，**等待图形pipline完成而不抢占**，因为图形比计算快，并且图形切换开销大；
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2028.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%207.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%208.png)
+
+抢占执行前，CPU程序为GPU的**CTA** level（不是thread block？似乎是channel）和**指令**level的context分配**context buffer**空间；
+
+**phase 1**：front end**停止接收host**的kernel，对task/work unit发出**preemption命令**，处理单元/SM收到preemption后**停止**向下游单元输出任务，**等待**全部停止后，front end发出**context freeze**信号来确保处理单元不占用保存context的传输资源；
+
+**wait-for-idle（WFI）**的任务被抢占时**要求front end等待pipeline idle之后**，一般是长时间片的高优先级任务；
+
+**指令level**的context包括SM内warp/指令、GPC内的CTA和front end内任务的情况，即任务启动到指令发射的**全栈**；
+
+**CTA level**的context包括front end内任务的情况，因为尝试等待GPC内的下游模块任务完成（drain），**减少需要保存的context**；
+
+context 抢占过程中的**动态产生的任务**，包含在front end context中；
+
+**task manager unit**（front end后的scheduler和distributor）将**任务组织成CTA构成的grid**（隐式的x，y，z三个维度），CTA是CUDA模型中block。
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%209.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2010.png)
+
+指令level抢占时，**preemption命令**到达SM后，SM由**trap handler**控制preemption的过程，完成后向上层pipeline manager（GPC）传递信号；
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2011.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2012.png)
+
+**phase4-5**：**加载**上下文，**恢复**被抢占的任务启动（SM的**preemption-restore** mode的开始和结束）、传递ready信号的顺序类似**“栈”**；
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2013.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2014.png)
+
+**ACK**
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2015.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2016.png)
+
+## Fig 5A **指令level的context unload**
+
+**指令level的context unload**：front end停止启动任务、scheduler/distributor停止派发任务给GPC、SM停止发调度和发射指令、等待内存传输指令完成、保存上下文、重置（trap handler）……
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2017.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2018.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2019.png)
+
+## Fig 5B 指令level的**context restore**
+
+指令level的**context restore：context-restore mode；**
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2020.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2021.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2022.png)
+
+## Fig 6A **CTA level的context unload**
+
+**CTA level的context unload：尝试等待**GPC下游中的任务完成，**timer超时**后转为指令level的context unload，即**中断/停止**SM内执行的指令（抢占SM）；
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2023.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2024.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2025.png)
+
+## Fig 6B **CTA level的context restore**
+
+**CTA level的context restore**
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2026.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2027.png)
+
+## Fig 3A task manager（软件辅助的指令level抢占）
+
+Task MetaDada（TMD）是task manager调度任务的数据结构；
+
+软件辅助的指令level抢占，是把**硬件控制**的SM内context的save/unload和restore/load过程，分别改为**preemption-save kernel和preemption-restore kernel的任务（软件辅助）**；
+
+TMU将计算任务用scheduler table管理，scheduler table是很多TMD-group。
+
+抢占时，执行save-kernel保存Ctx，save-krenl生成restore-kernel后插入**TMD-group**链表的head或tail，保证恢复被抢占的任务。
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2028.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2029.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%203.png)
+
+**硬件CTA** preemption后，GPC将save-kernel派发到SM执行，**SM强制跳转运行中CTA的PC到save-kernel**，保存SM的所有Ctx（save-kernel有最高权限），生成restore-kernel插入task group。
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2030.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2031.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2032.png)
+
+## Fig 7A **preemption save kernel**
+
+**preemption save kernel**完成指令level context unload，其中**生成preemption-restore kernel**作为最**高优先级**任务，插入到front end（TMDs）和其他任务一起**保存**；
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2033.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2034.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2035.png)
+
+## Fig 7B **preemption-restore kernel**
+
+**preemption-restore kernel**完成的context ****restore；
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2036.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2037.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2038.png)
+
+# 其他Preemption案例
+
+ref：TECHNIQUES FOR MODIFYING EXECUTABLE GRAPHS TO PERFORM DIFFERENT WORKLOADS
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2039.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2040.png)
+
+ref：PREEMPTION IN A MACHINE LEARNING HARDWARE ACCELERATOR
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2041.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2042.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2043.png)
+
+中低优先级设置**CLIP或GFXP**，**时间片内允许抢占**，设置较短时间片来及时释放资源。
+
+高优先级任务设置**WFI**，保证**时间片内不被抢占**，设置较长的时间片，保证一次kernel调用完成。
+
+**辨析wait-for-idle**指令： **wait-for-idle**是应用卸载到GPU任务的指令流里的一种**常规同步指令**。要求让前端暂停调度该进程任务的后续任务，直到资源空闲。**wait-for-idle**常用于低优先级任务，让任务执行到wait-for-idle后**主动“休息”**，**不和高优先级任务争抢资源**。
+
+应用Preemption类型包括WFI、CLIP、GFXP，决定channel在时间片内是否被抢占。
+
+**抢占类型**
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2044.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2045.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2046.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2047.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2048.png)
+
+SM内CTA以warp为单位调度执行，不同warp轮流发射指令，warp内线程按SIMT-pipeline并行。
+
+GPC的pipeline-manager将packet派发到有CTA并发余量的SM，或其他Engine。
+
+**TMU**对TMD指针进行任务管理、调度执行和派发资源。
+
+任务管理：不同优先级分为不同TMD group，每个TMD group维护**多个队列，支持GPU程序的嵌套执行、同步和抢占恢复等机制**。
+
+调度任务：按照队列内串行、队列间并发，和队列中任务内容（wait、signal、grid）定义的同步依赖和队列优先级调度任务。
+
+派发资源：为grid分配CTA，和CTA在grid中位置打包成**packet**，派发到有CTA余量的GPC。
+
+空闲SM：允许SCG-SM申请资源正交的任务，图形任务直接调度，计算任务需要TMU调度。
+
+**CGA机制**：按照SM-CTA/GPC-CTA/GPU-CTA粒度分配资源，并派发到SM/GPC/uGPU范围内的SM。
+
+![Screenshot from 2026-03-12 16-03-33.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/Screenshot_from_2026-03-12_16-03-33.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%203.png)
+
+![Screenshot from 2026-03-12 16-04-32.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/Screenshot_from_2026-03-12_16-04-32.png)
+
+**前端**控制GPU的抢占过程，完成后将TMD指针发到TMU。
+
+**主机接口**传递host抢占命令（指定channel或runlist切换）或计时器抢占命令（TS超时切换），并从pushbuffer中读取新channel中的TMD指针后传递给前端。
+
+**runlist**是host定义的channel队列，runlist中channel在GPU中运行分配时间片TS后切换，**interleave freq**越大的channel在runlist中出现频率更高，对应**高优先级应用**。
+
+**channel**是应用卸载任务TMDs的通道，是GPU执行任务的指针**集合**（kernel指令起始地址等），每个TMD可以指定执行优先级（不同kernel优先级），一个应用使用1个或多个channel来卸载任务。
+
+**channel、runlist和TS抢占**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2027.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2028.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2024.png)

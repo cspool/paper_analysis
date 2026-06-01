@@ -1,0 +1,179 @@
+# GPU Cooperative Group Array
+
+ref：Cooperative Group Array
+
+CGA API和对应支持机制（DSMEM）
+
+CGA扩展了CTA在SM内协作和同步的模式，提供更大量线程在更大资源范围内的协作和同步。**CGA同时启动，独占更大范围的资源，提高重负载的性能。**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2024.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2025.png)
+
+## Fig1A、1B、1C
+
+每个SM是一个PE，执行一个kernel。
+
+weak scaling：每个PE加任务，增加PE并发负载。
+
+strong scaling：每个PE任务相同，增加并行PE。
+
+![image.png](GPU%20Cooperative%20Group%20Array/image.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%201.png)
+
+## Fig2A、2B、2C
+
+CGA前是全硬件的SM内同步机制。
+
+CGA引入软件辅助的**同步**机制，高效支持更大范围的grid同步，访问存储更灵活高效。
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%202.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%203.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%204.png)
+
+## Fig3、4、5、5A
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%205.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%206.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%207.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%208.png)
+
+## Fig6、7
+
+CGA的存储架构下，SM之间的数据交换更容易。
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%209.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2010.png)
+
+## Fig8、9、10、11、12
+
+GPU分别看成**不同层次Tile（SM、GPC、GPU）组成的三维阵列**，不同层次Tile有不同并发容量，分别调度不同层次的CGA（grid-SM/GPC/GPU-CGA），将**grid分层映射到不同层次的不同CGA**。
+
+**grid-CTA/grid-SM-CGA（CTA in SM）**
+
+GPU是SM组成的三维阵列，每个CTA在一个SM上执行，定义CTA不超过SM容量。grid拆成CTA的三维阵列，分别调度到SM。
+
+跨SM/grid协作时协作效率低，CTA映射的SM容易“乱飞”让DSMEM传输拥塞，中介L2Cache慢。
+
+**grid-GPC-CGA（CTA in SM、GPC-CGA in GPC）**
+
+GPU是GPC组成的三维阵列，每个GPC-CGA在一个GPC上执行，定义GPC-CGA不超过GPC容量。grid拆成GPC-CGA的三维阵列，分别调度到GPC。每个GPC-CGA拆成CTA的三维阵列，分别调度到自身所在GPC的SM。
+
+跨SM/grid协作时协作效率适中，CGA映射的SM集中，DSMEM传输高效。
+
+**grid-GPU-CGA（CTA in SM、GPU-CGA in GPU）**
+
+GPU（cluster）是**GPU**组成的三维阵列，每个GPU-CGA在一个**GPU**上执行，定义GPU-CGA不超过**GPU**容量。grid拆成GPU-CGA的三维阵列，分别调度到GPU。每个GPU-CGA拆成CTA的三维阵列，分别调度到自身所在GPU的SM。
+
+跨SM/grid协作时协作效率适中，CGA映射的SM集中，DSMEM传输高效。
+
+**grid-GPU-GPC-CGA（CTA in SM、GPC-CGA in GPC、GPU-CGA in GPU）**
+
+在grid-GPU-CGA的基础上，每个GPU-CGA在一个**GPU**上执行，定义GPU-CGA不超过**GPU**容量。grid拆成GPU-CGA的三维阵列，分别调度到GPU。。每个GPU-CGA拆成GPC-CGA的三维阵列，分别调度到GPC，每个GPC-CGA拆成CTA的三维阵列，分别调度到所在GPC的SM。
+
+尽管协作效率提升，但同步开销仍然随着协作容量提升而提升。
+
+kernel（1个grid）设计将关系紧密的CTAs（1个blk）组织为CGA（1个blk cluster），映射到访存效率更高的资源组（***-CGA）。
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2011.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2012.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2013.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2014.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2015.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2016.png)
+
+## Fig13、14、15、16、17、18、19
+
+DSMEM：分布式SM存储，用于SM之间数据交换。
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2017.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2018.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2019.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2020.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2021.png)
+
+CGA启动
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2022.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2023.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2024.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2025.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2026.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2027.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2028.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2029.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2030.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2031.png)
+
+地址空间
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2032.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2033.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2034.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2035.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2036.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2037.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2038.png)
+
+地址空间
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2039.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2040.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2041.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2042.png)
+
+## Fig20、21、22、23
+
+SM在DSMEM上的数据交换机制。
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2043.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2044.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2045.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2046.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2047.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2048.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2049.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2050.png)
+
+![image.png](GPU%20Cooperative%20Group%20Array/image%2051.png)

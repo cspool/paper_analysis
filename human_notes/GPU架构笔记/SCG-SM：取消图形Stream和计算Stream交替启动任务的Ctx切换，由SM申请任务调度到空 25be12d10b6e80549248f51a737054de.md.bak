@@ -1,0 +1,657 @@
+# SCG-SM：取消图形Stream和计算Stream交替启动任务的Ctx切换，由SM申请任务调度到空闲资源
+
+**NV GPU + K8S的时间切片time slicing，即超卖GPU：**
+
+[https://run-ai-docs.nvidia.com/saas/platform-management/runai-scheduler/resource-optimization/time-slicing](https://run-ai-docs.nvidia.com/saas/platform-management/runai-scheduler/resource-optimization/time-slicing)
+
+ref：SIMULTANEOUS COMPUTE AND GRAPHICS SCHEDULING
+
+ref：[https://zhuanlan.zhihu.com/p/5286874142](https://zhuanlan.zhihu.com/p/5286874142)
+
+ref：[https://cloud.tencent.com/developer/article/2517231](https://cloud.tencent.com/developer/article/2517231)
+
+ref：[https://cloud.tencent.cn/developer/article/2449219](https://cloud.tencent.cn/developer/article/2449219)
+
+# 背景和改进
+
+GPU执行计算、图形任务的**线程数据、指令和运行时状态**是图形context、计算context；
+
+**传统GPU以负载为单位切换context**，如GPU完成计算负载后，切换context后进行图形负载；
+
+下图为Geforce 8800 GPU，即传统GPU；
+
+负载就是应用中不同Stream。
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%201.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%202.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%203.png)
+
+**GPU需要动态改变并发负载的资源分配，但不切换运行中负载的context**，如先执行图形负载的**部分线程**，再执行计算负载的**部分线程**；
+
+**但现有GPU切换不同负载的线程需切换context，重新分配资源需要等待其负载完成**；
+
+有的GPU分配不同PU负责不同负载（MIG或者vGPU），**改变不同负载PU的分配比例**而不切换context，但PU的重分配Migration需要当前负载完成（WFI）；（US Pat：9626216）
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%204.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%205.png)
+
+**示例GPU可以warp粒度调度计算和图形负载，让软件提供hint施行策略（greedy、balance）；**
+
+有的GPU（US app 14/137818）提供硬件机制，运行时调度GPU执行计算、图形负载的比例，但需要软件参与决策，在面对计算、图形负载随机产生、随机对齐时不实用；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%206.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%207.png)
+
+**现有GPU的问题**：硬编码策略对不同负载时不够灵活、资源要么给计算要么给图形负载（无法同时）、SM的释放延迟高（完成当前负载）、SM的资源分配粒度过大；
+
+**示例GPU的改进**：不同SM在不同负载的动态分配、异步计算、SM同时进行计算和图形负载、SM切换负载不需要等待所有运行warp完成；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%208.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%209.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2010.png)
+
+# SM同时执行计算和图形
+
+## Fig 1：并发示意图
+
+PPU的**SIMD core**指GPU中的**GPC**，**SIMD Unit**指**SM**；
+
+**scheduler**从内存中的计算/图形队列中**调度负载到SM**，队列中负载来源于计算/图形的pipeline；
+
+**pipeline**是执行相关计算的过程/流程；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2011.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2012.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2013.png)
+
+**scheduler**执行优先计算/图形负载的策略；
+
+**arbiter**监控性能、资源使用情况等运行时信息并统计，考虑调度策略，适时插入不优先的负载；
+
+arbiter寻找LC任务不使用的空闲资源（hole）进行BE任务的启动；
+
+应用程序将计算、图形负载和优先级写入内存（队列），指令传递给PPU，示例GPU的**每个SM设置1个scheduler、1个arbiter**；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2014.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2015.png)
+
+## Fig 2A：并发调度算法
+
+scheduler和arbiter动态调度计算、图形任务在SIMD unit并发；
+
+scheduler调度高优先级任务，arbiter检测空闲资源，scheduler插空启动低优先级任务；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2016.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2017.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2018.png)
+
+# 不同负载的warp分发
+
+## Fig 2B-2C：Warp Concurrency
+
+传统GPU的SM不能并发不同负载的warp，示例GPU的SM并发不同负载的warp；
+
+为何传统GPU不行？示例GPU做了什么改进？加了SM申请-CWD回应的行为
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2019.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2020.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2021.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2022.png)
+
+# PPU/GPU架构
+
+## Fig 3：GPU
+
+GPU模块组成；
+
+GPU连接DRAM，可能是HBM；
+
+**NVLink连接多GPU和多CPU**，提供系统扩展性，支持Cache Coherence（CPU为主）；
+
+GPU其他模块的数据和命令通过NVLink，**经过集线器Hub模块传递**；
+
+**Hub模块**以一对多方式传递信号，一指信号非并行，类似物理上集线器；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2023.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2024.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2025.png)
+
+IO unit通过互联（如PCIe）或中介设备通信，接收、传输host和其他处理器的数据和命令；
+
+IO unit解码收到的数据包，按照命令输送给frond end或其他功能模块，建立GPU各模块间的路由；
+
+host将负载编码成命令流并存于buffer（host和GPU共享），将流指针发给IO unit并传到front end，**front end**从buffer读取命令流后发送给GPU不同模块；
+
+front end读取的命令流定义任务，**scheduler unit**将**调度任务启动**，管理运行信息：负责任务的GPC、任务是否执行中、优先级等；
+
+scheduler unit的**视图是所有任务**，管理任务的运行时状态；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2026.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2027.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2028.png)
+
+**distrbution unit**为每个GPC管理pending pool和active pool，让GPC并发执行分配的任务；
+
+distrbution unit的**视图是每个GPC，**管理每个GPC的任务运行情况；
+
+**XBar**是连接不同模块的片上网络；
+
+**GPC执行结果的流向**：内部消化、通过XBar传给其他GPC、通过partition unit写回内存、通过NVLink传给其他GPU、CPU；
+
+host通过**驱动程序的API**启动多个应用在一个GPU上执行（隔离、QoS），**驱动程序kernel**将应用的指令和数据转为任务，以命令流传给GPU；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2029.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2030.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2031.png)
+
+## Fig 4A：GPC
+
+GPC：pipeline manager管理DPC执行并转发上层的packet、DPC执行渲染、MMU地址映射、PROP路由和优化计算、distribution crossbar分派通路。
+
+GPC包含图形pipeline所需Engines和算术cluster（DPC/SM），将前端scheduler启动的命令派发给对应的图形Engine或DPC/SM。**不考虑图形命令时，GPC直接将算术命令转发给SM**。
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2032.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2033.png)
+
+**PROP**将raster engine和DPC数据**路由**到Raster Operation unit执行像元算子，执行部分优化；
+
+**Raster Engine**将图形图元vertices转换成像素片元fragment（位置、色彩），即**光栅化raster**：
+
+setup——>coarse raster——>culling——>clipping——>fine raster——>tile coalescing；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2034.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2035.png)
+
+**DPC**：
+
+**M-Pipe Controller（MPC）控制**DPC行为，**转发**GPC控制器（pipeline manager）的packet到对应Engine或SM（不同Pipeline）；
+
+**Premitive Engine**从内存中读取vertex的属性（packet指定）；
+
+**单SM以SIMD/SIMT**方式执行多线程程序；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2036.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2037.png)
+
+## Fig 4B：**partition unit**
+
+**MMU**：GPC和partition unit之间的**接口**、虚拟物理地址映射、内存保护、访存请求裁决；
+
+**partition unit：ROP、L2 Cache、内存接口**（类似MIG、内存控制器）；
+
+每个**内存接口**配对两个partition unit（读、写）和一个内存设备HBM/DDR5；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2038.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2039.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2040.png)
+
+**HBM2**和GPU封装在一起，包含4个die，每个die包含2个128bit的通道，内存总线位宽1024bit；
+
+**ECC纠错检测**提高可靠性；
+
+**分层存储**为CPU、GPU提供**统一的虚拟地址空间**，GPU高频访问的CPU物理页**移动到GPU内存**；
+
+**NVLink**支持GPU直接访问CPU页表，**完全访问CPU内存**（类似外设和**user** memory间的**DMA**）；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2041.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2042.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2043.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2044.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2045.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2046.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2047.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2048.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2049.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2050.png)
+
+**copy engine**在多GPU和CPU之间传输数据，触发缺页中断要求partition unit“调页”，否则软件管理多GPU的数据传输需**上锁内存段，减少可用容量？**；
+
+**片上L2 Cache**被不同GPC**共享**，每个**partition unit**包含关联内存设备的一**部分L2 Cache**，L2 Cache和内存接口、XBar配对，**L1 Cache**是SM私有Cache**；**
+
+**ROP unit**对光栅化后的片元进行pixel color的相关操作：color compression、pixel blending、和Raster Engine协同的depth test等；
+
+ROP（partition unit）数目和GPC不同，ROP将生成的数据**选择路由**到某个GPC；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2051.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2052.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2053.png)
+
+## Fig 5A：SM
+
+**SM**：Instr Cache、scheduler units、RF、Cores、SFUs、LSUs、互联网络、shared mem/L1 Cache；
+
+**shader program**：work distribution unit——>GPC——>DPC——>SM——>scheduler；
+
+**scheduler**以**warp**粒度调度SM中的线程**blocks**，每个被调度的block分配至少1个**warp资源；**
+
+**dispatch**以cooperative groups粒度**发射线程指令**到Core/功能单元；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2054.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2055.png)
+
+**cooperative groups（CG）**：编程模型，用于程序员指定**线程通信/同步**的范围，范围从1个线程到多个线程block；
+
+**显式定义和灵活**的cooperative groups同步减小因不清楚库函数底层设计导致的死锁和竞争；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2056.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2057.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2058.png)
+
+**dispatch unit**发射指令到执行单元；
+
+**RF**的数量：可能是每个**功能单元**绑定一部分RF（结构简单），可能是并发的每个**warp**分配一部分RF（资源利用率高）；
+
+**cuda core/stream processor**：fully-pipelined、多精度、逻辑算术运算；
+
+**tensor core**：矩阵乘法累加，分块计算完成大矩阵运算，1个warp可完成16×16的矩阵运算；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2059.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2060.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2061.png)
+
+**SFU**：特殊函数、平方根、属性评估、树遍历、texture unit；
+
+**texture unit**：从shared memory/L1 Cache中加载texture map、texture map filter/采样得到多尺度map供SM执行shader program；
+
+**LSU**：shared memory/L1 Cache和RF之间的load、store操作；
+
+**interconnect net**：计算单元Cores/FU和RF之间的互联，LSU和shared memory/L1 Cache、RF之间的互联；
+
+**share memory/L1 Cache**：数据**存储**、SM和primitive Engine的**通信**、SM不同线程间基于同步和线程ID映射地址的**通信**、处于SM和L2 Cache的路径上作为**缓存**；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2062.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2063.png)
+
+**通用并行计算**：
+
+**distribution unit**直接将任务派发到DPC，而不需要pipeline manager控制图形pipeline；
+
+线程块block中每个线程设置id产生独立的结果，在**SM**中执行程序、shared mem/L1 Cache完成线程通信、LSU通过shared mem/L1 Cache和partition unit从/向global memory中读/写数据；
+
+**SM可要求前端scheduler启动**更多任务到DPCs；
+
+**GPU的成品**：单die芯片、多GPU-CPU-MMU-内存-DAC封装后的SoC、GPU和多个内存设备组装的显卡（与主机通过PCIe连接）、作为iGPU处于主板的芯片组；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2064.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2065.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2066.png)
+
+# 典型计算系统
+
+## Fig 5B：多GPU、CPU系统
+
+**多GPU、CPU、内存、Link**可能位于单个半导体平台，可以是SoC或MCM/chiplet实现；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2067.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2068.png)
+
+**NVLink实现**可以是interconnect的物理链路，也可以是片上互联协议；
+
+单一半导体平台可以是单die的**SoC**，可以是多封装的组装**MCM**或多晶片的封装**chiplet**，目前NV成熟的平台实现是2.5D/3D封装的HBM+GPU（chiplet）；
+
+NVLink支持：CPU对每个GPU内存的load/store/atomic、一致性操作允许CPU的Cache缓存GPU内存数据、地址翻译服务ATS允许GPU直接访问CPU页表并访问CPU内存；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2069.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2070.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2071.png)
+
+## Fig 5C：CPU+GPU计算系统
+
+**典型计算系统实现**：CPU、总线、内存、输入设备、并行处理设备、显示设备、网路、二级存储（磁盘、可移动存储、磁带、DVD、flash）；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2072.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2073.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2074.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2075.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2076.png)
+
+# 图形处理pipeline
+
+GPU执行图形计算
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2077.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2078.png)
+
+## Fig 6：图形处理
+
+**图形处理流程**
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2079.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2080.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2081.png)
+
+**data assemble、vertex shading、primitive assemble、geometry shading**
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2082.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2083.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2084.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2085.png)
+
+**rasterization**、**fragment shading**、**raster operation**
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2086.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2087.png)
+
+**GPU driver**是软件程序，包含控制GPU行为的指令，提供API调用去编程图形显示程序；
+
+图形显示程序调用API，**GPU driver翻译调用行为**，执行相关操作（CPU、GPU）；
+
+GPU执行的任务（**kernel**）可能是图形pipeline的部分阶段；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2088.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2089.png)
+
+# 机器学习
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2090.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2091.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2092.png)
+
+# SM的计算、图形负载并发（Non-Balanced）
+
+## Fig 7：MPC（scheduler、arbiter）in DPC（DPC=SM）
+
+scheduler和arbiter基于所在DPC的**局部信息**，调度和裁决**SM的任务**；
+
+scheduler构建任务调度的框架（行为交互），Arbiter根据profile和策略进行调度决策（调度决策）。
+
+**arbiter物理上邻近SM**，加快决策速度，提高针对**SM使用率**的反馈准确率（时效性好）。
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2093.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2094.png)
+
+compute work distribution unit（**CWDU**）包含compute work distributor（**CWD**）和compute scheduling unit（**CSU**），在**多个SM之间分别调度和分派计算任务**；
+
+**scheduler通过warp launch来调度线程组**在SM执行，warp launch将warp优先级提供给SM；
+
+scheduler从compute queue、graphic queue中按照优先级**抓取线程组，**SM同时并发32个warp，32个warp中两种负载的**比例由scheduler分配**；
+
+**arbiter监控**资源使用率的预设指标，在达到策略设定阈值时**通知**scheduler（greedy）从非优先queue中抓取任务并启动；
+
+**feedback**模块实现对预设指标的监控；
+
+scheduler可能从**compute work distribution unit**中获取**计算负载**，而不是直接读取计算queue；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2095.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2096.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2097.png)
+
+## Fig 8：应用配置GPU的负载调度策略
+
+CPU进程配置策略的过程：**设置空闲arbiter**，不同优先级下监控的**性能指标、使用率指标**以检测空闲资源，检测阈值**trickle rates**超过就启动非优先进程；
+
+**参数（条件）是设置策略的方式**，如对优先图形负载的策略，将图形负载是否输出阻塞作为参数：
+
+若检测到**SM阻塞并且特定功能单元执行**中，能够知晓图形线程输出阻塞，因为计算负载在SM内执行完后输出到L1 Cache，但是**图形负载需要特定功能单元**（SM以外）；
+
+**SM没有执行图形负载**，可调度计算负载，不调度图形负载，因为特定功能单元不空闲；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2098.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2099.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20100.png)
+
+**图形负载**的策略参数：3个pipeline的**输入饥饿阈值**（低于就停止某输入来源）和不同目标的**输出阻塞阈值**（高于就**阻塞SM，此时可调度计算负载**）、**graphic warp/RF/ISBE occupacy、优先级、“插空”任务数**；
+
+**ISBE**是inter-stage buffer entry，猜测用于暂存等待copy out或drain to RF的中间结果；
+
+计算负载的参数：**输入饥饿阈值、compute warp/RF/SHM occupacy、优先级、“插空”线程数CTA（Cooperative threads array/Cooperative group/thread block）**；
+
+策略参数包含**采样窗口average window**的大小、间隔；
+
+CPU将指令和工作项以流式分别写入图形、计算队列，CPU和GPU**运行中能传输**工作项； 
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20101.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20102.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20103.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20104.png)
+
+## Fig 9：scheduler的工作流程
+
+根据图形/计算队列的下一个负载的优先级（1-63）**决定GPU优先模式；**
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20105.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20106.png)
+
+**根据优先策略一直抓取任务直到空、低优先级任务由arbiter提醒“插空”；**
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20107.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20108.png)
+
+**图形优先转为计算优先策略**：
+
+若因为更高优先级的计算（task sync），则释放VTG任务的RF、warps、ISBE，释放pixel任务的资源，切换优先策略；
+
+若因为图形pipe的优先级降低，则flush设置优先级前的所有图形输入；
+
+**计算任务的抓取和调度**：
+
+**MPC**（scheduler、arbiter）**向CWD请求，**CWD收到MPC请求后可能**启动CTA并加载到SM执行（**不需要排队**）**，可能回复MPC**拒绝信号**；
+
+MPC（master）向CWD（server）请求CTA启动的情形：CTA发出的**task sync**信号、SM上**CTA完成**的信号、**arbiter要求**在SM分配更多CTA；
+
+CWD**平衡各SM的负载**，根据收到的MPC对CTA的请求数量和SM已分配资源；
+
+MPC根据DPC资源量向CWD申请CTAs并**保留资源**，以便CWD分配任务后直接加载启动，CWD拒绝后**释放资源**；
+
+猜测：**MPC侧重DPC-level/SM**的资源分配和任务申请（局部视角），**CWD侧重整体负载**在全体SM的balance（负载/全局视角）；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20109.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20110.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20111.png)
+
+不同（图形）任务运行所需分配的**资源类型不同；**
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20112.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20113.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20114.png)
+
+## Fig 10：Arbiter的执行流程
+
+优先级策略影响**SM中的指令调度的优先级；**
+
+arbiter发出可调度低优先级任务的**信号**，MPC**分配资源**后向CWD请求任务，CWD同意后，任务迅速**加载到SM并启动**，信号和任务启动是**异步**；
+
+不同任务的**启动竞争**SM的不同资源，MPC考虑任务执行情况**异步**向CWD发送申请；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20115.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20116.png)
+
+MPC统计图形线程的**资源使用情况**（warp id、rf空间、isbe memory、接口情况），统计计算线程的资源使用情况（warp id、rf、shared mem、接口情况）；
+
+arbiter根据**DPC**运行时的统计信息，**和软件预设的策略参数**作条件判断，基于此作决策；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20117.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20118.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20119.png)
+
+arbiter根据运行时状态和策略参数**检测资源“hole”**、决策下一个**启动的负载类型**；
+
+arbiter决策图形负载时，直接从**输入queue中**抓取下一个任务；
+
+arbiter决策计算负载后，MPC按照空闲资源支持的CTA数目**向CWD申请任务**，CWD可能因为**任务派发给其余TPC或任务取消**而拒绝申请；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20120.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20121.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20122.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20123.png)
+
+## Fig 11：CPU进程配置调度策略和参数
+
+CPU配置调度策略和参数（**profile**），设置GPU **timer用于切换策**略；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20124.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20125.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20126.png)
+
+## Fig 12：GPU切换调度策略
+
+通过在工作流中插入改变调度策略的方法，让GPU运行不同负载时**同步改变调度策略**；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20127.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20128.png)
+
+**microcode以异步**方式**动态**改变arbiter的**决策设置**，每组预设的arbiter决策参数称为**profile**，包含不同负载的调度参数；
+
+每个profile包含负载**优先级**、切换的**timeslice**、是否有效**valid**等；
+
+**timer超时**会产生非阻塞中断到front end unit，要求从内存读取下一个profile的数据结构；
+
+arbiter**运行时重配置**，但**不需要软件参与**，当设置compute greedy和graphic greedy的**timeslice的比值**是X:Y时，能对**计算负载提供X/X+Y的服务保证**，无论图形负载多么严重；
+
+这是**非抢占式**的任务**并发**调度，只保证算力时间，**不是抢占式的任务Preemption**；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20129.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20130.png)
+
+## Fig 13：空任务/空闲检测
+
+当前策略下检测到没有执行任务（**空闲**），切换策略去抓取其他任务**填充SM**；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20131.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20132.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20133.png)
+
+# 其他 SCG-SM Arbiter类型
+
+**MPC/DPC-level arbiter**根据**DPC/SM内**资源情况（RF、interface、shared mem等）检测**SM**中的“hole”来决策**SM的任务申请**；
+
+**GPM/GPC-level arbiter聚合GPC内多个DPC/SM的整体**资源情况，决策**GPC/SMs**的任务申请；
+
+更高层级的**GPM arbiter有不同的策略参数**，如分配/卸载任务的粒度（如SM、TPC）、决策是否balanced、DPC/SM的最小分配计算/图形任务数；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20134.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20135.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20136.png)
+
+**动态分区arbiter**均衡GPC中不同SM的负载，**以SM粒度裁决任务**，而不是以warp粒度；
+
+动态分区arbiter在根据需求切换SM的负载时，**不需要显式等待pipeline排空**；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20137.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20138.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20139.png)
+
+# Arbiter动态profile的应用
+
+图形pipeline从输入队列**顺序抓取**，命令设置或负载启动时的优先级设置和命令流中**顺序一致**；
+
+计算pipeline的优先级同步改变**需要同步机制**，因为**命令流（优先级流）和任务分配/启动（优先级设置）不一定同步**；
+
+**图形pipeline**包含alpha stage>beta stage>pixel stage，**动态设置优先级**如16-prior>draw A>32-prior>draw B能提高性能，因为A先发（16）、B后发（32），A和B的pixel stage都能高效执行，并且A的pixel stage在优先级拉高前执行完而不会被B的pipeline竞争调度；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20140.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20141.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20142.png)
+
+**microcode**收到timer超时，异步设置profile，profile由软件预设存储在内存，**任务自身优先级优先**；
+
+**microcode**收到超时中断后，根据采集信息，动态决定下一个profile的类型；
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20143.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20144.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20145.png)
+
+图形负载+计算后处理：图形最高优先级，计算插空执行；
+
+CUDA workload、physics simulation、VR…….
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20146.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%20147.png)

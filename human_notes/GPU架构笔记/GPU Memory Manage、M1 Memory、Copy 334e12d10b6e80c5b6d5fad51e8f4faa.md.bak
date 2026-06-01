@@ -1,0 +1,109 @@
+# GPU Memory Manage、M1 Memory、Copy
+
+## UVM Manage
+
+MEMORY SYSTEM HAVING COMBINED HIGH DENSITY , LOW BANDWIDTH AND LOW DENSITY , HIGH BANDWIDTH MEMORIES：Apple内存芯片架构
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%201.png)
+
+UNIFIED MEMORY SYSTEMS AND METHODS
+
+cudaMallocManaged分配的统一内存，由CUDA运行时自动管理缺页和复制。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%202.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%203.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%204.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%205.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%206.png)
+
+CPU和GPU的虚拟地址共享数据时，访问主体device或host在本地内存复制数据后进行地址映射和修改，修改完成后数据修改返回并作用于源数据。不同主体共享数据时，对共享数据的修改需要同步排队，即轮流获取写权限、修改、释放权限、更新。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%207.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%208.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%209.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2010.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2011.png)
+
+独立地址空间，显式Copy内存。统一虚拟内存的动态分配和静态分配。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2012.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2013.png)
+
+## UVM一致性访问
+
+UNIFIED VIRTUAL MEMORY MANAGEMENT IN HETE CS
+
+UVM对共享数据的同步排队修改，严重影响处理速度，为了维护统一内存的一致性。
+
+Fig2A对应上面的Fig4-5。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2014.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2015.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2016.png)
+
+相关维护一致性的统一内存访问算法。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2017.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2018.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2019.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2020.png)
+
+## On-demand、Page-Fault、Prefetch
+
+Unified Memory: GPGPU-Sim/UVM Smart Integration
+
+CPU多进程，则能够缺页时切换进程。因为GPU**缺少管理多进程MMU的后台运行时**，因此缺页时不能切换channel Ctx，否则补齐的物理页没有MMU管理，无法完成缺页处理。
+
+CPU是OS统一负责处理缺页，而GPU只有应用进程和辅助应用的运行时。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2021.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2022.png)
+
+缺页处理。Prefetch减少缺页开销。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2023.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2024.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2025.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2026.png)
+
+## Copy Engine
+
+NVIDIA QUADRO DUAL COPY ENGINES
+
+COPY ENGINE AND A METHOD FOR DATA MOVEMENT
+
+CPU将应用Space的数据Copy到driver space并转换，之后下载到GPU VRAM组成overlap。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2027.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2028.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2029.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2030.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2031.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2032.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2033.png)

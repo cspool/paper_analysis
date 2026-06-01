@@ -1,0 +1,473 @@
+# GPU并发机制TS、MPS、MIG、vGPU
+
+## 提示词
+
+**基础知识**
+
+作为一个GPU架构专家，你知道如下基础知识：
+
+作为一个GPU架构专家，请判断下面总结是否正确：
+
+1、多应用在GPU上的执行。
+
+1）不同应用的任务轮流在GPU执行，channels是GPU为应用卸载任务提供的通道，每个channel占用GPU Partition/vGPU一个时间片TS后或Ctx Drain后被新channel抢占。
+
+2）主机接口轮流读取不同channel，则runlist是调度不同channel执行的队列。interleave freq越大的channel在runlist中出现频率更高，对应高优先级应用。
+
+zzzzzzzzzzzzzz
+
+3）前端从channel buffer中读取work指针，构建和维护应用定义的Stream（计算grid队列和图形命令队列）。
+
+4）前端scheduler调度不同Stream中grid到GPC，可配置Stream优先级。
+
+5）前端WDU按照SM-CTA/GPC-CTA/GPU-CTA粒度调度任务，并分别派发到SM/GPC/uGPU范围内的SM。
+
+zzzzzzz
+
+6）SM内warp内线程按SIMT pipeline并行，不同warp轮流发射指令。
+
+2、上下文Ctx是channel中任务在GPU分配资源上的运行时镜像。
+
+1）不同channel按照时间片TS轮流执行，需要切换不同的channel Ctx。
+
+2）stream并发是channel Ctx内并发不同Stream的grid，不用切换channel Ctx。
+
+3）SM内的warp并发，不用切换channel Ctx，并且SM内并发warp的Ctx同时存在，不用切换。
+
+3、旧channel到达timeslice，新channel抢占GPU过程
+
+1）Host提前在显存VRAM分配Ctx buffer空间。
+
+2）主机接口从Runlist中选择新channel，抢占旧channel的Ctx占据的资源，前端和各层trap handler控制抢占过程。
+
+3）GPU停止context处理、保存context到内存、重置Engine/SM、加载上下文、恢复任务启动。
+
+4）GPU完成抢占后，前端向主机接口发送ACK，切换新channel执行。
+
+4、GPU抢占的原理
+
+1）暂停不同深度层次上资源（前端和GPC、SM）上的任务（CTA或指令）调度和发射。
+
+2）等待抢占深度上资源空闲，即前端和GPC已调度CTA或SM已发射指令完成后释放资源。
+
+3）资源空闲后，保存旧Ctx，加载新Ctx并且开始执行。
+
+**GPU专利**
+
+现在我给你一些资料，需要你回答下面问题。
+
+1、对比上述基础知识，有哪些修正和新的认知？
+
+2、有什么新的机制？回答时，请给出例子。
+
+2、这些新机制的设计目的是什么？应用背景是什么？
+
+**GPU sharing论文**
+
+现在我给你一些关于GPU上多任务抢占的论文，需要你回答下面问题。
+
+1、对比上述基础知识，有哪些修正和新的认知？
+
+2、论文对比的baseline是什么？baseline在多任务场景中有什么问题？回答时，请给出例子。
+
+2、论文相比baseline做出的修改是什么？回答时，请给出例子。
+
+应用将任务卸载到GPU channel后，无法干预GPU对runlist内channel和channel内CTA的调度执行，因为GPU没有提供相关接口。
+
+MIG、μGPU是物理隔离的GPU划分，看成算力和容量完全隔离的GPU Partition（资源）。相比GPU进行channel切换时，GPU所有资源执行stall-unload-load带来的抢占延迟和吞吐下降，partition内开销更少，partition之间互不影响。
+
+**CTA是资源**，是SM并发能力的单位，warp是资源，是SM的SIMT并行能力单位。
+
+vGPU、vGPC、vTPC等是关联物理资源的虚拟化封装，为应用的不同粒度任务（VM、block）提供更灵活的资源分配方式。Migration开销更小？抢占开销呢？
+
+## **GPC、SM；TG、CTA/block、CGA、CG；channel、runlist**
+
+**channel是GPU TMD指针的集合，应用包含若干channel。channel是TMU中的work group硬件模块。多channel对应Kepler中hyperQ。pushbuffer是Stream在memory中的存储区域。**
+
+**channel**抢占通过清除channel ram entry的valid后写入preempt寄存器来unload Ctx，完成后切换runlist中下一个channel。
+
+**runlist**抢占将新runlist写入runlist寄存器，找到有pending任务的第一个channel来load Ctx和执行。
+
+**Timeslice Out**抢占，每个**channel**的时间片按照**Ctx中命令流stream的方法数（kernel call）定义**，dense stream的更长，sparse stream的更短。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%201.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%202.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%203.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%204.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%205.png)
+
+应用的**kernel调用或API调用**经过GPU驱动转为**任务task（TMD）**，应用可能存在多个**命令流协作（Streams）**，存储在内存的**pushbuffer区域**。（数据结构DS定义命令流，DS指针写入pushbuffer来初始化命令流）
+
+channel是TMU管理Stream的硬件队列，应用只能占用1个channel（占用了GPU全部），因为HyperQ之前GPU只存在一个channel。
+
+**runlist**定义了轮流读取不同pushbuffer的顺序，即**应用轮流抢占channel的顺序**，高优先级应用的channel出现/读取频率更高。
+
+GPU从不同pushbuffer轮流读取命令流Stream，通过WMU中的channel管理任务。**命令流Stream就是cudaStream。命令流包含SM处理的命令发给host interface**、**Memory操作的命令发给memory cross bar**。
+
+**SM处理的命令包含TMD指针**。计算任务编码成TMD，包含数据坐标、state参数、定义数据处理的命令。
+
+TMD的调度优先级由channle决定，channel的优先级由管理的pushbuffer优先级确定。
+
+**WMU**分别维护**不同优先级应用的task group（channel）并按优先级调度**。将pushbuffer存储Stream，扩展到TMDQs和GTMD queue并存在memory，管理动态生成的grid TMD或Stream。
+
+**WDU**接受TMD指针，确保在GPC处于valid状态后，读取TMD并初始化TMD，将**grid TMD或queue TMD定义的若干CTA发到GPC**。grid TMD一般是计算任务，queue TMD一般是图形任务（可能动态生成子任务）。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%206.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%207.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%208.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%209.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2010.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2011.png)
+
+TMD分为grid和queue，grid TMD是CTA的三维阵列，queue TMD是图形pipeline或dataflow任务。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2012.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2013.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2014.png)
+
+GPC管理多个TMD的CTA，**SM按照CTA粒度接取负载、分配和保留Ctx资源（SCG），按线程组warp执行**，pipeline manager可能给每个SM配置Controller来分别管理SM内CTA的运行情况，如哪些warp被抢占。
+
+GPC是图形pipeline的图形处理单元/Tile，只考虑通用计算的情况下，GPC包含SM集合和相关机制的模块支持（复用图形模块的datapath）。
+
+**线程组在表述中表示运行相同code的一组线程，大小是warp、block、CG都可。**
+
+**warp是SM执行CTA的单位，和SM中lane数量成比例（SIMD-Cores多周期完成），分支发散时部分idle/masked。**
+
+线程组/warp是任务划分，warp Ctx是资源单位。线程（模型）是逻辑上的负载，Ctx是负载实际执行的环境/资源（指令、数据、存储、隔离）。
+
+**CTA是指SM内通过sharedMem协作的线程阵列，CTA大小是blockSz定义的线程数，不能超过SM的并发线程容量，通过编程时的blockSz定义。**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2015.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2016.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2017.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2018.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2019.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2020.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2021.png)
+
+**协作组CGA是应用定义的协作的线程集合，包含CTA但支持比CTA更大范围的协作。**
+
+CG或CGA是CTA的扩展，**扩展了CTA在SM内协作和同步的模式，提供更大量线程在更大资源范围内的协作和同步。**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2022.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2023.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2013.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2024.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2025.png)
+
+## 应用在GPU的执行模型
+
+[https://developer.nvidia.com/docs/drive/drive-os/7.0.3/public/drive-os-linux-sdk/embedded-software-components/embedded_software_components.html](https://developer.nvidia.com/docs/drive/drive-os/7.0.3/public/drive-os-linux-sdk/embedded-software-components/embedded_software_components.html)
+
+**channel、runlist、抢占设置**
+
+**channel是TMU的硬件模块task group，包含TMD指针，应用可以分时占用多个channel（TSG）。**
+
+**channel**抢占通过清除channel ram entry的valid后写入preempt寄存器来unload Ctx，完成后切换runlist中下一个应用占有的channel。
+
+**runlist**抢占将新runlist写入runlist寄存器，找到有pending任务的第一个channel来load Ctx和执行。
+
+**Timeslice Out**抢占，每个**channel**的时间片按照**Ctx中命令流stream的方法数（kernel call）定义**，dense stream的更长，sparse stream的更短。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%203.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2026.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2027.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2028.png)
+
+![image.png](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA/image%2024.png)
+
+**主机接口**传递host抢占命令（指定channel或runlist切换）或计时器抢占命令（TS超时切换），并从新pushbuffer中读取TMD指针到runlist指定的新channel。
+
+**前端**控制GPU的抢占过程，完成后将TMD指针发到TMU。
+
+**TMU**对TMD指针进行任务管理、调度执行和派发资源。
+
+任务管理：不同优先级分为不同TMD group，每个TMD group维护**多个队列，支持GPU程序的嵌套执行、同步和抢占恢复等机制**。
+
+调度任务：按照队列内串行、队列间并发，和队列中任务内容（wait、signal、grid）定义的同步依赖和队列优先级调度任务。
+
+派发资源：为grid task分配CTA，和CTA在grid中位置打包成**packet**，派发到有CTA余量的GPC。
+
+SCG-SM-Sched&Arbitor：SM可能是调度任务的主控，按照优先级和资源情况决定申请计算任务或图形任务，图形任务直接调度，计算任务由TMU同意申请后调度。
+
+**CGA机制**：按照SM-CTA/GPC-CTA/GPU-CTA粒度分配资源，并派发到SM/GPC/uGPU范围内的SM。
+
+GPC的pipeline-manager调度CTA packet并派发CTA到有足够余量的SM（DPC）。SM对CTA按warp执行，直到CTA包含的所有warp完成。
+
+SM是**SIMD pipeline**，执行单元包含LS指令的SIMD单元LSUs、算术指令的SIMD单元Cuda Cores、SF指令的SIMD单元SFUs和Tensor指令的SIMD单元Tensor Core。
+
+**SIMD单元每次执行1个SIMD指令，执行1个warp的指令，使用warp内线程定义的数据。**
+
+SIMD单元花费若干cycles完成（pipeline并行）1个SIMD指令，对应不同指令的不同延迟。
+
+SIMD单元每次执行1个warp的1条指令，为了占满全部种类的SIMD单元（隐藏LD的长延迟），使用多个warp的多条指令来填充全部SIMD单元，因此**SM交错发射不同warp的指令**。
+
+no OoO：1个warp的多条指令并行开销大（处理指令依赖interlock），SM通过SB机制阻塞存在前序依赖的后序指令发射，让没有依赖的后序指令发射。
+
+LD长延迟：执行warp的LD指令会阻塞所有warp的LD指令发射，发射其他warp中的非LS指令来填充非LSU的SIMD单元。
+
+## TS、Preemption（单实例）
+
+[https://developer.nvidia.com/docs/drive/drive-os/7.0.3/public/drive-os-linux-sdk/embedded-software-components/embedded_software_components.html](https://developer.nvidia.com/docs/drive/drive-os/7.0.3/public/drive-os-linux-sdk/embedded-software-components/embedded_software_components.html)
+
+**channel是GPU TMD指针的集合，应用包含若干channel。**
+
+**channel**抢占通过清除channel ram entry的valid后写入preempt寄存器来unload Ctx，完成后切换runlist中下一个channel。
+
+**runlist**抢占将新runlist写入runlist寄存器，找到有pending任务的第一个channel来load Ctx和执行。
+
+**Timeslice Out**抢占，每个**channel**的时间片按照**Ctx中命令流stream的方法数（kernel call）定义**，dense stream的更长，sparse stream的更短。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%204.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%203.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2026.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%205.png)
+
+应用**Preemption**类型包括WFI、CLIP、GFXP，决定应用channel在时间片内是否被抢占。
+
+（短时）高优先级任务设置**WFI（wait-for-idle）**，保证**时间片内不被抢占**，**同时设置较长的时间片，保证时间片内kernel完成**。
+
+**辨析wait-for-idle**指令： **wait-for-idle**是应用卸载到GPU任务的指令流里的一种**常规同步指令**。要求让前端暂停调度该进程任务的后续任务，直到资源空闲。**wait-for-idle**常用于低优先级任务，让任务执行到wait-for-idle后**主动“休息”**，**不和高优先级任务争抢资源**。
+
+中低优先级设置**CLIP或GFXP**，**时间片内允许指令级抢占**，设置较短时间片来及时释放资源。
+
+高优先级任务的时间片TS设置不能超过最差情况下的调度延迟，因为TS超过阈值还没有完成会导致违背帧率的计算速度要求（16.6ms/channel）。
+
+最差情况考虑：上一个高优先级channel完成后，低优先级抢先执行，但时间片到达后（lpt）没有正常切出，经过切换超时检测后（cst），强制清空channel后（crt），调度下一个高优先级channel。强制清空channel不会保存channel ctx。
+
+图中没有显示H1、H2、H3任务的Ctx保存延迟，因为保证在TS内完成，不需要保存。
+
+时间片开头是Ctx加载延迟，而时间片不会包含Ctx保存延迟。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%203.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2029.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2030.png)
+
+![Screenshot from 2026-03-12 16-04-32.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/Screenshot_from_2026-03-12_16-04-32.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2031.png)
+
+![Screenshot from 2026-03-12 16-03-33.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/Screenshot_from_2026-03-12_16-03-33.png)
+
+**旧channel到达timeslice，新channel抢占GPU过程**
+
+1、GPU驱动提前在显存VRAM分配**Ctx buffer**空间。
+
+2、主机接口从Runlist中选择新channel，**抢占**旧channel的Ctx占据的资源，**前端和各层trap handler控制**抢占过程。
+
+3、**GPU停止**context处理、**保存**context到内存、**重置**Engine/SM、**加载**上下文、**恢复**任务启动。
+
+4、GPU完成抢占后，前端向主机接口发送**ACK**，切换新channel执行。
+
+**抢占的原理**
+
+暂停不同深度层次上（TMU和GPC、SM）上的任务调度和资源分配（CTA或warp）。
+
+等待已分配资源被释放，即TMU和GPC已分配CTA或SM已发射指令完成后释放资源。
+
+“暂停-等待空闲”是因为**GPU高并发，不能追踪和控制特定任务，以资源为handler**，等待资源上任务完成（wait-based/drain），或者放弃任务（flush-based）。
+
+资源空闲后，保存旧Ctx，加载新Ctx并且开始执行。
+
+**硬件控制**：恢复时，硬件必须将之前被抢占的CTA精确发射回**原来执行它的同一个SM内的同一个物理CTA槽位（physical CTA slot）**，甚至warp也要使用相同的物理warp ID，保证资源不超限。
+
+**软件辅助**：抢占时，将被抢占CTA包装成最高优先级的**抢占TMD**。恢复时，这个TMD作为优先级极高的任务被前端调度器调度，随后执行`preemption-restore kernel`来恢复上下文。解除CTA、warp对底层资源的强绑定。
+
+软件辅助指令级抢占的设计初衷，是为了在**复用CTA级抢占的硬件控制流**的基础上，通过软件（子任务生成和exit指令）跳过耗时的排空阶段，**不需要增加复杂的纯硬件指令级卸载逻辑**。
+
+## Hyper-Q（Stream并发优化）
+
+[https://developer.download.nvidia.com/compute/DevZone/C/html_x64/6_Advanced/simpleHyperQ/doc/HyperQ.pdf](https://developer.download.nvidia.com/compute/DevZone/C/html_x64/6_Advanced/simpleHyperQ/doc/HyperQ.pdf)
+
+hyper-Q：在WDU之前**增加GMU（即WMU），**GMU设置32个**硬件queue是task group（链表），也称为channel**，**移除单个channel管理多个cudaStream的False Dependence**。
+
+多个cudaStream交错整合后进入一个task group（channel），WDU从单一channel中读取grid TMD并派发CTA，则不同Stream之间的并发存在隐式Dependence（**Stream A和Stream B共享task group**），**GMU**让接受不同Stream并行发射。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2032.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2033.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2034.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2035.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2036.png)
+
+## 多进程服务MPS（共享相同App Ctx，不同task group/channel）
+
+**MPS：**架构基于Hyper-Q（设置多个work queue/channel）改进，由CPU的MPS进程将相同VM的不同请求打包成一个应用的若干命令流，发给GPU中WMU的不同work queue管理。
+
+GPU视角中，只有一个应用的多个命令流在执行，因此**隔离性差**带来性能干扰，所有任务响应针对应用的抢占或异常处理。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2037.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2038.png)
+
+**CPU进程cuda context server打包和混合同一个用户（VM）的user**的不同请求client，但阻塞其他用户的请求，用户user是OS level分类，请求client是进程level的分类；
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2039.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2040.png)
+
+**对进程数/线程数不足的LC应用，MPS不足以充分利用GPU资源；**
+
+**Volta架构的MPS中每个进程的地址空间独立，而非共享全体地址空间；**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2041.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2042.png)
+
+MPS使用
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2043.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2044.png)
+
+**Test Case 1**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2045.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2046.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2047.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2048.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2049.png)
+
+**Test Case 2**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2050.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2051.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2052.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2053.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2054.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2055.png)
+
+**Test Case 3**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2056.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2057.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2058.png)
+
+## 多实例GPU MIG（空间划分、物理隔离）
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2059.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2060.png)
+
+**Mult-Instance GPU**将性能超强的GPU单卡“拆分”成多个“小”GPU实例，面向多用户应用，提高资源使用率；
+
+MIG的多个子GPU运行时所用资源是**“硬件隔离”**；MPS的进程间通过资源分配进行隔离，但部分硬件资源共享；
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2061.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2062.png)
+
+**MIG的子GPU配置和用途**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2063.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2064.png)
+
+**内存和计算的双重划分，支持容器部署。软件栈**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2065.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2066.png)
+
+**用户工作流**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2067.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2068.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2069.png)
+
+**Test Case**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2070.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2071.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2072.png)
+
+## 推理TRITON、vGPU（逻辑划分和虚拟划分资源，灵活Migration且不必Reset）
+
+**推理系统**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2073.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2074.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2075.png)
+
+**异构GPU虚拟化：面向PC、工作站、计算；**
+
+vGPU是将MIG进行超卖，比如4个MIG分时轮转5个VM，等效提供了5个vGPU。
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2076.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2077.png)
+
+## **不同cuda并发机制**
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2078.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2079.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2080.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2081.png)
+
+## GPU使用率metric和profile工具
+
+[https://live.nvidia.cn/gtc-od/attachments/CNS20856.pdf](https://live.nvidia.cn/gtc-od/attachments/CNS20856.pdf)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2082.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2083.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2084.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2085.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2086.png)

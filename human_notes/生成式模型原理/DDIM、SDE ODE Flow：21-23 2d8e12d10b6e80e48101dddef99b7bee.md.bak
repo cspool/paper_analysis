@@ -1,0 +1,359 @@
+# DDIM、SDE/ODE Flow：21-23
+
+BackBone UNet，新的采样方法
+
+SDE/ODE模拟积分是指多次采样过程
+
+## NIPS21、ICLR21：Score-Based
+
+NIPS21：Score-based Generative Modeling in Latent Space
+
+ICLR21：Score-based generative modeling through stochastic differential equations
+
+扩散过程的正向采样过程是**正向SDE的模拟积分过程**，图像扩散的结果是正向SDE的积分结果。
+
+扩散过程的逆向采样公式是**逆向SDE的模拟积分过程**，生成图像的结果是逆向SDE的积分结果。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image.png)
+
+**学习数据分布**，根据学到的数据分布生成数据。
+
+扩散过程的逆向采样算法归约到学习**扰动分布p(ε)**的函数，即基于分数的生成式模型。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%201.png)
+
+### **随机微分方程SDE的积分求解**
+
+**SDE的正向**$dx=f(x,t)dt+g(t)dw$（随机噪声**w**）是正向采样是，逆向SDE扩散过程被证明是$dx=[f(x,t)-g^2(t)\nabla_xlogp_t(x)]dt+g(t)d{\overline{w}}$。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%202.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%203.png)
+
+使用分数模型$s_{\theta}(x,t)$求解逆向采样过程中每个t的$p(x_t)$的梯度$*∇xlogp_t(x)*$。基于**SDE的求解原理构建模型（DDPM）**。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%204.png)
+
+### **常微分方程ODE的积分求解**
+
+逆向扩散过程的求解 → 常微分方程**ODE**的概率流模型，将随机噪声w改为**可学习的xt概率项$p_t(x)$**，分数模型预测$∇xlogp_t(x)$，即**Flow方法**。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%205.png)
+
+## ICLR21：DDIM（高斯采样的ODE Flow：ε-prediction）
+
+ICLR21：Denosing Diffusion Implicit Model
+
+ref：[https://zhuanlan.zhihu.com/p/1900299484749072056](https://zhuanlan.zhihu.com/p/1900299484749072056)
+
+### 和DDPM的关联
+
+*DDPM的核心原理*
+
+$x_{T}→x_1  \color {grey}{→x_{0}}$：构造$q(x_{t-1} | x_t , x_0)$，每步$x_t$采样时，**沿着$x_0$的编码路径$q(x_{t} | x_{t-1})$逆向采样。**
+
+$x_{T}→x_{1} \color {grey} →f_θ$：定义$\{p_θ(x_{t-1} | x_t)=q(x_{t-1} | x_{t}, f_θ) | t=2...T \}$，在$x_t$处采样时，**沿着$x_0$预测值$f_θ(x_t)$的编码路径逆向采样**。
+
+$x_{1}→f_θ$：$p_θ(x_0|x_1)$是$x_{1}$处采样得到$x_{0}$的**高斯采样**，$p_θ(x_0|x_1)$最大，是在修正$x_t$处的对$x_0$的预测值$f_θ(x_t)$。
+
+*DDPM和DDIM的生成过程（左-DDPM，右-DDIM）*
+
+DDPM和DDIM均定义生成采样分布**$p_θ(x_{t-1} | x_t)=q(x_{t-1} | x_t, f_θ)$**。**预测噪声值$ε_θ$**来近似从$x_0$到$x_t$（$x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \mathbf{\epsilon_t'}$）的加噪噪声$ε_t'$，计算$f_θ$。
+
+$q(x_{t-1} | x_t, x_0)$的定义不同
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%206.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%207.png)
+
+$p_θ(x_{t-1} | x_t)$的定义不同
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%208.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%209.png)
+
+根据$p_θ(x_{t-1} | x_t)$采样生成的公式不同
+
+**DDIM中，$σ_t=0$的生成**：从$x_1$到$x_T$是**确定的双向映射**，$x_1$到$x_0$之间分别是基于分布$q(x_1 | x_0)$和$p_θ(x_{0} | x_1)$的**采样**。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2010.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2011.png)
+
+*DDPM和DDIM中**$q(x_{t-1} | x_t, x_0)$**的构造区别*
+
+DDPM定义扩散过程$q(x_T : x_1 | x_0)= Πq(x_t | x_{t-1})$。通过$Πq(x_t | x_{t-1}) = q(x_T | x_0) \cdot Πq(x_{t-1} | x_{t}, x_0)$**推导**$x_0$编码序列$x_{1}...x_{T}$的逆向采样方式$q(x_{t-1} | x_t, x_0)$和分布关系$q(x_t | x_0)$。
+
+> 采样生成的方差$σ_t^2 \neq 0$和$x_{1}...x_{T}$的序列关系绑定，生成采样是SDE模拟积分，无法转为ODE模拟积分。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%206.png)
+
+DDIM**定义并维持$q_σ(x_1 | x_0)...q_σ(x_T | x_0)$分布**，**加入$x_0$到$x_t$的加噪噪声$ε_t$来指引$x_{t-1}$的采样方向**，来**构造**$x_0$的编码序列$x_{1}...x_{T}$的逆向采样方式$q(x_{t-1} | x_{t}, x_0)$。
+
+> 生成采样的方差$σ_t^2 = 0$不破坏$x_{1}...x_{T}$的序列关系。当$σ_t^2 = 0$时，采样转为ODE积分。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%207.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2012.png)
+
+### DDIM训练
+
+分布簇$Q\{q_σ(x_{t-1} | x_t, x_0), …, q_σ(x_{T-1} | x_T, x_0), q_σ(x_T | x_0)\}$定义为生成过程的**Ground Truth**，分布簇Q的构造是$q_σ(x_t | x_0)$**和DDPM扩散过程$q(x_1 : x_T | x_0)$的marginal分布$q(x_t | x_0)$相同**。
+
+> **$q_σ(x_T | x_0)$**是静态参数$α_T$定义的高斯分布，定义了**”起点“$x_T$分布和“终点“$x_0$分布**的关系，$x_T$到$x_0$的“路径”由$q_σ(x_{1} | x_2, x_0)...q_σ(x_{T-1} | x_T, x_0)$定义。
+
+> 超参数**$σ_t$**提供逐步采样$q_σ(x_{t-1} | x_t, x_0)$中的不确定性，对应DDPM中$β_t$。
+
+**训练Loss**
+
+**> $ε_θ(x_t, t)$**预测$x_t$和$x_0$之间的差距**$ε_t$**（和DDPM中**$ε_θ$一致**）。
+
+**>** 根据$x_t$和$ε_t$计算**$x_0$的预测值$f_θ(x_t)$**。
+
+**>** 用$f_θ(x_t)$作为$x_0$，计算**未知$x_0$的**生成过程$p_θ(x_{t-1}| x_t) = q_σ(x_{t-1}| x_t, f_θ)$。
+
+**>** $p_θ(x_{t-1}| x_t)$近似**已知x0时的扩散过程$q_σ(x_1:x_T | x_0)$的逆向采样$q_σ(x_{t-1}| x_t, x_0)$**。
+
+**> 最大化**$p_θ(x_{0}| x_1)$，修正$x_t$处对$x_0$的预测值$f_θ(x_t)$。
+
+**复用DDPM的参数**
+
+**>** DDIM的训练损失J，**等价**于特定$γ_t$取值下DDPM的损失函数L，且和Q中$σ_t$取值无关。
+
+**>** $γ_t$是DDPM中$α_t$和和$β_t$定义的静态参数，特定取值是$*γ_t = 1/(2d \cdot σ_t^2 \cdotα_t)$，*d是$x_0$的维度，据此反解$σ_t$值。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2013.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2014.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2015.png)
+
+### DDIM推理和跳步
+
+根据**$x_0$的预测值$f_θ$**计算的生成采样分布**$p_θ(x_{t-1} | x_t)$，**逐步采样，生成图像$x_0$。
+
+$σ_t$仅用于训练时，生成时可以设置$σ_t=0$，**生成采样是确定的，即ODE积分**。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2016.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2017.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2018.png)
+
+**中间跳步采样**将T步缩短到S步
+
+通过将T步分成**$τ\{S步采样生成\}$**和$\bar τ\{剩余步变分目标\}$两部分的方式，维持$q_σ(x_t | x_0)$和DDPM marginals一致，**重新定义T步扩散过程$q_σ(x_1:x_T | x_0)$和近似生成过程$p_θ(x_0: x_T)$**。
+
+**>** logp(X)证明：**$τ$部分采样生成样本$x_0$（同上），$\bar τ$部分训练模型在$x_t$处对$x_0$的预测能力（$p_θ(x_t: x_0)$近似$q_σ(x_t | x_0)$）。**
+
+**>** 和上文$q_σ(x_T : x_1 | x_0)= q_σ(x_T | x_0) Πq_σ(x_{t-1} | x_{t}, x_0)$的扩散过程**定义不同**。
+
+**> 训练中T步采样**（$τ$和$\bar τ$两部分采样），但推理时能在中间跳步。
+
+**>** S步-DDIM和DDPM的训练目标一致，可以**复用DDPM的训练好的参数**。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2019.png)
+
+每个生成步骤$t_{τ_{i-1}}$，模型$ε_θ$预测$ε_{t_{τ_{i-1}}}$，计算**$x_0$的预测值$f_\theta$**，带入采样分布$p_\theta$进行采样。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2020.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2021.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2019.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2022.png)
+
+### DDIM和ODE Flow的联系
+
+DDIM定义的生成采样公式，是**ODE的从$x_T$到$x_0$的Euler积分**。由于ODE积分的**可逆性**，DDIM的**扩散过程（ODE从$x_0$到$x_T$的积分）可用于编码$x_T$**。
+
+DDIM定义的生成过程，等价于使用**ODE积分**来求解基于分数的SDE积分。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2018.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2023.png)
+
+### 实验
+
+配置：使用DDPM模型参数，T的采样步骤子集τ，Q的变分超参$σ_t$，每步一个$σ_t$。
+
+**$σ_t$取非零特定值**$σ_{t1}$**时，DDIM的采样生成$q_σ(x_{t-1} | x_{t}, x_0)$和DDPM的$q(x_{t-1} | x_{t}, x_0)$相同。**
+
+$σ_t$定义成$σ_{t1} * η$，来切换DDPM生成（η=1）和DDIM生成（η=0）过程。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2018.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2024.png)
+
+生成采样ODE的逆向积分，用于编码图像。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2025.png)
+
+## ICLR23：ReFlow（直线插值采样的ODE Flow：v-prediction）
+
+ICLR23：Flow straight and fast: Learning to generate and transfer data with rectified flow. 
+
+[https://zhuanlan.zhihu.com/p/603740431](https://zhuanlan.zhihu.com/p/603740431)
+
+### 动机
+
+*扩散过程和生成过程本质是传输映射*
+
+DDPM和DDIM中**$x_0$的扩散过程$q(x_{T} : x_1 | x_0)$将分布$q(x_0)$映射到分布$q(x_T)$，$x_0$的近似生成过程$p_θ(x_0 :x_T)$将分布$q(x_T)$映射到分布$q(x_0)$。**
+
+DDPM和DDIM**人为构造$q(x_{t-1} | x_t , x_0)$来参数化定义可学习的$p_θ(x_{t-1} | x_t)$**，即$p_θ(x_{t-1} | x_t)=q(x_{t-1} | x_{t}, f_θ)$，模型预测$f_θ$或$ε_θ$，从$x_T$根据$p_θ(x_{t-1} | x_t)$迭代采样到$x_0$。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%206.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2026.png)
+
+*预测ODE函数：v-prediction，即$z_t$的差分预测*
+
+DDPM/DDIM中，采样生成公式$p_θ(x_{t-1} |x_t)$定义了$x_t$关于t的微分公式。**$x_1$采样生成$x_0$，是$p_θ(x_{t-1} |x_t)$定义的ODE微分从0到T积分的模拟求解**。
+
+ReFlow将**$p_θ(x_{t-1} | x_t)$抽象成可学习的$v(z_t, t)$，即$\frac{dZ_t}{dt}=v(Z_t,t)$**，将$x_T$根据$p_θ(x_{t-1} |x_t)$迭代采样到$x_0$的过程抽象成**$v$从0到1的积分，即$Z_{t+ε}=Z_t+εv(Z_t, t)$**，$Z_1$是图像$x_0$，$Z_0$是编码$x_T$。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2027.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2028.png)
+
+*“直线”的传输映射*
+
+DDPM和DDIM预测$x_t$处关于$x_0$的采样方向$ε_θ$，ODE/SDE积分的数值求解器在**生成时模拟积分**，完成**$x_{T}→x_{1} →f_θ$**的过程。
+
+> DDPM的$v(x_t, t)$是$q(x_{t-1} | x_t , x_0)$的参数化表达，$q(x_{t-1} | x_t , x_0)$由马尔可夫过程$q(x_{t-1} | x_{t-1})$推导得到，采样步数长且无法跳步。
+
+> DDIM的$v(x_t, t)$是$q(x_{t-1} | x_t , x_0)$的参数化表达，$q(x_{t-1} | x_t , x_0)$是根据预先定义$q(x_{t} | x_0)$后**人为构造**，**根据自定义的采样步数S，可以构造$v$的不同参数化表达**。
+
+ReFlow希望将**$v(Z_t, t)$**构造成从样本$Z_0$到样本$Z_1$的**直线映射**，而非DDIM/DDPM中的多步采样完成的映射。$Z*$表示直线采样方式，$X*$表示不一定直线但是有效的采样方法。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2029.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2030.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2031.png)
+
+### Rectified Flow方法
+
+**配对Coupling，类似DDPM中图像$x_0$和$x_0$用$q(x_{t} | x_{t-1})$采样得到的编码$x_T$，或者编码$z_T$和$z_T$用$q(z_{t-1} | z_{t}, z_0)$采样生成的图像$z_0$。因为$z_T→z_0$的采样“路径”$q(z_{t-1} | z_{t}, z_0)$是$z_0→z_T$的采样路径逆向构造的，$z_t$的采样几乎不可能“交叉”，和$v(Z_t, t)$对类似$q(z_{t-1} | z_{t}, z_0)$路径的近似程度相关。**
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2032.png)
+
+*1-ReFlow：$v(X_t, t)$*
+
+**希望任意步迭代采样的结果$X_t$是$Π_0$的样本$X_0$到$Π_1$的样本$X_1$所定义的直线上的点**，定义$X_t = tX_1 +(1-t)X_0$， 则$\frac{dX_t}{dt} = X_1 -X_0$。但$X_1 -X_0$在生成时不可解，因为$X_1$是$X_0$采样的目标结果，不可能提前知道。
+
+类似DDIM中，$q(x_0 | x_{T} : x_1 )$不可解，定义$p_θ(x_{0} : x_T)$近似$q(x_0 | x_{T} : x_1 )$，将$p_θ(x_{t-1} | x_t)$参数化为$x_0$的编码序列$x_{1}...x_{T}$的逆向采样方式$q(x_{t-1} | x_{t}, f_0)$并学习$q(x_{t-1} | x_{t}, x_0)$。
+
+对已知的$Π_0$分布的样本$X_0$和$Π_1$分布的样本$X_1$，定义$v(X_t, t)$学习$X_1 -X_0$，其中，$X_t = tX_1 +(1-t)X_0$。
+
+*2-ReFlow：$v(Z_t, t)$*
+
+$v(X_t, t)$的采样方式近似了$X_1 -X_0$的采样方式，从而学到了分布$Π_0$到分布$Π_1$的**“不交叉”的采样方式**，类似于学到了$q(x_{t-1} | x_{t}, x_0)$。
+
+令$Z_0$是分布$Π_0$的采样，$Z_1 = Flow(v(X_t, t), Z_0)$是生成的图像，则$Z_0$和$Z_1$是建立了**“不交叉”采样的配对样本，类似DDPM中$q(x_{t-1} | x_{t}, x_0)$和$q(x_{t} | x_{t-1})$配对的编码$x_T$和图像$x_0$**。
+
+定义$v(Z_t, t)$学习$Z_1 -Z_0$，其中，$Z_t = tZ_1 +(1-t)Z_0$。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2033.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2034.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2035.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2036.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2037.png)
+
+ReFlow的作用是将编码分布$X_0$和样本分布$X_1$之间**寻找直线映射**，从而一步或少数步采样生成。
+
+Distillation在现有的采样方式基础上，学习更少步数的近似采样方式。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2038.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2039.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2040.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2041.png)
+
+### 实验
+
+递归获取1-ReFlow…K-ReFlow，蒸馏K-ReFlow，使用K-ReFlow单步生成$Z_1$。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2042.png)
+
+Example
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2043.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2044.png)
+
+## ICLR22：DDIM Distilling（DDIM Teacher，x-prediction）
+
+ICLR22：Progressive distillation for fast sampling of diffusion models 
+
+**distilling策略**
+
+标准DDIM作为Teacher在生成过程中，每步$z_t$预测$x_0$的值进行采样，得到$z_{t-\epsilon}$。
+
+Student DDIM在生成过程中，每步$z_t'$直接学习Teacher连续两步采样的结果$z_{t-2\epsilon}$。
+
+Student DDIM蒸馏后极限情况，由$z_1$直接生成$x_0$。
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2045.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2046.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2047.png)
+
+**distilling实现**
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2048.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2049.png)
+
+## ICLR23：Flow Matching（最优传输计划ODE Flow：v-prediction）
+
+ICLR23：Flow matching for generative modeling    
+
+[https://zhuanlan.zhihu.com/p/685921518](https://zhuanlan.zhihu.com/p/685921518)
+
+类似ReFlow方法，模型直接学习ODE本身（v-prediction），而不是人为构造ODE的参数化形式。
+
+用CNF理论模型建模和解释ODE积分的求解方式，比如DDPM、DDIM等。
+
+最优传输计划OT是直线映射方式。
+
+### 连续规整流CNF
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2050.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2051.png)
+
+### CNF理论例子：VP、VE、OT
+
+CNF理论解释不同的扩散过程：方差爆炸VE和方差保护VP
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2052.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2053.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2054.png)
+
+**CNF理论设计OT Flow**
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2055.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2056.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2057.png)
+
+### 实验
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2058.png)
+
+![image.png](DDIM%E3%80%81SDE%20ODE%20Flow%EF%BC%9A21-23/image%2059.png)
+
+![image.png](DiT%E3%80%81JiT%EF%BC%9A23%E3%80%8125/image%202.png)

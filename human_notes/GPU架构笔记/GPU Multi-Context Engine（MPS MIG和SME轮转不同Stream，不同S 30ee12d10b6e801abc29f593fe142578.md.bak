@@ -1,0 +1,183 @@
+# GPU Multi-Context Engine（MPS>MIG和SME轮转不同Stream，不同Stream是不同Ctx）
+
+ref：TECHNIQUES FOR CONFIGURING A PROCESSOR TO FUNCTION AS MULTIPLE , SEPARATE PROCESSORS
+
+Ctx定义了任务需要的资源和其所处的目标状态（共享、隔离）。
+
+MPS是？？？父亲进程的很多子进程共享父进程Ctx，子进程消耗资源不可调度（GPU眼中只有一个父进程channel），任一子进程的异常处理影响全部子进程，即MPS互相性能和异常干扰。
+
+**MIG和SME提供更好的隔离性。**
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%201.png)
+
+## Fig1、2、3、4
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%202.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%203.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%204.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%205.png)
+
+## Fig5、6、7、8
+
+timeslice ctx switch，DRAM Arch for MIG（SMC Engine） partition。SME的划分标准是SysPipe，接受一个应用的channels或一个TSG。
+
+FECS：前端Ctx切换控制，GPU Slice的Channel Ctx切换。
+
+GPC逻辑划分到SME（可扩展到vGPC便于迁移），SysPipe物理划分到SME，SysPipe派发CTA到GPC之间的路由**Route**由Crossbar和SMC Arbiter设置。
+
+CPU通过特权寄存器Pri配置GPU，Pri Hub映射/划分全局Pri地址空间到不同SysPipe中Pri的地址空间，Pri地址空间管理Pri寄存器。
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%206.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%207.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%208.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%209.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2010.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2011.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2012.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2013.png)
+
+## Fig9、10、11、12、13
+
+host分隔GPU到多块，插板法配置
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2014.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2015.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2016.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2017.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2018.png)
+
+## Fig14、15、16、17
+
+多VM执行，地址划分，GPU/GPC/TPC迁移
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2019.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2020.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2021.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2022.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2023.png)
+
+## Fig18、19、20、21、22、23、24
+
+资源分隔、内存管理支持
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2024.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2025.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2026.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2027.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2028.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2029.png)
+
+global virtual、sub virtual
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2030.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2031.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2032.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2033.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2034.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2035.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2036.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2037.png)
+
+## Fig25、26、27（*）
+
+MIG运行VM负载，VM Ctx包含内部所有的SME Ctx和Memory Ctx。
+
+SME运行runlist负载，SME轮转TSG的顺序是runlist，TSG内应用可能占用多个channel，不同TSG分时共享SME Ctx（SME中所有channel）。
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2038.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2039.png)
+
+VM-level timeslicing（25、26）将**时间片分配给不同VM**，切换VM内所有runlist：
+
+25中，t1时刻VM中断，**partition重置**（SME合并），支持1个Ctx更大的runlist，t4时刻VM中断，SME拆分，支持2个Ctx更小的runlist；
+
+26中，t2时刻partition空闲，**partition重划分**（4、6、7作merge），支持更大Ctx的runlist。
+
+SMC-level timeslice（27）将**时间片分配给关键runlists**，切换关键runlist：
+
+27中，**时间片足够完成关键runlists**，合并后移除关键runlist（t1-t2，t3-t4，t5-t6），切换runlist或VM。
+
+Fast ReCfg：划分内的FECS和GPC统一load配置，之后统一init。
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2040.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2041.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2042.png)
+
+## Fig28、29、30（*）
+
+VM的GPU迁移（28、29）：5个VM轮流在4个PPU迁移执行，负载均衡，每个VM平均使用80%的单个PPU时间。
+
+time-slice VM流程（30）：PPU内ReCfg、PPU之间ReCfg、抢占目标PPU的目标VM的资源。
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2043.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2044.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2045.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2046.png)
+
+## Fig31、32（Privileged Reg）
+
+memory Mapping：Bar0对应权限Regs（31、32）
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2047.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2048.png)
+
+## Fig33、34、35、36、37、38、39
+
+性能监控PM（33、34、35、36、37）
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2049.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2050.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2051.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2052.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2053.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2054.png)
+
+功耗和时钟监控（38、39）
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2055.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2056.png)

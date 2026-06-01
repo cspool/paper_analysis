@@ -1,0 +1,715 @@
+# NV各代GPU架构
+
+## 目录
+
+**架构对比、CUDA模型、统一内存管理**
+
+NVIDIA GPU ARCHITECTURE:FROM TURING TO BLACKWELL
+
+Evolution of Nvidia GPU from microarchitectures Pascal to Ampere
+
+**fermi**
+
+NVIDIA’s Fermi: The First Complete GPU Computing Architecture
+
+NVIDIA’s Next Generation CUDA Compute Architecture: Fermi
+
+FERMI GF100, A GRAPHICS PROCESSING UNIT (GPU) ARCHITECTURE FOR COMPUTE, TESSELLATION, PHYSICS, AND COMPUTATIONAL GRAPHICS
+
+Whitepaper NVIDIA GF100 World’s Fastest GPU Delivering Great Gaming Performance with True Geometric Realism
+
+**kepler**
+
+Technology Overview NVIDIA GeForce GTX 680 The fastest, most efficient GPU ever built.
+
+Whitepaper NVIDIA’s Next Generation CUDA Compute Architecture Kepler GK110/210
+
+**maxwell**
+
+Whitepaper NVIDIA GeForce GTX 980 Featuring Maxwell, The Most Advanced GPU Ever Made.
+
+Whitepaper NVIDIA GeForce GTX 750 Ti Featuring First-Generation Maxwell GPU Technology, Designed for Extreme Performance per Watt
+
+**pascal**
+
+NVIDIA Tesla P100 *The Most Advanced Datacenter Accelerator Ever Built Featuring Pascal GP100, the World’s Fastest GPU*
+
+Whitepaper NVIDIA GeForce GTX 1080
+
+**Volta**
+
+NVIDIA TESLA V100 GPU ARCHITECTURE *THE WORLD’S MOST ADVANCED DATA CENTER GPU*
+
+**Turing**
+
+NVIDIA TURING GPU ARCHITECTURE *Graphics Reinvented*
+
+RTX ON – THE NVIDIA TURING GPU
+
+**Ampere**
+
+NVIDIA A100 Tensor Core GPU Architecture UNPRECEDENTED ACCELERATION AT EVERY SCALE
+
+NVIDIA AMPERE GA102 GPU ARCHITECTURE *Second-Generation RTX*
+
+**Hopper**
+
+NVIDIA GH200 Grace Hopper Superchip Architecture
+
+NVIDIA H100 Tensor Core GPU Architecture EXCEPTIONAL PERFORMANCE, SCALABILITY, AND SECURITY FOR THE DATA CENTER
+
+**Blackwell**
+
+NVIDIA Blackwell Architecture Technical Brief Built for the Age of AI Reasoning
+
+NVIDIA RTX BLACKWELL GPU ARCHITECTURE Built for Neural Rendering
+
+[https://medium.com/@kvnagesh/nvidia-blackwell-architecture-a-deep-dive-into-the-next-generation-of-ai-computing-79c2b1ce3c1b](https://medium.com/@kvnagesh/nvidia-blackwell-architecture-a-deep-dive-into-the-next-generation-of-ai-computing-79c2b1ce3c1b)
+
+**Rubin**
+
+GTC25
+
+## CUDA、统一内存、NVLink
+
+CUDA是使用GPU的SIMT执行模型来执行并行计算的多线程编程模型。
+
+统一地址空间的目的是使用统一地址识别数据位于的层次和device。
+
+统一内存的目的是让CPU和GPU的内存构成内存池，使用统一地址“自动地”访问不同device的内存数据，缺页时由runtime自动传输数据page，而不需要应用手动管理内存一致性。
+
+NVLink的目的是让GPU之间、CPU和GPU之间的内存传输更快。
+
+统一地址空间，不等于虚拟地址空间。虚拟是说不同应用有独立的地址空间，经过MMU映射到物理页。统一地址空间是把不同物理资源整合成统一资源池的物理页。
+
+## 图形加速器和Fermi（CUDA、统一地址空间）
+
+GeForce3是**3D图形pipeline加速器**，pipeline不同阶段是不同的处理核心群。
+
+GeForce8800：最早支持**统一编程框架CUDA**的GPU，使用统一核心和基于C语言的GPU编程支持图形pipeline的所有阶段。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%201.png)
+
+**Fermi（GF100）**
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%202.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%203.png)
+
+CUDA app、grid、block、thd，Fermi的设计初心包含**加速Tessellation的新pipeline**。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%204.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%205.png)
+
+面向VM的执行模型，设计ISA（PTX）和GPU架构支持，便于迭代，VM类似软工中的“接口”。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%206.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%207.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%208.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%209.png)
+
+PTX2用**统一地址空间address**来统一管理不同存储层次Memory。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2010.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2011.png)
+
+同类型指针，通过指针地址所在范围自动识别设备和层次，而不需要编程时额外指定。
+
+[https://cloud.tencent.com/developer/inventory/8372/article/1151503](https://cloud.tencent.com/developer/inventory/8372/article/1151503)
+
+![Screenshot from 2026-03-26 20-57-09.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/Screenshot_from_2026-03-26_20-57-09.png)
+
+![Screenshot from 2026-03-26 20-59-22.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/Screenshot_from_2026-03-26_20-59-22.png)
+
+### 应用抢占/独占、MPS
+
+不同应用对shared memory和cache的需求偏好不同。
+
+WDU派发CTA到GPC/SM，SM内派发warp到SIMD Cores。
+
+**CUDA Ctx**是**应用在CPU侧进程的运行时，相同CUDA Ctx的kernel表示相同应用的kernel call**。相同App内不同**kernel** grid并发，因为TMU和WDU相对于SM执行是异步发送。不同App内不同**kernel** grid可以并发，但是存在性能干扰和可能的控制干扰（一挂全挂）。
+
+不同App分时间片独占GPU时，需要切换**App Ctx（从前端开始的Ctx）**，因为需要抢占TMU中的所有的task group（channel）。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2012.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2013.png)
+
+## Kepler（动态并行、Hyper-Q）
+
+Kepler的1个SMX等价于Fermi中2个SM，面积效率和能耗更好。
+
+Kepler相比Maxwell，双精度性能更高。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2014.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2015.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2016.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2017.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2018.png)
+
+**算术指令执行延迟确定**，编译来确定SMX中指令发射顺序（打包在指令中）。使用简单硬件模块提取发射延迟，在warp之间**调度发射**时剔除（mask out）特定warps（需要等待预定延迟后发射）。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2019.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2020.png)
+
+取消shader clock（部分单元用更高时钟），执行单元使用面积换吞吐，提高TOPS/W。PolyMorph Engine（图形）优化。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2021.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2022.png)
+
+### Hyper-Q，动态并行
+
+线程Ctx寄存器容量扩大（最大并发线程数和最大RF/线程Ctx匹配）。
+
+Shuffle指令允许warp内线程通过寄存器交换数据。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2023.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2024.png)
+
+**动态并行**允许**device线程动态生成grid、Stream和event**，提高数值仿真效率。
+
+channel是TMU中的task group（链表实现），pushbuffer存储cudaStream（TMD指针），cudaStream通过channel传递，**Fermi允许连接多个pushbuffer来读取命令流，但只提供1个channel**，不同Stream竞争channel引入False依赖。
+
+Hyper-Q：增加更多硬件队列（物理连接数）。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2025.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2026.png)
+
+channel Ctx的切换是什么？抢占TMU的work group（channel）。设置GMU管理host传递和SM生成的grid（GTMQ queue、QTMD）或cudaStream（TMDQs）。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2027.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2028.png)
+
+## Maxwell（Tiled Texture>动态分辨率）
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2029.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2030.png)
+
+Tiled Texture支持不同区域的动态分辨率。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2031.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2032.png)
+
+## Pascal（NVLink、HBM2、统一内存、计算抢占）
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2033.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2034.png)
+
+更多的双精度DP Cores用于训练（Kepler是3:1，Pascal是2:1），FP16支持更好性能的DropOut（防止过拟合）。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2035.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2036.png)
+
+显存升级到HBM2，支持NvLink、HBM2的GPU芯片封装。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2037.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2038.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2039.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2040.png)
+
+NVLink：CPU和GPU，GPU和GPU之间数据传输。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2041.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2042.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2043.png)
+
+### 统一内存（GPU访问CPU内存）
+
+CPU和GPU统一内存让CPU和GPU Cache“隐式自动”从CPU内存和GPU内存中读取数据。
+
+CUDA4是统一虚拟地址空间来管理不同内存。
+
+CUDA6的统一内存创造CPU和GPU的内存池，但是CPU只能在GPU执行kernel之前或等待完成后访问统一内存，CPU和GPU不能同时访问内存，统一地址空间不超过VRAM大小。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2044.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2045.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2046.png)
+
+Pascal中CPU和GPU统一内存，虚拟地址空间覆盖系统内存池，支持CPU和GPU之间的缺页自动传输（CPU/GPU使用映射到其他U内存的虚拟地址区域时可触发缺页中断，从其他U内存中调页）。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2047.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2048.png)
+
+**计算任务的指令级抢占（接口）**，允许切换其他应用Ctx。Kepler的抢占接口只支持CTA级抢占，等待CTA完成后才能切换Ctx。
+
+支持指令级抢占接口之前，需要将长任务切分成时间片执行，以便CTA尽快结束（drain）后被抢占和切换Ctx，也不必被OS强制结束（重置GPU，导致任务reset）。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2049.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2050.png)
+
+### 图形pipeline的Fast Sync
+
+**图形pipeline的V-SYNC和Fast SYNC**
+
+开启V-SYNC要求pipeline降速到和display刷新率相同（pipeline速度被display“后端阻压”），让Engine发任务、pipeline处理和display帧率一致，防止帧抖动tearing，但引入较高的输入延迟（Engine发任务慢）。
+
+关闭V-SYNC让pipeline全速处理任务，不必要和display刷新率同步，导致帧抖动，但输入延迟低。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2051.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2052.png)
+
+架构改变：增加更大GPU frame buffer匹配高速GPU的pipeline和低速Display的Scan，将pipeline中的GPU→Display和Game Engine→GPU两个阶段解耦，打破耦合pipeline同步导致高输入延迟，或者耦合pipeline异步导致帧抖动。
+
+新架构支持的pipeline的新执行模式Fast Sync中，Engine、GPU和display不同步，但frame buffer按照刷新率输出以同步Display。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2053.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2054.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2055.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2056.png)
+
+**游戏中异步的多计算负载**：**物理计算和媒体处理的GPU并发overlap**；渲染帧的后处理；**VR中异步timewarp（ATW）在刷新间隔内，基于头的实时位置修改当前帧**。
+
+图形GPU命令包含多个draw call，每个draw call包含很多三角形，每个三角形包含很多pixel的渲染计算，命令长延时且一般不被抢占。
+
+Pascal支持**Pixel Level Preemption**，图形命令的执行拆分成Pixel Level执行，添加抢占接口和对应架构支持。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2057.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2058.png)
+
+### Pixel&Thd Level抢占
+
+命令流存储在pushbuffer，每个命令包含若干三角形queue TMD或grid TMD，queue TMD按照pixel为单位执行，grid TMD按照CTA为单位执行。
+
+不同level抢占的共性是等待不同level负载完成后抢占，支持pixel level、CTA level和instr level抢占。
+
+instr抢占不必等待CTA完成而只需等待指令完成，因此抢占延迟确定且更短，抢占指令不必过早发出就能保证ATW能及时开始和完成，减少GPU抢占开销。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2059.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2060.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2061.png)
+
+### SMP几何引擎
+
+同时多投影引擎SMP Engine能对2个投影中心分别完成16次投影计算，提供dataflow满足几何pipeline（几何命令Stream）的多投影需求，节省几何负载繁重场景下使用原有dataflow存在的重复计算。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2062.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2063.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2064.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2065.png)
+
+## Volta（合并L1和SharedMem、Tensor Core、FP32+INT32并行、独立线程调度、MPS、CG）
+
+### Tensor Core
+
+合并SM中的L1 Cache和SharedMem，提高L1性能，简化SharedMem的编程管理开销，之前SharedMem没有设置Cache，需要**精细管理（作为Buffer）**。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2066.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2067.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2068.png)
+
+**Tensor Core**是**矩阵乘法的特化datapath**，比Cuda Core的矩阵乘更快。warp-level矩阵乘法操作。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2069.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2070.png)
+
+### 独立线程调度 for 分支并行和Starvation-Free（解决死锁）
+
+独立线程调度给每个线程设置独立的PC和call stack空间，线程可以脱离warp单独“前进”，而不必束缚于warp，不存在warp内active线程对inactive线程的“PC结构”阻塞。
+
+之前的SIMT中warp内所有线程共享PC，warp内线程一旦脱离warp，就无法正确执行，因为线程没有单独的PC和call stack管理指令执行，导致warp内active线程阻塞inactive线程的执行。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2071.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2072.png)
+
+正确的**多线程程序**，让线程总能等待并获得mutex，而不需要考虑结构性阻塞，因为不存在warp内active线程对inactive线程的“PC结构”阻塞。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2073.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2074.png)
+
+### MPS（单用户的多应用）、统一内存和地址翻译ATS
+
+CPU的**MPS进程把相同用户的多个应用的任务打包成相同应用的命令流**，**共享地址空间和资源**，GPU将其当作单应用，只拥有应用内的多任务隔离性，承受单应用的性能干扰和异常处理打扰。
+
+Kepler将多个协作App Ctx**打包**成一个App Ctx，多个App共享GPU资源。
+
+Pascal设置**中介**CPU进程将协作App的任务作为自己的任务提交给GPU。
+
+Volta允许多个App的任务**直接提交到GPU的channel**，并发多个App的kernel。
+
+Volta的不同任务可以设置访问资源，限制任务间性能干扰。
+
+**内存设置Access Counter**让GPU内存缓存其他处理器内存的物理页，减少跨U传输。
+
+**地址翻译ATS**允许GPU直接查询CPU的页表，GPU的MMU缺页时，可向CPU请求访问页表（减少CPU在缺页中断中参与的深度）。此外，ATS允许GPU从CPU申请内存malloc。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2075.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2076.png)
+
+![image.png](../../meeting-26%2003%2024/image%204.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2077.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2078.png)
+
+### CG API（自定义大小的线程组同步）
+
+CG前静态定义blockSz，只能定义warp和block范围内的线程同步。
+
+CG允许**编程时定义运行时sub-warp、warp、blk、multi-blk、grid、multi-grid范围的线程同步**。
+
+**架构定义执行模型是**SM按block为单位接受负载和分配资源，SIMD Cores按warp为单位执行指令，因此自定义范围的CG运行时按照block为单位调度到SM后启动，按warp为单位发射指令。
+
+**架构定义传输模型是**block内线程可通过SMEM共享数据，warp内线程通过寄存器交换数据，因此自定义范围的CG中线程快速共享数据的方式仍然是block内走SMEM和warp内走寄存器。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2079.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2080.png)
+
+例子：grid-group、multi-grid-group。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2081.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2082.png)
+
+## Turing（细节优化）
+
+FP32和INT32的比例按照workload中Op比例设置。更高性能的TensorCore。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2083.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2084.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2085.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2086.png)
+
+Cache优化、独立线程调度下优化重复数据计算。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2087.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2088.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2089.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2090.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2091.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2092.png)
+
+## Ampere（TF32、TC支持更多精度和结构性稀疏、MIG、NVSwitch）
+
+### Tensor Core
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2093.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2094.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2095.png)
+
+TF32
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2096.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2097.png)
+
+结构化稀疏TC
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2098.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%2099.png)
+
+### MIG
+
+MIG将资源partition成多个GPU Slice，每个GPU Slice可以作为独立的GPU instance（MIG），提供多VM（用户）的资源隔离。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20100.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20101.png)
+
+1个图形-计算前端Sys Pipe和之前一致，额外6个计算前端。
+
+每个MIG Slice可以独立承载一个应用Ctx或VM Ctx，每个Slice拥有独立的channel资源（Sys Pipe）。
+
+若干MIG slice可以组成不同大小的GPU instance（MIG），MIG可以分时超卖来提供更多的vGPU，vGPU间可迁移VM负载。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20102.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20103.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20104.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20105.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20106.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20107.png)
+
+### 异步指令、Cache、任务抽象、CG level指令
+
+FP32计算数值、INT32计算地址。TC支持更大的数据共享。L2 Cache维持部分数据不刷新。
+
+异步Copy指令允许线程的传输指令和计算指令Overlap，因为VRAM到SMEM的异步Copy过程不占用线程资源。
+
+异步Barrier将Arrive-Wait融合的Primitive拆成Arrive和Wait Primitive，先Arrive（Produce）的线程继续执行（Steal），直到遇到Wait才等待（Consume），设计成**Produce-Steal-Consume pipeline来减少线程阻塞**。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20108.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20109.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20110.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20111.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20112.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20113.png)
+
+**task graph**（和grid、stream同功能的任务容器）和延迟breakdown，task graph将GPU的树形架构作类似**dataflow**配置来启动。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20114.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20115.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20116.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20117.png)
+
+**CG级指令**：硬件加速warpSz的reduction指令
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20118.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20119.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20120.png)
+
+## Hopper和Grace-H（FP8、CGA&DSMEM、TMA、扩展内存池）
+
+### FP8、DPX（加速DP算法）、TC
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20121.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20122.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20123.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20124.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20125.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20126.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20127.png)
+
+### 新执行模型block cluster & DSMEM
+
+Volta CG API的自定义范围的线程组同步，是硬件独立线程调度和软件Barrier实现，但架构面向block和warp来提供数据共享和任务调度功能，即架构的执行模型和传输模型是block/CTA和warp。
+
+Hopper架构在**GPC内的每个SM引入DSMEM**，面向**block cluster**提供数据共享和任务调度，是新的执行模型和传输模型（grid、cluster、block、warp）。
+
+GPC按cluster为单位接受负载，cluster通过GPC内的所有DSMEM共享数据。cluster内线程将cluster的所有block在DSMEM的地址段映射到自己的地址空间。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20128.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20129.png)
+
+### 异步TMA、异步传输Barrier
+
+把之前的grid中同步等待的目标指令（如Copy），设置额外硬件处理，让同步等待的对象脱离原有datapath，异步进行和其他指令overlap，为了完成原有同步，设置对应的屏障类型和接口。
+
+A100中设置特定线程计算细粒度地址、发起细粒度传输和等待所有传输完成，H100的TMA硬件打包细粒度地址的计算过程，不需要特定线程进行计算-传输-等待的循环。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20130.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20131.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20132.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20133.png)
+
+异步屏障将barrier拆分为Arrive和Wait，让先Arrive的线程可以继续，直到遇到Wait等待，计数线程Arrive计数足够后Wait完成。
+
+异步传输屏障的Wait的完成，既需要Arrive计数足够，也需要传输量满足Wait定义。因为原来负责传输的线程启动TMA后，不需要等待TMA传输完成就能到达Wait，需要数据量要求来强制等待TMA完成传输。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20134.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20135.png)
+
+### 安全MIG、Transformer Engine
+
+单GPU（不同MIG）运行不同VM、单GPU单VM、多GPU单VM时，保证隔离性和传输加密。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20136.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20137.png)
+
+**TF Engine是对Transformer结构的软硬件协同加速方案**，统计每层输出，每层使用不同的精度计算，混合精度推理。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20138.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20139.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20140.png)
+
+### Grace CPU扩展统一内存池
+
+Hopper GPU使用96GB HBM3或141GB HBM3e，Grace CPU管理扩展的480GB DDR5，CPU和GPU之间通过NVLink C2C传输。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20141.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20142.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20143.png)
+
+InfiniBand网络传输组成服务器集群，水平扩展Scale-Out。高算力、高容量存储、高带宽的通信和传输适合有硬性的超大算力和存储需求的负载（strong-scaling）。
+
+多个Grace-Hopper通过NVLink互联组成服务器，GPU是核心计算节点，Grace管理巨大内存池。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20144.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20145.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20146.png)
+
+硬件加速处理内存一致性。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20147.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20148.png)
+
+Access Counter缓存频繁的物理页。NVLink Switch中的内存访问。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20149.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20150.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20151.png)
+
+## Blackwell（FP4、FP32/INT32、NR、TMEM）和Grace-B（Attn、RLLM）
+
+### TC（FP4、TMEM）
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20152.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20153.png)
+
+FP4的TC。INT32和FP32的统一CUDA Core。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20154.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20155.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20156.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20157.png)
+
+TMEM：Tensor Core专属的Memory，而不需要占用通用寄存器资源。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20158.png)
+
+![Screenshot from 2026-03-23 21-57-38.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/Screenshot_from_2026-03-23_21-57-38.png)
+
+![Screenshot from 2026-03-23 21-59-05.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/Screenshot_from_2026-03-23_21-59-05.png)
+
+### AMP设置RV Core作为GPU前端
+
+由AMP负责调度GPU Ctx，而不需要系统CPU参与，之前channel preemption是CPU控制或TO，将**CUDA Ctx放在GPU侧**，减少CPU的参与。
+
+AMP提供类似SCG的功能，动态改变计算和图形的策略。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20159.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20160.png)
+
+### Neural Render
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20161.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20162.png)
+
+Grace-Blackwell
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20163.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20164.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20165.png)
+
+### Chip & Cheese（模块在芯片的布局）
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20166.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20167.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20168.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20169.png)
+
+## Rubin
+
+infer at scale。PD workload。Reasoning的token暴增。
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20170.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20171.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20172.png)
+
+数据
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20173.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20174.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20175.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20176.png)
+
+产品
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20177.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20178.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20179.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20180.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20181.png)
+
+![image.png](NV%E5%90%84%E4%BB%A3GPU%E6%9E%B6%E6%9E%84/image%20182.png)

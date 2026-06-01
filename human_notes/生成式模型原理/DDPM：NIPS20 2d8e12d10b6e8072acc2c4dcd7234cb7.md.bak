@@ -1,0 +1,251 @@
+# DDPM：NIPS20
+
+## NIPS20：DDPM
+
+NIPS20：Denoising Diffusion Probabilistic Models
+
+DDPM扩散过程$q(x_T : x_1 | x_0)= Πq(x_t | x_{t-1})$ 定义了从$q(x_0)$采样生成$q(x_T)=N(0,1)$的映射方式。
+
+相同扩散过程$q(x_T : x_1 | x_0)= q(x_T | x_0) \cdot Πq(x_{t-1} | x_{t}, x_0)$提供了从$q(x_T | x_0)=N(0,1)$采样生成$q(x_1 | x_0)$的方式，因此根据变分推断模型，定义$\{p_θ(x_{t-1} | x_t)=q(x_{t-1} | x_{t}, f_θ) | t=2...T \}$学习$\{q(x_{t-1} | x_{t}, x_θ) | t=2...T \}$，参数化并最大化$p_θ(x_0|x_1)$。
+
+### Diffusion的动机
+
+**VAE的概率模型是基于$p(Z)$的采样Z，按照$p(X | Z)$采样生成样本X**，隐变量Z的后验分布**$p(Z | X)$**将样本X分布$p(X)$映射到分布$p(Z)$。
+
+VAE-Decoder中单步Guaasian采样会平均化图像的高频成分，导致图像可能**模糊**。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%201.png)
+
+VAE解码为了让ELBO中的重建项更大，会平均高频特征，但导致**blurry**。
+
+比如**全局特征相似的两个局部pattern**会编码到同一个z，但单步高斯p(X|Z)在同一个z条件的均值下很难匹配不同pattern，因此解码时会平均化pattern后生成图像。
+
+Diffusion将**编码采样映射设计为覆盖语义足够的扩散过程**（隐变量序列x1…xT），因此只需预测在解码映射的生成过程。VAE需要同时优化编码和解码的采样分布，要求编码采样能覆盖更多语义且保持在p(Z)范围，解码采样能正确还原样本。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%202.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/e7215f56-9562-4cd6-8a99-1cbb0a48790e.png)
+
+*变分推断模型下的Diffusion*
+
+$q(x_T : x_1 | x_0)= Πq(x_t | x_{t-1})$ 作为**编码器**，**编码**和理解图像$x_0$的分布$p(x_0)$。
+
+$x_{0}→x_1→x_T$：**Markov扩散过程**$q(x_T : x_1 | x_0)= Πq(x_t | x_{t-1})$定义分布$p(x_0)$逐步采样（$x_{t-1}→x_t$）生成$x_1…x_T$序列的方式。
+
+$q(x_0|x_1:x_T)$作为**解码器不可解**，**定义$p_θ(x_0:x_T)$来近似$q(x_0|x_1:x_T)$**。
+
+$x_{T}→x_1  \color {grey}{→x_{0}}$：**相同扩散过程**$q(x_T : x_1 | x_0)= q(x_T | x_0) \cdot Πq(x_{t-1} | x_{t}, x_0)$定义分布$q(x_T | x_0)$ 逐步采样（$x_{t}→x_{t-1}$）生成序列$x_{T}…x_1$的方式，即$x_t$处采样时，**沿着$x_0$的编码路径逆向采样**。
+
+$x_{T}→x_{1} \color {grey} →f_θ$：定义$\{p_θ(x_{t-1} | x_t)=q(x_{t-1} | x_{t}, f_θ) | t=2...T \}$，分布$p(x_T)$ 逐步采样（$x_{t}→x_{t-1}$）生成序列$x_{T}…x_1$的方式，即$x_t$处采样时，**沿着$x_0$预测值$f_θ(x_t)$的编码路径逆向采样**。
+
+$x_{1}→f_θ$：定义$p_θ(x_0|x_1)$是$x_{1}$处采样得到$x_{0}$的**高斯采样**，$p_θ(x_0|x_1)$最大，是在修正$x_t$处的对$x_0$的预测值$f_θ(x_t)$。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%203.png)
+
+$x_0$能逐步**扩散到标准高斯分布z**，是马尔可夫扩散过程$q(x_T : x_1 | x_0)$中静态参数$α_t$设置的结果。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%204.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%205.png)
+
+### Diffusion的数学原理
+
+*Diffusion的Loss符合变分推断的优化方向*
+
+变分推断认为隐变量序列$x_1…x_T$是样本$x_0$的原因，**近似分布为了$logp(x_0)$最大**：
+
+> 后验分布$q(x_1 : x_T | x_0)$和**近似先验**分布$p_θ(x_T : x_1)$相似，但是扩散过程$q(x_T : x_1 | x_0)$是静态定义的。因此**$p_θ(x_{t-1} | x_t)$拟合$q(x_{t-1} | x_t , x_0)$**，对应$L_{t-1}$项。
+
+> **最大化样本$x_0$的似然分布$p_θ(x_0| x_{T} : x_1)=p_θ(x_0|x_1)$** ，对应$L_0$项。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%206.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%207.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%208.png)
+
+### Loss转换成预测噪声εθ（Lt-1，L0）
+
+*preview*
+
+**分布参数化**：**$*x_t = a \cdot x_{t-1} + b \cdot ε$** → xt以xt-1为条件的条件分布是高斯分布，xt-1作为常量，ε是高斯变量，除去xT，x0~xt-1都不是高斯变量。*
+
+**加高斯噪声**：$q(x_t|x_{t-1})=N(x_t; at \cdot x_{t-1}, b_t \cdot I)$的含义是**xt的条件分布**，xt-1影响条件分布的均值，即**$x_t = a \cdot x_{t-1} + b \cdot ε$**。
+
+**去高斯噪声**：$pθ(x_{t-1}|x_t)=N(x_{t-1}; μ_θ(x_t, t), Σ_θ(x_t, t))$的含义是**xt-1的条件分布**，xt影响条件分布的均值和方差，定义**$x_{t-1} = μ_θ(x_t, t) + Σ_θ \cdot ε$**。
+
+*Lt-1：让pθ(xt-1 | xt)拟合q(xt-1 | xt, x0)。*
+
+**pθ(xt-1 | xt)拟合q(xt-1 | xt, x0)**，μt‘和βt’分别是q(xt-1 | xt, x0)的均值和方差。由于高斯分布的假设，**pθ(xt-1 | xt)的均值uθ拟合ut‘**，来指引逆向去噪过程的采样。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%209.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2010.png)
+
+**训练过程中，x0、t和xt(x0, εt‘)和参数θ无关**，因为他们是x0、静态βt和ε产生的样本数据。“*’”表示“*”是累计过程关联的变量，如 $x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \mathbf{\epsilon_t'}$，其中εt‘是噪声叠加后表达式中的标准高斯噪声。
+
+> Lt-1 = pθ(xt-1 | xt)和q(xt-1 | xt, x0)分布期望**μθ和μt‘的KL距离——**关于q(xt-1 | xt, x0)的**均值**，让**μθ预测μt‘**，对应公式(9)**。**
+
+> 生成过程x0未知，**将x0用xt和εt**表示，Lt-1中μθ的ground truth **$μ_t' = \frac{1}{\sqrt{α_t}} (x_t(x_0,ε_t') - \frac {β_t } {\sqrt{(1 - \bar{α_t})} } ε_t')$**，对应公式(10)**。**
+
+> 用ground truth μt‘的形式定义μθ，并将μθ中参数转移到**εθ(xt，t)，$μ_\theta = \frac{1}{\sqrt{α_t}} (x_t(x_0,ε_\theta) - \frac {β_t } {\sqrt{(1 - \bar{α_t})} } ε_\theta)$，εθ(xt, t)预测**的ground truth是x0到xt过程的**叠加噪声εt‘**，对应公式(11)。
+
+*Loss → 训练和推理的**kernel***
+
+**训练**：pθ(xt-1 | xt)拟合q(xt-1 | xt, x0)的**训练数据是x0**，将xt表达为x0和εt‘的表达式，则：
+
+**Lt-1** → **预测噪声εθ(xt(x0, εt’), t)**和x0加噪到xt（$x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \mathbf{\epsilon_t'}$）的**实际噪声εt‘**的距离——关于x0、εt’的**均值**，对应公式(12)**。**
+
+**推理**：基于$p_θ(x_{t-1} | x_t)=N(u_θ, σ_t^2I)$的**εθ**表达，得到**从xt采样xt-1的表达式$x_{t-1} = \color{blue}{\frac{1}{\sqrt{\alpha_t}}} \left( x_t - \color{red}{\frac{1 - \alpha_t}{\sqrt{1 - \bar{\alpha}t}} \epsilon_\theta(x_t, t)} \right) + \color{green}{\sigma_t \mathbf{z}}$**，σt控制最终生成的x0的形式（N(0, 1)，确定点）。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2011.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2012.png)
+
+*L0 = -log[pθ(x0|x1)]：pθ(x0|x1)拟合q(x0|x1,x0)=δ(x0)*
+
+**高斯分布pθ(x0|x1)是x1到x0的解码器**，拟合ground truth是样本x0处的狄拉克分布q(x0|x1,x0)=δ(x0)，即**学习x0的条件分布**的均值uθ(x1，1)≈x0，类似于VAE-Decoder最大化pθ(x|z)。
+
+计算pθi(x0i|x1)：x0i是离散点，uθi是连续值，将x0i量化到[-1,1]，δ为积分窗口函数，pθi(x0i|x1)的预测均值**uθi(x1，1)接近x0i的量化值**时，pθi最大。
+
+假设每个x0i独立由x1生成，对D作累乘获得联合分布pθ(x0|x1)，要求**每个pixel x0i**都能被正确解码。
+
+去除系数来简化Loss，称为**reweighted Loss**，让Diffusion聚焦于较大t值的去噪重建。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2013.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2014.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2015.png)
+
+*训练和推理的实现*
+
+Diffusion**训练**的Loss是**x0和εt的函数均值**，因此训练的实现需要采样x0、t和ε，前向过程是：
+
+> 采样样本x0，采样时间t，采样噪声ε。
+
+> 计算x0经过t个噪声**叠加**的输出$x_t = \sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \mathbf ({\epsilon_t'}=\epsilon)$。
+
+> BackBone输入xt和t后预测**εθ(xt,t)≈ε**，计算εθ(xt,t)和ε的距离来优化。
+
+Diffusion**推理**需要从采样xT=z开始，**对t∈T:1执行t步去噪**，每个t的执行过程是：
+
+> BackBone输入xt和t后预测εθ(xt,t)。
+
+> 对xt去噪，计算$x_{t-1} = \color{blue}{\frac{1}{\sqrt{\alpha_t}}} \left( x_t - \color{red}{\frac{1 - \alpha_t}{\sqrt{1 - \bar{\alpha}t}} \epsilon_\theta(x_t, t)} \right) + \color{green}{\sigma_t \mathbf{z}}$。
+
+> t=1执行完后，输出x0。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2016.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2017.png)
+
+### Diffusion实验和用途
+
+Diffusion的x0扩散和z去噪轨迹是对x0的保守有损压缩，L1+…+LT是压缩率，L0是失真率，x1:xT是压缩表达，x0是原始信息，p(Y=x0 | x1)是x1对x0的还原度，因此-logp(Y= x0 | x1)是失真度。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2018.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2019.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2020.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2021.png)
+
+Diffusion的Loss来源于马尔库夫链，Diffusion和自回归模型的数学模型都是马尔可夫链，但**Diffusion和自回归生成图像的过程不同**。
+
+自回归模型生成图像是“**重排数据坐标**”的，每一步基于之前生成位置的pixel或z，预测下一个位置的pixel，而预测起点的位置/坐标可以改变。 
+
+Diffusion模型生成图像是“**位生成顺序**”的，即所有位置pixel的**数值位（如8bit，0-255）**随着去噪过程的每个t逐渐确定/生成。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2022.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2023.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2024.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2025.png)
+
+xT去噪生成图像x0过程中，**不同xt的含义**是优先生成大的轮廓，后生成局部的细节。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2026.png)
+
+### DDPM Q & A
+
+Q：为什么扩散参数选择是**sqrt(1-βt)和βt**？
+
+A：前向扩散是q后验q(xt|xt-1)，由**静态参数βt**定义，扩散每一步结果xt的**方差为1**。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2027.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2028.png)
+
+Q：**VAE和Diffusion**的关联是什么？
+
+VAE是x0单步编码到z的Encoder，z单步解码到x0的Decoder。
+
+Diffusion是x0多步扩散到xT(z)的Diffusion，xT(z)多步去噪到x0的Denoise。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2029.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2030.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2031.png)
+
+Q：Diffusion-**denoising**和VAE-**decoder**的学习和训练有什么区别？
+
+Diffusion和VAE都通过**变分推断近似未知分布，即最大化logp(X)**。Diffusion将编码映射**设计为覆盖语义足够**的扩散过程，因此只需预测在解码映射的生成过程。VAE需要同时优化编码和解码映射（分布），要求编码映射能覆盖更多语义，解码映射能正确还原样本。
+
+Diffusion-Denoising预测xT→x0过程每个t的xt → xt-1的“中间路径”pθ(xt-1 | xt)。
+
+> 但xt-1被xT~x0的“路径”q(xt | xt-1)定义，**q(x0)…q(xT-1)未知**，因此q(xt, xt-1)未知。
+
+> **将x0作为条件**，让pθ(xt-1 | xt)拟合**q(xt-1 | xt, x0)**。当t=1时，pθ(x0 | x1)拟合到x0附近。
+
+VAE-Decoder预测xT(z)→x0的“路径”**pθ(x0 | z)**，Encoder预测x0→xT(z)的“路径”**qφ(z | x0)**。
+
+> **pθ(x0 | z)最大**，即denoising中pθ(x0 | x1)最大，让生成接近样本x0。
+
+> qφ(z | x0)靠近先验分布p(z)，让编码z**覆盖**x0所需编码范围。
+
+Q：pθ(xt-1 | xt)学习以x0为条件的**q(xt-1 | xt, x0)是否会损失效果？**
+
+q(xt | xt-1)难以计算是因为**ground truth的xT~x0路径和未知的*xT‘~x0’*路径在xt→xt-1段存在重叠**，但Diffusion学习**多组xT~x0的途径**，包含多样的x0，就能获得多样的生成能力。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2032.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2033.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2034.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2035.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2036.png)
+
+Q：Diffusion的**扩散**过程和VAE的**Encoding**区别
+
+Diffusion的扩散目的是将图像x0摧毁成纯噪声z，**摧毁方式是逐步加噪声（参数设置保证）**，**设置βt是为了防止方差爆炸**，是否动态选择参数不影响达成目的，因此静态设置βt来降低计算量。
+
+VAE的Encoding目的是压缩数据维度，提取**存储价值更高的全局信息**到编码z中，而Diffusion计算过程不会改变数据维度。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2037.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2038.png)
+
+ 
+
+Q：为什么VAE会优先将图像**全局信息**压缩到编码z？
+
+全局信息会影响更大范围的数据，全局信息丢失对MSE造成很大损失，全局信息的编码连续而局部信息的编码离散且难以预测。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2039.png)
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2040.png)
+
+Q：为什么BackBone称为UNet？
+
+FCN中将不同层次特征**相加**后输出，而UNet中将不同层次特征**拼接**后输出，形状类似**U形**。
+
+![image.png](DDPM%EF%BC%9ANIPS20/image%2041.png)

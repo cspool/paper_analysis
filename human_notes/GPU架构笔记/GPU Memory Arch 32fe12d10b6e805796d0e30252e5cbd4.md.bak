@@ -1,0 +1,183 @@
+# GPU Memory Arch
+
+[https://ajdillhoff.github.io/notes/cuda_memory_architecture/](https://ajdillhoff.github.io/notes/cuda_memory_architecture/)
+
+[https://uplatz.com/blog/the-cuda-memory-hierarchy-architectural-analysis-performance-characteristics-and-optimization-strategies/](https://uplatz.com/blog/the-cuda-memory-hierarchy-architectural-analysis-performance-characteristics-and-optimization-strategies/)
+
+[https://www.tutorialspoint.com/cuda/cuda_memories.htm](https://www.tutorialspoint.com/cuda/cuda_memories.htm)
+
+[https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/understanding-memory.html](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/understanding-memory.html)
+
+MEMORY SHARING VIA A UNIFIED MEMORY ARCHITECTURE
+
+## GPU Mem
+
+统一地址空间是索引所有设备内存的虚拟地址空间，不同设备划分不同子地址空间，不同应用从所在设备的虚拟地址空间中划分子空间。
+
+![image.png](GPU%20Memory%20Arch/image.png)
+
+![image.png](GPU%20Memory%20Arch/image%201.png)
+
+![image.png](GPU%20Memory%20Arch/image%202.png)
+
+![image.png](GPU%20Memory%20Arch/image%203.png)
+
+![image.png](GPU%20Memory%20Arch/image%204.png)
+
+kernel定义Var，是分配memory资源的索引。统一地址空间是对CPU和GPU内存使用统一索引标识。统一内存是建立CPU和GPU内存的统一操作接口，底层驱动管理PTE和缺页处理。
+
+**生命周期Lifetime**是Var存活时段（启动和销毁层），决定**物理资源分配和回收，由负载的生命周期决定**，生命周期内已分配资源只属于分配目标（抢占目标）。
+
+**作用域Scope**是Var可见范围（运行时层），是负载的**虚拟地址空间**，作用域内的线程通过Var来使用资源、影响作用域内线程，不同作用域的资源操作隔离。
+
+Channel和内存partition分配给应用/MPS（lifetime），应用按grid或queue TMD执行（scope），grid执行操作Channel和内存（资源）。
+
+SMEM（SPM）分配给grid（lifetime），grid按block执行（scope），block操作SMEM和RF（资源）。
+
+WDU解析grid TMD得到，需要执行gridSz个block，派发执行block需要分配SMEM空间，每个block需要执行blockSz个线程，每个线程需要分配RF空间，派发执行block需要分配RF空间。
+
+grid从若干SM中申请“多份”SMEM空间和RF空间后，配置SMEM地址和RF地址给block后发到对应SM，对应数量的block并行。
+
+每个block使用SMEM地址访问SMEM资源执行，使用RF地址和线程Id访问RF空间，执行完毕后等待下一个block到来。
+
+gridSz个block派发且执行完毕后，申请的多个SM中的SMEM空间和RF空间释放，生命周期结束。
+
+![Screenshot from 2026-03-26 19-21-42.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_19-21-42.png)
+
+![Screenshot from 2026-03-26 19-21-57.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_19-21-57.png)
+
+Scope内所有线程共享资源，共享虚拟索引空间（global、SMEM、RF），线程通过指令（grid-base）+blockId+thdId访问虚拟地址进行数据交换。
+
+资源分配给Lifetime，不同Scope的资源独立且隔离，Scope有独立的虚拟索引，内层Scope的线程可以访问外层Scope资源（不同Scope通信）。
+
+内存分配给应用Lifetime，不同grid有不同的子虚拟空间，处于隔离的物理内存空间。
+
+虚拟空间中，多个线程的邻接虚拟地址访问“尽量”合并成一个地址字（Cache Line）进行访问，将数据加载到SMEM中分配的空间，虚拟地址按物理page不连续，邻接虚拟地址的物理地址一定连续。
+
+![Screenshot from 2026-03-26 17-47-36.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_17-47-36.png)
+
+![Screenshot from 2026-03-26 17-34-57.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_17-34-57.png)
+
+![Screenshot from 2026-03-26 19-55-55.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_19-55-55.png)
+
+## GPU MM kernel
+
+Tiling：外层Memory容量大但访问慢，将数据分块加载到内层Memory。
+
+![Screenshot from 2026-03-26 15-37-00.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-37-00.png)
+
+![Screenshot from 2026-03-26 15-37-20.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-37-20.png)
+
+Tiled MM：线程block计算矩阵乘法的输出矩阵，SIMT要求线程block执行相同指令，统一成ld-com-str阶段，每个阶段是相同指令的不同地址或数据。
+
+![Screenshot from 2026-03-26 15-39-37.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-39-37.png)
+
+![Screenshot from 2026-03-26 15-40-10.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-40-10.png)
+
+每个线程block有4个线程，并行计算2*2的输出矩阵，使用4个线程依次加载2*2的A和B到SMEM，并行计算2*2个内积，存储到SMEM。
+
+kernel编程：每个线程依次加载A和B的对应元素，计算1个内积，存储到SMEM。
+
+![Screenshot from 2026-03-26 15-40-25.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-40-25.png)
+
+![Screenshot from 2026-03-26 15-40-58.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-40-58.png)
+
+![Screenshot from 2026-03-26 15-41-09.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-41-09.png)
+
+![Screenshot from 2026-03-26 15-42-02.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-42-02.png)
+
+![Screenshot from 2026-03-26 15-41-36.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-41-36.png)
+
+![Screenshot from 2026-03-26 15-42-40.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-42-40.png)
+
+边界处理、Memory占用、动态决定使用SMEM的大小来支持分块大小。
+
+SMEM的分配是地址段的分配（不涉及MMU，类似地址索引的Buffer），因此允许block启动时指定block需要的SMEM大小。
+
+![Screenshot from 2026-03-26 15-42-50.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-42-50.png)
+
+![Screenshot from 2026-03-26 15-44-02.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-44-02.png)
+
+![Screenshot from 2026-03-26 15-44-48.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_15-44-48.png)
+
+## GPU Conv
+
+[https://ajdillhoff.github.io/notes/gpu_pattern_convolution/](https://ajdillhoff.github.io/notes/gpu_pattern_convolution/)
+
+[https://eunomia.dev/others/cuda-tutorial/06-cnn-convolution/](https://eunomia.dev/others/cuda-tutorial/06-cnn-convolution/)
+
+基础Conv。优化后，权重存储Constant Mem，被Cache而快速访问。
+
+![Screenshot from 2026-03-26 18-11-01.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_18-11-01.png)
+
+![Screenshot from 2026-03-26 18-11-47.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_18-11-47.png)
+
+![Screenshot from 2026-03-26 18-12-21.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_18-12-21.png)
+
+Tiled Conv用多个线程读取Tile输入到SPM，直接Conv的访存和内积，没有提前im2col后GEMM。
+
+Cache the Halo，光环线程不参与当前Tile结果计算，参与后续Tile计算而直接从SPM读取。
+
+![Screenshot from 2026-03-26 18-14-23.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_18-14-23.png)
+
+![Screenshot from 2026-03-26 18-14-05.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_18-14-05.png)
+
+![Screenshot from 2026-03-26 19-41-40.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_19-41-40.png)
+
+![Screenshot from 2026-03-26 18-16-12.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_18-16-12.png)
+
+## GPU Reduction
+
+[https://ajdillhoff.github.io/notes/gpu_pattern_reduction/](https://ajdillhoff.github.io/notes/gpu_pattern_reduction/)
+
+reduction：多输入单输出的规约，如内积。
+
+![Screenshot from 2026-03-26 20-12-17.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-12-17.png)
+
+![Screenshot from 2026-03-26 20-11-47.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-11-47.png)
+
+多输出对应多线程时，线程同步开销、线程分束（warp效率）和内存访问效率（Stride地址）低。
+
+![Screenshot from 2026-03-26 20-12-38.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-12-38.png)
+
+![Screenshot from 2026-03-26 20-12-46.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-12-46.png)
+
+重新排列线程和输出的映射，提高warp小丑，降低分束开支。
+
+![Screenshot from 2026-03-26 20-17-01.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-17-01.png)
+
+![Screenshot from 2026-03-26 20-19-43.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-19-43.png)
+
+![image.png](GPU%20Memory%20Arch/image%205.png)
+
+内存访问优化
+
+![Screenshot from 2026-03-26 20-20-11.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-20-11.png)
+
+![Screenshot from 2026-03-26 20-21-05.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-21-05.png)
+
+![Screenshot from 2026-03-26 20-21-13.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-21-13.png)
+
+![Screenshot from 2026-03-26 20-21-27.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-21-27.png)
+
+## GPU SpMM
+
+[https://ajdillhoff.github.io/notes/sparse_matrix_computation/](https://ajdillhoff.github.io/notes/sparse_matrix_computation/)
+
+![Screenshot from 2026-03-26 20-29-32.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-29-32.png)
+
+![Screenshot from 2026-03-26 20-29-39.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-29-39.png)
+
+![Screenshot from 2026-03-26 20-29-46.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-29-46.png)
+
+![Screenshot from 2026-03-26 20-29-54.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-29-54.png)
+
+![Screenshot from 2026-03-26 20-30-13.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-30-13.png)
+
+![Screenshot from 2026-03-26 20-30-21.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-30-21.png)
+
+![Screenshot from 2026-03-26 20-30-29.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-30-29.png)
+
+![Screenshot from 2026-03-26 20-30-36.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-30-36.png)
+
+![Screenshot from 2026-03-26 20-30-45.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_20-30-45.png)
