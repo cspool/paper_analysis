@@ -72,10 +72,10 @@
 
 | 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
 |------|------|-------------|----------|------|
-| **推理计算流程** | MoE Forward Pass | Router(Softmax+TopK) → Token Dispatch(permute, memory-bound) → Expert FFN × E (并行, compute-bound) → Token Combine + 加权聚合 | Top-K Sparse Routing, Expert 间完美并行, Dispatch 占 step time 34.1% | Q1.1 |
-| **推理计算流程** | DiT Denoising Loop | TimestepEmbed + Conditioning → adaLN Modulate → MHA(per head 并行) → MLP FFN → NoisePred + DDIM Step；T 步严格串行 | 步间 barrier, 步内 multi-head 并行, Patch token 数决定 Attention O(N²) | Q1.1 |
-| **推理计算流程** | MLLM Concatenation Pipeline | Vision Encoder (ViT, 冻结) → Projector (MLP/Q-Former) → LLM Backbone (三阶段: Shallow/Middle/Deep) → Autoregressive Decode | Vision+Text 编码可并行; 跨模态 Attention 四区域 (V→V/V→T/T→V/T→T); 深层 Vision Exit | Q1.1 |
-| **推理计算流程** | Video DiT (MMDiT) | 3D Patchify → Shared Self-Attn (text+video 统一交互) → 独立 FFN (text/video) → NoisePred + Denoising；Spatial Attn (per frame 并行) → Temporal Attn (跨帧 barrier) | 分解时空 Attention (Spatial+ Temporal); MMDiT 共享 Attn + 独立 FFN 可并行 | Q1.1 |
+| **推理计算流程** | MoE Forward Pass* | Router(Softmax+TopK) → Token Dispatch(permute, memory-bound) → Expert FFN × E (并行, compute-bound) → Token Combine + 加权聚合 | Top-K Sparse Routing, Expert 间完美并行, Dispatch 占 step time 34.1% | Q1.1 |
+| **推理计算流程** | DiT Denoising Loop | TimestepEmbed + Conditioning → adaLN Modulate(**调制来注入条件**) → MHA(per head 并行) → MLP FFN → NoisePred + DDIM Step；T 步严格串行 | 步间 barrier, 步内 multi-head 并行, Patch token 数决定 Attention O(N²) | Q1.1 |
+| **推理计算流程** | MLLM Concatenation Pipeline* | Vision Encoder (ViT, 冻结) → Projector (MLP/Q-Former) → LLM Backbone (三阶段: Shallow/Middle/Deep) → Autoregressive Decode | Vision+Text 编码可并行; 跨模态 Attention 四区域 (V→V/V→T/T→V/T→T); 深层 Vision Exit | Q1.1 |
+| **推理计算流程** | Video DiT (MMDiT)* | 3D Patchify → Shared Self-Attn (text+video 统一交互) → 独立 FFN (text/video) → NoisePred + Denoising；Spatial Attn (per frame 并行) → Temporal Attn (跨帧 barrier) | 分解时空 Attention (Spatial+ Temporal); MMDiT 共享 Attn + 独立 FFN 可并行 | Q1.1 |
 | | | | | |
 | **稀疏化与路由优化** | Capacity-Aware Token Drop | Expert capacity 上限 (C×B×S/E) + Expanded Drop (top-(K+K') 扩展候选集)；消除 straggler expert 等待 | 30% 加速/0.9% 精度损失; SM 利用率 40-60%→70-85% | Q1.2 |
 | **稀疏化与路由优化** | Pre-gated MoE | Pre-gating function 在 L-1 预测 L 的 expert 选择；expert 权重预取与 L-1 计算重叠 | 打破 Router→Expert 串行依赖; 1.5-3× vs CPU offload | Q1.4 |
@@ -83,9 +83,9 @@
 | | | | | |
 | **量化** | PTQ (通用 INT8/FP8/INT4/NF4) | 校准统计 + 量化推理 (INT_MATMUL + rescale)；INT8 2× GEMM 加速 vs FP16, FP8 1.7× | Tensor Core MMA 指令; K 维需对齐 16 | Q1.2 |
 | **量化** | DMQ (扩散专用 PTQ) | LES (Learned Equivalent Scaling, channel-wise) + PTS (Power-of-Two Scaling, 移位替代乘法) + Adaptive Timestep Weighting (早期步权重高) | 针对扩散 out-of-distribution outlier; W4A8 低损失 | Q1.2 |
-| **量化** | Q-VDiT (视频 DiT 量化) | TQE (Token-Quantization Error compensation, rank-1 低秩) + TMD (Temporal Model Distillation)；W4A6 几乎无损, W3A6 SC 23.40 | ViDiT-Q, FlatQuant, LoRunner Kernel | Q1.2 |
-| **量化** | S²Q-VDiT (视频 DiT 量化+蒸馏) | Hessian-aware SDS + Sparse Token Distillation；3.94× 压缩, 1.56× 显存节省, 1.28× 加速 | CUDA kernel (ViDiT-Q+FlatQuant) | Q1.2 |
-| **量化** | LiquidQuant W4A8 | 两级量化 FP16→INT8→UINT4；dequant 仅需 IMAD+XOR 两条 32-bit 指令处理 4 元素；H800 接近 FP8 性能 | LiquidServe (ByteDance) | Q1.3 |
+| **量化** | Q-VDiT (视频 DiT 量化) | TQE (Token-Quantization Error compensation, rank-1 **低秩矩阵补偿量化误差**) + TMD (Temporal Model Distillation)是**对齐帧间差异的蒸馏目标**；W4A6 几乎无损, W3A6 SC 23.40 | ViDiT-Q, FlatQuant, LoRunner Kernel | Q1.2 |
+| **量化** | S²Q-VDiT (视频 DiT 量化+蒸馏)* | Hessian-aware SDS(**选择关键时间步的latent用于量化参数优化的数据集**) + Sparse Token Distillation(**给关注度高的token更大的蒸馏损失项权重**)；3.94× 压缩, 1.56× 显存节省, 1.28× 加速 | CUDA kernel (ViDiT-Q+FlatQuant) | Q1.2 |
+| **量化** | LiquidQuant W4A8* | 两级量化 FP16→INT8→UINT4；dequant 仅需 IMAD+XOR 两条 32-bit 指令处理 4 元素(**解决int8-int4的量化计算溢出问题**)；H800 接近 FP8 性能 | LiquidServe (ByteDance) | Q1.3 |
 | | | | | |
 | **知识蒸馏** | MoE KD (Mixture-of-Students) | Teacher MoE (8×7B) → Student MoE (4×3B)；多个 students 通过 gating 分工；联合损失 (CE + KL) | ~4× 参数减少; HBM 占用 ~93GB→~24GB; 单卡可行 | Q1.2 |
 | **知识蒸馏** | Consistency Models (步蒸馏) | 学习 f(x_t, t)→x_0 consistency function；多步去噪→1-4 步；8-12.5× 理论加速 | 去噪步数减少→HBM 带宽需求等比例降低 | Q1.2 |
@@ -95,45 +95,45 @@
 | **推测解码** | MoESD (MoE 专用) | Target efficiency 度量 (draft 质量 × 验证效率)；MoE 中等 batch 下 SD 加速优于 dense | 验证阶段受益于 expert 稀疏性 (更少每 token 计算) | Q1.2 |
 | | | | | |
 | **KV-Cache 压缩** | H2O Heavy-Hitter Eviction | 累积注意力分数重要性 + 保留 top-budget + 最近 W token；Memory 减少 10-32× | Rethinking: 压缩后 layout 未优化 → 延迟未必减少 | Q1.2 |
-| **KV-Cache 压缩** | Cross-Self KV Pruning | 区分 cross-KV (视觉) 和 self-KV (文本) 进行模态感知剪枝；比统一剪枝多节省 30-50% | 视觉 token 占 KV 80-90% → 模态感知剪枝收益大 | Q1.2 |
+| **KV-Cache 压缩** | Cross-Self KV Pruning* | 区分 cross-KV (视觉) 和 self-KV (文本) 进行模态感知剪枝(**模态参与评估Cache重要性, 低精度存储/丢弃/不参与当前计算**)；比统一剪枝多节省 30-50% | 视觉 token 占 KV 80-90% → 模态感知剪枝收益大 | Q1.2 |
 | | | | | |
-| **多算子并发与调度** | PROBE Phase-Locked Co-Scheduling | 双轨执行: 主轨 (确定性 MoE) + 辅助轨 (预测→规划→预取)；split-phase 避免通信-计算带宽竞争 | Prefill -32%, Decode +41% | Q1.4/Q1.5 |
-| **多算子并发与调度** | DeepSeek-V3 DualPipe | Micro-batch 级计算-通信流水线 + SM 分区 + Node-Limited Routing；近 100% overlap | Persistent kernel + NCCL fusion | Q1.4 |
-| **多算子并发与调度** | Kitsune Tile-Level Spatial Dataflow | L2-resident ring buffer queue + 双 arbiter grid scheduler；Tensor Core + SIMT Core 同时活跃 | 1.3-2.3× 加速, 41-98% off-chip traffic 减少; 需修改 GPU HW | Q1.5 |
-| **多算子并发与调度** | AEP/AMoE 异步 EP | µ-queuing + token 到达即处理 + 去 barrier；2.7× 吞吐, 近线性多节点扩展 | 代价: token 乱序需 reorder buffer | Q1.5 |
-| **多算子并发与调度** | Nimble AoT Multi-Stream | AoT CUDA Graph capture + MEG + Ford-Fulkerson 最大匹配 → 多 stream 并发 | vs PyTorch up to 22.34×; max concurrency=15 | Q1.6 |
-| **多算子并发与调度** | MPK (Mirage) In-Kernel Runtime | SM 分区 (128W+4S) + event-driven + cross-task pipelining + paged SMEM | 12.5ms/token (下限~10ms) | Q1.6 |
-| **多算子并发与调度** | HATB (mPLUG-Owl3) | Self-Attn ‖ Cross-Attn 并行 + Adaptive Gating 融合；共享 Q 投影, K/V 独立 | 4/28 layers optimal; cross-attn 延迟隐藏 | Q1.4 |
-| **多算子并发与调度** | Cypress Task-Based | Warp-specialized: TMA 异步搬运 + Tensor Core MMA 流水线 | 0.88-1.06× cuBLAS GEMM | Q1.4 |
-| **多算子并发与调度** | EEVEE Modal Cache | 缓存 modality-specific module 输出消除跨请求重复计算 | 提升多模态 serving 吞吐 | Q1.4 |
+| **多算子并发与调度** | PROBE Phase-Locked Co-Scheduling* | 双轨执行: 主轨 (确定性 MoE) + 辅助轨 (预测→规划→预取)；split-phase 避免通信-计算带宽竞争(**多卡调度**) | Prefill -32%, Decode +41% | Q1.4/Q1.5 |
+| **多算子并发与调度** | DeepSeek-V3 DualPipe | Micro-batch 级计算-通信流水线 + SM 分区 + Node-Limited Routing(**通信优化**)；近 100% overlap | Persistent kernel + NCCL fusion | Q1.4 |
+| **多算子并发与调度** | Kitsune Tile-Level Spatial Dataflow* | L2-resident ring buffer queue + 双 arbiter grid scheduler；Tensor Core + SIMT Core 同时活跃(**不同算子映射到不同block,空间并发**) | 1.3-2.3× 加速, 41-98% off-chip traffic 减少; 需修改 GPU HW | Q1.5 |
+| **多算子并发与调度** | AEP/AMoE 异步 EP | µ-queuing + token 到达即处理 + 去 barrier；2.7× 吞吐, 近线性多节点扩展(**多卡调度**) | 代价: token 乱序需 reorder buffer | Q1.5 |
+| **多算子并发与调度** | Nimble AoT Multi-Stream* | AoT CUDA Graph capture + MEG + Ford-Fulkerson 最大匹配 → 多 stream 并发(**cuda graph匹配并发算子,多Stream执行**) | vs PyTorch up to 22.34×; max concurrency=15 | Q1.6 |
+| **多算子并发与调度** | MPK (Mirage) In-Kernel Runtime * | SM 分区 (128W+4S) + event-driven + cross-task pipelining + paged SMEM(**整个模型推理编译为一个 Mega-Kernel，在其中嵌入一个完整的并行运行时系统**) | 12.5ms/token (下限~10ms) | Q1.6 |
+| **多算子并发与调度** | HATB (mPLUG-Owl3)* | Self-Attn ‖ Cross-Attn 并行 + Adaptive Gating 融合；共享 Q 投影, K/V 独立(**text query和text KV, visual KV分别并行作self和cross的Attn, 而不是self->cross(利用self输出)->fuse->sffn的串行, adaptive gating优化模态信息融合**) | 4/28 layers optimal; cross-attn 延迟隐藏 | Q1.4 |
+| **多算子并发与调度** | Cypress Task-Based* | Warp-specialized: TMA 异步搬运 + Tensor Core MMA 流水线(**基于TMA+SM硬件的事件编程模型, 编译框架**) | 0.88-1.06× cuBLAS GEMM | Q1.4 |
+| **多算子并发与调度** | EEVEE Modal Cache* | 缓存 modality-specific module 输出消除跨请求重复计算(**Serving可共享跨请求的模块latent输出（visual tokens / KV pairs）**) | 提升多模态 serving 吞吐 | Q1.4 |
 | | | | | |
 | **计算-通信重叠** | Comet Tile-Level Fused MoE | Shared Tensor Decomposition + Tile Reordering (T_local/T_mixed/T_remote) + TB Specialization；Hide 86.5% communication | 单层 1.96×, E2E 1.71× | Q1.6 |
 | **计算-通信重叠** | Lancet Whole-Graph Pipeline | batch 分 P 个 partition + 4-stage pipeline (NMC→A2A→Expert→Post) | 跨 partition 重叠; 多 GPU 训练为主 | Q1.6 |
 | **计算-通信重叠** | MegaScale-MoE Intra-op Overlap | Tile 级 device memory barrier + SM 分配 (少量通信+其余计算) + Swizzling | Hide 86.5% 通信延迟 | Q1.5 |
 | **计算-通信重叠** | Irregular All-to-All (Lancet) | 双趟 A2A: 先交换 size→再传输数据；不传 padding tokens | 3.83% prediction error | Q1.4 |
 | | | | | |
-| **算子融合** | FlashFuser DSM Fusion | Hopper DSM 跨 SM cluster kernel fusion；dsm_all_exchange/shuffle/reduce_scatter primitives；~1.15×10^6 候选→Top-11 profiling | HBM access -58%, vs Chimera 4.1× | Q1.6 |
-| **算子融合** | SN40L Streaming Dataflow | 硬件原生 streaming: PCU SA/SIMD + PMU composable mem；Gated FFN 全融合为单 spatial pipeline | 中间结果永不物化到 off-chip | Q1.6 |
-| **算子融合** | Welder Tile-Graph Memory | Tile propagation 自动对齐 + traffic cost model + 双层搜索；89 种 fusion pattern 自动发现 | DRAM traffic -69% (BERT); NeRF 7-layer MLP 全融合 5× | Q1.6 |
-| **算子融合** | Shepherd Operator | Micro-operator→virtual operator 合并; per-shepherd-operator 调度降级 | 消除 micro-operator scheduling overhead | Q1.4 |
+| **算子融合** | FlashFuser DSM Fusion* | Hopper DSM 跨 SM cluster kernel fusion(**利用SM cluster的硬件划分机制**)；dsm_all_exchange/shuffle/reduce_scatter primitives；~1.15×10^6 候选→Top-11 profiling | HBM access -58%, vs Chimera 4.1× | Q1.6 |
+| **算子融合** | SN40L Streaming Dataflow* | **硬件原生 streaming**: PCU SA/SIMD + PMU composable mem；Gated FFN 全融合为单 spatial pipeline | 中间结果永不物化到 off-chip | Q1.6 |
+| **算子融合** | Welder Tile-Graph Memory* | Tile propagation 自动对齐 + traffic cost model + 双层搜索(**tile graph自动搜索tile连接配置, 静态编译策略**)；89 种 fusion pattern 自动发现 | DRAM traffic -69% (BERT); NeRF 7-layer MLP 全融合 5× | Q1.6 |
+| **算子融合** | Shepherd Operator* | Micro-operator→virtual operator 合并( 编译期静态准备 + 运行时动态选择 + CDP守护kernel启动, 部分算子的调度开销约等于执行开销); per-shepherd-operator 调度降级 | 消除 micro-operator scheduling overhead | Q1.4 |
 | | | | | |
 | **Memory Planning** | Welder Tile-Graph | Tile propagation 反向推导 + SetConnect memory level 选择 (L0/L1/L2) + traffic cost model | Inter-layer independence 解耦优化 | Q1.6 |
-| **Memory Planning** | MPK Paged SMEM | 32KB fixed pages + interval graph coloring 复用 + cross-task pipelining 预取 | H100: 7 pages/SM, A100: 5 pages/SM | Q1.6 |
-| **Memory Planning** | PROBE Greedy Planning | T_window 约束 + water-filling 策略 + max kmax=16 iterations | 每 rank T_window 按计算-带宽比动态确定 | Q1.6 |
+| **Memory Planning** | MPK Paged SMEM * | 32KB fixed pages + interval graph coloring 复用 + cross-task pipelining 预取(**利用TMA并发下一个任务的读取, worker kernel而非算子kernel, 让SM内的kernel内接力不同任务的kernel block, SMEM虚拟化, 打破资源按照kernel分配的限制**) | H100: 7 pages/SM, A100: 5 pages/SM | Q1.6 |
+| **Memory Planning** | PROBE Greedy Planning | T_window 约束(**EP的多rank调度优化**) + water-filling 策略 + max kmax=16 iterations | 每 rank T_window 按计算-带宽比动态确定 | Q1.6 |
 | | | | | |
 | **实现框架** | vLLM | PagedAttention (block 级 KV 虚拟内存) + Continuous Batching + CUDA Graph | KV 利用率 ~96%, H200 peak 69,147 tok/s | Q1.3 |
 | **实现框架** | TensorRT-LLM | 图融合 + INT4/FP8 量化注入 + In-flight Batching + CUDA Graph | FP8 MFU 85-95% | Q1.3 |
 | **实现框架** | DeepSpeed-MoE | DP+TP+EP 混合并行 + 分层 All-to-All (NVLink+InfiniBand) | HAP ILP 搜索 1.01-1.77× vs TP | Q1.3 |
 | **实现框架** | SGLang | RadixAttention (前缀树 KV 共享) + Structured Prompt Programming | KV 节省 30-60%, 与 vLLM PagedAttention 互补 | Q1.3 |
-| **实现框架** | Triton/CUTLASS/TileLang | 三层 kernel 编程抽象；TileLang Layout/Pipeline Inference；跨 CUDA/ROCm/NPU | TileLang ~50 行 DeepSeek MLA, 95%+ CUDA 性能 | Q1.3 |
-| **实现框架** | Ascend CANN/MindSpore | Da Vinci Core (Cube+Vector+Scalar+MTE)；MikPoly 两阶段 micro-kernel 聚合编译 | NPU 1.70× vs CANN | Q1.3 |
-| **实现框架** | Cerebras SDK | WSE Weight Streaming + 2D Mesh 片上路由；Single-GPU-like PyTorch API | Llama 4: 2,522 tok/s | Q1.3 |
+| **实现框架** | Triton/CUTLASS/TileLang* | **三层 kernel 编程抽象**；TileLang Layout/Pipeline Inference；跨 CUDA/ROCm/NPU | TileLang ~50 行 DeepSeek MLA, 95%+ CUDA 性能 | Q1.3 |
+| **实现框架** | Ascend CANN/MindSpore* | Da Vinci Core (Cube+Vector+Scalar+MTE)；MikPoly 两阶段 micro-kernel 聚合编译(**离线编译+运行时选择, 优化动态shape**) | NPU 1.70× vs CANN | Q1.3 |
+| **实现框架** | Cerebras SDK | WSE Weight Streaming + 2D Mesh 片上路由；Single-GPU-like PyTorch API(**静态编译策略Mapping**) | Llama 4: 2,522 tok/s | Q1.3 |
 | | | | | |
 | **硬件体系结构** | GPU SIMT (H100) | 132 SMs, 4th-gen Tensor Core (989 TFLOPS BF16, 1979 TOPS FP8), 80GB HBM3 3.35 TB/s, NVLink 900 GB/s | Warp scheduler 动态调度; CUDA Graph capture; MIG 物理分区 | Q1.3/Q1.5 |
-| **硬件体系结构** | NPU SA (Ascend 910B) | Da Vinci Core × N; Cube Unit (矩阵乘) + Vector Unit (激活) + Scalar Unit (控制流) + MTE (通信卸载); 64GB HBM ~1.2 TB/s | 需软件显式管理 L1 Buffer; MTE CoC 通信-计算重叠 | Q1.3 |
+| **硬件体系结构** | NPU SA (Ascend 910B) | Da Vinci Core × N; Cube Unit (矩阵乘) + Vector Unit (激活) + Scalar Unit (控制流) + MTE (通信卸载, HBM/RDMA/A2A); 64GB HBM ~1.2 TB/s | 需软件显式管理 L1 Buffer; MTE CoC 通信-计算重叠 | Q1.3 |
 | **硬件体系结构** | Dataflow RDU (SN40L) | 1040 PCUs + 1040 PMUs; 520MB SRAM; 三级存储 (SRAM→HBM→DDR); 硬件原生 streaming fusion | 无 kernel launch overhead; 编译器 PnR 映射 | Q1.6 |
 | **硬件体系结构** | WSE-3 (Cerebras) | 900,000 PE 2D Mesh; 44GB SRAM 片上; 21 PB/s 片上带宽; Weight Streaming from MemoryX | MoE 通信瓶颈消除 (片上路由 1 cycle/hop vs HBM ~300ns) | Q1.3 |
-| **硬件体系结构** | HNLPU (ASIC) | 320MB 片上 KV Cache, 20,000 bank, 80 TB/s; Metal-Embedding 权重固化; 5,555× throughput vs H100 | 1,047× 能效 vs H100; 仅能运行一个模型 | Q1.3/Q1.4 |
+| **硬件体系结构** | HNLPU (ASIC) | 320MB 片上 KV Cache, 20,000 bank, 80 TB/s; **Metal-Embedding 权重固化**; 5,555× throughput vs H100 | 1,047× 能效 vs H100; 仅能运行一个模型 | Q1.3/Q1.4 |
 
 ---
 

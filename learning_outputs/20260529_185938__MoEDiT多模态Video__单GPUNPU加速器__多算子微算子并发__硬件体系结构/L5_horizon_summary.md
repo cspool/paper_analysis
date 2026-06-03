@@ -67,31 +67,31 @@
 |------|------|-------------|----------|------|
 | **数据流设计** | Weight Stationary Systolic | Weights预加载PE不动→inputs流经array→partial sums驻留accumulator | Weight stationary dataflow消除weight重复读取 | Q5.1 |
 | **数据流设计** | Output Stationary 3D PE Array (GyRot) | Per-PE 32-way INT4 dot product→partial sum留在PE accumulator→inter-group accumulation流水线 | 3D PE减少PE数(64 vs 1024)换取更高per-PE density | Q5.1 |
-| **数据流设计** | FEATHER可重构Dataflow | Temporal reduction(PE内)→Spatial reduction(BIRRD butterfly)→RIR重排序post-reduction oActs | 任意dataflow parallelism+per-layer (dataflow, layout) co-switching | Q5.1, Q5.3 |
-| **数据流设计** | StreamTensor Spatial Dataflow | Linalg IR→dataflow circuit→FIFO流式传递中间数据→多kernel空间流水线并发 | 空间计算替代时序复用，消除off-chip DRAM往返 | Q5.4 |
-| **数据流设计** | GPU三级异步Pipeline | Level 1(Global→SMEM cp.async/TMA双缓冲) + Level 2(SMEM→Reg+Dequant寄存器双缓冲) + Level 3(Tensor Core WGMMA异步) | Memory-Copy-Compute三级全重叠 | Q5.2 |
-| **计算单元组织** | SIMT+Tensor Core异构 | SM内CUDA Core(60 TFLOPS FP32)+Tensor Core(989 TFLOPS FP16 INT8)吞吐比≈16.5×；Warp scheduler选择ready warp利用warp-level parallelism隐藏延迟 | 异构pipeline overlap: 三个硬件单元(TMA+CUDA+TC)并发工作 | Q5.1 |
-| **计算单元组织** | GyRot 3D Tensor PE | 8×8 2D systolic × 32-way INT4 dot product(第三维) = 2048 parallel ops/cycle | Per-PE 32路并行乘法器+adder tree+integer dequantization | Q5.1 |
-| **计算单元组织** | MHE-TPE跨PE协同编码 | Bit-Slice Encoding→Vector PPs Generation→Cross-Dimensional Reduction统一计算引擎 | 跨PE共享vector PP lookup table消除PE间冗余PPs | Q5.1 |
-| **计算单元组织** | Ascend DaVinci Tile-based | AIC(Cube+Vector+Scalar)+AIV(Element-wise)+MTE(DMA)三单元并行 | Tile级数据并行+AIC/AIV/MTE计算-计算+计算-访存双重overlap | Q5.4 |
-| **计算单元组织** | Focus Modular SA Add-on | SEC(token pruning)+SIC(vector compression)嵌入SA memory interface侧 | Streaming concentration完全与GEMM时间重叠 | Q5.4 |
-| **控制与调度** | Warp Scheduler推测调度 | 每SM 4个warp scheduler，每周期从ready warp中选一个发射指令；greedy-then-oldest策略(推测)；零成本warp切换(per-warp独立PC+RF) | Scoreboard stall→自动切换到另一ready warp→latency hiding | Q5.1, Q5.2 |
-| **控制与调度** | Thread Block Scheduler | Leftover Policy(仅队头kernel block可调度)+Most-Room Policy(选容纳最多block的SM)；GSP firmware实现 | 多kernel并发通过spatial sharing(SM间)+colocation(SM内) | Q5.1, Q5.2 |
-| **控制与调度** | CKE (Concurrent Kernel Execution) | Concurrent-Isolated(两kernel block在不同SM)vs Concurrent-Colocated(同SM混合)两种模式 | 队头kernel所有block调度完后下一个kernel block才能调度 | Q5.1, Q5.2 |
-| **控制与调度** | ACS Inter-Kernel Scheduling | 运行时检测小窗口内kernel依赖关系→out-of-order风格动态kernel发射→最高2.19×加速(avg 1.56×) | ACS-SW(纯软件开源)+ACS-HW(GPU硬件增加轻量依赖检测单元) | Q5.1 |
-| **控制与调度** | GPU Dataflow (Kitsune) | Inter-CTA Ring Queue(L2-resident ring buffer, atomics同步)+Modified Grid Scheduler(双arbiter) | 异构CTA类型SM co-residency→Tensor Core和SIMT Core同时被不同算子使用 | Q5.4 |
-| **控制与调度** | µShare Intra-SM Co-locating | 通过blocksize参数间接影响dispatch unit的left-over调度实现SM内kernel交错 | 非侵入式(无需修改硬件或kernel代码) | Q5.2, Q5.6 |
-| **控制与调度** | Bullet动态SM分区 | 根据系统负载实时调整prefill SM数：burst时全GPU prefill→恢复后平衡分区 | Prefill-decode时空并发→SM active cycles 86.2%(+11.2%) | Q5.6 |
-| **控制与调度** | MuxWISE Bubble-less Multiplexing | Operator级intra-GPU multiplexing消除prefill-decode间bubble | TBT SLO=50-100ms约束下的最优multiplexing策略 | Q5.6 |
+| **数据流设计** | FEATHER可重构Dataflow* | Temporal reduction(PE内)→Spatial reduction(BIRRD butterfly)→RIR重排序post-reduction oActs | **任意dataflow parallelism+per-layer (dataflow, layout) co-switching** | Q5.1, Q5.3 |
+| **数据流设计** | StreamTensor Spatial Dataflow* | Linalg IR→dataflow circuit→FIFO流式传递中间数据→**多kernel空间流水线并发** | 空间计算替代时序复用，消除off-chip DRAM往返 | Q5.4 |
+| **数据流设计** | GPU三级异步Pipeline* | Level 1(Global→SMEM cp.async/TMA双缓冲) + Level 2(SMEM→Reg+Dequant寄存器双缓冲) + Level 3(Tensor Core WGMMA异步) | Memory-Copy-Compute三级全重叠 | Q5.2 |
+| **计算单元组织** | SIMT+Tensor Core异构* | SM内CUDA Core(60 TFLOPS FP32)+Tensor Core(989 TFLOPS FP16 INT8)吞吐比≈16.5×；Warp scheduler选择ready warp利用warp-level parallelism隐藏延迟 | 异构pipeline overlap: **三个硬件单元(TMA+CUDA+TC)并发工作** | Q5.1 |
+| **计算单元组织** | GyRot 3D Tensor PE? | 8×8 2D systolic × 32-way INT4 dot product(第三维) = 2048 parallel ops/cycle | Per-PE 32路并行乘法器+adder tree+integer dequantization | Q5.1 |
+| **计算单元组织** | MHE-TPE跨PE协同编码? | Bit-Slice Encoding→Vector PPs Generation→Cross-Dimensional Reduction统一计算引擎 | 跨PE共享vector PP lookup table消除PE间冗余PPs | Q5.1 |
+| **计算单元组织** | Ascend DaVinci Tile-based* | AIC(Cube+Vector+Scalar)+AIV(Element-wise)+MTE(DMA)三单元并行 | Tile级数据并行+AIC/AIV/MTE计算-计算+计算-访存双重overlap | Q5.4 |
+| **计算单元组织** | Focus Modular SA Add-on* | SEC(token pruning)+SIC(vector compression)嵌入SA memory interface侧 | **Streaming concentration完全与GEMM时间重叠** | Q5.4 |
+| **控制与调度** | Warp Scheduler推测调度! | 每SM 4个warp scheduler，每周期从ready warp中选一个发射指令；greedy-then-oldest策略(推测)；零成本warp切换(per-warp独立PC+RF) | Scoreboard stall→自动切换到另一ready warp→latency hiding | Q5.1, Q5.2 |
+| **控制与调度** | Thread Block Scheduler! | Leftover Policy(仅队头kernel block可调度)+Most-Room Policy(选容纳最多block的SM)；GSP firmware实现 | 多kernel并发通过spatial sharing(SM间)+colocation(SM内) | Q5.1, Q5.2 |
+| **控制与调度** | CKE (Concurrent Kernel Execution)* | Concurrent-Isolated(两kernel block在不同SM)vs Concurrent-Colocated(同SM混合)两种模式 | 队头kernel所有block调度完后下一个kernel block才能调度 | Q5.1, Q5.2 |
+| **控制与调度** | ACS Inter-Kernel Scheduling! | **运行时检测小窗口内kernel依赖关系**→out-of-order风格动态kernel发射→最高2.19×加速(avg 1.56×) | ACS-SW(纯软件开源)+ACS-HW(GPU硬件增加轻量依赖检测单元) | Q5.1 |
+| **控制与调度** | GPU Dataflow (Kitsune)! | Inter-CTA Ring Queue(L2-resident ring buffer, atomics同步)+Modified Grid Scheduler(双arbiter) | 异构CTA类型SM co-residency→Tensor Core和SIMT Core同时被不同算子使用 | Q5.4 |
+| **控制与调度** | µShare Intra-SM Co-locating* | 通过blocksize参数间接影响dispatch unit的left-over调度**实现SM内kernel交错** | 非侵入式(无需修改硬件或kernel代码) | Q5.2, Q5.6 |
+| **控制与调度** | Bullet动态SM分区* | **根据系统负载实时调整prefill SM数**：burst时全GPU prefill→恢复后平衡分区 | Prefill-decode时空并发→SM active cycles 86.2%(+11.2%) | Q5.6 |
+| **控制与调度** | MuxWISE Bubble-less Multiplexing* | **Operator级intra-GPU multiplexing**消除prefill-decode间bubble | TBT SLO=50-100ms约束下的最优multiplexing策略 | Q5.6 |
 | **访存体系** | GPU四级Memory Hierarchy | HBM(3.35TB/s, 400-800 cycles)→L2(50MB, 7-12TB/s, ~200 cycles)→L1/SMEM(228KB/SM, ~19TB/s, 20-30 cycles)→RF(256KB/SM, ~40TB/s, 0 cycles) | 容量-带宽权衡金字塔：每层通过tiling适配working set | Q5.2 |
 | **访存体系** | TMA异步DMA | 单线程发起bulk tensor传输(1D-5D)，硬件独立完成，不经过寄存器；TMA multicast单次HBM读取广播到cluster内多SM | 释放线程资源→producer warp仅需1 thread→其余127 thread可用于计算 | Q5.1, Q5.2 |
 | **访存体系** | mbarrier硬件同步 | Producer arrive(硬件写入)→Consumer wait(按需等待)→支持expect_tx字节级计数；与__syncthreads()不同：不阻塞所有线程，仅阻塞等待方 | Warp-group specialization的核心同步原语 | Q5.1, Q5.2 |
 | **访存体系** | 双缓冲范式 | Buffer A/B交替: read_buffer被计算时write_buffer被异步加载下一个tile；扩展到inter-tile(SMEM双缓冲)+intra-tile(Reg双缓冲) | 数据搬运与计算从串行依赖转化为流水线重叠 | Q5.2 |
 | **访存体系** | Memory Coalescing | LSU→L1→L2的事务合并：warp内32线程连续对齐访问→1个128B transaction→100% BW效率；scatter访问→up to 32 transactions→3-10%效率 | Coalescing效率因子γ=A/(M×128)，多算子并发需注意不同访问模式兼容性 | Q5.2 |
-| **访存体系** | FlashFuser DSM Fusion | SMEM→DSM(L1.5层, 3.6MB池, 4-8TB/s via SM-to-SM Crossbar)→SMEM替代SMEM→HBM→HBM→SMEM | 减少58% global memory access，缓解Memory Wall | Q5.2 |
-| **访存体系** | Expert Weight Prefetching (HtoD Overlap) | MoE expert权重offload到CPU memory→GPU计算当前expert时HtoD engine异步预取下一个expert权重到double buffer | 前提: expert batch size > 2^11 tokens/expert→GPU计算时间≥HtoD copy时间 | Q5.2 |
-| **访存体系** | RPU HBM-CO容量优化型HBM | 减少rank/bank/subarray降低容量驱动结构，保留内部BW架构；bandwidth per dollar和energy efficiency up to 2.4× over conventional HBM | 低batch decode场景memory BW利用率仅32%→容量优化比带宽优化更关键 | Q5.6 |
-| **片上网络** | RDN 2D Mesh of Non-Blocking Switches | 三fabric分离(Vector/Scalar/Control)+credit-based per-hop flow control+many-to-one sequence ID重排序+multicast fan-out | 多PCU间并行packet传输，非阻塞架构消除head-of-line blocking | Q5.3 |
+| **访存体系** | FlashFuser DSM Fusion! | SMEM→DSM(L1.5层, 3.6MB池, 4-8TB/s via SM-to-SM Crossbar)→SMEM替代SMEM→HBM→HBM→SMEM | 减少58% global memory access，缓解Memory Wall | Q5.2 |
+| **访存体系** | Expert Weight Prefetching (HtoD Overlap)! | MoE expert权重offload到CPU memory→GPU计算当前expert时**HtoD engine异步预取下一个expert权重到double buffer** | 前提: expert batch size > 2^11 tokens/expert→GPU计算时间≥HtoD copy时间 | Q5.2 |
+| **访存体系** | RPU HBM-CO容量优化型HBM? | 减少rank/bank/subarray降低容量驱动结构，保留内部BW架构；bandwidth per dollar和energy efficiency up to 2.4× over conventional HBM | 低batch decode场景memory BW利用率仅32%→容量优化比带宽优化更关键 | Q5.6 |
+| **片上网络** | RDN 2D Mesh of Non-Blocking Switches? | 三fabric分离(Vector/Scalar/Control)+credit-based per-hop flow control+many-to-one sequence ID重排序+multicast fan-out | 多PCU间并行packet传输，非阻塞架构消除head-of-line blocking | Q5.3 |
 | **片上网络** | Crossbar NoC (MTIA 2i) | Non-blocking全互联+Leaky-bucket traffic shaping+packet fragmentation+source端flow control | 任意initiator-target pair不被其他pair阻塞 | Q5.3 |
 | **片间互联** | NVLink+NVSwitch | Non-blocking crossbar switch+all-to-all单跳<1μs+SHARP in-network reduction | MoE all-to-all token exchange直接通过NVLink+NVSwitch完成 | Q5.3 |
 | **片间互联** | AMD Infinity Fabric Full Mesh | 8 GPU全互联无外部switch+每GPU 7 links>50 GB/s/link+单跳<1μs+编程透明 | 无in-network reduction，O(N²) link数限制扩展到>8 | Q5.3 |
@@ -100,11 +100,11 @@
 | **片间互联** | MCM-GPU层次化Crossbar | Concentrated hierarchical crossbar单跳768GB/s 32 cycles/hop+L1.5 cache+First-touch page allocation | 多chiplet间低延迟高带宽全互联 | Q5.3 |
 | **硬件实现流程** | RTL→FPGA→ASIC设计流程 | SystemVerilog/Verilog RTL→Xilinx Vivado FPGA原型(250MHz)→Synopsys DC综合→IC Compiler P&R→Tape-out (TSMC 28nm/GF 65nm/FreePDK 15nm) | 学术加速器主流流程 | Q5.4 |
 | **硬件实现流程** | HLS设计方法 | Xilinx Vitis libraries提供FFT/SVM/AES-GCM等HLS实现；StreamTensor: Linalg IR→HLS synthesis→FPGA bitstream | 深度学习加速器核心路径用RTL(性能)，非关键路径用HLS(开发速度) | Q5.4 |
-| **硬件实现流程** | CuTe DSL GPU Kernel开发 | CuTe C++ templates→NVCC→PTX→SASS→SM90/SM100 hardware；支持warp-specialized pipeline、Ping-Pong scheduling、cluster-level sync | Triton无法表达的底层硬件特性(warp-specialized异步调度/Ping-Pong pipeline) | Q5.4 |
-| **模拟与评估** | 全系统Cycle-Accurate模拟 | GPGPU-Sim(cycle-level GPU微架构)+gem5(全系统CPU+内存)+DRAMsim3/Ramulator2(cycle-accurate DRAM) | SM/Warp/Thread级别建模到DRAM bank/row-buffer/时序参数 | Q5.5 |
-| **模拟与评估** | 分析型设计空间探索 | Timeloop(Map Space Explorer混合启发式+随机)+Accelergy(可插拔组件能量模型)+Roofline Model(三维约束) | Map space搜索最优tiling/loop order+组件级能量累加+峰值性能上界 | Q5.5 |
-| **模拟与评估** | 硬件功耗面积建模 | McPAT(transistor activity factor)+CACTI 7.0(SRAM bitcell/decoder/sense amplifier)+GPUWattch/AccelWattch(GPU专用)+Synopsys DC(RTL综合) | 从标准单元库参数→晶体管级activity factor→模块级功耗面积 | Q5.5 |
-| **模拟与评估** | MoE专用自研模拟器 | Python事件驱动multi-chiplet GPU sim+Expert Distribution Table+Cross-token Heatmap Cache+PDU prediction table+8×H100 DGX验证<5%误差 | 现有工具(cycle-accurate太慢，ASTRA-sim不支持single-GPU-like编程模型)均不适用 | Q5.5 |
+| **硬件实现流程** | CuTe DSL GPU Kernel开发? | CuTe C++ templates→NVCC→PTX→SASS→SM90/SM100 hardware；支持warp-specialized pipeline、Ping-Pong scheduling、cluster-level sync | Triton无法表达的底层硬件特性(warp-specialized异步调度/Ping-Pong pipeline) | Q5.4 |
+| **模拟与评估** | 全系统Cycle-Accurate模拟? | GPGPU-Sim(cycle-level GPU微架构)+gem5(全系统CPU+内存)+DRAMsim3/Ramulator2(cycle-accurate DRAM) | SM/Warp/Thread级别建模到DRAM bank/row-buffer/时序参数 | Q5.5 |
+| **模拟与评估** | 分析型设计空间探索? | Timeloop(Map Space Explorer混合启发式+随机)+Accelergy(可插拔组件能量模型)+Roofline Model(三维约束) | Map space搜索最优tiling/loop order+组件级能量累加+峰值性能上界 | Q5.5 |
+| **模拟与评估** | 硬件功耗面积建模? | McPAT(transistor activity factor)+CACTI 7.0(SRAM bitcell/decoder/sense amplifier)+GPUWattch/AccelWattch(GPU专用)+Synopsys DC(RTL综合) | 从标准单元库参数→晶体管级activity factor→模块级功耗面积 | Q5.5 |
+| **模拟与评估** | MoE专用自研模拟器? | Python事件驱动multi-chiplet GPU sim+Expert Distribution Table+Cross-token Heatmap Cache+PDU prediction table+8×H100 DGX验证<5%误差 | 现有工具(cycle-accurate太慢，ASTRA-sim不支持single-GPU-like编程模型)均不适用 | Q5.5 |
 
 ---
 
