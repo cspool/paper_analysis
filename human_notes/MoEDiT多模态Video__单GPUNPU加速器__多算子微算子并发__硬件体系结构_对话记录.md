@@ -370,3 +370,238 @@ Ascend 侧的难点是：Da Vinci Core、L1/UB、TBE/Ascend C、MTE 这些资源
 [$export-conversation-notes](/data3/paper_analysis/.codex/skills/export-conversation-notes/SKILL.md) 
 
 ---
+
+---
+
+## 对话记录补充：2026-06-04 10:39 CST
+
+### 001 User
+<environment_context>
+  <cwd>/data3/paper_analysis</cwd>
+  <shell>bash</shell>
+  <current_date>2026-06-04</current_date>
+  <timezone>Asia/Shanghai</timezone>
+  <filesystem><workspace_roots><root>/data3/paper_analysis</root></workspace_roots><permission_profile type="managed"><file_system type="restricted"><entry access="read"><special>:root</special></entry><entry access="write"><path>/data3/paper_analysis</path></entry><entry access="write"><special>:slash_tmp</special></entry><entry access="write"><special>:tmpdir</special></entry><entry access="read"><path>/data3/paper_analysis/.git</path></entry><entry access="read"><path>/data3/paper_analysis/.agents</path></entry><entry access="read"><path>/data3/paper_analysis/.codex</path></entry></file_system></permission_profile></filesystem>
+</environment_context>
+
+### 002 User
+# Context from my IDE setup:
+
+## Active file: draft/review_draft.md
+
+## Active selection of the file:
+| DiT调度 | MixFusion Patch-Level 并行分解? | GCD-based uniform patch统一不同分辨率；CSP格式4个integer array O(1)查找；Operator Taxonomy: pixel-wise ops (>70%，batch全29 patches) vs Self-Attention (~20%，per-resolution分组) vs Conv (仅U-Net，PES边界缝合) | DiT无Convolution→patched inference自然100% accuracy；H100 sequential 17.8s→batched 9.5s | Q2.3, vault: knowledge_notes/Operator Taxonomy (751.0) |
+## Open tabs:
+- review_draft.md: draft/review_draft.md
+- L6_horizon_summary.md: learning_outputs/20260529_185938__MoEDiT多模态Video__单GPUNPU加速器__多算子微算子并发__硬件体系结构/L6_horizon_summary.md
+- L5_horizon_summary.md: learning_outputs/20260529_185938__MoEDiT多模态Video__单GPUNPU加速器__多算子微算子并发__硬件体系结构/L5_horizon_summary.md
+- L4_horizon_summary.md: learning_outputs/20260529_185938__MoEDiT多模态Video__单GPUNPU加速器__多算子微算子并发__硬件体系结构/L4_horizon_summary.md
+- L3_horizon_summary.md: learning_outputs/20260529_185938__MoEDiT多模态Video__单GPUNPU加速器__多算子微算子并发__硬件体系结构/L3_horizon_summary.md
+
+## My request for Codex:
+教我:'| DiT调度 | MixFusion Patch-Level 并行分解? | GCD-based uniform patch统一不同分辨率；CSP格式4个integer array O(1)查找；Operator Taxonomy: pixel-wise ops (>70%，batch全29 patches) vs Self-Attention (~20%，per-resolution分组) vs Conv (仅U-Net，PES边界缝合) | DiT无Convolution→patched inference自然100% accuracy；H100 sequential 17.8s→batched 9.5s | Q2.3, vault: knowledge_notes/Operator Taxonomy (751.0) |'
+
+### 003 Codex Final
+这行可以这样读：
+
+**MixFusion 的“DiT 调度”不是传统队列调度，而是把不同分辨率扩散请求切成同形状 patch，让它们能在一个 batch 里并发跑。**
+
+核心链条是：
+
+```text
+不同分辨率请求不能直接 batch
+→ 用 GCD 切成 uniform patches
+→ 用 CSP 记录 patch/request/resolution 映射
+→ 按 Operator Taxonomy 分三类执行
+→ DiT 没有 Conv 边界依赖，所以 patch 化几乎天然无精度损失
+→ H100 上 17.8s sequential 降到 9.5s batched
+```
+
+**1. GCD-based uniform patch 是什么**
+
+假设请求分辨率是 `512x512`, `768x768`, `1024x1024`：
+
+$$
+p = \gcd(512, 768, 1024) = 256
+$$
+
+所以：
+
+```text
+512x512   -> 2x2 = 4 patches
+768x768   -> 3x3 = 9 patches
+1024x1024 -> 4x4 = 16 patches
+total     -> 29 patches
+```
+
+这样原本 shape 不同的 3 个请求，被转成了 `29` 个同形状 patch。GPU 最喜欢这种事：同形状、可 batch、可并行。
+
+**注解**：这里的 `patch_size=256` 不是拍脑袋选的，而是 batch 内各分辨率的最大公约数。缺点是如果分辨率组合太碎，GCD 变小，patch 数会爆炸，显存和调度开销就会上来。
+
+**2. CSP 格式是干嘛的**
+
+CSP = `Compressed Sparse Patch`。你可以把它理解成 MixFusion 的 patch 地址簿。
+
+它用几个 integer array 记录：
+
+```text
+RequestOffset[]     每个请求的首 patch 位置
+ResolutionOffset[]  每种分辨率的 patch 分组位置
+RequestStart[]      每个 patch 所属请求的起始 patch
+RequestEnd[]        每个 patch 所属请求的结束 patch
+```
+
+有了这些数组，系统就能快速回答：
+
+```text
+这个 patch 属于哪个 request？
+这个 request 有哪些 patches？
+Self-Attention 要重组成哪一个 full feature map？
+Conv 边界要找哪个邻居 patch？
+```
+
+一个小提醒：表格里写 `O(1) 查找`基本是在说直接数组索引这件事；如果只靠 `RequestOffset` 做边界查找，严格说可能是 `O(log R)` 二分。但工程语境里，CSP 的重点是把复杂 metadata 压成少量 offset array，查找开销很低。
+
+**3. Operator Taxonomy 是这行的灵魂**
+
+MixFusion 把扩散模型算子分三类：
+
+| 算子类型 | 占比/性质 | 怎么处理 |
+|---|---:|---|
+| Pixel-wise ops | `>70%` | Linear、FFN、Cross-Attn 等，只依赖当前 patch，直接把 29 个 patches batch 跑 |
+| Self-Attention | `~20%` | 需要同一图像内所有 patch 互相看，所以按 resolution 分组，先 reconstruct 成 full feature map，再做 attention |
+| Convolution | U-Net 才有 | 需要邻居 patch 的边界像素，用 Patch Edge Stitcher 做边界缝合 |
+
+伪代码就是：
+
+```python
+for op in denoising_block:
+    if op in ["Linear", "FFN", "CrossAttention"]:
+        out = op(all_uniform_patches)  # batch=29
+
+    elif op == "SelfAttention":
+        for group in resolution_groups:
+            full = reconstruct(group.patches)
+            out = self_attention(full)
+
+    elif op == "Convolution":  # U-Net only
+        out = fused_groupnorm_with_edge_stitching(patches)
+```
+
+**注解**：这就是“patch-level 并行分解”能成立的原因：大多数算子根本不需要全图上下文；只有 Self-Attention 和 Conv 需要特殊照顾。
+
+**4. 为什么 DiT 更舒服**
+
+DiT，也就是 Diffusion Transformer，只有 Transformer blocks，没有 U-Net 里的 Convolution。于是它少了最麻烦的“邻居 patch 边界像素”问题。
+
+所以表格里这句：
+
+```text
+DiT无Convolution → patched inference自然100% accuracy
+```
+
+意思是：DiT 的 patch 化主要只要处理 Self-Attention 的 full-image reconstruction；不像 U-Net 那样还要处理 Conv 的边界缝合。U-Net 用 PES，也就是 `Patch Edge Stitcher`，来补这个坑。
+
+**证据来源**
+
+- `paper_secs/.../MixFusion.../1-Introduction.md`：论文正文，包含 `17.8s` vs `9.5s`、GCD patch、CSP、PES、DiT/U-Net 区别。
+- `knowledge_notes/算法知识笔记/Operator Taxonomy for Patch-Level Diffusion Inference.md`：Pixel-wise / Self-Attention / Convolution 分类。
+- `knowledge_notes/系统知识笔记/Mixed-Resolution Batching for Diffusion Model Serving.md`：GCD patch、CSP 四数组、H100 结果。
+- `knowledge_notes/kernel知识笔记/Compressed Sparse Patch (CSP) Format.md`：CSP 数据结构。
+- `knowledge_notes/kernel知识笔记/Patch Edge Stitcher.md`：Conv 边界缝合。
+
+### 004 User
+# Context from my IDE setup:
+
+## Active file: draft/review_draft.md
+
+## Open tabs:
+- review_draft.md: draft/review_draft.md
+- L6_horizon_summary.md: learning_outputs/20260529_185938__MoEDiT多模态Video__单GPUNPU加速器__多算子微算子并发__硬件体系结构/L6_horizon_summary.md
+- L5_horizon_summary.md: learning_outputs/20260529_185938__MoEDiT多模态Video__单GPUNPU加速器__多算子微算子并发__硬件体系结构/L5_horizon_summary.md
+- L4_horizon_summary.md: learning_outputs/20260529_185938__MoEDiT多模态Video__单GPUNPU加速器__多算子微算子并发__硬件体系结构/L4_horizon_summary.md
+- L3_horizon_summary.md: learning_outputs/20260529_185938__MoEDiT多模态Video__单GPUNPU加速器__多算子微算子并发__硬件体系结构/L3_horizon_summary.md
+
+## My request for Codex:
+[$export-conversation-notes](/data3/paper_analysis/.codex/skills/export-conversation-notes/SKILL.md) 
+
+### 005 User
+<skill>
+<name>export-conversation-notes</name>
+<path>/data3/paper_analysis/.codex/skills/export-conversation-notes/SKILL.md</path>
+---
+name: export-conversation-notes
+description: Export the currently available Codex/chat session record into a target Markdown file, defaulting to human_notes/. Save only user inputs and Codex final outputs. Use when the user asks to save, archive, output, or record the current conversation, dialogue history, or analysis session in the paper_analysis workspace. If the target Markdown file already exists and is non-empty, append incrementally without modifying, deleting, reformatting, or replacing any existing content.
+---
+
+# Export Conversation Notes
+
+## Overview
+
+Save the current session's available user inputs and Codex final outputs to the requested target location. Default to `human_notes/` when no explicit directory is provided. Default to Chinese for headings and status text. Do not save process notes, status updates, tool calls, command outputs, hidden instructions, or intermediate work logs.
+
+## Workflow
+
+1. Identify the target path.
+   - save under `human_notes/`.
+   - If no filename can be identified, use `<session-name>.md` and <session-name> is the name of the current session.
+
+2. Prepare the target file.
+   - Work relative to the current workspace root.
+   - Ensure the destination directory exists.
+   - Sanitize only the filename portion by replacing filesystem-hostile characters such as `/`, `\`, `:`, `*`, `?`, `"`, `<`, `>`, and `|` with safe separators, then trim whitespace.
+   - Save to the resolved target path.
+
+3. Capture the available conversation record.
+   - Output only user inputs and Codex final outputs in chronological order with speaker labels.
+   - Include all available user messages exactly as written.
+   - Include only Codex final responses that answer the user, not interim progress updates or tool-facing content.
+   - Do not include tool calls, shell commands, command outputs, file edit logs, errors from tools, status updates, planning chatter, hidden system/developer/policy/runtime instructions, or intermediate reasoning.
+   - Do not summarize, compress, paraphrase, normalize, or reorganize the saved user inputs and final outputs.
+   - If earlier user inputs or final outputs are unavailable because context was compacted or not exposed to Codex, state this limitation briefly before the saved conversation.
+
+4. Write the Markdown file.
+   - If the file does not exist, create it with the new-file template.
+   - If the file exists but is empty, write the new-file template.
+   - If the file exists and is non-empty, enter incremental mode: append a new dated section only at the end of the file.
+   - In incremental mode, never modify, delete, reorder, summarize, normalize, reformat, or replace any existing content, even if the existing note has typos, duplicate headings, stale metadata, or inconsistent formatting.
+   - In incremental mode, use an append-only edit. With `apply_patch`, add only new lines after the existing final line.
+   - Keep the saved record readable, but preserve the available user inputs and final outputs over brevity.
+   - If the record is too long for one edit, append it in multiple consecutive chunks until all currently available user inputs and final outputs are saved.
+
+## Markdown Template
+
+For a new file, use this structure:
+
+```md
+# <session-or-paper-title>
+
+- 导出时间：<YYYY-MM-DD HH:MM TZ>
+- 来源：当前 Codex session 可用对话上下文
+- 保存路径：<resolved-target-path>
+- 范围：仅用户输入与 Codex 最终输出
+
+## 对话记录
+
+### 001 User
+<用户消息原文>
+
+### 002 Codex Final
+<Codex 最终回复原文>
+```
+
+For appending to an existing non-empty file, add this block at the end of the file without changing earlier content:
+
+```md
+---
+
+## 对话记录补充：<YYYY-MM-DD HH:MM TZ>
+
+<continue the same chronological format, saving only user inputs and Codex final outputs>
+```
+
+## Completion Response
+
+After saving, respond briefly with the output path and whether the file was created or appended. Mention any uncertainty about target inference or incomplete available conversation context.
+
+</skill>
