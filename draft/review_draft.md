@@ -2,104 +2,100 @@
 
 ### 算法和模型
 
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|
-| **推理计算流程** | MoE Forward Pass* | Router(Softmax+TopK) → Token Dispatch(permute, memory-bound) → Expert FFN × E (并行, compute-bound) → Token Combine + 加权聚合 | Top-K Sparse Routing, Expert 间完美并行, Dispatch 占 step time 34.1% | Q1.1 |
-| **推理计算流程** | MLLM Concatenation Pipeline* | Vision Encoder (ViT, 冻结) → Projector (MLP/Q-Former) → LLM Backbone (**三阶段: Shallow/Middle/Deep**) → Autoregressive Decode | Vision+Text 编码可并行; 跨模态 Attention 四区域 (V→V/V→T/T→V/T→T); 深层 Vision Exit | Q1.1 |
-| **推理计算流程** | Video DiT (MMDiT)* | 3D Patchify → **Shared Self-Attn (text+video clip Attn) → 独立 FFN (text/video)** → NoisePred + Denoising；Spatial Attn (per frame 并行) → Temporal Attn (跨帧 barrier) | 分解时空 Attention (Spatial+ Temporal); MMDiT 共享 Attn + 独立 FFN 可并行 | Q1.1 |
+| **推理计算流程** | MoE Forward Pass* | Router(Softmax+TopK) → Token Dispatch(permute, memory-bound) → Expert FFN × E (并行, compute-bound) → Token Combine + 加权聚合 | Top-K Sparse Routing, Expert 间完美并行, Dispatch 占 step time 34.1% | Q1.1 | MoE layer的不同专家的计算独立, 存在并发的可能 |
+| **推理计算流程** | MLLM Concatenation Pipeline* | Vision Encoder (ViT, 冻结) → Projector (MLP/Q-Former) → LLM Backbone (**三阶段动态裁减visual tokens: Shallow/Middle/Deep**) → Autoregressive Decode | Vision+Text 编码可并行; 跨模态 Attention 四区域 (V→V/V→T/T→V/T→T); 深层 Vision Exit | Q1.1 | 推理layers划分为三阶段, 其中visual tokens参与不同类型计算或被跳过, 可能需要运行时计算确定三个阶段的边界, 产生额外开销, 可能通过并发优化, 并且裁减tokens位置可能动态, 导致负载不均衡, 需要运行时调度 |
+| **推理计算流程** | Video DiT (MMDiT)* | 3D Patchify → **Shared Self-Attn (text+video clip Attn) → 独立 FFN (text/video)** → NoisePred + Denoising；Spatial Attn (per frame 并行) → Temporal Attn (跨帧 barrier) | 分解时空 Attention (Spatial+ Temporal); MMDiT 共享 Attn + 独立 FFN 可并行 | Q1.1 | 不同模态tokens的计算相对独立, 存在并发的可能 |
 | | | | | |
-| **量化** | PTQ (通用 INT8/FP8/INT4/NF4) | 校准统计 + 量化推理 (INT_MATMUL + rescale)；INT8 2× GEMM 加速 vs FP16, FP8 1.7× | Tensor Core MMA 指令; K 维需对齐 16 | Q1.2 |
-| **量化** | DMQ (扩散专用 PTQ) | **LES (Learned Equivalent Scaling, channel-wise)** + PTS (Power-of-Two Scaling, 移位替代乘法) + Adaptive Timestep Weighting (**早期步权重高**) | 针对扩散 out-of-distribution outlier; W4A8 低损失 | Q1.2 |
-| **量化** | Q-VDiT (视频 DiT 量化) | TQE (Token-Quantization Error compensation, rank-1 **低秩矩阵补偿量化误差**) + TMD (Temporal Model Distillation)是**对齐帧间差异的蒸馏目标**；W4A6 几乎无损, W3A6 SC 23.40 | ViDiT-Q, FlatQuant, LoRunner Kernel | Q1.2 |
-| **量化** | S²Q-VDiT (视频 DiT 量化+蒸馏)* | Hessian-aware SDS(**选择关键时间步的latent用于量化参数优化的数据集**) + Sparse Token Distillation(**给关注度高的token更大的蒸馏损失项权重**)；3.94× 压缩, 1.56× 显存节省, 1.28× 加速 | CUDA kernel (ViDiT-Q+FlatQuant) | Q1.2 |
-| **量化** | LiquidQuant W4A8* | 两级量化 FP16→INT8→UINT4；dequant 仅需 IMAD+XOR 两条 32-bit 指令处理 4 元素(**解决int8-int4的量化计算溢出问题**)；H800 接近 FP8 性能 | LiquidServe (ByteDance) | Q1.3 |
+| **量化** | PTQ (通用 INT8/FP8/INT4/NF4) | 校准统计 + 量化推理 (INT_MATMUL + rescale)；INT8 2× GEMM 加速 vs FP16, FP8 1.7× | Tensor Core MMA 指令; K 维需对齐 16 | Q1.2 | 量化/反量化是运行时计算, 有需求动态计算的潜力, 不同精度张量的计算公式不同, 存在并发可能 |
+| **量化** | DMQ (扩散专用 PTQ) | **LES (Learned Equivalent Scaling, channel-wise)** + PTS (Power-of-Two Scaling, 移位替代乘法) + Adaptive Timestep Weighting (**早期步权重高**) | 针对扩散 out-of-distribution outlier; W4A8 低损失 | Q1.2 | 去噪时间步影响量化误差, 量化参数可能需要动态计算, 产生额外开销, 可能通过并发优化 |
+| **量化** | Q-VDiT (视频 DiT 量化) | TQE (Token-Quantization Error compensation, rank-1 **低秩矩阵补偿量化误差**) + TMD (Temporal Model Distillation)是**对齐帧间差异的蒸馏目标**；W4A6 几乎无损, W3A6 SC 23.40 | ViDiT-Q, FlatQuant, LoRunner Kernel | Q1.2 | 低秩矩阵补偿量化计算误差, 属于运行时计算, 产生额外开销, 可能通过并发优化 |
+| **量化** | S²Q-VDiT (视频 DiT 量化+蒸馏)* | Hessian-aware SDS(**选择关键时间步的latent用于量化参数优化的数据集**) + Sparse Token Distillation(**给关注度高的token更大的蒸馏损失项权重**)；3.94× 压缩, 1.56× 显存节省, 1.28× 加速 | CUDA kernel (ViDiT-Q+FlatQuant) | Q1.2 | 关键token影响量化误差, 量化参数可能需要动态计算, 产生额外开销, 可能通过并发优化 |
+| **量化** | LiquidQuant W4A8* | 两级量化 FP16→INT8→UINT4；dequant 仅需 IMAD+XOR 两条 32-bit 指令处理 4 元素(**解决int8-int4的量化计算溢出问题**)；H800 接近 FP8 性能 | LiquidServe (ByteDance) | Q1.3 | 优化量化计算公式(优化运行时计算), 减少量化误差 |
 | | | | | |
-| **推测解码** | MoESD (MoE 专用)? | Target efficiency 度量 (draft 质量 × 验证效率)；MoE 中等 batch 下 SD 加速优于 dense | 验证阶段受益于 expert 稀疏性 (更少每 token 计算) | Q1.2 |
+| **推测解码** | MoESD (MoE 专用)? | Target efficiency 度量 (draft 质量 × 验证效率)；MoE 中等 batch 下 SD 加速优于 dense | 验证阶段受益于 expert 稀疏性 (更少每 token 计算) | Q1.2 | 推测解码中, 每个draft token按概率被接受, 负载存在动态特征, 容易导致负载不均衡, 设计并发可能提高资源使用率(并发优化性能的空间) |
 | | | | | |
-| **KV-Cache 压缩** | Cross-Self KV Pruning* | 区分 cross-KV (视觉) 和 self-KV (文本) 进行模态感知剪枝(**模态参与评估Cache重要性, 低精度存储/丢弃/不参与当前计算**)；比统一剪枝多节省 30-50% | 视觉 token 占 KV 80-90% → 模态感知剪枝收益大 | Q1.2 |
+| **KV-Cache 压缩** | Cross-Self KV Pruning* | 区分 cross-KV (视觉) 和 self-KV (文本) 进行模态感知剪枝(**模态参与评估Cache重要性, 低精度存储/丢弃/不参与当前计算**)；比统一剪枝多节省 30-50% | 视觉 token 占 KV 80-90% → 模态感知剪枝收益大 | Q1.2 | 模态参与Cache重要性评估, 不同模态数据的运行时计算, 产生额外开销, 可能通过并发优化, 有硬件架构和底层优化空间 |
 | | | | | |
 
 
 ### MoE Expert 调度策略
 
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|
-| MoE调度 | FinDEP 细粒度DEP调度? | r₁(batch)×r₂(token)两级pipeline(**多卡调度, AG和EG的调度**)；shared expert感知最大重叠；ASAS/AASS两种策略选择 | 细粒度token级调度，attention AG与expert compute流水线重叠 | Q2.1, vault: paper_secs/FinDEP (4142.6) |
-| MoE调度 | Faster MoE Expert Skipping/Pruning? | Expert skipping (na 6→2): throughput up to 1.32×；Expert pruning (ne 64→16): up to 2.3× speedup；SGLang v0.4.4 post1 on A800/H200 with DeepSeek-V2-Lite/V3 | **动态减少激活expert数(减少k)/剪枝冗余expert(减少N-E)** | Q2.6, vault: Faster MoE (2480.89) |
+| MoE调度 | FinDEP 细粒度DEP调度? | r₁(batch)×r₂(token)两级pipeline(**多卡调度, AG和EG的调度**)；shared expert感知最大重叠；ASAS/AASS两种策略选择 | 细粒度token级调度，attention AG与expert compute流水线重叠 | Q2.1, vault: paper_secs/FinDEP (4142.6) | 2种并发策略的动态选择, 可能需要运行时计算 |
+| MoE调度 | Faster MoE Expert Skipping/Pruning? | Expert skipping (na 6→2): throughput up to 1.32×；Expert pruning (ne 64→16): up to 2.3× speedup；SGLang v0.4.4 post1 on A800/H200 with DeepSeek-V2-Lite/V3 | **动态减少激活expert数(减少k)/剪枝冗余expert(减少N-E)** | Q2.6, vault: Faster MoE (2480.89) | 动态减少激活专家或裁减冗余专家, 需要运行时计算, 产生额外开销, 可能通过并发优化 |
 
 ### DiT/Diffusion 调度策略
 
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|
-| DiT调度 | CFG Batch 双流调度* | Conditional + Unconditional latent合并batch=2单次forward pass(**每次去噪时, cond forward pass + uncond forward pass, 合并成1个batch执行**)；GEMM M维度翻倍→Tensor Core利用率~50%→~80%+；HBM weight loading减半（仅加载一次）；对比串行双流（2×延迟）和双GPU并行CFG | Batch双流在单GPU最优——减少HBM weight loading次数+提高GEMM效率 | Q2.1, vault: knowledge_notes/MMDiT (262.0, 笔记推断) |
-| DiT调度 | TetriServe Deadline-Aware Round-Based? | **连续时间切分为固定时长round**，每round动态选择请求和SP并行度；FLUX.1-dev/SD3上vs固定SP度xDiT baseline提升up to 32% SLO attainment | Round-based scheduler + deadline-aware SP selection | Q2.2, vault: paper_secs/TetriServe (2956.1) |
-| DiT调度 | MixFusion Patch-Level 并行分解? | **GCD-based uniform patch统一不同分辨率(不同分辨率的统一patchify)**；CSP格式4个integer array O(1)查找；Operator Taxonomy: pixel-wise ops (>70%，batch全29 patches) vs Self-Attention (~20%，per-resolution分组) vs Conv (仅U-Net，PES边界缝合) | DiT无Convolution→patched inference自然100% accuracy；H100 sequential 17.8s→batched 9.5s | Q2.3, vault: knowledge_notes/Operator Taxonomy (751.0) |
+| DiT调度 | CFG Batch 双流调度* | Conditional + Unconditional latent合并batch=2单次forward pass(**每次去噪时, cond forward pass + uncond forward pass, 合并成1个batch执行**)；GEMM M维度翻倍→Tensor Core利用率~50%→~80%+；HBM weight loading减半（仅加载一次）；对比串行双流（2×延迟）和双GPU并行CFG | Batch双流在单GPU最优——减少HBM weight loading次数+提高GEMM效率 | Q2.1, vault: knowledge_notes/MMDiT (262.0, 笔记推断) | 推理中, cond pass和uncond pass两个分支的计算合并到相同batch, 2个pass并发执行 |
+| DiT调度 | TetriServe Deadline-Aware Round-Based? | **连续时间切分为固定时长round**，每round动态选择请求和SP并行度；FLUX.1-dev/SD3上vs固定SP度xDiT baseline提升up to 32% SLO attainment | Round-based scheduler + deadline-aware SP selection | Q2.2, vault: paper_secs/TetriServe (2956.1) | 切分round是按时间划分资源, 不同时间调度不同资源去执行不同负载, 属于并发  |
+| DiT调度 | MixFusion Patch-Level 并行分解? | **GCD-based uniform patch统一不同分辨率(不同分辨率的统一patchify)**；CSP格式4个integer array O(1)查找；Operator Taxonomy: pixel-wise ops (>70%，batch全29 patches) vs Self-Attention (~20%，per-resolution分组) vs Conv (仅U-Net，PES边界缝合) | DiT无Convolution→patched inference自然100% accuracy；H100 sequential 17.8s→batched 9.5s | Q2.3, vault: knowledge_notes/Operator Taxonomy (751.0) | 不同分辨率输入是动态长度的输入数据, 不同长度输入的执行时间不同, 存在并发计算提高资源使用率的可能 |
 
 
 ### 多模态 Serving 调度
 
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|
-| 多模态调度 | VisiPruner 三阶段跨模态调度! | **Shallow** (L1-8): 视觉+文本token独立演化→跳过cross-attention+视觉self-attention，节省~25%**；Middle** (L9-23): ~10/576关键视觉token驱动跨模态融合→Influence-based Token Selection仅保留instruction-relevant tokens（~10-50 vs 576），节省~90%**；Deep** (L24+): Vision Exit完全丢弃视觉tokens→纯文本self-attention，节省~20% | 分层token pruning基于跨模态信息流量化（FlowMM ρ^l metric指导） | Q2.1, vault: knowledge_notes/Three-Stage Cross-Modal (621.3), Cross-Modal Info Flow (707.2) |
-| 多模态调度 | EEVEE Modal Cache! | Controller计算图像content hash (64-bit)→GPU shared memory Modal Cache查找；命中→跳过视觉编码；Encoder-Decoder: 缓存cross-attention KV pairs；Decoder-Only: 缓存visual prefix self-attention KV；Critical Modal Cache（压缩至~170 tokens/30% retention via attention score排序）优先GPU memory | **跨请求复用消除重复visual encoding**；Pipeline overlap: 新请求encoder computation与cache loading重叠 | Q2.1/Q2.3, vault: knowledge_notes/Modal Cache (382.2), Module Multiplexing (14.6) |
-| 多模态调度 | vLLM-Omni Stage Graph* | **复杂Any-to-Any多模态模型分解为独立stage（Thinker LLM→Talker LLM→DiT Vocoder）****，每stage由独立execution engine服务**；unified connector (NCD/shared memory/Mooncake RDMA)传输中间数据；Qwen2.5-Omni RTF降低61.4%，Qwen3-Omni RTF降低90.7% | Stage Disaggregation + Unified Connector传输 | Q2.2, vault: paper_secs/vLLM-Omni (2910.6) |
-| 多模态调度 | ModServe Modality-Aware Disaggregation? | Image Instances (CPU preprocessing + GPU encoding) ↔ Text Instances (LLM prefill + decode)独立autoscaling；modality-aware routing(**模态forward分离不同实例**) | 模态级独立扩缩容，InternVL-26B上6.8× throughput vs vLLM monolith | Q2.2, vault: paper_secs/ModServe (2224.6) |
+| 多模态调度 | VisiPruner 三阶段跨模态调度! | **Shallow** (L1-8): 视觉+文本token独立演化→跳过cross-attention+视觉self-attention，节省~25%**；Middle** (L9-23): ~10/576关键视觉token驱动跨模态融合→Influence-based Token Selection仅保留instruction-relevant tokens（~10-50 vs 576），节省~90%**；Deep** (L24+): Vision Exit完全丢弃视觉tokens→纯文本self-attention，节省~20% | 分层token pruning基于跨模态信息流量化（FlowMM ρ^l metric指导） | Q2.1, vault: knowledge_notes/Three-Stage Cross-Modal (621.3), Cross-Modal Info Flow (707.2) | 三个阶段分别对visual tokens执行不同计算, 不同模型的阶段划分不同, 可能需要推理运行时计算, 产生额外开销, 可能通过并发优化 |
+| 多模态调度 | EEVEE Modal Cache! | Controller计算图像content hash (64-bit)→GPU shared memory Modal Cache查找；命中→跳过视觉编码；Encoder-Decoder: 缓存cross-attention KV pairs；Decoder-Only: 缓存visual prefix self-attention KV；Critical Modal Cache（压缩至~170 tokens/30% retention via attention score排序）优先GPU memory | **跨请求复用消除重复visual encoding**；Pipeline overlap: 新请求encoder computation与cache loading重叠 | Q2.1/Q2.3, vault: knowledge_notes/Modal Cache (382.2), Module Multiplexing (14.6) | 跨请求复用KV-Cache和latent, 说明并发能产生性能收益  |
+| 多模态调度 | vLLM-Omni Stage Graph* | **复杂Any-to-Any多模态模型分解为独立stage（Thinker LLM→Talker LLM→DiT Vocoder）****，每stage由独立execution engine服务**；unified connector (NCD/shared memory/Mooncake RDMA)传输中间数据；Qwen2.5-Omni RTF降低61.4%，Qwen3-Omni RTF降低90.7% | Stage Disaggregation + Unified Connector传输 | Q2.2, vault: paper_secs/vLLM-Omni (2910.6) | 多模态模型的多stage构建范式, 不同stage相对独立(满足并发基本条件), 存在并发的实现潜力 |
+| 多模态调度 | ModServe Modality-Aware Disaggregation? | Image Instances (CPU preprocessing + GPU encoding) ↔ Text Instances (LLM prefill + decode)独立autoscaling；modality-aware routing(**模态forward分离不同实例**) | 模态级独立扩缩容，InternVL-26B上6.8× throughput vs vLLM monolith | Q2.2, vault: paper_secs/ModServe (2224.6) | 不同模态计算分离到不同实例, 相对独立的计算, 存在并发的实现潜力 |
 
 
 ### Video Serving 调度
 
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|
-| Video调度 | LiveStar SVeD Streaming 逐帧因果? | Vision Encoding (InternViT, 16 tokens/frame)→Streaming SVeD Loop: Cache Lookup (Inter-dialogue Streaming Cache)→Verification Forward Pass **(运行时PPL计算, PPL 越低 → 新帧与当前字幕语义匹配；PPL 越高 → 新帧出现了字幕无法解释的新内容)→Gate Decision (PPL>α×PPL_ref→Response Mode生成新描述；else Silence Mode维持状态)**；Peak-End压缩（保留高PPL峰值+最新帧） | PPL-gated响应-沉默决策；Strict因果约束（不可预看未来帧）；双级KV Cache (Intra-dialogue + Inter-dialogue) | Q2.1, vault: knowledge_notes/Online Video-LLM (192.5), Streaming KV Cache (556.9) |
-| Video调度 | 长视频分块与上下文窗口滑动? | Sliding Window: W=64 frames, S=32 frames每chunk做spatial-temporal encoding + attention KV cache**保留最近K chunks**(**长视频的KVCache爆炸**)；Hierarchical Chunk: L1 short-term (8f)→L2 medium-term (8 chunks, 64f)→L3 long-term (相似度搜索选择关键segments)；Context Window Sliding: LLM 128K token窗口→注意力分驱逐+attention sink保留 | 分层时间表示降低KV cache膨胀；粗粒度segment搜索+细粒度frame分析 | Q2.1, vault: knowledge_notes/Online Video-LLM (192.5, 笔记推断) |
+| Video调度 | LiveStar SVeD Streaming 逐帧因果? | Vision Encoding (InternViT, 16 tokens/frame)→Streaming SVeD Loop: Cache Lookup (Inter-dialogue Streaming Cache)→Verification Forward Pass **(运行时PPL计算, PPL 越低 → 新帧与当前字幕语义匹配；PPL 越高 → 新帧出现了字幕无法解释的新内容)→Gate Decision (PPL>α×PPL_ref→Response Mode生成新描述；else Silence Mode维持状态)**；Peak-End压缩（保留高PPL峰值+最新帧） | PPL-gated响应-沉默决策；Strict因果约束（不可预看未来帧）；双级KV Cache (Intra-dialogue + Inter-dialogue) | Q2.1, vault: knowledge_notes/Online Video-LLM (192.5), Streaming KV Cache (556.9) | 运行时指标计算, 动态决定是否执行解码计算, 产生额外开销, 可能通过并发优化 |
+| Video调度 | 长视频分块与上下文窗口滑动? | Sliding Window: W=64 frames, S=32 frames每chunk做spatial-temporal encoding + attention KV cache**保留最近K chunks**(**长视频的KVCache爆炸**)；Hierarchical Chunk: L1 short-term (8f)→L2 medium-term (8 chunks, 64f)→L3 long-term (相似度搜索选择关键segments)；Context Window Sliding: LLM 128K token窗口→注意力分驱逐+attention sink保留 | 分层时间表示降低KV cache膨胀；粗粒度segment搜索+细粒度frame分析 | Q2.1, vault: knowledge_notes/Online Video-LLM (192.5, 笔记推断) | KV-Cache的压缩/跳过/丢弃策略是运行时计算, 产生额外开销, 可能通过并发优化 |
 
 ### KV-Cache 管理与优化
 
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|
-| KV-Cache | PagedAttention (vLLM)! | 固定大小block (16 tokens)→block table映射逻辑序列到非连续物理GPU内存；prefix caching: content hash + Copy-on-Write语义共享block；GPU-side block table (BrownoutServe)消除CPU↔GPU同步 | OS虚拟内存分页类比→消除碎片+实现内存共享 | Q2.2/Q2.5, vault: PagedAttention (24.0) |
-| KV-Cache | RadixAttention (SGLang)! | Token-level KV-cache pool + Radix Tree自动**前缀复用**；tree节点ref_count生命周期管理；比vLLM block-level共享粒度更细但tree维护开销更大 | Token vs block粒度权衡：共享效率↑ vs metadata overhead↑ | Q2.2/Q2.5, vault: SGLang (291.2) |
-| KV-Cache | Streaming KV Cache Dual-Level (LiveStar)! | **Intra-dialogue (clip内) + Inter-dialogue (跨clip) 双级KV Cache(长视频Cache压缩策略)**；Peak-End压缩（保留高PPL峰值+最新帧）；SVeD Swap：响应→沉默时swap cache末尾位置 | 5min video FPS 3.82 (Both) vs 2.50 (No Cache)，1.53×加速 | Q2.1, vault: Streaming KV Cache (556.9) |
-| KV-Cache | EEVEE Modal Cache! | 视觉编码器输出**跨请求缓存复用**；64-bit content hash→GPU shared memory查找；Critical Modal Cache压缩（token-wise attention score排序→~30% retention, 576→170 tokens）；Global LRU + host memory spill | **同一图像多问题场景→后续请求完全跳过视觉编码** | Q2.1, vault: Modal Cache (382.2) |
+| KV-Cache | RadixAttention (SGLang)! | Token-level KV-cache pool + Radix Tree自动**前缀复用**；tree节点ref_count生命周期管理；比vLLM block-level共享粒度更细但tree维护开销更大 | Token vs block粒度权衡：共享效率↑ vs metadata overhead↑ | Q2.2/Q2.5, vault: SGLang (291.2) | 跨请求复用KV-Cache, 说明并发能产生性能收益 |
 
 
 
 ## 并发方法的应用和实现
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|
-| **多算子并发与调度** | Kitsune Tile-Level Spatial Dataflow* | L2-resident ring buffer queue + 双 arbiter grid scheduler；Tensor Core + SIMT Core 同时活跃(**不同算子映射到不同Core,空间并发**) | 1.3-2.3× 加速, 41-98% off-chip traffic 减少; 需修改 GPU HW | Q1.5 |
-| **多算子并发与调度** | Nimble AoT Multi-Stream* | AoT CUDA Graph capture + MEG + Ford-Fulkerson 最大匹配 → 多 stream 并发(**cuda graph匹配并发算子, 多Stream执行**) | vs PyTorch up to 22.34×; max concurrency=15 | Q1.6 |
-| **多算子并发与调度** | MPK (Mirage) In-Kernel Runtime * | SM 分区 (128W+4S) + event-driven + cross-task pipelining + paged SMEM(**整个模型推理编译为一个 Mega-Kernel，在其中嵌入一个完整的并行运行时系统**) | 12.5ms/token (下限~10ms) | Q1.6 |
-| **多算子并发与调度** | HATB (mPLUG-Owl3)* | Self-Attn ‖ Cross-Attn 并行 + Adaptive Gating 融合；共享 Q 投影, K/V 独立(**text query和text KV, visual KV分别并行作self和cross的Attn, 而不是self->cross(利用self输出)->fuse->sffn的串行, adaptive gating优化模态信息融合**) | 4/28 layers optimal; cross-attn 延迟隐藏 | Q1.4 |
-| **多算子并发与调度** | Cypress Task-Based* | Warp-specialized: TMA 异步搬运 + Tensor Core MMA 流水线(**基于TMA+SM硬件的事件编程模型, 编译框架**) | 0.88-1.06× cuBLAS GEMM | Q1.4 |
-| **多算子并发与调度** | EEVEE Modal Cache* | 缓存 modality-specific module 输出消除跨请求重复计算(**Serving可共享跨请求的模块latent输出（visual tokens / KV pairs）**) | 提升多模态 serving 吞吐 | Q1.4 |
+| **多算子并发与调度** | Kitsune Tile-Level Spatial Dataflow* | L2-resident ring buffer queue + 双 arbiter grid scheduler；Tensor Core + SIMT Core 同时活跃(**不同算子映射到不同Core,空间并发**) | 1.3-2.3× 加速, 41-98% off-chip traffic 减少; 需修改 GPU HW | Q1.5 | 不同算子映射到不同Core的空间并发, 但是TC和CC能同时启动吗(存疑)? |
+| **多算子并发与调度** | Nimble AoT Multi-Stream* | AoT CUDA Graph capture + MEG + Ford-Fulkerson 最大匹配 → 多 stream 并发(**cuda graph匹配并发算子, 多Stream执行**) | vs PyTorch up to 22.34×; max concurrency=15 | Q1.6 | cuda graph匹配并发算子, 多Stream并发的执行模型 |
+| **多算子并发与调度** | MPK (Mirage) In-Kernel Runtime * | SM 分区 (128W+4S) + event-driven + cross-task pipelining + paged SMEM(**整个模型推理编译为一个 Mega-Kernel，在其中嵌入一个完整的并行运行时系统**) | 12.5ms/token (下限~10ms) | Q1.6 | Mega kernel打包/引用多个kernel, 持久化运行, 多kernel并发实现方式 |
+| **多算子并发与调度** | HATB (mPLUG-Owl3)* | Self-Attn ‖ Cross-Attn 并行 + Adaptive Gating 融合；共享 Q 投影, K/V 独立(**text query和text KV, visual KV分别并行作self和cross的Attn, 而不是self->cross(利用self输出)->fuse->ffn的串行, adaptive gating优化模态信息融合**) | 4/28 layers optimal; cross-attn 延迟隐藏 | Q1.4 | 计算流中不同模态tokens拆分后并发 |
+| **多算子并发与调度** | Cypress Task-Based* | Warp-specialized: TMA 异步搬运 + Tensor Core MMA 流水线(**基于TMA+SM硬件的事件编程模型, 编译框架**) | 0.88-1.06× cuBLAS GEMM | Q1.4 | 硬件模块TMA的事件编程模型, 编译框架中执行模型是硬件TMA和计算TC/CC并发 |
+| **多算子并发与调度** | EEVEE Modal Cache* | 缓存 modality-specific module 输出消除跨请求重复计算(**Serving可共享跨请求的模块latent输出（visual tokens / KV pairs）**) | 提升多模态 serving 吞吐 | Q1.4 | 跨请求的latent数据复用, 说明并发能产生性能收益 |
 | | | | | |
-| **算子融合** | FlashFuser DSM Fusion* | Hopper DSM 跨 SM cluster kernel fusion(**利用SM cluster的硬件划分机制**)；dsm_all_exchange/shuffle/reduce_scatter primitives；~1.15×10^6 候选→Top-11 profiling | HBM access -58%, vs Chimera 4.1× | Q1.6 |
-| **算子融合** | SN40L Streaming Dataflow* | **硬件原生 streaming**: PCU SA/SIMD + PMU composable mem；Gated FFN 全融合为单 spatial pipeline | 中间结果永不物化到 off-chip | Q1.6 |
-| **算子融合** | Welder Tile-Graph Memory* | Tile propagation 自动对齐 + traffic cost model + 双层搜索(**tile graph自动搜索tile连接配置, 静态编译策略**)；89 种 fusion pattern 自动发现 | DRAM traffic -69% (BERT); NeRF 7-layer MLP 全融合 5× | Q1.6 |
-| **算子融合** | Shepherd Operator* | Micro-operator→virtual operator 合并( **编译期静态准备 + 运行时动态选择 + CDP守护kernel启动, 部分算子的调度开销约等于执行开销**); per-shepherd-operator 调度降级 | 消除 micro-operator scheduling overhead | Q1.4 |
+| **算子融合** | FlashFuser DSM Fusion* | Hopper DSM 跨 SM cluster kernel fusion(**利用SM cluster的硬件划分机制**)；dsm_all_exchange/shuffle/reduce_scatter primitives；~1.15×10^6 候选→Top-11 profiling | HBM access -58%, vs Chimera 4.1× | Q1.6 | 利用硬件DSM机制, 进行算子融合, 算子融合是并发的实现机制, 并且减少数据传输, 拿到性能收益 |
+| **算子融合** | SN40L Streaming Dataflow* | **硬件原生 streaming**: PCU SA/SIMD + PMU composable mem；Gated FFN 全融合为单 spatial pipeline | 中间结果永不物化到 off-chip | Q1.6 | Streaming的硬件架构提供空间并发机制 |
+| **算子融合** | Welder Tile-Graph Memory* | Tile propagation 自动对齐 + traffic cost model + 双层搜索(**tile graph自动搜索tile连接配置, 静态编译策略**)；89 种 fusion pattern 自动发现 | DRAM traffic -69% (BERT); NeRF 7-layer MLP 全融合 5× | Q1.6 | 编译过程搜索tile级别的并发机会 |
+| **算子融合** | Shepherd Operator* | Micro-operator→virtual operator 合并( **编译期静态准备 + 运行时动态选择 + CDP守护kernel启动, 部分算子的调度开销约等于执行开销**); per-shepherd-operator 调度降级 | 消除 micro-operator scheduling overhead | Q1.4 | 编译期静态准备多个版本kernel, 运行时动态选择kernel来提高资源使用率, CDP动态启动kernel来压榨资源使用 |
 | | | | | |
-| **Memory Planning** | Welder Tile-Graph | Tile propagation 反向推导 + SetConnect memory level 选择 (L0/L1/L2) + traffic cost model | Inter-layer independence 解耦优化 | Q1.6 |
-| **Memory Planning** | MPK Paged SMEM * | 32KB fixed pages + interval graph coloring 复用 + cross-task pipelining 预取(**利用TMA并发下一个任务的读取, worker kernel而非算子kernel, 让SM内的kernel内接力不同任务的kernel block, SMEM虚拟化, 打破资源按照kernel分配的限制**) | H100: 7 pages/SM, A100: 5 pages/SM | Q1.6 |
+| **Memory Planning** | MPK Paged SMEM * | 32KB fixed pages + interval graph coloring 复用 + cross-task pipelining 预取(**利用TMA并发下一个任务的读取, worker kernel而非算子kernel, 让SM内的kernel内接力不同任务的kernel block, SMEM虚拟化, 打破资源按照kernel分配的限制**) | H100: 7 pages/SM, A100: 5 pages/SM | Q1.6 | 设计worker kernel持久化运行, 动态执行不同算子的kernel(利用TMA读取下一个任务的数据), launch开销减少, 算子动态启动而能够对齐动态负载和资源情况, 得到性能收益 |
 | | | | | |
 
 ### 多模态 Serving 调度
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|
-| 多模态调度 | EPD-Serve 三阶段解耦* | Encode (ViT, compute-heavy+大activation) → Prefill (LLM, compute-heavy+产KV Cache) → Decode (memory-bound token-by-token)；7种物理共置拓扑(**多模态推理拆成 Encode、Prefill、Decode 三个资源特征完全不同的阶段，然后按 SLO 目标选择“分置”或“共置”的部署拓扑；在 Ascend NPU 上，再利用 AI Core 和 AI Vector 的算子互补来减少硬件空转**) | 三阶段不同计算/内存特征→解耦消除硬件利用率低；AI Core+AI Vector算子互补复用 | Q2.2/Q2.3, vault: EPD Disaggregation (19537.8/21.7) |
+| 多模态调度 | EPD-Serve 三阶段解耦* | Encode (ViT, compute-heavy+大activation) → Prefill (LLM, compute-heavy+产KV Cache) → Decode (memory-bound token-by-token)；7种物理共置拓扑(**多模态推理拆成 Encode、Prefill、Decode 三个资源特征完全不同的阶段，然后按 SLO 目标选择“分置”或“共置”的部署拓扑；在 Ascend NPU 上，再利用 AI Core 和 AI Vector 的算子互补来减少硬件空转**) | 三阶段不同计算/内存特征→解耦消除硬件利用率低；AI Core+AI Vector算子互补复用 | Q2.2/Q2.3, vault: EPD Disaggregation (19537.8/21.7) | 多模态推理拆成 Encode、Prefill、Decode 三个资源特征完全不同的阶段, 满足并发的条件 |
 
 
 ### 计算图分解策略
 
-| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
+| 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review(Todo) |
 |------|------|-------------|----------|------|
-| 算子内Tile级 | MegaScale-MoE Intra-op Tile-Level? | **4类tile级通信-计算barrier融合**：**A2A+GEMM、GEMM+A2A、AG+Scatter+GroupedGEMM、GroupedGEMM+Gather+RS；per-tile device memory barrier替代kernel-level barrier**；**tile到达即计算不等全量通信完成** | **Tile级barrier**→通信与计算在tile粒度重叠（非operator粒度） | Q2.3, vault: Intra-operator Communication-Computation Overlap (275.9) |
-| 算子级分解 | Infera Tile-Based + Shepherd Operator* | 大op→micro-op tile切分（Register/Shared/Global memory三级tile size静态分析决策）+ 小op→Shepherd Operator合并（降低per-op调度overhead）；Multi-version micro kernel (pipeline stage 2/3/4 + async copy + warp specialization)；Zero-tuning（无需GPU profiling反馈） | 自适应粒度控制：tile切分上限+Shepherd合并下限；协同编译-调度：**离线multi-version + 在线动态kernel选择** | Q2.3/Q2.4, vault: Tile-Based Compilation (1309.2), Shepherd Operator (1413.2) |
-| 算子级分解 | Nimble DAG→MEG→Stream Assign! | DAG→MEG去除冗余传递边→Bipartite Matching（最大匹配=一组可并行算子）→**CUDA Stream分配**+仅在跨stream MEG边界插入CUDA event同步；理论保证maximum logical concurrency + minimum synchronizations | MEG暴露真实直接依赖关系（消除DAG max_flow误导） | Q2.3, vault: Stream Assignment Algorithm (29.3) |
-| 层/模块级分解 | vLLM Fused MoE + FlashMoE Megakernel* | Fused MoE: Router→Token Sorting (moe_align_block_size, BLOCK_M=64)→Grouped GEMM Triton kernel (per-expert block-level parallelism)→Weighted Combine atomic aggregation；FlashMoE: **Persistent kernel内含GPU内work-conserving scheduler (doorbell monotonic counter并行sweep)** + CUTLASS device-side GEMM | 消除per-expert kernel launch overhead（6-8次→1-2次，15-20%吞吐提升）；Megakernel进一步融合跨GPU通信→1次launch vs 432次 | Q2.3/Q2.5, vault: Fused MoE (400.9/390.2), Megakernel (455.7) |
-| 层/模块级分解 | EEVEE Module Multiplexing* | Visual Encoder (70% SM, B_vis=2) ↔ Text Decoder (30% SM, B_txt=8) **CUDA MPS空间分区**；Offline Synergistic Greedy Search策略生成（逐步增加batch→平衡SM再分配）；Stage-Level Pipeline: CPU预处理↔GPU inference重叠 | MPS SM Partition硬约束（需CUDA初始化前设定→active-standby机制ms级切换） | Q2.3, vault: Module Multiplexing (14.6) |
-| Mega-Kernel化 | MPK tGraph* | **SM级任务tGraph替代kernel级DAG**；per-task-pair event (352 bytes/task metadata, 全部GPU device memory连续数组)；**128 Workers + 4 Scheduler-SMs物理分区；Cross-task pipelining** (TMA prefetch next weight tile during current compute) | SM级表示暴露kernel barrier遮蔽的细粒度并行；Hybrid JIT+AOT：attention JIT dynamic load balance + MatMul AOT消除dispatch overhead | Q2.3, vault: MPK (59.2) |
-| 阶段级分解 | EPD-Serve E/P/D 解耦! | 7种部署拓扑；AI Core (MatMul) ↔ AI Vector (AllReduce) 算子互补空间复用；**Ascend NPU Hardware TS直接解析Task Descriptor Chain**（vs GPU GigaThread Engine软件层干预） | 阶段级解耦依据三阶段不同计算/内存特征；物理共置利用硬件异构计算单元独立性 | Q2.3, vault: EPD Disaggregation (19537.8/21.7) |
+| 算子内Tile级 | MegaScale-MoE Intra-op Tile-Level? | **4类tile级通信-计算barrier融合**：**A2A+GEMM、GEMM+A2A、AG+Scatter+GroupedGEMM、GroupedGEMM+Gather+RS；per-tile device memory barrier替代kernel-level barrier**；**tile到达即计算不等全量通信完成** | **Tile级barrier**→通信与计算在tile粒度重叠（非operator粒度） | Q2.3, vault: Intra-operator Communication-Computation Overlap (275.9) | 计算-通信融合, 并发的实现/应用, tile粒度的融合可能提高重叠覆盖率, 带来性能收益 |
+| 算子级分解 | Infera Tile-Based + Shepherd Operator* | 大op→micro-op tile切分（Register/Shared/Global memory三级tile size静态分析决策）+ 小op→Shepherd Operator合并（降低per-op调度overhead）；Multi-version micro kernel (pipeline stage 2/3/4 + async copy + warp specialization)；Zero-tuning（无需GPU profiling反馈） | 自适应粒度控制：tile切分上限+Shepherd合并下限；协同编译-调度：**离线multi-version + 在线动态kernel选择** | Q2.3/Q2.4, vault: Tile-Based Compilation (1309.2), Shepherd Operator (1413.2) | 离线multi-version的kernel, 在线动态kernel选择, 运行时确定能对齐动态需求 |
+| 算子级分解 | Nimble DAG→MEG→Stream Assign! | DAG→MEG去除冗余传递边→Bipartite Matching（最大匹配=一组可并行算子）→**CUDA Stream分配**+仅在跨stream MEG边界插入CUDA event同步；理论保证maximum logical concurrency + minimum synchronizations | MEG暴露真实直接依赖关系（消除DAG max_flow误导） | Q2.3, vault: Stream Assignment Algorithm (29.3) | 利用CUDA Stream机制并发, 按最大可并发拆分计算图 |
+| 层/模块级分解 | vLLM Fused MoE + FlashMoE Megakernel* | Fused MoE: Router→Token Sorting (moe_align_block_size, BLOCK_M=64)→Grouped GEMM Triton kernel (per-expert block-level parallelism)→Weighted Combine atomic aggregation；FlashMoE: **Persistent kernel内含GPU内work-conserving scheduler (doorbell monotonic counter并行sweep)** + CUTLASS device-side GEMM | 消除per-expert kernel launch overhead（6-8次→1-2次，15-20%吞吐提升）；Megakernel进一步融合跨GPU通信→1次launch vs 432次 | Q2.3/Q2.5, vault: Fused MoE (400.9/390.2), Megakernel (455.7) | Persistent kernel运行时调度不同工作, 减少kernel启动开销, 获得运行时出现的并发机会 |
+| 层/模块级分解 | EEVEE Module Multiplexing* | Visual Encoder (70% SM, B_vis=2) ↔ Text Decoder (30% SM, B_txt=8) **CUDA MPS空间分区**；Offline Synergistic Greedy Search策略生成（逐步增加batch→平衡SM再分配）；Stage-Level Pipeline: CPU预处理↔GPU inference重叠 | MPS SM Partition硬约束（需CUDA初始化前设定→active-standby机制ms级切换） | Q2.3, vault: Module Multiplexing (14.6) | MPS的SM隔离执行不同模块的独立计算 |
+| Mega-Kernel化 | MPK tGraph* | **SM级任务tGraph替代kernel级DAG**；per-task-pair event (352 bytes/task metadata, 全部GPU device memory连续数组)；**128 Workers + 4 Scheduler-SMs物理分区；Cross-task pipelining** (TMA prefetch next weight tile during current compute) | SM级表示暴露kernel barrier遮蔽的细粒度并行；Hybrid JIT+AOT：attention JIT dynamic load balance + MatMul AOT消除dispatch overhead | Q2.3, vault: MPK (59.2) | Workers kernel和SM分区, 作资源隔离来减少并发的资源竞争, Worker kernel提供动态性, tGraph提供硬件对齐(并发视角)的负载表达 |
+| 阶段级分解 | EPD-Serve E/P/D 解耦! | 7种部署拓扑；AI Core (MatMul) ↔ AI Vector (AllReduce) 算子互补空间复用；**Ascend NPU Hardware TS直接解析Task Descriptor Chain**（vs GPU GigaThread Engine软件层干预） | 阶段级解耦依据三阶段不同计算/内存特征；物理共置利用硬件异构计算单元独立性 | Q2.3, vault: EPD Disaggregation (19537.8/21.7) | 异构算力资源的不同kernel并发, NPU解析Task Descriptor Chain对比GPU前端的Scheduler解析Task MetaData, 讨论硬件的并发机制 |
 
 ### Dispatcher 设计方法
 
@@ -161,7 +157,7 @@
 |------|------|-------------|----------|------|
 | **Kernel Fusion (算子融合)** | Fused MoE Kernel? | Expert FFN: GEMM(gate+up) + SiLU + GEMM(down) + atomic scatter-add 融合为单 kernel。Sorted token indirection + L2 cache 友好的 block ordering。BLOCK_M=64 (H100 SMEM 约束) | 减少 6-8 kernel launch→1-2；消除中间 HBM round-trip；atomicAdd on L2 处理 top-k 多 expert 累积 | Q4.1, Q4.3, Q4.6 |
 | **Kernel Fusion** | SLA Fused Sparse-Linear Attention? | DiT denoising attention: sparse FA + linear attention + negligible skip 三模式单 kernel 融合。**CRITICAL→Tensor Core O(N²)，MARGINAL→CUDA Core O(1)，NEGLIGIBLE→skip** | Per-Q-block conditional execution；static tile (diffusion step 固定 shape) | Q4.1 |
-| **Kernel Fusion** | FlashAttention? | QK^T + Softmax + PV 融合单 kernel。Online softmax rescaling 避免 N×N 矩阵 materialize 到 HBM。FA-3: warp-specialized WGMMA+TMA async pipeline | HBM traffic 35.3GB→4.4GB (8× reduction)；FA-3 H100 840 TFLOPs/s (85% peak) | Q4.3, Q4.4 |
+| **Kernel Fusion** | FlashAttention? | **QK^T + Softmax + PV 融合单 kernel**。Online softmax rescaling 避免 N×N 矩阵 materialize 到 HBM。FA-3: warp-specialized WGMMA+TMA async pipeline | HBM traffic 35.3GB→4.4GB (8× reduction)；FA-3 H100 840 TFLOPs/s (85% peak) | Q4.3, Q4.4 |
 | **Kernel Fusion** | FlashMoE Persistent Kernel* | Gate + Dispatch + Expert FFN + Combine 全融合单 persistent kernel。Actor model: **Processor/Scheduler/Subscriber 三种 warp-specialized 角色**。Tile (128,64)，128 threads/block | **1 launch 替代 432-550 kernel launches**；93.17% SM util；对称 Tensor Layout 实现 write-write conflict-free DMA | Q4.1, Q4.4, Q4.5 |
 | **Kernel Fusion** | ChituDiffusion dEngine* | DiT/diffusion 模型的 dGraph 分解 + tile-based 编译。Data-property-aware 多 dEngine 预编译 + 运行时动态选择。Ragged operation regularization | **编译时多版本 + 运行时动态匹配** input property；round-robin tile→thread block mapping for ragged batching | Q4.4 |
 | **Tile 切分与调度** | WELDER Hardware-Aligned Tile Search? | 三级硬件 penalty 驱动 tile shape 枚举：coalesced (128B transaction) + parallelism (≥128 tiles) + capacity (SMEM footprint)。MMA fragment 整除约束 (16 for FP16) | 枚举空间 = 各维度 tile size 笛卡尔积；penalty 各自 O(1) 计算；multiple candidates 可并行评估 | Q4.1, Q4.4 |
@@ -217,7 +213,7 @@
 | **PIM/存内计算** | ERAS (Expert Residency Aware Selection)* | Routing quality vs data movement cost 权衡: Gating Logits → Softmax → Residency-Aware Adjustment (HBM 驻留 expert 概率 +α, 远端 expert 概率 -β×(1-freq[i])) → Renormalize → Top-K Selection; α=0.15 时减少 10-13% 解码延迟, offload 越多效果越显著 (最大 21.2%); 与 PIM 正交叠加: **PIM 提供物理近存计算能力, ERAS 提供调度层 expert placement 优化** | Residency-Aware Gating Adjustment + 异步 HtoD transfer 流水线 | Q6.3 |
 
 
-## 影响并发的架构要素
+## 影响并发的架构机制
 | 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
 |------|------|-------------|----------|------|
 | **访存体系** | GPU四级Memory Hierarchy | HBM(3.35TB/s, 400-800 cycles)→L2(50MB, 7-12TB/s, ~200 cycles)→L1/SMEM(228KB/SM, ~19TB/s, 20-30 cycles)→RF(256KB/SM, ~40TB/s, 0 cycles) | 容量-带宽权衡金字塔：每层通过tiling适配working set | Q5.2 |
@@ -253,7 +249,7 @@
 
 
 
-## 实验工具
+## 架构性能和开销的实验工具
 | 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 |
 |------|------|-------------|----------|------|
 | **硬件实现流程** | CuTe DSL GPU Kernel开发? | CuTe C++ templates→NVCC→PTX→SASS→SM90/SM100 hardware；支持warp-specialized pipeline、Ping-Pong scheduling、cluster-level sync | Triton无法表达的底层硬件特性(warp-specialized异步调度/Ping-Pong pipeline) | Q5.4 |
