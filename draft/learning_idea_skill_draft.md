@@ -20,10 +20,11 @@ idea-question-skill.(人工归纳, mark ts)
 question-data-mark
 将summary的输出, 人工归纳, 先写review, 细化.
 低优先级/抛弃的标准: 用不包含在review的方法项目, 学习反例.
+human review和补充
 
 
 
 idea-answer-summary-gap
 架构故事思路:
 架构设计侧重模块化, 什么计算需要什么模块, 基础模块提供通用性能保底, 专用模块补齐特化性能, 专用模块提供插件效果.
-自动review, 性能收益
+自动review(筛选, 价值), 深入探索(性能收益,gap,空间)
