@@ -1,0 +1,274 @@
+# Kitsune_ Enabling Dataflow Execution on GPUs
+
+> 2026-06-08T09:58:33.804Z
+> Rounds: 2
+> QA: `9ac954c5-87e0-4067-a153-0f31b6f10ea8`  AA: `67bb5fe8-f483-4e0e-95a4-054691ba41cd`
+
+## 评判
+
+| 维度 | 评定 | 理由 |
+|------|------|------|
+| 相关性 | 高 | Kitsune 同时直接属于「并发方法的应用和实现」（大类二）和「提供并发机制的硬件模块/架构」（大类三）。其 spatial dataflow pipeline 将 operator 间的时间串行转换为 CTA 级空间并行（大类二核心关注），Modified GPU Grid Scheduler 双 arbiter 是对硬件并发调度机制的直接修改（大类三核心关注）。二级分类覆盖：多算子并发与调度、编译框架、算子融合、Kernel 调度、控制与调度。 |
+| 参考价值 | 中 | 方法提供充分定量证据（DRAM traffic 减少 41-98%，低利用率从 26% 降至 15%，A100 实测 5 个应用），L2-resident ring buffer queue 设计模式可迁移。但依赖硬件修改（双 arbiter 需改动 GPU Grid Scheduler），在现有商用 GPU 上不可直接部署，限制即时参考实用性。ILP 对 batch size 敏感度未验证、queue depth=2 缺乏 ablation、多 pipeline L2 竞争未测量。 |
+| 深入价值 | 高 | 揭示三个可迁移的 **** 级核心机制：(1) ILP 编译-运行时协同模式（静态规划+动态执行）可迁移到其他并发调度场景；(2) L2-resident inter-CTA ring buffer queue 的同步/反压/L2 pinning 设计为 GPU 上 software-defined on-chip network 提供可复用 blueprint；(3) 对现有 GPU 并发机制的系统性差距分析（MPS/Streams/Persistent Kernel/ISPA/SMK 为何不足以实现 systematic heterogeneous CTA co-location）构成评估新并发方案的参考框架。shared memory capacity 作为纯软件方案的物理硬上限论证尤为深刻。 |
+
+**总结**：高价值正例——Kitsune 的 spatial dataflow pipeline 是超越 BSP/vertical fusion 的第三种 DL 执行范式。「仅需两个最小化原语（软件 queue + 修改 grid scheduler）即可在现有 GPU 架构上实现高效 dataflow 执行」的哲学可迁移。其对现有 GPU 并发机制的系统性局限分析可作为评估后续并发方案的 checklist；L2-resident ring buffer queue 设计模式可复用于其他需要 on-chip inter-CTA 通信的场景。主要不足：硬件依赖（双 arbiter 不可在现有 GPU 部署）和实验完备性（缺少 batch size scaling、queue depth ablation、多 pipeline L2 竞争测量）。
+
+## 问答记录
+
+### Round 1
+
+**Q**：根据 idea note 内容，Kitsune 明显同时涉及**大类二（并发方法的应用和实现）**和**大类三（提供并发机制的硬件模块/架构）**——它通过软件 Ring Buffer Queue + 修改 GPU Grid Scheduler 实现 spatial dataflow pipeline。这是跨大类的强正例信号。
+
+现在进行第一级提问，确认大类归属并获取关键实现细节。
+
+---
+
+### 第一级问题（大类匹配）
+
+**Kitsune 同时涉及并发实现方法（大类二）和硬件并发机制修改（大类三），以下问题覆盖两个大类的归属确认：**
+
+**1. 并发实现的粒度与资源隔离（大类二 — 引导追问 2.1、2.2）**
+
+Kitsune 的 spatial pipeline 将不同算子映射到不同 CTA，通过 L2-resident ring buffer queue 传递 tile 级中间数据。请具体说明：
+
+- **(a) 并发粒度**：Kitsune 的并发发生在什么粒度——是 CTA 间（不同 CTA 执行不同算子）、warp 间（同一 SM 内不同 warp 执行不同算子）还是两者兼有？一个 spatial pipeline stage 内，producer CTA 和 consumer CTA 的数量比是多少？这个比例是固定的还是由 compiler 的 ILP 求解器根据负载特征动态决定的？
+
+- **(b) 同步机制**：Ring buffer queue 的 producer/consumer 同步使用 sequence number + atomic 操作。每个 tile 传递的同步开销（atomic 操作的 latency + L2 cache access）是多少 cycles？与 tile 的计算时间相比占比多大？当 producer 和 consumer 速度不匹配时（例如 Linear GEMM 比 ReLU 慢），queue 的反压（backpressure）机制是什么——是 producer 等待 consumer 消费后才写入，还是 queue 满时 producer 被阻塞？
+
+- **(c) 资源隔离**：Modified grid scheduler 将 SIMT-heavy CTA 和 TensorCore-heavy CTA 配对到同一 SM。同一 SM 上两种 CTA 是否共享 register file 和 shared memory？如果不共享，SM 的资源（registers、SMEM、warp slots）是如何在两种 CTA 之间静态划分的？划分比例是 compiler 决定的还是运行时可调的？
+
+**2. 硬件 Grid Scheduler 修改的能力边界（大类三 — 引导追问 3.1、3.2）**
+
+Modified GPU Grid Scheduler 将单 round-robin arbiter 扩展为双 arbiter（SIMT 和 Tensor 各一个），通过 `cudaPipeline` API 标注每个 kernel 的 primary resource type。
+
+- **(a) 硬件修改的范围**：这个双 arbiter 修改是纯软件层面（在 GPU 驱动/runtime 中拦截和修改 CTA 发射顺序）还是需要硬件改动（修改 SM 的 warp scheduler 或 GigaThread Engine 的 CTA 分配逻辑）？如果纯软件实现，它是通过什么现有 GPU 机制做到的（例如 CUDA Stream 优先级、MPS、persistent kernel 自调度）？
+
+- **(b) 并发度上限**：双 arbiter 机制允许同一 SM 同时驻留的不同 kernel 数量上限是多少？这个上限受什么硬件资源限制（warp slots、register file、SMEM、L1 cache）？实验中 A100 108 SM 上压缩 152 CTAs（64+44+44）到 108 SM 预算内——这个「超配比」（152/108=1.41×）的物理极限在哪里？
+
+---
+
+请 Answer Agent 针对以上问题给出具体、定量的回答。
+
+**A**：Now I have sufficient context. Let me compile the answer.
+
+---
+
+## 回答：Kitsune 并发粒度、同步机制、资源隔离与 Grid Scheduler 修改
+
+### 1(a) 并发粒度
+
+Kitsune 的并发发生在 **CTA 粒度**——不同算子映射到不同的 CTA，stage 间通过 L2-resident queue 传递 tile 级数据。并发**不发生在 warp 粒度**（同一 CTA 内不混合不同算子）。
+
+**Producer/Consumer CTA 数量比是动态决定的**，由 Kitsune compiler 的 ILP（整数线性规划）求解器在 Load Balance 阶段（§5.3）根据负载特征计算。以 MeshGraphNets MLP forward pass（Linear(768→3072) → ReLU → Linear(3072→768)）为例：
+
+- ILP 求解输出：`a_Linear1=64` (Tensor CTAs), `a_ReLU=44` (SIMT CTAs), `a_Linear2=44` (Tensor CTAs)
+- Producer(Linear1) : Consumer(ReLU) = 64:44 ≈ 1.45:1
+- Producer(ReLU) : Consumer(Linear2) = 44:44 = 1:1
+
+这个比例不是固定的——ILP 的目标是最大化 sf-node 吞吐量，约束包括每 stage 的估计吞吐能力（`t_i × ResourceScale(a_i) × Speedup(a_i)`）、DRAM 带宽上限、L2 带宽上限，以及 SIMT/Tensor CTA 的独立 SM 分配（`Σ IsSimt_i × a_i = #SMs` 和 `Σ IsTensor_i × a_i = #SMs`）。ILP 使用 zero-latency performance model（解析模型而非 cycle-level 模拟），输入参数 `t_i`（BSP 实测吞吐量）、`ResourceScale(a_i)`、`Speedup(a_i)` 通过在真实 GPU 上用 NSIGHT Compute 测量获得。
+
+### 1(b) 同步机制
+
+**原子操作延迟与开销占比**：
+
+Ring buffer queue 使用 `atomicAdd` 实现 sequence number 同步。A100 硅片实测：无争用条件下，每个 CTA 可维持 **100M atomics/sec**，对应 385-1541 GB/s/queue 的理论上限（远超 L2 带宽 ≈61 GB/s/SM）。实际 54 queues（对应 108 SM）的微基准测试：
+
+- Payload 128-256KB：aggregate bandwidth 达 **2 TB/s**（37 GB/s/queue）
+- 同步开销（vs 无同步 raw L2 带宽）：**12× reduction @ 1KB payload**，**<63% @ ≥64KB payload**（即 payload ≥64KB 时同步开销降至 63% 以内）
+- Payload > 256KB 性能下降（queue 总大小超 L2 capacity 溢写到 HBM，降至 1.5 TB/s）
+
+开销占计算时间比例取决于 tile 大小：论文推荐 64-256KB tile——在此区间内同步开销控制在 <63%。考虑到 tile 的 GEMM 计算量通常远大于数据传输量（compute-bound），同步开销在实际工作负载中占比有限。
+
+**反压（Backpressure）机制**：
+
+反压机制是**隐式的 spin-wait**，通过 sequence number 自然实现 dataflow 反压：
+
+```
+Producer (wr_acquire):
+  while true:
+    seq = atomicAdd(q->seq, 0)
+    if seq == tile_id: break    // consumer 消费完前序 tile 才可写入
+    // spin wait → 此为反压点
+
+Consumer (rd_acquire):
+  while true:
+    seq = atomicAdd(q->seq, 0)
+    if seq == tile_id + 1: break  // producer 释放此 tile 后才可读取
+    // spin wait → 此为反压点
+```
+
+Queue 为**双 buffer 设计**（仅 2 个 entry），producer 最多领先 consumer 1 个 tile。当 producer（如 Linear1 GEMM）快于 consumer（如 ReLU elementwise）时，producer 在 `wr_acquire` 中 spin 等待 consumer 通过 `rd_release`（`atomicAdd(q->consumed, 1)`）释放 entry。反之，consumer 快于 producer 时，consumer 在 `rd_acquire` 中 spin 等待 producer 通过 `wr_release`（`atomicAdd(q->seq, 1)` + `__syncthreads()`）释放新数据。**没有显式的阻塞或抢占——纯粹通过 atomics spin-wait 实现流水线自然反压**。论文指出通常仅一个 CTA 在给定时间 spin 同一变量，争用极低。
+
+### 1(c) 资源隔离
+
+同一 SM 上 SIMT-heavy CTA 和 TensorCore-heavy CTA **共享 register file 和 shared memory**——没有硬件级静态分区。但实际上两类 CTA 的**资源竞争很低**，原因在于它们使用不同的计算单元：
+
+- **TensorCore-heavy CTA**：主要使用 TensorCore 执行矩阵乘，寄存器用于 accumulator fragments，shared memory 用于 input tile staging
+- **SIMT-heavy CTA**：主要使用 SIMT core 执行 elementwise/reduction 操作，寄存器压力不同，shared memory 需求通常较小
+
+**"划分"机制的实质**：不是 compiler 显式静态划分，而是依赖 GPU 现有的 SM occupancy 追踪机制。双 arbiter 各自检查 SM 的 occupancy table（threads、shared memory、registers），只有当 SM 有足够资源满足新 CTA 需求时才 dispatch。ILP 的约束条件 `Σ IsSimt_i × a_i = #SMs` 和 `Σ IsTensor_i × a_i = #SMs` **独立求和**（不是联合求和），意味着 ILP 模型将两者视为使用正交资源——可以在所有 108 SM 上同时分配 108 Tensor CTAs 和 108 SIMT CTAs。
+
+这是一个**编译时决策 + 硬件执行时的 occupancy 检查**的组合：ILP 在编译时确定各 stage 的 CTA 数量（保证在硬件资源约束内），grid scheduler 在运行时按现有 occupancy 机制检查具体 SM 是否容纳。划分比例不可运行时动态调整——它是 ILP 一次性求解的静态配置。
+
+### 2(a) 硬件修改的范围
+
+**需要硬件改动**，不是纯软件方案。修改涉及 GPU Grid Scheduler 硬件单元（负责将 CTA dispatch 到 SM 的控制逻辑）：
+
+具体修改（论文描述为 "modest"）：
+1. **单 arbiter → 双 arbiter**：复制现有 round-robin arbiter 逻辑，产生 SIMT Arbiter 和 Tensor Arbiter 各一个
+2. **Kernel call header 新增 type metadata 字段**：标记每个 kernel 的 primary resource type（SIMT 或 TENSOR）
+3. **CTA dispatch 逻辑不变**：仍检查 SM occupancy，但根据 kernel type 选择对应 arbiter 进行 dispatch
+
+**不是纯软件方案的原因**：Grid Scheduler 是 GPU 硬件中的固定功能单元（在 GigaThread Engine 附近），现有 GPU 的单 arbiter FIFO 策略是硬件实现的。CUDA Stream 优先级、MPS、persistent kernel 自调度等纯软件机制无法实现 Kitsune 所需的**不同类型 CTA 的配对 co-location**——它们可以并发多 kernel，但不能保证异构 CTA 系统性地配对到同一 SM。
+
+论文**未做 RTL 实现**，而是通过修改 NVIDIA 内部的 NVArchSim (NVAS) simulator（hybrid trace- and execution-driven，已针对 Ampere 架构校准）模拟双 arbiter 行为。`cudaPipeline` API 是软件侧暴露接口，但其效果依赖底层硬件双 arbiter。
+
+### 2(b) 并发度上限
+
+同一 SM 上可同时驻留的**不同 kernel 的 CTA 数量理论上限**受限于 SM 物理资源：
+
+| 资源 | A100 每 SM 上限 |
+|------|----------------|
+| Max threads | 2048 |
+| Shared memory | 192 KB |
+| 32-bit registers | 65536 |
+| Warp slots | 64 |
+
+论文不设固定上限——实际驻留数取决于每个 CTA 的资源需求（threads/CTA × 资源/SM）。从示例看，至少 **2 个不同 kernel 的 CTA**（1 SIMT + 1 Tensor）可同时驻留同一 SM。理论上如果每个 CTA 资源需求足够小，可以容纳更多。
+
+**152/108 = 1.41× "超配比"的物理含义**：
+
+这不是真正的 "超配"——152 是 pipeline 中所有 stage 的 CTA 总数（64+44+44），108 是物理 SM 数。关键洞察是 SIMT 和 Tensor CTA 可以在同一 SM 上**空间重叠**（因为使用不同执行单元），所以：
+
+- 64 个 Linear1 Tensor CTAs 占用部分 SM（每 SM 0~1 个 CTA）
+- 44 个 ReLU SIMT CTAs 与 Linear1 CTAs 在相同 SM 上 colocate
+- 44 个 Linear2 Tensor CTAs 可能也与前两个 stage 的 CTAs 重叠（取决于 pipeline 的执行时序）
+
+**物理极限**不在 CTA 数量，而在每个 SM 的 register file、shared memory 和 warp slots 是否足够同时容纳两种 CTA。超过此限制的 CTA 只能排队等待。论文利用的是 SIMT 和 TensorCore 作为**独立的执行资源**（不互相抢占），而非增加 SM 的存储容量。因此 "超配比" **取决于每个 CTA 的 register/shmem 需求**——ILP 求解器在优化时已确保 CTA 分配不超出硬件约束。
+
+---
+
+### Round 2
+
+**Q**：Answer Agent 的回答揭示了几个关键的 `****` 级关注点：（1）ILP 静态求解 + 运行时 occupancy 检查的编译-运行时协同；（2）L2-resident 双 buffer queue 的反压与同步；（3）硬件修改（双 arbiter）的必要性与纯软件替代方案的差距。以下进入第二级/第三级混合提问。
+
+---
+
+### 第二级+第三级问题（方法类别定位 + 关注点深入）
+
+**问题 1：编译-运行时协同机制的深入（大类二「编译框架」+ `****`编译-运行时协同）**
+
+Kitsune compiler 的 ILP 求解器使用 "zero-latency performance model" 确定 CTA 分配（a_i）和各 stage 比例，而 grid scheduler 在运行时按 occupancy 检查 dispatch。请解答：
+
+- **(a) ILP 模型的保真度**：ILP 的输入参数 `t_i`（BSP 实测吞吐量）、`ResourceScale(a_i)`、`Speedup(a_i)` 是通过 NSIGHT Compute 在真实 GPU 上测量获得的。这些参数在一次 profiling 后就是固定的，还是覆盖了多个 batch size / 序列长度的组合？ILP 求解出的 CTA 配置对负载变化的敏感度如何——例如若实际 batch size 与 profiling 时的 batch size 差 2×，ILP 的配置会退化到比 BSP baseline 更差吗？
+
+- **(b) subgraph 选择边界**：Kitsune compiler 通过模式匹配识别 Linear→ReLU→Linear chain 等可 spatial-fuse 的子图。什么样的子图**不能被** spatial-fuse——是因为 intermediate 太小（不值得建 queue）还是因为算子类型不兼容（如 attention 的 softmax 无法分解为 tile 级流水线）？与 Welder 的 tile-graph 自动搜索（89 种 fusion pattern）相比，Kitsune 的覆盖范围是更窄还是与 Welder 互补？
+
+**问题 2：Ring Buffer Queue 的设计 trade-off（大类二「算子融合」+ `****`数据流/依赖优化）**
+
+- **(a) 双 buffer 深度的选择理由**：Queue 仅 2 个 entry（双 buffer）。选择 depth=2 而非更大的 depth（如 4/8）的 trade-off 是什么——是为了最小化 L2 cache footprint（留更多 L2 给其他数据）还是因为即使 depth=2 反压概率已经很低？实验中有没有测量过不同 queue depth 对 pipeline stall 率和整体吞吐量的影响？
+
+- **(b) L2 pinning 的可靠性**：Queue 数据通过 CUDA API "pinning" 保持在 L2 cache 中。L2 cache 是共享资源——多 CTA 并发访问 queue 时的 cache line 竞争/eviction 是否会导致 queue 数据被踢出 L2 而回落到 HBM？论文中有测量过这种 "L2 pollution" 效应吗？当 sf-node 数量增多（多个 spatial pipeline 同时运行时），L2 的总 queue 容量是否会超过 L2 总容量（A100 L2=40MB）？
+
+**问题 3：与现有纯软件并发机制的差距分析（大类二「多算子并发与调度」+ `****`并发实现的选择理由）**
+
+回答中明确指出双 arbiter 需要硬件修改，但论文又声称 "modest adjustments" 即可实现。请具体对比：
+
+- **(a) 与现有 GPU 并发机制的差异**：CUDA MPS（Multi-Process Service）已支持空间分区——将 SM 资源划分给不同进程；CUDA Stream 支持多 kernel 时间复用并发；persistent kernel（如 MPK/Cypress）支持同一 SM 内 warp 级角色分工。Kitsune 的双 arbiter 方案与这三者各自的**本质差异**是什么？为什么这些现有机制不足以实现 Kitsune 所需的 "systematic heterogeneous CTA co-location"？
+
+- **(b) 纯软件近似实现的差距**：如果**不修改硬件**，用 persistent kernel 方案（所有stage 融合为一个 mega-kernel，warp 内部分工 SIMT/Tensor）能否近似实现 Kitsune 的效果？如果可以，差距有多大（吞吐量/延迟/资源利用率方面）？如果不能，根本障碍是什么？
+
+---
+
+请 Answer Agent 对以上问题给出回答。
+
+**A**：### 问题 1(a)：ILP 模型的保真度与负载敏感性
+
+**参数来源与固定性**：
+
+论文的 ILP 模型使用三个参数：
+- `t_i`（BSP 实测吞吐量）：通过 NSIGHT Compute 在真实 GPU 上测量
+- `ResourceScale(a_i)`：基于 CTA 数量的性能 scaling 估计
+- `Speedup(a_i) = 1/u`：其中 `u` 是 SIMT 或 Tensor pipeline 的最大资源利用率（反映 operands 从 DRAM 搬到 on-chip queue 后的加速）
+
+论文明确承认这些参数**不是一次 profiling 就固定的**——原文说："In practical deployment terms, we require either a two-pass compiler, run-time optimization pass, or a dictionary of kernel characteristics to get `u_i` to guide the ILP." 这意味着生产部署需要（a）两遍编译（第一遍 profiling + 第二遍优化）、（b）运行时优化 pass、或（c）预构建 kernel 特性字典。论文认为在 curated environment（如 TensorRT 的部署模式）下这三者均可行。
+
+**未覆盖的组合**：论文评估固定在 A100 上的 5 个应用，没有讨论 batch size 变化对 ILP 配置的敏感性。`t_i` 是在特定 batch size 下测量的 BSP 吞吐量——不同 batch size 下 GEMM 的 compute intensity 不同，`t_i`、`Speedup(a_i)` 都会变化。**然而**，从 ILP 的设计哲学看，即使 CTA 分配不严格最优，spatial pipeline 消除 DRAM round-trip 和实现 SIMT/Tensor 并发的架构优势，不太可能使性能退化到比 BSP baseline 更差——最坏情况下 queue 通信退化为 atomic spin-wait 开销（≥64KB payload 时 <63%）。论文没有定量讨论此退化边界。
+
+### 问题 1(b)：Subgraph 选择边界
+
+**不能 spatial-fuse 的子图**：
+
+论文使用两类**排除规则**：
+1. **Bulk-sync friendly 的节点**：这些节点在 BSP 模式下已高效，不需要 spatial fusion 的额外开销
+2. **Index/gather 类节点**：跨所有数据做 gather 的节点（例如 embedding lookup），访问模式是全局索引——无法分解为固定 tile 的流水线
+
+除这两类外，subgraph 还需满足 **"contiguity" 约束**（reference [47]）：子图内不能有一条边离开子图后又重新进入。
+
+**实际上可 spatial-fuse 的**：论文覆盖了全部三个常见 pattern：(a) GEMM→Elementwise→GEMM chain（含大 hidden dim），(b) Reduction（batch 维度 gradient reduction，通过 queue 构建 reduction tree），(c) Multicast（一个 Elementwise 输出消费给两个 GEMM consumer），含 back-prop 的 dactivation→{dweight, dinput}。
+
+**与 Welder 的对比**：
+
+| 维度 | Kitsune | Welder |
+|------|---------|--------|
+| 融合抽象 | Spatial pipeline（CTA 间） | Tile-graph（CTA 内 shared memory 级） |
+| Fusion pattern 数量 | 手动模式匹配库（正则表达式） | 自动搜索，发现 89 种 tile-graph fusion pattern |
+| 覆盖范围侧重 | GEMM→Elem→GEMM + Reduction + Multicast，含 back-prop | 更侧重 FP32 / bs=1 等非生产场景 |
+| 处理大 intermediate | 天然处理（split hidden dim 到多 CTA） | shared memory 容量限制（≥768 hidden dim 时 spill） |
+| 支持的并行维度 | reduction 和 hidden 维度（多 CTA parallel reduce） | 不支持 reduction/hidden 维度并行 |
+| back-prop 支持 | 是 | 论文提到 "none...have demonstrated execution of training" |
+
+两者**互补**：Welder 专注 CTA 内 tile-level memory reuse（shared memory 级），Kitsune 专注 CTA 间 spatial pipeline（L2 级）。
+
+### 问题 2(a)：双 buffer 深度的选择理由
+
+论文**没有提供**不同 queue depth 的对比实验。选择 depth=2 的逻辑需从设计约束推理：
+
+1. **L2 capacity 约束是首要因素**：54 queues × 2 entries × payload 为总 L2 footprint。A100 L2=40MB。256KB payload 时 54×2×256KB=27.6MB——已占 69%。depth=4 在 256KB 下将达 55.2MB，超 L2 容量导致 HBM spill（实测带宽降至 1.5 TB/s）。**depth=2 是在不超 L2 容量前提下的最小可行 depth**。
+
+2. **Synchronous dataflow (SDF) 模型天然限速**：Kitsune 属 SDF——CTA 仅在输入 queue 有数据时执行。ILP 已通过 `Σ IsSimt_i×a_i = #SMs` 确保负载均衡，额外 buffering 收益有限。
+
+3. **同步开销**：更多 entry 意味着更复杂的 sequence number 管理——当前 `seq == tile_id` 简单检查变为需处理 wraparound 的环形逻辑，metadata 变量更多。
+
+**实验缺失**：论文未测量不同 depth 对 pipeline stall 率的影响。
+
+### 问题 2(b)：L2 Pinning 的可靠性
+
+1. **Payload > 256KB 时 L2→HBM spill 已实测**：带宽从 2 TB/s 降至 1.5 TB/s——直接证明 L2 capacity 溢出效应。论文据此推荐 64-256KB payload。
+
+2. **多个 sf-node 同时运行的 L2 竞争**：论文**没有**讨论此情景。但可估算：54 queues × 256KB × 2 entries = 27.6MB < 40MB L2——单 spatial pipeline 在安全范围。若更多 stages → 更多 queues → 每个 queue 的 payload 需相应缩小。
+
+3. **L2 cache line 竞争**：论文通过 cache line padding 处理 metadata 的 false-sharing，通过 CUDA API pinning 防止 queue data 被 evict。但论文未测量非 queue 数据（如 GEMM weight tile）对 queue data 的 "L2 pollution" 效应。ILP 模型包含 L2 bandwidth 约束（`Throughput × L2_Bytes < L2_Bandwidth`）但未建模 L2 capacity 的多方竞争。
+
+### 问题 3(a)：与现有 GPU 并发机制的差异
+
+| 机制 | 并发模型 | 与 Kitsune 的本质差异 |
+|------|---------|---------------------|
+| **CUDA MPS** | SM 空间分区——静态将 SM 资源划分给不同进程 | 粗粒度**静态分区**（进程级），不区分 CTA 的计算资源类型。无法做到同一 SM 内 SIMT 和 Tensor CTA 的**动态配对 co-location**。 |
+| **CUDA Streams** | 多 kernel 时间复用——受限于 grid scheduler FIFO | 论文明确指出当前 GPU 的 FIFO grid scheduler 使 kernel 间"几乎没有执行重叠"（§2/§4.2）。Kitsune 的双 arbiter **从硬件层面打破 FIFO 限制**。 |
+| **Persistent Kernel (MPK/Cypress)** | 单个 mega-kernel 内 warp 级角色分工 | Warp 级 temporal multiplex 在同一 CTA 内共享 register file / shared memory，无法利用 hidden dimension 并行（受限于单 CTA shared memory capacity）。Kitsune 的 CTA 级 spatial pipeline 通过 L2 queue 跨 CTA 通信，打破了单 SM 容量限制。 |
+| **ISPA [56]** | 纯软件 co-scheduling 两个 kernel | (1) 仅支持 2 个 kernel 且无数据依赖；(2) 依赖现有 GPU thread scheduler 做 CTA 放置——"doesn't guarantee overlap"。无法扩展到任意数量 kernels 的 data-dependent pipeline。 |
+| **SMK [54]** | HW co-design——CTA partial context switching | 目标是更高总体 SM 利用率（通过抢占切换），非 Kitsune 的空间并发数据流。同样仅支持"co-scheduling just two kernels with no data dependence"。 |
+
+**本质差异**：现有机制要么在错误粒度（SM 间 vs SM 内）、要么受限于硬件 FIFO（streams）、要么无法保证系统性异构配对（ISPA）、要么不支持 data-dependent pipeline（persistent kernel）。Kitsune 的双 arbiter 是唯一保证 "systematic heterogeneous CTA co-location with data-dependencies" 的方案。
+
+### 问题 3(b)：纯软件近似实现的差距
+
+**用 persistent mega-kernel（warp 内 SIMT/Tensor 分工）近似 Kitsune 是可行的**——在概念上等价于**垂直融合的 warp-specialized 变体**。
+
+**但存在三个根本差距**：
+
+1. **Shared memory capacity（最致命）**：Kitsune 的核心优势是 split hidden dim 到多 CTA，每个 CTA 仅容纳一个 tile（64-256KB）。Persistent kernel 方案下所有 warp 共享同一 SM 的 192KB shared memory——若 hidden dim ≥ 768，单个 GEMM tile 就需 ~768×batch×4B 的容量，加上 elementwise workspace 和 producer-consumer buffer——直接回到**垂直融合的容量瓶颈**。Kitsune 通过跨 CTA 的 L2 queue 绕过了此限制。
+
+2. **无法利用 reduction/hidden 维度并行**：Kitsune 的 reduction tree（多对一 queue topology）将梯度 reduce 从单 CTA 扩展到多 CTA/SM。Persistent kernel 的 warp 级 reduction 仍是单 CTA/单 SM 范围——**并行度受限于 1 个 SM 的计算资源**。
+
+3. **无硬件保证的异构配对**：Persistent kernel 依赖 warp scheduler 的细粒度切换实现 overlap（FlashAttention-3 已验证），但这是 **temporal interleaving**（warp 1 执行时 warp 2 等待），而非 Kitsune 的 **spatial concurrency**（同一 cycle 内 TensorCore 和 SIMT core 同时活跃）。
+
+**定量差距估计**（基于论文数据推理）：
+- **吞吐量**：对小 hidden dim（shared memory 够用），warp-specialized persistent kernel 可能接近 Kitsune；但对大 hidden dim（≥768），因 spill 回退 DRAM——差距对应论文 DRAM traffic 减少量（41-98% inference / 16-42% training），可达 **1.7×-50×**
+- **资源利用率**：Kitsune 将 "both low utilization" 从 BSP 的 26% 降至 15%（inference）；persistent kernel 可能居中（~18-22%），因 warp 级 time-multiplex 仍有单资源空闲窗口
+- **根本障碍不是工程复杂度，而是 shared memory capacity 作为硬上限**——这是物理约束，纯软件无法绕过
+
+---
+
