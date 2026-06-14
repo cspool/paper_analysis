@@ -62,6 +62,7 @@
 
 
 ## 并发方法的应用和实现
+<!-- ! -->
 | 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|------|
 | **多算子并发与调度** | Kitsune Tile-Level Spatial Dataflow* | L2-resident ring buffer queue + 双 arbiter grid scheduler；Tensor Core + SIMT Core 同时活跃(**不同算子映射到不同Core,空间并发**) | 1.3-2.3× 加速, 41-98% off-chip traffic 减少; 需修改 GPU HW | Q1.5 | 不同算子映射到不同Core的空间并发, 但是TC和CC能同时启动吗(存疑)? |
@@ -111,7 +112,7 @@
 | 微批次流水线 | MPipeMoE 3-Stream Micro-Batch Pipeline* | **任务切分micro-batch后, 分别用3 CUDA stream (comp/comm/mem)**；offline interference profiling (μ/σ/η slowdown因子)；4种memory reuse策略 (S1-S4) + n∈{1,2,4,8,16}自适应选择→min T_total | σ≈1（计算几乎不受干扰→通信-计算重叠可行）；N大(64 GPU): S4最优（避免memory bandwidth竞争） | Q2.4, vault: MPipeMoE (56.3) | 任务切分micro-batch后, 分别用3 CUDA stream (comp/comm/mem)并发 |
 
 ### Serving/框架架构与实现
-
+<!-- ! -->
 | 分类 | 方法 | 具体方法描述 | 核心机制 | 来源 | review |
 |------|------|-------------|----------|------|------|
 | 实现框架 | vLLM* | PagedAttention (block 级 KV 虚拟内存) + Continuous Batching + **CUDA Graph** | KV 利用率 ~96%, H200 peak 69,147 tok/s | Q1.3 | 框架底层使用CUDA Graph的模型表示并发负载和并发执行, 用于学习框架上层对cuda graph的使用 |

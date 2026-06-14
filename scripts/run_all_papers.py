@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import argparse
 import json
 import subprocess
 from pathlib import Path
@@ -13,8 +14,8 @@ from datetime import datetime
 ROOT = Path("/data3/paper_analysis").resolve()
 ROOT_REPO = Path("/data3/paper_analysis/repos").resolve()
 
-# 论文 Markdown 及图片的根目录，每篇论文为一个子目录（目录名即为论文标题）
-PAPER_BASE_DIR = ROOT / "papers_md" / "md_model_quant"
+# 拆分后的论文 Markdown 及图片根目录，每篇论文为一个子目录（目录名即为论文标题）
+PAPER_BASE_DIR = ROOT / "paper_secs" / "secs_model_quant"
 
 LOG_DIR = ROOT / "paper_extract_checkpoints" / "logs"
 STATUS_DIR = ROOT / "paper_extract_checkpoints" / "status"
@@ -32,6 +33,7 @@ STOP_ON_FAILURE = False
 EXPERIMENT_DIR = ROOT_REPO / "repo_model_quant" / "experiment_repo"
 IDEA_DIR = ROOT_REPO / "repo_model_quant" / "idea_repo"
 KNOWLEDGE_DIR = ROOT_REPO / "repo_model_quant" / "knowledge_repo"
+OUTPUT_REPO_DIR = ROOT_REPO / "repo_model_quant"
 
 MODEL_NAME = None
 # 如果你的 deepseekv4pro 已经在 Claude Code 环境中配置好，这里保持 None。
@@ -234,7 +236,7 @@ def ensure_dirs():
     PROGRESS.parent.mkdir(parents=True, exist_ok=True)
 
 
-def load_titles():
+def load_titles(selected_title=None, limit=None):
     """解析 PAPER_BASE_DIR 目录结构，子目录名即为论文标题。"""
     if not PAPER_BASE_DIR.exists():
         raise FileNotFoundError(f"Paper base dir not found: {PAPER_BASE_DIR}")
@@ -246,6 +248,17 @@ def load_titles():
 
     if not titles:
         raise ValueError(f"No paper directories found in: {PAPER_BASE_DIR}")
+
+    if selected_title:
+        if selected_title not in titles:
+            raise ValueError(
+                f"Paper title directory not found: {selected_title}\n"
+                f"Paper base dir: {PAPER_BASE_DIR}"
+            )
+        titles = [selected_title]
+
+    if limit is not None:
+        titles = titles[:limit]
 
     return titles
 
@@ -494,16 +507,106 @@ def run_one(index, total, title):
 # Main loop
 # =========================
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Sequentially analyze paper directories with paper-experiment-idea "
+            "and paper-knowledge skills."
+        )
+    )
+    parser.add_argument(
+        "--paper-base-dir",
+        default=str(PAPER_BASE_DIR),
+        help="Directory whose immediate subdirectories are paper titles.",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        default=str(PROGRESS.parent),
+        help="Directory for logs/, status/, and progress.json.",
+    )
+    parser.add_argument(
+        "--output-repo-dir",
+        default=str(OUTPUT_REPO_DIR),
+        help="Directory containing experiment_repo/, idea_repo/, and knowledge_repo/.",
+    )
+    parser.add_argument(
+        "--title",
+        help="Process only the exact matching paper-title subdirectory.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Process at most the first N selected paper directories.",
+    )
+    parser.add_argument(
+        "--model",
+        help="Optional Claude model override.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate selection and print prompts without launching Claude or writing checkpoints.",
+    )
+    args = parser.parse_args()
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be a positive integer")
+    return args
+
+
+def apply_args(args):
+    global PAPER_BASE_DIR, LOG_DIR, STATUS_DIR, PROGRESS
+    global OUTPUT_REPO_DIR, EXPERIMENT_DIR, IDEA_DIR, KNOWLEDGE_DIR, MODEL_NAME
+
+    PAPER_BASE_DIR = Path(args.paper_base_dir).expanduser().resolve()
+
+    checkpoint_dir = Path(args.checkpoint_dir).expanduser().resolve()
+    LOG_DIR = checkpoint_dir / "logs"
+    STATUS_DIR = checkpoint_dir / "status"
+    PROGRESS = checkpoint_dir / "progress.json"
+
+    OUTPUT_REPO_DIR = Path(args.output_repo_dir).expanduser().resolve()
+    EXPERIMENT_DIR = OUTPUT_REPO_DIR / "experiment_repo"
+    IDEA_DIR = OUTPUT_REPO_DIR / "idea_repo"
+    KNOWLEDGE_DIR = OUTPUT_REPO_DIR / "knowledge_repo"
+
+    if args.model:
+        MODEL_NAME = args.model
+
+
+def print_dry_run(titles):
+    total = len(titles)
+    print("DRY RUN: Claude will not be launched and no checkpoint will be written.")
+    print(f"Project root: {ROOT}")
+    print(f"Paper base dir: {PAPER_BASE_DIR}")
+    print(f"Checkpoint dir: {PROGRESS.parent}")
+    print(f"Output repo dir: {OUTPUT_REPO_DIR}")
+    print(f"Selected papers: {total}")
+    for index, title in enumerate(titles, start=1):
+        print("\n" + "=" * 80)
+        print(f"DRY RUN {index}/{total}: {title}")
+        print(make_prompt(index, total, title).strip())
+
+
 def main():
+    args = parse_args()
+    apply_args(args)
+
+    titles = load_titles(selected_title=args.title, limit=args.limit)
+    if args.dry_run:
+        print_dry_run(titles)
+        return
+
     ensure_dirs()
 
-    titles = load_titles()
     total = len(titles)
 
     progress = load_progress()
     done_set = set(progress.get("done", []))
 
     print(f"Project root: {ROOT}")
+    print(f"Paper base dir: {PAPER_BASE_DIR}")
+    print(f"Output repo dir: {OUTPUT_REPO_DIR}")
+    print(f"Checkpoint dir: {PROGRESS.parent}")
     print(f"Total papers: {total}")
     print(f"Execution mode: single scheduler, strict sequential run_one")
     print(f"Per paper: one context, two skills sequentially")

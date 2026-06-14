@@ -64,24 +64,24 @@ def split_md(src_path: Path, dst_dir: Path) -> int:
     return len(sections)
 
 
-def resolve_output_dir(repo_name: str, md_stem: str) -> Path | None:
+def resolve_output_dir(repo_name: str, md_stem: str, notes_base: Path = NOTES_BASE) -> Path | None:
     """Resolve the output directory for a given MD file from a repo."""
     if repo_name == "idea_repo":
-        return NOTES_BASE / "idea_notes"
+        return notes_base / "idea_notes"
 
     if repo_name == "experiment_repo":
         sub = EXP_NAME_TO_DIR.get(md_stem)
         if sub is None:
             print(f"  WARNING: unknown experiment name '{md_stem}', skipping", file=sys.stderr)
             return None
-        return NOTES_BASE / "experiment_notes" / sub
+        return notes_base / "experiment_notes" / sub
 
     if repo_name == "knowledge_repo":
         sub = KNOW_NAME_TO_DIR.get(md_stem)
         if sub is None:
             print(f"  WARNING: unknown knowledge name '{md_stem}', skipping", file=sys.stderr)
             return None
-        return NOTES_BASE / "knowledge_notes" / sub
+        return notes_base / "knowledge_notes" / sub
 
     print(f"  WARNING: unknown repo '{repo_name}', skipping", file=sys.stderr)
     return None
@@ -96,9 +96,18 @@ def main():
         "root_repo_path",
         help="Root path containing experiment_repo/, idea_repo/, knowledge_repo/ subdirectories",
     )
+    parser.add_argument(
+        "--notes-base",
+        default=str(NOTES_BASE),
+        help=(
+            "Output notes root. Defaults to /data3/paper_analysis; override this "
+            "for isolated temp tests."
+        ),
+    )
     args = parser.parse_args()
 
     root = Path(args.root_repo_path)
+    notes_base = Path(args.notes_base).expanduser().resolve()
     if not root.is_dir():
         print(f"Error: {root} is not a directory", file=sys.stderr)
         sys.exit(1)
@@ -125,7 +134,7 @@ def main():
         print(f"[{repo_name}] ({len(md_files)} files)")
         for md_path in md_files:
             md_stem = md_path.stem  # filename without .md
-            dst_dir = resolve_output_dir(repo_name, md_stem)
+            dst_dir = resolve_output_dir(repo_name, md_stem, notes_base)
             if dst_dir is None:
                 continue
 
