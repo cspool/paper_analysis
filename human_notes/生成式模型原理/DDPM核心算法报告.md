@@ -4,7 +4,7 @@
 本文以 DDPM 为主线，研究扩散生成如何由随机反向过程发展为 ODE 确定性传输，并讨论 JiT 对预测目标、损失函数与采样函数的重新组合。结果表明，三种表示在数学上可相互换算，但有限容量网络对其学习难度并不相同。
 
 ## 1. 论文基本信息
-*Denoising Diffusion Probabilistic Models* 由 Jonathan Ho、Ajay Jain、Pieter Abbeel 发表于 NeurIPS 2020，研究扩散概率生成及其与去噪分数匹配、Langevin 动力学的联系，链接为 <https://arxiv.org/abs/2006.11239>。JiT 代表文献 *Back to Basics: Let Denoising Generative Models Denoise* 由 Tianhong Li、Kaiming He 于 2025 年公开，研究基于流形假设的像素空间生成，链接为 <https://arxiv.org/abs/2511.13720>。ODE 代表文献为 ICLR 2021 *Denoising Diffusion Implicit Models*；线性 Flow 代表文献为 ICLR 2023 *Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow*，链接分别为 <https://arxiv.org/abs/2010.02502>、<https://arxiv.org/abs/2209.03003>。
+本文以 DDPM 为主要研究对象。该方法建立扩散概率生成与去噪分数匹配、Langevin 动力学的联系[1]。在此基础上，DDIM 将生成过程表示为确定性 ODE[2]，Rectified Flow 进一步研究线性传输路径[3]，JiT 则基于流形假设研究像素空间中的预测目标选择[4]。
 
 ## 2. 研究背景与问题定义
 VAE 的单步解码容易平滑细节，GAN 的对抗训练又可能不稳定，因而需要兼具概率解释与生成质量的方法。任务是学习从简单高斯噪声分布到真实图像分布的映射。设真实图像为 $x$，噪声为 $\epsilon\sim\mathcal N(0,I)$，中间状态为 $x_t$ 或 $z_t$。训练输入是图像、噪声与时间，输出是噪声、速度或干净图像的预测；推理输入是随机噪声，输出是生成图像。该问题的重要性在于，高维图像分布难以直接估计，而逐步去噪或连续传输可将复杂生成拆成可监督的局部回归。
@@ -83,3 +83,12 @@ JiT 在 ImageNet 高维 patch 上采用 v-Loss 时，预测图像、噪声和速
 DDPM 的主要贡献是用固定编码路径监督可学习的逆向生成；ODE Flow 提供确定性积分解释；JiT 证明预测、损失与采样可以组合设计。其优点是训练稳定且理论统一，缺点是多步采样成本较高，线性训练路径也不保证生成轨迹笔直。
 
 从生成时的概率模型看，模型并非一次计算“最可能图像”，而是在每个状态预测下一步条件分布或采样方向，再将局部决策组合为完整样本。随机 DDPM 中，初始噪声和逐步随机项共同选择样本；确定性 ODE 中，初始噪声固定后轨迹唯一，但不同噪声仍映射到不同图像。因此，模型学习的是从先验分布到数据分布的采样规则，而不是某一张标准答案。可进一步联合优化路径、时间权重与求解器。该研究联系模式识别中的概率建模、贝叶斯推断、流形假设与数值积分。
+
+## 参考文献
+[1] Ho J, Jain A, Abbeel P. *Denoising Diffusion Probabilistic Models*. NeurIPS, 2020. <https://arxiv.org/abs/2006.11239>
+
+[2] Song J, Meng C, Ermon S. *Denoising Diffusion Implicit Models*. ICLR, 2021. <https://arxiv.org/abs/2010.02502>
+
+[3] Liu X, Gong C, Liu Q. *Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow*. ICLR, 2023. <https://arxiv.org/abs/2209.03003>
+
+[4] Li T, He K. *Back to Basics: Let Denoising Generative Models Denoise*. arXiv, 2025. <https://arxiv.org/abs/2511.13720>
