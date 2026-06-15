@@ -3,4 +3,4 @@
 
 
 
-3. 伪代码风格的a和q skill和调度脚本的说明在github上发布blog。
+3. .claude/下的Claude Code中伪代码风格的a和q skill和调度脚本的说明, 总结成blog风格（开头的效果展示， 然后思路介绍（包含skill的work flow概述）， 然后伪代码风格skill的实例）。
