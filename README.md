@@ -1,8 +1,8 @@
-# Paper Analysis
+# Paper Analysis(基于低成本DeepSeek4pro API的私有知识库工作流)
 
 面向 AI Systems、LLM 推理、Serving、编译器、GPU Kernel 与体系结构研究的 Agent 原生论文工作台。
 
-这个仓库不是“把一篇论文总结一下”的脚本集合，而是一条可复用的研究工作流：从标题下载论文，转换和拆分正文，抽取实验、Idea 与术语知识，再通过 Obsidian 本地知识库和伪代码式 Agent 编排，对指定主题做可追溯的学习与价值 Review。
+这个仓库不是“把一篇论文总结一下”的脚本集合，而是一条可复用的研究工作流：从标题下载论文，转换和拆分正文，抽取实验、Idea 与术语知识，再通过 Obsidian 本地知识库和伪代码式 Agent 编排（弥补DS4P的tool use和长上下文能力不足），对指定主题做可追溯的学习与价值 Review。
 
 ## 1. 工作流贡献
 

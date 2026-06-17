@@ -74,15 +74,15 @@ AA 的每个任务块都必须在同一次响应中完成全部线性步骤。�
    - 取 idea note 中 `## <标题>` 或内容首行作为「线索标题」
    - 线索标题可能不完整或有格式差异（如 `_` 代替 `:`），需通过搜索确认
 
-§1.2. **在 paper_secs/ 中搜索定位论文**：
-   - `obsidian_search_notes(mode="text", query="<线索标题>", pathPrefix="paper_secs/")`
+§1.2. **在 /data3/paper_analysis/paper_secs/ 中搜索定位论文**：
+   - `obsidian_search_notes(mode="text", query="<线索标题>", pathPrefix="/data3/paper_analysis/paper_secs/")`
    - 若命中，从返回路径推理 `paper_subdir`（命中文件的**父目录**）；子目录名仅作为定位线索：
-     例：命中 `paper_secs/secs_multimodal_kernel/Kitsune Enabling Dataflow Execution on GPUs/Kitsune-...md`
-     → `paper_subdir` = `paper_secs/secs_multimodal_kernel/Kitsune Enabling Dataflow Execution on GPUs/`
+     例：命中 `/data3/paper_analysis/paper_secs/secs_multimodal_kernel/Kitsune Enabling Dataflow Execution on GPUs/Kitsune-...md`
+     → `paper_subdir` = `/data3/paper_analysis/paper_secs/secs_multimodal_kernel/Kitsune Enabling Dataflow Execution on GPUs/`
    - 定位论文主文件后，读取其首个 H1 标题，去除 H1 中的 HTML 标签但保留原始标点（特别是 `:`），将其作为 canonical `paper_title`
      → `paper_title` = `Kitsune: Enabling Dataflow Execution on GPUs`
    - 不得直接把输入线索标题或去除标点的子目录名当作 canonical `paper_title`
-   - 若 0 命中，用 `obsidian_list_notes(path="paper_secs/", depth=2)` 浏览子目录结构，用线索标题中的关键词（技术名、缩写）模糊匹配子目录名
+   - 若 0 命中，用 `obsidian_list_notes(path="/data3/paper_analysis/paper_secs/", depth=2)` 浏览子目录结构，用线索标题中的关键词（技术名、缩写）模糊匹配子目录名
    - 若仍未找到，**缩短线索**（只保留核心技术名/缩写），用 `obsidian_search_notes(mode="omnisearch", query="<缩短线索>")` 全 vault 搜索兜底
    - 将 `paper_title` 和 `paper_subdir` 保存到 session 记忆
 
@@ -94,10 +94,10 @@ AA 的每个任务块都必须在同一次响应中完成全部线性步骤。�
    - 路径加入 loaded_paths；核心发现记入 evidence_summary
 
    **B. 一级上下文获取**（text 模式，用 `paper_title` 搜索 4 目录）：
-   - `obsidian_search_notes(mode="text", query="<paper_title>", pathPrefix="idea_notes/")`
-   - `obsidian_search_notes(mode="text", query="<paper_title>", pathPrefix="experiment_notes/")`
-   - `obsidian_search_notes(mode="text", query="<paper_title>", pathPrefix="knowledge_notes/")`
-   - `obsidian_search_notes(mode="text", query="<paper_title>", pathPrefix="review_notes/")`
+   - `obsidian_search_notes(mode="text", query="<paper_title>", pathPrefix="/data3/paper_analysis/idea_notes/")`
+   - `obsidian_search_notes(mode="text", query="<paper_title>", pathPrefix="/data3/paper_analysis/experiment_notes/")`
+   - `obsidian_search_notes(mode="text", query="<paper_title>", pathPrefix="/data3/paper_analysis/knowledge_notes/")`
+   - `obsidian_search_notes(mode="text", query="<paper_title>", pathPrefix="/data3/paper_analysis/review_notes/")`
    - 搜索结果与 loaded_paths 差集，按相关性最多 **5 个唯一新路径**
    - 对选中的路径用 `obsidian_get_note(format="content", ...)` 读取正文 → 加入 loaded_paths
    - 若 paper_title 搜索 0 命中，用线索标题或技术缩写名重试
@@ -123,7 +123,7 @@ AA 的每个任务块都必须在同一次响应中完成全部线性步骤。�
 ___AA_INIT_COMPLETE___
 {
   "paper_title": "<论文主文件 H1 中的真实完整标题，保留标点>",
-  "paper_subdir": "<vault-relative paper_secs 子目录路径>"
+  "paper_subdir": "<绝对 paper_secs 子目录路径>"
 }
 ___AA_INIT_COMPLETE_END___
 ```
@@ -169,13 +169,13 @@ ___QA_QUESTION_END___
 - b. 记忆模糊 → 可重读 loaded_paths 中已有路径（不消耗新获取预算）
 - c. 仍不足 → 补充检索（每 round 最多一次，≤1 新路径）：
   从信息缺口选 1 个关键词，在以下五个目录做 omnisearch：
-  `obsidian_search_notes(mode="omnisearch", query="path:idea_notes  <关键词>")`
-  `obsidian_search_notes(mode="omnisearch", query="path:experiment_notes  <关键词>")`
-  `obsidian_search_notes(mode="omnisearch", query="path:knowledge_notes  <关键词>")`
-  `obsidian_search_notes(mode="omnisearch", query="path:human_notes  <关键词>")`
-  `obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  <关键词>")`
+  `obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/idea_notes  <关键词>")`
+  `obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/experiment_notes  <关键词>")`
+  `obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/knowledge_notes  <关键词>")`
+  `obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  <关键词>")`
+  `obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  <关键词>")`
   **`path:` 过滤嵌入 query 字符串内，没有独立 `pathPrefix` 参数。**
-  命中后用 `obsidian_get_note(format="content", target={type: "path", path: "<命中路径>"})` 读取。
+  命中后用 `obsidian_get_note(format="content", target={type: "path", path: "<命中绝对路径>"})` 读取。
   → 与 loaded_paths 差集 → ≤1 唯一新路径 → 加入 loaded_paths
   → 若 paper_subdir 已发现，也可在 paper_subdir 内补充 omnisearch：
   `obsidian_search_notes(mode="omnisearch", query="path:<paper_subdir>  <关键词>")`
@@ -197,7 +197,7 @@ ___AA_OUTPUT_START___
   "round": N
 }
 ___AA_SOURCES_START___
-- <vault-relative 路径，每行一个；没有则留空>
+- <绝对路径，每行一个；没有则留空>
 ___AA_SOURCES_END___
 ___AA_GAPS_START___
 - <信息缺口，每行一个；没有则留空>
@@ -225,7 +225,7 @@ ___AA_OUTPUT_END___
 - 回答自包含——QA 看不到 idea note
 
 **路径去重**（贯穿 `§1 / §INIT` 和 `§2 / §ANSWER` 的获取步骤）：
-- 所有路径规范化为 vault-relative path
+- 所有路径规范化为绝对路径
 - loaded_paths 记录已访问路径（写入 LOOP 标记，编排器回注，永不丢失）
 - 优先从 evidence_summary 提取（快，不消耗预算）
 - 记忆模糊可重读已加载路径（不消耗新获取预算）
@@ -251,7 +251,7 @@ ___AA_OUTPUT_END___
 - marker 独占一行
 - 初始化必须输出 `___AA_INIT_COMPLETE___` / `___AA_INIT_COMPLETE_END___`，JSON 仅含 canonical `paper_title` 与 `paper_subdir`
 - `___AA_OUTPUT_START___` 与 `___AA_SOURCES_START___` 之间：合法 JSON，只含整数 round
-- `___AA_SOURCES_START___` / `___AA_SOURCES_END___`：每行一个实际引用的 vault-relative 路径；没有则留空
+- `___AA_SOURCES_START___` / `___AA_SOURCES_END___`：每行一个实际引用的绝对路径；没有则留空
 - `___AA_GAPS_START___` / `___AA_GAPS_END___`：每行一个信息缺口；没有则留空。此区段是原始文本，双引号无需转义
 - `___AA_ANSWER_START___` 与 `___AA_ANSWER_END___` 之间：原始 Markdown，无需转义
 - sources/gaps/回答正文不得包含任何协议 marker 的完整独占行
@@ -264,10 +264,10 @@ ___AA_OUTPUT_END___
 
 | 阶段 | 层级 | 时机 | 搜索范围 | 方法 | 新路径上限 |
 |------|------|------|---------|------|----------|
-| 初始化 | 论文定位 | `§1 / §INIT` 一次 | paper_secs/ → 全 vault 兜底 | `mode="text"` 标题搜索 → 路径推理 `paper_subdir` → 从论文主文件 H1 确认 canonical `paper_title`；0 命中 → `list_notes` 浏览 → 缩短线索 omnisearch 兜底 | ≤3 |
-| 初始化 | 一级上下文 | `§1 / §INIT` 一次 | idea_notes/ + experiment_notes/ + knowledge_notes/ + review_notes/ | `mode="text"` 按 paper_title 搜索 | ≤5 |
+| 初始化 | 论文定位 | `§1 / §INIT` 一次 | /data3/paper_analysis/paper_secs/ → 全 vault 兜底 | `mode="text"` 标题搜索 → 路径推理 `paper_subdir` → 从论文主文件 H1 确认 canonical `paper_title`；0 命中 → `list_notes` 浏览 → 缩短线索 omnisearch 兜底 | ≤3 |
+| 初始化 | 一级上下文 | `§1 / §INIT` 一次 | /data3/paper_analysis/idea_notes/ + /data3/paper_analysis/experiment_notes/ + /data3/paper_analysis/knowledge_notes/ + /data3/paper_analysis/review_notes/ | `mode="text"` 按 paper_title 搜索 | ≤5 |
 | 初始化 | 二级上下文 | `§1 / §INIT` 一次 | `paper_subdir` 内 omnisearch | `mode="omnisearch"` `path:<paper_subdir>` 按 Method/Implementation/Experiment/Evaluation/Architecture 五个方向各搜一次 | ≤5 |
-| 回答 | 补充检索 | `§2 / §ANSWER` 每 round 一次 | idea_notes/ + experiment_notes/ + knowledge_notes/ + human_notes/ + learning_outputs/（可选 paper_subdir） | `mode="omnisearch"` `path:<dir>  <关键词>`；paper_subdir 内用 `format="section"` 精确读取 | ≤1 |
+| 回答 | 补充检索 | `§2 / §ANSWER` 每 round 一次 | /data3/paper_analysis/idea_notes/ + /data3/paper_analysis/experiment_notes/ + /data3/paper_analysis/knowledge_notes/ + /data3/paper_analysis/human_notes/ + /data3/paper_analysis/learning_outputs/（可选 paper_subdir） | `mode="omnisearch"` `path:<绝对目录>  <关键词>`；paper_subdir 内用 `format="section"` 精确读取 | ≤1 |
 
 **路径去重**：loaded_paths 防预算浪费，evidence_summary 加速查询。记忆模糊可重读。
 

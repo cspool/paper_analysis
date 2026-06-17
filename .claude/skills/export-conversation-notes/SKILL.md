@@ -1,23 +1,23 @@
 ---
 name: export-conversation-notes
-description: 将当前对话中用户输入与 Claude 最终输出导出为 Markdown 笔记，默认保存到 human_notes/。当用户要求保存、存档、导出或记录当前对话时使用。如目标文件已存在且非空，则增量追加，绝不修改、删除或替换已有内容。
+description: 将当前对话中用户输入与 Claude 最终输出导出为 Markdown 笔记，默认保存到 /data3/paper_analysis/human_notes/。当用户要求保存、存档、导出或记录当前对话时使用。如目标文件已存在且非空，则增量追加，绝不修改、删除或替换已有内容。
 ---
 
 # Export Conversation Notes
 
 ## Overview
 
-将当前会话中可用的用户输入和 Claude 最终回复保存到指定目标位置。默认目录为 `human_notes/`，默认使用中文作为标题和状态文本。**不保存**过程性内容：工具调用、Shell 命令与输出、文件编辑日志、工具错误、状态更新、planning 对话、隐藏的系统/开发者/策略/运行时指令、中间推理步骤。
+将当前会话中可用的用户输入和 Claude 最终回复保存到指定目标位置。默认目录为 `/data3/paper_analysis/human_notes/`，默认使用中文作为标题和状态文本。**不保存**过程性内容：工具调用、Shell 命令与输出、文件编辑日志、工具错误、状态更新、planning 对话、隐藏的系统/开发者/策略/运行时指令、中间推理步骤。
 
 ## Workflow
 
 ### 1. 确定目标路径
 
-- 默认保存到 `human_notes/`。
-- 优先使用对话中明确提及的论文标题或路径作为文件名。若 IDE 上下文中有活跃的论文文件，取其去除扩展名的 basename（如 `papers/paper_2026/71-TokenFlow.md` → `71-TokenFlow`）。
+- 默认保存到 `/data3/paper_analysis/human_notes/`。
+- 优先使用对话中明确提及的论文标题或路径作为文件名。若 IDE 上下文中有活跃的论文文件，取其去除扩展名的 basename（如 `/data3/paper_analysis/papers/paper_2026/71-TokenFlow.md` → `71-TokenFlow`）。
 - 如果多个论文标签可见但没有明显当前论文，简要询问用户确认。
 - 若无法识别任何文件名，使用当前 session 名称作为文件名（如 `session-20260603.md`）。不要自行编造标题。
-- 工作路径相对于当前 workspace 根目录。
+- 工作路径使用绝对路径；未明确指定目录时，目标目录为 `/data3/paper_analysis/human_notes/`。
 
 ### 2. 准备目标文件
 

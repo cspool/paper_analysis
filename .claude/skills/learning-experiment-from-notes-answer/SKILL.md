@@ -12,7 +12,7 @@ description: Answer Agent —— 接收单个问题，通过问题的逻辑拆�
 - **所有 vault 笔记检索只能通过 Obsidian API 完成**：搜索使用 `obsidian_search_notes`，读取使用 `obsidian_get_note`。
 - 禁止使用文件系统搜索或目录遍历作为证据检索手段，包括但不限于 `rg`、`grep`、`find`、`ls`、Python 脚本扫描、shell 通配符扫描。
 - 允许使用 Web/联网搜索作为**外部补充证据**，但不能替代本地 Obsidian API 搜索；若 Obsidian API 未命中，必须先记录「该链条节点/关键词无 note evidence」，再把 Web 结果单独标注为「Web evidence」。
-- Obsidian API 搜索范围视为仅覆盖 vault 中的 Markdown 笔记；omnisearch query 必须同时使用 `path:<dir>` 限定搜索范围。
+- Obsidian API 搜索范围视为仅覆盖 vault 中的 Markdown 笔记；omnisearch query 必须同时使用 `path:<绝对目录>` 限定搜索范围。
 - 文件系统只允许用于读取调度器传入的问题空间文件、写入答案文件，以及必要的非证据性状态检查；不能用来替代 Obsidian API 搜索笔记内容。
 
 本 skill 是 **Answer Agent**，负责读取 vault 笔记并具体回答单个问题。**输出到文件后结束。** 答案文件必须 ≥100 行。
@@ -68,14 +68,14 @@ scheduler.ts 将参数直接嵌入此段（`fillSkillInput`），替换本文档
 
 #### 1.3 六目录 Obsidian API 并行搜索
 
-对每个逻辑链条节点，在且仅在六个目录分别执行**长匹配优先、逐级降级**搜索。所有搜索必须调用 `obsidian_search_notes`；不得用文件系统搜索替代。**omnisearch 模式通过 `path:` 内嵌查询字符串限定目录**（该模式没有独立的 `pathPrefix` 参数，`pathPrefix` 仅 `text` 模式可用）。`path:` 放在 query 开头，便于 Omnisearch 先应用目录和 Markdown 文件过滤。
+对每个逻辑链条节点，在且仅在六个绝对目录分别执行**长匹配优先、逐级降级**搜索。所有搜索必须调用 `obsidian_search_notes`；不得用文件系统搜索替代。**omnisearch 模式通过 `path:` 内嵌查询字符串限定绝对目录**（该模式没有独立的 `pathPrefix` 参数，`pathPrefix` 仅 `text` 模式可用）。`path:` 放在 query 开头，便于 Omnisearch 先应用目录和 Markdown 文件过滤。
 
 搜索必须保留节点映射：
 
 | 节点 | Query Level | Dir | Query | Path | Score |
 |------|-------------|-----|-------|------|-------|
-| S1 | A | paper_secs | `path:paper_secs  "concurrent kernel" "GPU occupancy"` | ... | ... |
-| S2 | C | knowledge_notes | `path:knowledge_notes  tiling` | ... | ... |
+| S1 | A | /data3/paper_analysis/paper_secs | `path:/data3/paper_analysis/paper_secs  "concurrent kernel" "GPU occupancy"` | ... | ... |
+| S2 | C | /data3/paper_analysis/knowledge_notes | `path:/data3/paper_analysis/knowledge_notes  tiling` | ... | ... |
 
 每个目录都按以下顺序搜索：
 
@@ -84,12 +84,12 @@ scheduler.ts 将参数直接嵌入此段（`fillSkillInput`），替换本文档
 先搜索同一逻辑链条节点内的组合 query，保留最多 5 条高分结果：
 
 ```
-obsidian_search_notes(mode="omnisearch", query="path:paper_secs  \"GPU occupancy\" \"concurrent kernel\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:knowledge_notes  \"GPU occupancy\" \"concurrent kernel\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:experiment_notes  \"GPU occupancy\" \"concurrent kernel\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:idea_notes  \"GPU occupancy\" \"concurrent kernel\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:human_notes  \"GPU occupancy\" \"concurrent kernel\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  \"GPU occupancy\" \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/paper_secs  \"GPU occupancy\" \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/knowledge_notes  \"GPU occupancy\" \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/experiment_notes  \"GPU occupancy\" \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/idea_notes  \"GPU occupancy\" \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  \"GPU occupancy\" \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  \"GPU occupancy\" \"concurrent kernel\" tiling")
 ```
 
 长匹配 query 的原则：
@@ -102,14 +102,14 @@ obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  \"GPU occ
 将长 query 拆成 2 个概念左右的短语组合：
 
 ```
-obsidian_search_notes(mode="omnisearch", query="path:paper_secs  \"GPU occupancy\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:paper_secs  \"concurrent kernel\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:knowledge_notes  \"GPU occupancy\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:knowledge_notes  \"concurrent kernel\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:human_notes  \"GPU occupancy\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:human_notes  \"concurrent kernel\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  \"GPU occupancy\" tiling")
-obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/paper_secs  \"GPU occupancy\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/paper_secs  \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/knowledge_notes  \"GPU occupancy\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/knowledge_notes  \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  \"GPU occupancy\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  \"concurrent kernel\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  \"GPU occupancy\" tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  \"concurrent kernel\" tiling")
 ```
 
 **Level C：单概念 / 变体匹配**
@@ -117,21 +117,21 @@ obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  \"concurr
 再逐个关键词或短语搜索：
 
 ```
-obsidian_search_notes(mode="omnisearch", query="path:paper_secs  \"GPU occupancy\"")
-obsidian_search_notes(mode="omnisearch", query="path:paper_secs  occupancy")
-obsidian_search_notes(mode="omnisearch", query="path:paper_secs  \"concurrent kernel\"")
-obsidian_search_notes(mode="omnisearch", query="path:paper_secs  tiling")
-obsidian_search_notes(mode="omnisearch", query="path:human_notes  \"GPU occupancy\"")
-obsidian_search_notes(mode="omnisearch", query="path:human_notes  occupancy")
-obsidian_search_notes(mode="omnisearch", query="path:human_notes  \"concurrent kernel\"")
-obsidian_search_notes(mode="omnisearch", query="path:human_notes  tiling")
-obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  \"GPU occupancy\"")
-obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  occupancy")
-obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  \"concurrent kernel\"")
-obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/paper_secs  \"GPU occupancy\"")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/paper_secs  occupancy")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/paper_secs  \"concurrent kernel\"")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/paper_secs  tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  \"GPU occupancy\"")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  occupancy")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  \"concurrent kernel\"")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  tiling")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  \"GPU occupancy\"")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  occupancy")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  \"concurrent kernel\"")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  tiling")
 ```
 
-搜索目录：paper_secs/、knowledge_notes/、experiment_notes/、idea_notes/、human_notes/、learning_outputs/
+搜索目录：/data3/paper_analysis/paper_secs/、/data3/paper_analysis/knowledge_notes/、/data3/paper_analysis/experiment_notes/、/data3/paper_analysis/idea_notes/、/data3/paper_analysis/human_notes/、/data3/paper_analysis/learning_outputs/
 
 每目录每 query 至多 5 条结果。omnisearch 上游硬上限 50 条，用 `-exclusion` 和 `path:`/`ext:` 过滤缩小范围。
 
@@ -143,12 +143,12 @@ obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  tiling")
 2. 拆成更短的单概念 query，例如 `"GPU occupancy"` → `occupancy`，`"tile selection"` → `tiling`。
 3. 如果 omnisearch 仍为零，仍只能调用 Obsidian API；切换到 `text` 模式，并用 `pathPrefix` 限定目录：
    ```
-   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="paper_secs")
-   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="knowledge_notes")
-   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="experiment_notes")
-   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="idea_notes")
-   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="human_notes")
-   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="learning_outputs")
+   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="/data3/paper_analysis/paper_secs")
+   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="/data3/paper_analysis/knowledge_notes")
+   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="/data3/paper_analysis/experiment_notes")
+   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="/data3/paper_analysis/idea_notes")
+   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="/data3/paper_analysis/human_notes")
+   obsidian_search_notes(mode="text", query="<keyword>", pathPrefix="/data3/paper_analysis/learning_outputs")
    ```
 4. 仍无本地结果时，记录「该链条节点/关键词无 note evidence」。不要使用文件系统搜索或无关本地搜索结果补证；如需补充，用 Web 搜索并在答案中单独标注为「Web evidence」。
 
@@ -163,23 +163,23 @@ obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  tiling")
 
 ### Step 2: 读取上下文笔记
 
-使用 `obsidian_get_note` 逐条读取去重后的笔记路径。**`target` 参数为 discriminated union，必须通过 `{type: "path", path: "..."}` 指定 vault 相对路径**：
+使用 `obsidian_get_note` 逐条读取去重后的笔记路径。**`target` 参数为 discriminated union，必须通过 `{type: "path", path: "..."}` 指定绝对路径**：
 
 - 默认读取全文：
   ```
-  obsidian_get_note(format="content", target={type: "path", path: "<vault-relative-path>"})
+  obsidian_get_note(format="content", target={type: "path", path: "<absolute-note-path>"})
   ```
 - 笔记较长且内容集中在特定标题下时，用 section 精准读取（嵌套标题用 `::` 分隔）：
   ```
-  obsidian_get_note(format="section", target={type: "path", path: "<vault-relative-path>"}, section={type: "heading", target: "<标题名>"})
+  obsidian_get_note(format="section", target={type: "path", path: "<absolute-note-path>"}, section={type: "heading", target: "<标题名>"})
   ```
 - 需要 frontmatter 元数据时：
   ```
-  obsidian_get_note(format="full", target={type: "path", path: "<vault-relative-path>"})
+  obsidian_get_note(format="full", target={type: "path", path: "<absolute-note-path>"})
   ```
 - 需要发现可用标题/block/frontmatter 目标时，先用 document-map：
   ```
-  obsidian_get_note(format="document-map", target={type: "path", path: "<vault-relative-path>"})
+  obsidian_get_note(format="document-map", target={type: "path", path: "<absolute-note-path>"})
   ```
 
 读取后按逻辑链条节点组织上下文：
@@ -187,10 +187,10 @@ obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  tiling")
 ```markdown
 ## 检索上下文映射
 ### S1: <逻辑角色/原文片段>
-- `<vault-path>` (score: X.X, query: `...`): <与 S1 相关的证据>
+- `<absolute-path>` (score: X.X, query: `...`): <与 S1 相关的证据>
 
 ### S2: <逻辑角色/原文片段>
-- `<vault-path>` (score: X.X, query: `...`): <与 S2 相关的证据>
+- `<absolute-path>` (score: X.X, query: `...`): <与 S2 相关的证据>
 ```
 
 答案生成时必须先覆盖各链条节点，再做综合回答，避免只根据某一类搜索结果回答整题。
@@ -262,14 +262,14 @@ obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  tiling")
 ## 笔记证据概览
 | 路径 | 分数 | 关键信息 |
 |------|------|----------|
-| paper_secs/... | 15.2 | ... |
+| /data3/paper_analysis/paper_secs/... | 15.2 | ... |
 
 ---
 
 ## <按侧重顺序的第一节>
 
 ### 方法1: <方法名>
-**笔记证据**: `<vault-path>` (score: X.X)
+**笔记证据**: `<absolute-path>` (score: X.X)
 **方法细节**（达到该层粒度要求的伪代码/模拟/指令pipeline/数据流）:
 ...
 **注解**: ...
@@ -312,7 +312,7 @@ obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  tiling")
 - [ ] **方法细节达到该层粒度要求**（L1 伪代码/L2-L3 框架模拟/L4 指令pipeline/L5 数据流+控制模块/L6 芯片拓扑+评估）
 - [ ] 每个结构化示例后跟「注解」节
 - [ ] 主内容 ≥3 条笔记证据，辅内容 ≥1 条
-- [ ] 笔记证据标注 vault 路径和 omnisearch 分数
+- [ ] 笔记证据标注绝对路径和 omnisearch 分数
 - [ ] Web 补充证据如有使用，已单独标注链接，且未替代本地 note evidence
 - [ ] 不编造 — 笔记未说明则写「笔记未明确说明」
 - [ ] `[ANSWER_AGENT_DONE]` 在文件末尾

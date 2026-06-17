@@ -5,14 +5,14 @@ description: Search local Obsidian vault notes under paper_secs, knowledge_notes
 
 # Obsidian Keyword Explainer
 
-Read-only. Answer in Chinese. Do not artificially shorten. Every structured example (formula/pseudocode/flowchart/timeline) must be followed by an "Annotations" section. The path below is related or based on '/data3/paper_analysis/'.
+Read-only. Answer in Chinese. Do not artificially shorten. Every structured example (formula/pseudocode/flowchart/timeline) must be followed by an "Annotations" section. All path parameters below use absolute paths rooted at '/data3/paper_analysis/'.
 
 ## Local Search Backend Hard Restriction
 
 - All vault-note searches must use the Obsidian API: search with `obsidian_search_notes`, then read with `obsidian_get_note`.
 - Do not use filesystem search or directory traversal as evidence retrieval, including `rg`, `grep`, `find`, `ls`, Python scanning, shell globs, or direct file scans.
 - Web/internet search is allowed as external supplementary evidence, but it must not replace local Obsidian API search. If the Obsidian API returns no local matches, first record "no note evidence", then cite any web result separately as "Web evidence".
-- Treat Obsidian API search as Markdown-note-only search. Every `omnisearch` query must include both `path:<dir>`.
+- Treat Obsidian API search as Markdown-note-only search. Every `omnisearch` query must include `path:<absolute-dir>`.
 
 ## Workflow
 
@@ -45,57 +45,57 @@ For **each keyword** extracted in Step 1, run **six** separate omnisearch querie
 
 **API**: `obsidian_search_notes` with `mode="omnisearch"`. Results capped at 50 upstream; paginate via `cursor` / `nextCursor` if needed.
 
-**Query format**: `path:<dir>  <keyword>`
+**Query format**: `path:<absolute-dir>  <keyword>`
 
-- Single-word keyword: `path:paper_secs  KV-Cache`
-- Multi-word keyword: use quoted phrases — `path:paper_secs  "KV Cache"`
+- Single-word keyword: `path:/data3/paper_analysis/paper_secs  KV-Cache`
+- Multi-word keyword: use quoted phrases — `path:/data3/paper_analysis/paper_secs  "KV Cache"`
 - Path filter is embedded in the query string. Do NOT use `pathPrefix` (text-mode only).
 - Use both English and Chinese variants of the keyword in separate searches if applicable. Combine results from variant searches for the same keyword.
 
-#### 2.1 Search `paper_secs/`
+#### 2.1 Search `/data3/paper_analysis/paper_secs/`
 
 ```
-obsidian_search_notes(mode="omnisearch", query="path:paper_secs  <keyword>")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/paper_secs  <keyword>")
 ```
 
 Record up to 5 paths with the highest scores. Score = API-returned score directly.
 
-#### 2.2 Search `knowledge_notes/`
+#### 2.2 Search `/data3/paper_analysis/knowledge_notes/`
 
 ```
-obsidian_search_notes(mode="omnisearch", query="path:knowledge_notes  <keyword>")
-```
-
-Record up to 5 paths with the highest scores.
-
-#### 2.3 Search `experiment_notes/`
-
-```
-obsidian_search_notes(mode="omnisearch", query="path:experiment_notes  <keyword>")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/knowledge_notes  <keyword>")
 ```
 
 Record up to 5 paths with the highest scores.
 
-#### 2.4 Search `idea_notes/`
+#### 2.3 Search `/data3/paper_analysis/experiment_notes/`
 
 ```
-obsidian_search_notes(mode="omnisearch", query="path:idea_notes  <keyword>")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/experiment_notes  <keyword>")
 ```
 
 Record up to 5 paths with the highest scores.
 
-#### 2.5 Search `human_notes/`
+#### 2.4 Search `/data3/paper_analysis/idea_notes/`
 
 ```
-obsidian_search_notes(mode="omnisearch", query="path:human_notes  <keyword>")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/idea_notes  <keyword>")
+```
+
+Record up to 5 paths with the highest scores.
+
+#### 2.5 Search `/data3/paper_analysis/human_notes/`
+
+```
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/human_notes  <keyword>")
 ```
 
 Record up to 10 paths with the highest scores.
 
-#### 2.6 Search `learning_outputs/`
+#### 2.6 Search `/data3/paper_analysis/learning_outputs/`
 
 ```
-obsidian_search_notes(mode="omnisearch", query="path:learning_outputs  <keyword>")
+obsidian_search_notes(mode="omnisearch", query="path:/data3/paper_analysis/learning_outputs  <keyword>")
 ```
 
 Record up to 5 paths with the highest scores.
@@ -110,8 +110,8 @@ Maintain a running table during search:
 
 | Keyword | Segment | Dir | Path | Score |
 |---------|---------|-----|------|-------|
-| KV Cache | S1 | paper_secs | paper_secs/2025/xxx.md | 12.5 |
-| KV Cache | S1 | knowledge_notes | knowledge_notes/kv_cache.md | 8.3 |
+| KV Cache | S1 | /data3/paper_analysis/paper_secs | /data3/paper_analysis/paper_secs/2025/xxx.md | 12.5 |
+| KV Cache | S1 | /data3/paper_analysis/knowledge_notes | /data3/paper_analysis/knowledge_notes/kv_cache.md | 8.3 |
 | ... | ... | ... | ... | ... |
 
 ---
@@ -120,7 +120,7 @@ Maintain a running table during search:
 
 After ALL keywords have been searched:
 
-**3.1 Deduplicate**: collect all unique paths from the search results table. De-duplicate by vault-relative path.
+**3.1 Deduplicate**: collect all unique paths from the search results table. De-duplicate by absolute path.
 
 **3.2 Read**: call `obsidian_get_note` for each unique path to read the full content.
 
@@ -135,21 +135,21 @@ After ALL keywords have been searched:
 
 For Step 3 context building, use **`format: "content"`** (the raw body is all that's needed). Use `format: "full"` only when frontmatter metadata (tags, dates) adds meaningful context to the explanation. Use `format: "section"` when the matched content is known to be under a specific heading and reading the whole file is wasteful.
 
-Address the note by one of: vault-relative `path` (e.g. `paper_secs/2025/xxx.md`), `active` file, or `periodic` (daily/weekly/monthly/quarterly/yearly, with optional ISO date).
+Address the note by one of: absolute `path` (e.g. `/data3/paper_analysis/paper_secs/2025/xxx.md`), `active` file, or `periodic` (daily/weekly/monthly/quarterly/yearly, with optional ISO date).
 
-**Important target schema**: `obsidian_get_note.target` is a discriminated object, not a bare string. For vault-relative paths, always pass:
+**Important target schema**: `obsidian_get_note.target` is a discriminated object, not a bare string. For absolute paths, always pass:
 
 ```json
 {
   "format": "content",
   "target": {
     "type": "path",
-    "path": "knowledge_notes/example.md"
+    "path": "/data3/paper_analysis/knowledge_notes/example.md"
   }
 }
 ```
 
-Do **not** call `obsidian_get_note` with `"target": "knowledge_notes/example.md"` or `"target": {"path": "knowledge_notes/example.md"}`; both are invalid because the tool requires `target.type`.
+Do **not** call `obsidian_get_note` with `"target": "/data3/paper_analysis/knowledge_notes/example.md"` or `"target": {"path": "/data3/paper_analysis/knowledge_notes/example.md"}`; both are invalid because the tool requires `target.type`.
 
 **3.3 Build context**: assemble all read notes into a unified context. For each file, annotate which keyword(s) and segment(s) it was matched for, along with the omnisearch score(s).
 
@@ -180,7 +180,7 @@ Three dimensions, each with ≥1 structured example + annotations:
 
 **After each example**: "Annotations" section — variables, steps, nodes, edges, lanes, time axis, dependencies, overlap, stalls, assumptions.
 
-**Note evidence**: list `<vault-path>` with omnisearch scores. If notes are insufficient, explicitly state the evidence gap; web search may be used as a separately labeled supplement.
+**Note evidence**: list `<absolute-path>` with omnisearch scores. If notes are insufficient, explicitly state the evidence gap; web search may be used as a separately labeled supplement.
 
 ---
 
@@ -219,7 +219,7 @@ flowchart TD
 
 **Segment Keywords**: `<kw1>`, `<kw2>`, ...
 **Relevant Context**:
-- `<vault-path>` (omnisearch score: <score>): <key context>
+- `<absolute-path>` (omnisearch score: <score>): <key context>
 
 ### What is it?
 <Explanation + concrete example + Annotations.>
@@ -231,7 +231,7 @@ flowchart TD
 <Explanation + concrete example + Annotations.>
 
 ### Note Evidence
-- `<vault-path>` (omnisearch score: <score>): <key info>
+- `<absolute-path>` (omnisearch score: <score>): <key info>
 
 ### Web Supplement
 - <url>: <supplement; or "Not used">
@@ -278,9 +278,9 @@ Violating these causes `Parse error`:
 
 ## Evidence Rules
 
-- Cite vault paths for notes and links for web. Distinguish note-backed fact ("Notes show") from inference ("Can be inferred") and web-backed fact ("Web sources show").
+- Cite absolute note paths for notes and links for web. Distinguish note-backed fact ("Notes show") from inference ("Can be inferred") and web-backed fact ("Web sources show").
 - Don't invent implementation details — write "Notes do not explicitly clarify."
-- Search scope: `paper_secs/`, `knowledge_notes/`, `experiment_notes/`, `idea_notes/`, `human_notes/`, `learning_outputs/`.
+- Search scope: `/data3/paper_analysis/paper_secs/`, `/data3/paper_analysis/knowledge_notes/`, `/data3/paper_analysis/experiment_notes/`, `/data3/paper_analysis/idea_notes/`, `/data3/paper_analysis/human_notes/`, `/data3/paper_analysis/learning_outputs/`.
 - Relevance = omnisearch BM25 score directly. No custom formula.
 - Each keyword searches all six directories; up to 5 paths per directory per keyword, except `human_notes/` where up to 10 paths are allowed.
 - Local/vault searches must use Obsidian API only. Do not use filesystem search for local evidence retrieval. Web search is allowed only as separately labeled external supplement.
@@ -292,6 +292,6 @@ Violating these causes `Parse error`:
 - [ ] Step 3: All paths deduplicated; unique files read; unified context built
 - [ ] Step 4: Per-segment explanation with all three dimensions; each with ≥1 structured example + annotations
 - [ ] Kernel/pipeline/overlap/batching questions use timeline diagrams
-- [ ] Note evidence: vault paths + omnisearch scores. Web evidence links if used. Uncertainties declared. No filesystem evidence retrieval used.
+- [ ] Note evidence: absolute paths + omnisearch scores. Web evidence links if used. Uncertainties declared. No filesystem evidence retrieval used.
 - [ ] Not artificially shortened
 - [ ] Step 5: Paragraph synthesis with Mermaid flowchart + integrated understanding
