@@ -1,0 +1,38 @@
+## MultiModal Serving
+
+- [xDiT](https://arxiv.org/abs/2411.01738): an Inference Engine for Diffusion Transformers (DiTs) with Massive Parallelism
+- [MOSEL](https://arxiv.org/pdf/2310.18481.pdf): Inference Serving Using Dynamic Modality Selection
+- [Approximate Caching for Efficiently Serving Diffusion Models](https://arxiv.org/abs/2312.04429) | Adobe Research
+- [Generative AI Beyond LLMs](https://arxiv.org/pdf/2312.14385): System Implications of Multi-Modal Generation | Meta
+- [Characterizing and Efficiently Accelerating Multimodal Generation Model Inference](https://arxiv.org/abs/2410.00215) | Meta
+- [DistriFusion:](https://arxiv.org/abs/2402.19481) Distributed Parallel Inference for High-Resolution Diffusion Models | MIT
+- [LongVILA: Scaling Long-Context Visual Language Models for Long Videos](https://arxiv.org/abs/2408.10188) | NVIDIA
+- [FlexCache: Flexible Approximate Cache System for Video Diffusion](https://arxiv.org/abs/2501.04012) | University of Waterloo
+- [DDiT](https://arxiv.org/abs/2506.13497v1): Dynamic Resource Allocation for Diffusion Transformer Model Serving
+- [PATCHEDSERVE](https://arxiv.org/pdf/2501.09253): A Patch Management Framework for SLO-Optimized Hybrid Resolution Diffusion Serving
+- [ElasticMM](https://arxiv.org/abs/2507.10069): Efficient Multimodal LLMs Serving with Elastic Multimodal Parallelism
+- [TetriServe](https://arxiv.org/abs/2510.01565): Efficient DiT Serving for Heterogeneous Image Generation
+- [dInfer](https://arxiv.org/abs/2510.08666): An Efficient Inference Framework for Diffusion Language Models
+- [Fast-dLLM v2](https://arxiv.org/abs/2509.26328): Efficient Block-Diffusion LLM
+- [Argus](https://arxiv.org/abs/2511.06724): Quality-Aware High-Throughput Text-to-Image Inference Serving System
+- [Cornserve](https://arxiv.org/abs/2512.14098): Efficiently Serving Any-to-Any Multimodal Models
+- [HydraInfer](https://arxiv.org/abs/2505.12658): Hybrid Disaggregated Scheduling for Multimodal Large Language Model Serving
+- [Enabling Disaggregated Multi-Stage MLLM Inference via GPU-Internal Scheduling and Resource Sharing](https://arxiv.org/abs/2512.17574)
+- [VoxServe](https://arxiv.org/abs/2602.00269): Streaming-Centric Serving System for Speech Language Models
+- [dLLM-Serve](https://arxiv.org/abs/2512.17077): Taming the Memory Footprint Crisis for Efficient Diffusion LLM Serving
+- [HADIS](https://arxiv.org/abs/2509.00642): Hybrid Adaptive Diffusion Model Serving for Efficient Text-to-Image Generation
+- [Efficient Multimodal Serving via Module Multiplexing](https://dl.acm.org/doi/10.1145/3767295.3769389) | EuroSys' 26
+- [FlashPS](https://dl.acm.org/doi/10.1145/3767295.3769379): Efficient Generative Image Editing with Mask-aware Caching and Scheduling | EuroSys' 26
+- [StreamDiffusionV2](https://arxiv.org/abs/2511.07399): A Streaming System for Dynamic and Interactive Video Generation | MLSys' 26
+- [SpecDiff-2](https://arxiv.org/abs/2511.00606): Scaling Diffusion Drafter Alignment For Faster Speculative Decoding | MLSys' 26
+- [Million-Scale Text-to-Video Retrieval with Hyperdimensional Computing](https://dl.acm.org/doi/10.1145/3767295.3803610) | EuroSys' 26
+- [TriInfer: Hybrid Encode-Prefill-Decode Disaggregation for Multimodal LLM Inference](https://mlsys.org/virtual/2026/oral/3756) | MLSys' 26
+- [CDLM: Consistency Diffusion Language Models for Faster Text Generation Sampling](https://mlsys.org/virtual/2026/oral/3785) | MLSys' 26
+- [db-SP: Accelerating Sparse Attention for Visual Generative Models](https://mlsys.org/virtual/2026/poster/3575) | MLSys' 26
+- [TiDAR: Think in Diffusion, Talk in Autoregression for Multimodal Generation](https://mlsys.org/virtual/2026/poster/3528) | MLSys' 26
+- [SlackServe](https://arxiv.org/abs/2606.15319): Adaptive Resource Management and Quality Control for Streaming Video Generation | Peking University, Purdue
+- [Quant VideoGen](https://arxiv.org/abs/2602.02958): Auto-Regressive Long Video Generation via 2-Bit KV-Cache Quantization | UCB
+- [MonarchRT](https://arxiv.org/abs/2602.12271): Efficient Attention for Real-Time Video Generation | CMU
+- [SwiftFusion](https://arxiv.org/abs/2601.20273): Scalable Sequence Parallelism for Distributed Inference of Diffusion Transformers on GPUs | Univ. of Toronto
+- [d3LLM](https://arxiv.org/abs/2601.07568): Ultra-Fast Diffusion LLM using Pseudo-Trajectory Distillation | UCSD
+- [VLA-Perf](https://arxiv.org/abs/2602.18397): Demystifying VLA Inference Performance | Stanford

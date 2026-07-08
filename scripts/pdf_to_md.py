@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 
-DEFAULT_MARKER_ROOT = Path("/home/descfly/Desktop/marker")
+DEFAULT_MARKER_ROOT = Path("/data3/Projects/marker")
 DEFAULT_MARKER_PYTHON = Path("/home/descfly/miniconda3/bin/python3")
 DEFAULT_OUTPUT = Path.cwd() / "paper_markdown"
 

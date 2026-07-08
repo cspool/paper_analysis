@@ -1,0 +1,12 @@
+## edge serving
+- [TZ-LLM](https://dl.acm.org/doi/10.1145/3767295.3769334): Protecting On-Device Large Language Models with Arm TrustZone | EuroSys' 26
+- [TailorLLM](https://dl.acm.org/doi/10.1145/3767295.3769346): Collaborative End-Cloud Inference of Large and Small Language Models Based on Low-Rank Adaptation | EuroSys' 26
+- [Federated Fine-Tuning of Sparsely-Activated Large Language Models on Resource-Constrained Devices](https://dl.acm.org/doi/10.1145/3767295.3769329) | EuroSys' 26
+- [Scaling LLM Test-Time Compute with Mobile NPU on Smartphones](https://dl.acm.org/doi/10.1145/3767295.3769382) | EuroSys' 26
+- [On-device Semantic Selection Made Low Latency and Memory Efficient with Monolithic Forwarding](https://dl.acm.org/doi/10.1145/3767295.3803572) | EuroSys' 26
+- [SwiftFL: Enabling Speculative Training for On-Device Federated Deep Learning](https://dl.acm.org/doi/10.1145/3767295.3803605) | EuroSys' 26
+- [viNPU: Optimizing Vision Transformer Inference on Mobile NPUs](https://dl.acm.org/doi/10.1145/3767295.3803619) | EuroSys' 26
+- [Efficient, VRAM-Constrained Cross-Lingual Model Inference on Client Devices](https://mlsys.org/virtual/2026/oral/3802) | MLSys' 26
+- [Rethinking DVFS for Mobile LLMs: CORE for Energy-Efficient On-Device Inference](https://mlsys.org/virtual/2026/oral/3814) | MLSys' 26
+- [IntAttention: Fully Integer Attention Pipeline for Edge LLM Inference](https://mlsys.org/virtual/2026/oral/3848) | MLSys' 26
+- [OpenJarvis](https://arxiv.org/abs/2605.17172): Personal AI, On Personal Devices via LLM-Guided Spec Search and Local-Cloud Collaboration | Stanford

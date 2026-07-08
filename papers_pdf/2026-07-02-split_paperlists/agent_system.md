@@ -1,0 +1,20 @@
+## agent system
+- [DualPath](https://arxiv.org/abs/2602.21548): Breaking the Storage Bandwidth Bottleneck in Agentic LLM Inference | DeepSeek
+- [AIMS](https://dl.acm.org/doi/10.1145/3767295.3803622): Cost-Efficient LLM-Based Agent Deployment in Hybrid Cloud-Edge Environments | EuroSys' 26
+- [From Imperative to Declarative](https://dl.acm.org/doi/10.1145/3767295.3803576): Towards LLM-friendly OS Interfaces for Boosted Computer-Use Agents | EuroSys' 26
+- [Hippocampus](https://arxiv.org/abs/2602.13594): An Efficient and Scalable Memory Module for Agentic AI | MLSys' 26
+- [PROMPTS: Performance Optimization via Multi-Agent Planning for Test-time Compute Scaling](https://mlsys.org/virtual/2026/oral/3843) | MLSys' 26
+- [TeleRAG: Efficient Retrieval-Augmented Generation Inference with Lookahead Retrieval](https://mlsys.org/virtual/2026/poster/3573) | MLSys' 26
+- [OpenHands Software Agent SDK](https://mlsys.org/virtual/2026/poster/3526) | MLSys' 26
+- [FlashAgents: Accelerating Multi-Agent LLM Systems via Streaming Prefill Overlap](https://mlsys.org/virtual/2026/poster/3537) | MLSys' 26
+- [AgenticCache: Cache-Driven Asynchronous Planning for Agentic LLM Systems](https://mlsys.org/virtual/2026/oral/3806) | MLSys' 26
+- [Matrix: Peer-to-Peer Multi-Agent Synthetic Data Generation](https://mlsys.org/virtual/2026/oral/3753) | MLSys' 26
+- [Ontology-Guided Long-Term Agent Memory for Conversational RAG](https://mlsys.org/virtual/2026/oral/3738) | MLSys' 26
+- [OSWorld-Human: Benchmarking Efficiency of Computer-Use Agents](https://mlsys.org/virtual/2026/oral/3865) | MLSys' 26
+- [KAIROS](https://arxiv.org/abs/2604.16682): Stateful, Context-Aware, Power-Efficient Agentic Inference Serving | UMich
+- [ThunderAgent](https://arxiv.org/abs/2602.13692): A Simple, Fast and Program-Aware Agentic Inference System | CMU
+- [Vortex](https://arxiv.org/abs/2606.06453): Efficient and Programmable Sparse Attention Serving for AI Agents | CMU
+- [Nalar](https://arxiv.org/abs/2601.05109): An Agent Serving Framework Separating Workflow Specification from Execution | UT Austin
+- [Concurrency without Model Changes](https://arxiv.org/abs/2605.15077): Future-based Asynchronous Function Calling for LLMs | UCB
+- [Agent JIT Compilation](https://arxiv.org/abs/2605.21470): Latency-Optimizing Web Agent Planning and Scheduling | ICML' 26
+- [SemWeave](https://dl.acm.org/doi/10.1145/3788853.3801593): Semantic Common Expressions for LLM-powered Query Processing | SIGMOD' 26

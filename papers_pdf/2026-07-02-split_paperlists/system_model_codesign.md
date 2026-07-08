@@ -1,0 +1,21 @@
+## system model codesign
+- [Reducing GPU Memory Fragmentation via Spatio-Temporal Allocation Planning](https://arxiv.org/abs/2507.16274) | EuroSys' 26
+- [SAS](https://dl.acm.org/doi/10.1145/3767295.3769364): Sparse Attention Synthesizer for Efficient Language Model Inference | EuroSys' 26
+- [LLMFolder](https://dl.acm.org/doi/10.1145/3767295.3769339): Revisiting Constant Folding in Large Language Models | EuroSys' 26
+- [FlashAttention-4](https://arxiv.org/abs/2603.05451): Algorithm and Kernel Pipelining Co-Design for Asymmetric Hardware Scaling (Blackwell) | MLSys' 26
+- [BLASST: Dynamic Blocked Attention Sparsity for Scalable Transformer Inference](https://mlsys.org/virtual/2026/poster/3631) | MLSys' 26
+- [Attribution-based Sparse Activation in Large Language Models](https://mlsys.org/virtual/2026/poster/3556) | MLSys' 26
+- [MixLLM: LLM Quantization with Global Mixed-Precision between Output and Embeddings](https://mlsys.org/virtual/2026/oral/3805) | MLSys' 26
+- [MAC-Attention: Match-Amend-Complete Attention for Efficient Long-Context Inference](https://mlsys.org/virtual/2026/oral/3794) | MLSys' 26
+- [Flashlight: PyTorch Compiler Extensions for Attention Variants](https://mlsys.org/virtual/2026/poster/3540) | MLSys' 26
+- [CAGE: Curvature-Aware Gradient Estimation for Quantization-Aware Training](https://mlsys.org/virtual/2026/oral/3841) | MLSys' 26
+- [OPKV: Recallable Sparsity in Paged KV Cache for Efficient LLM Inference](https://mlsys.org/virtual/2026/poster/3621) | MLSys' 26
+- [Using Span Queries to Optimize Cache and Attention Locality](https://mlsys.org/virtual/2026/oral/3747) | MLSys' 26
+- [SLA2](https://arxiv.org/abs/2602.12675): Sparse-Linear Attention with Learnable Routing and QAT | UCB
+- [SageBwd](https://arxiv.org/abs/2603.02170): A Trainable Low-bit Attention for Efficient Training | UCB
+- [Inference Time Context Sparsity](https://arxiv.org/abs/2605.24168): Illusion or Opportunity? | UCB
+- [Tilus](https://arxiv.org/abs/2504.12984): A Tile-Level GPGPU Programming Language for Low-Precision Computation | ASPLOS' 26
+- [PuzzleMoE](https://arxiv.org/abs/2511.04805): Efficient Compression of Large MoE Models via Sparse Expert Merging and Bit-packed Inference | ICML' 26
+- [Sieve](https://arxiv.org/abs/2605.11277): Dynamic Expert-Aware PIM Acceleration for Evolving Mixture-of-Experts Models | Stanford
+- [Streaming Tensor Programs](https://arxiv.org/abs/2511.07776): A Streaming Abstraction for Dynamic Parallelism on Dataflow Accelerators | ASPLOS' 26
+- [FuseFlow](https://arxiv.org/abs/2511.04768): A Fusion-Centric Compilation Framework for Sparse Deep Learning on Streaming Dataflow | ASPLOS' 26

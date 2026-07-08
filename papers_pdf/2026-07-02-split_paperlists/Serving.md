@@ -1,0 +1,75 @@
+## Serving
+
+- [TokenWeave: Efficient Compute-Communication Overlap for Distributed LLM Inference](https://arxiv.org/abs/2505.11329) | [Code](https://github.com/microsoft/tokenweave) | MLSys' 26
+- [AIConfigurator](https://arxiv.org/abs/2601.06288): Lightning-Fast Configuration Optimization for Multi-Framework LLM Serving
+- [SuperInfer](https://arxiv.org/abs/2601.20309): SLO-Aware Rotary Scheduling and Memory Management for LLM Inference on Superchips | MLSys' 26
+- [Scaling Up Efficient Small Language Models Serving](https://arxiv.org/abs/2510.22101): Serving and Deployment for Semantic Job Search | MLSys' 26
+- [OptiKIT](https://arxiv.org/abs/2601.20408): Meeting SLOs, Slashing Hours - Automated Enterprise LLM Optimization | MLSys' 26
+- [BlendServe](https://dl.acm.org/doi/abs/10.1145/3779212.3790133): Optimizing Offline Inference for Auto-regressive Large Models with Resource-aware Batching | ASPLOS' 26
+- [SwiftSpec](https://dl.acm.org/doi/abs/10.1145/3779212.3790246): Ultra-Low Latency LLM Decoding by Scaling Asynchronous Speculative Decoding with Disaggregated Pipeline and Fused Kernels | ASPLOS' 26
+- [MuxWise](https://dl.acm.org/doi/abs/10.1145/3779212.3790236): Towards High-Goodput LLM Serving with Prefill-decode Multiplexing | ASPLOS' 26
+- [MoEless](https://arxiv.org/abs/2603.06350): Efficient MoE LLM Serving via Serverless Computing
+- [BiScale](https://arxiv.org/abs/2602.18755): Energy-Efficient Disaggregated LLM Serving via Phase-Aware Placement and DVFS
+- [Harvest](https://arxiv.org/abs/2602.00328): Opportunistic Peer-to-Peer GPU Caching for LLM Inference
+- [MineDraft](https://arxiv.org/abs/2603.18016): A Framework for Batch Parallel Speculative Decoding — overlaps drafting and verification across two batches, hiding draft latency. Up to +75% throughput, -39% latency. Integrated into vLLM. | NUS & MIT
+- [Foundry](https://arxiv.org/abs/2604.06664): Template-Based CUDA Graph Context Materialization for Fast LLM Serving Cold Start
+- [AdaServe](https://arxiv.org/abs/2501.12162): Accelerating Multi-SLO LLM Serving with SLO-Customized Speculative Decoding | EuroSys' 26
+- [FlexPipe](https://arxiv.org/abs/2510.11938): Adapting Dynamic LLM Serving Through Inflight Pipeline Refactoring in Fragmented Serverless Clusters | EuroSys' 26
+- [Taming Latency-Memory Trade-Off in MoE-Based LLM Serving via Fine-Grained Expert Offloading](https://dl.acm.org/doi/10.1145/3767295.3769319) | EuroSys' 26
+- [KunServe](https://arxiv.org/abs/2412.18169): Parameter-centric Memory Management for Efficient Memory Overloading Handling in LLM Serving | EuroSys' 26
+- [AdaGen](https://dl.acm.org/doi/10.1145/3767295.3769345): Workload-Adaptive Cluster Scheduler for Latency-Optimal LLM Inference Serving | EuroSys' 26
+- [SkyWalker](https://arxiv.org/abs/2505.24095): A Locality-Aware Cross-Region Load Balancer for LLM Inference | EuroSys' 26
+- [High Throughput and Low Latency LLM Serving via Adaptive KV Caching](https://dl.acm.org/doi/10.1145/3767295.3803570) | EuroSys' 26
+- [PARD](https://dl.acm.org/doi/10.1145/3767295.3803581): Enhancing Goodput for Inference Pipeline via Proactive Request Dropping | EuroSys' 26
+- [PiLLM](https://dl.acm.org/doi/10.1145/3767295.3769393): Resource-Efficient LLM Inference Using Workload Prediction | EuroSys' 26
+- [Automated End-to-End Model Serving with Cooperative Compilation and Scheduling](https://dl.acm.org/doi/10.1145/3767295.3769392) | EuroSys' 26
+- [MFS](https://dl.acm.org/doi/10.1145/3767295.3769355): An Efficient Model Family Serving System for LLMs | EuroSys' 26
+- [CRAFT](https://arxiv.org/abs/2603.28768): Cost-aware Expert Replica Allocation with Fine-Grained Layerwise Estimations for Efficient MoE Serving | MLSys' 26
+- [MorphServe](https://arxiv.org/abs/2506.02006): Efficient and Workload-Aware LLM Serving via Runtime Quantized Layer Swapping and KV Cache Resizing | MLSys' 26
+- [FlexiCache](https://arxiv.org/abs/2511.00868): Leveraging Temporal Stability of Attention Heads for Efficient KV Cache Management | MLSys' 26
+- [Kitty](https://arxiv.org/abs/2511.18643): Accurate and Efficient 2-bit KV Cache Quantization with Dynamic Channel-wise Precision Boost | MLSys' 26
+- [SkipKV](https://arxiv.org/abs/2512.07993): Selective Skipping of KV Generation and Storage for Efficient Inference with Large Reasoning Models | MLSys' 26
+- [BOute](https://arxiv.org/abs/2602.10729): Cost-Efficient LLM Serving with Heterogeneous LLMs and GPUs via Multi-Objective Bayesian Optimization | MLSys' 26
+- [From Tokens to Layers](https://arxiv.org/abs/2510.08055): Redefining Stall-Free Scheduling for LLM Serving with Layered Prefill | MLSys' 26
+- [HELIOS](https://arxiv.org/abs/2504.10724): Adaptive Model And Early-Exit Selection for Efficient LLM Inference Serving | MLSys' 26
+- [BatchLLM](https://arxiv.org/abs/2412.03594): Optimizing Large Batched LLM Inference with Global Prefix Sharing and Throughput-oriented Token Batching | MLSys' 26
+- [GhostServe](https://arxiv.org/abs/2605.00831): A Lightweight Checkpointing System in the Shadow for Fault-Tolerant LLM Serving | MLSys' 26
+- [PRISM](https://arxiv.org/abs/2602.01762): Parametrically Refactoring Inference for Speculative Decoding Draft Models | MLSys' 26
+- [FarSkip-Collective](https://arxiv.org/abs/2511.11505): Unhobbling Blocking Communication in Mixture of Experts Models | MLSys' 26
+- [Efficient Data Passing for Serverless Inference Workflows: A GPU-Centric Approach](https://dl.acm.org/doi/10.1145/3767295.3769336) | EuroSys' 26
+- [TrustWeave: Integrity Measurement and Attestation for Multi-Cloud LLMs](https://dl.acm.org/doi/10.1145/3767295.3803586) | EuroSys' 26
+- [Stream2LLM: Overlapping Context Streaming and Prefill for Low-Latency LLM Serving](https://mlsys.org/virtual/2026/oral/3842) | MLSys' 26
+- [Locality-Aware Beam Scheduling for Efficient Test-Time Compute](https://mlsys.org/virtual/2026/oral/3788) | MLSys' 26
+- [Optimizing Deployment Configurations for LLM Inference](https://mlsys.org/virtual/2026/oral/3780) | MLSys' 26
+- [ContextPilot: Fast Long-Context Inference via Context Reuse](https://mlsys.org/virtual/2026/oral/3810) | MLSys' 26
+- [Speculative Decoding: Performance or Illusion?](https://mlsys.org/virtual/2026/oral/3782) | MLSys' 26
+- [SHIP: SRAM-Based Huge Inference Pipelines for Fast LLM Serving](https://mlsys.org/virtual/2026/oral/3834) | MLSys' 26
+- [BEAM: Joint Resource-Power Optimization for LLM Inference](https://mlsys.org/virtual/2026/oral/3849) | MLSys' 26
+- [Beyond the Buzz: A Pragmatic Take on Inference Disaggregation](https://mlsys.org/virtual/2026/oral/3819) | MLSys' 26
+- [PLA-Serve: Prefill-Length-Aware LLM Serving System](https://mlsys.org/virtual/2026/oral/3787) | MLSys' 26
+- [Accelerating Reasoning Model Inference with Sparse Self-Speculative Decoding](https://mlsys.org/virtual/2026/oral/3733) | MLSys' 26
+- [FaaScale: Unlocking Fast LLM Scaling for Serverless Inference](https://mlsys.org/virtual/2026/oral/3769) | MLSys' 26
+- [Breaking the Ice: Analyzing Cold Start Latency in vLLM](https://mlsys.org/virtual/2026/oral/3784) | MLSys' 26
+- [Demystifying the Mixture of Experts Serving Tax](https://mlsys.org/virtual/2026/oral/3764) | MLSys' 26
+- [RaidServe: High-Performance Resilient LLM Serving](https://mlsys.org/virtual/2026/oral/3856) | MLSys' 26
+- [Toward Principled LLM Safety Testing: Solving the Jailbreak Oracle Problem](https://mlsys.org/virtual/2026/oral/3739) | MLSys' 26
+- [ZeRO-Prefill](https://arxiv.org/abs/2605.02960): Zero Redundancy Overheads in MoE Prefill Serving
+- [SkyNomad](https://arxiv.org/abs/2601.06520): On Using Multi-Region Spot Instances to Minimize AI Batch Job Cost | UCB
+- [Qrita](https://arxiv.org/abs/2602.01518): High-performance Top-k and Top-p Algorithm for GPUs using Pivot-based Truncation and Selection | UCB
+- [The Time is Here for Just-in-Time Systems](https://arxiv.org/abs/2605.24096): Challenges and Opportunities for Adaptive AI/ML Serving | UCB
+- [Event Tensor](https://arxiv.org/abs/2604.13327): A Unified Abstraction for Compiling Dynamic Megakernels for Low-Latency Serving | MLSys' 26
+- [XGrammar-2](https://arxiv.org/abs/2601.04426): Efficient Dynamic Structured Generation Engine for Agentic LLMs | CMU
+- [Prism (Superoptimizer)](https://arxiv.org/abs/2604.15272): Symbolic Superoptimization of Tensor Programs | CMU
+- [Coral](https://arxiv.org/abs/2605.04357): Cost-Efficient Multi-LLM Serving over Heterogeneous Cloud GPUs | CMU
+- [LAPS](https://arxiv.org/abs/2601.11589): A Length-Aware-Prefill LLM Serving System | CMU/MBZUAI
+- [Where Do the Joules Go?](https://arxiv.org/abs/2601.22076): Diagnosing Inference Energy Consumption | UMich
+- [SYMPHONY](https://www.usenix.org/conference/nsdi26/presentation/agarwal): Enabling Compute-Memory Disaggregation in LLM Serving Systems | NSDI' 26
+- [OpenTela](https://systems.ethz.ch/news-and-events/news/2026/03/two-papers-accepted-at-osdi26.html): Unifying Decentralized Computing Resources for Heterogeneous LLM Serving | OSDI' 26
+- [Speculative Speculative Decoding](https://arxiv.org/abs/2603.03251): Parallelizing the Speculate-then-Verify Dependency | ICLR' 26
+- [WWW.Serve](https://arxiv.org/abs/2603.20661): Interconnecting Global LLM Services through Decentralization | CMU
+- [Not All Prefills Are Equal](https://arxiv.org/abs/2603.13358): PPD Disaggregation for Multi-turn LLM Serving | UChicago
+- [Hexcute](https://arxiv.org/abs/2504.16214): A Compiler Framework for Automating Layout Synthesis in GPU Programs | CGO' 26
+- [AutoScout](https://arxiv.org/abs/2603.11603): Structured Optimization for Automating ML System Configuration | UT Austin
+- [VoltanaLLM](https://arxiv.org/abs/2509.04827): Energy-Efficient and SLO-Aware Disaggregated LLM Serving | ISC' 26
+- [Regulating Branch Parallelism in LLM Serving](https://arxiv.org/abs/2605.06914): Balancing Intra-Request Branch Admission against Co-batched Latency | Stanford
+- [Strata](https://arxiv.org/abs/2508.18572): Hierarchical Context Caching for Long-Context LLM Serving | OSDI' 26
