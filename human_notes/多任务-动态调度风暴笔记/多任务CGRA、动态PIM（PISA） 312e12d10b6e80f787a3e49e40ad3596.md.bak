@@ -1,0 +1,437 @@
+# 多任务CGRA、动态PIM（PISA）
+
+## PISA（LLM块稀疏）能否模仿后用于DiT？
+
+ref：PISA: Supporting Dynamic Block Sparse Attention in Long-Context LLMs via Programmable and Decoupled PIM System
+
+BCE-TopK-SpAttn的pipeline，PIM-ISA的**粗粒度指令**和RV-ISA映射到PIM-Core。
+
+PIM-CCU设计，GEMM、BCE的datapath。
+
+PIM-Core Ctrl计算TopK，并且根据动态选择的块信息，运行时生成PIM访存指令。
+
+和GPU、PIM baseline做对比。
+
+### BCE in 动态块稀疏
+
+BCE加速器，BCE是动态块稀疏Attn中的主要耗时算子，计算密度不高而是访存密集算子，严重依赖Host处理。（因此PIM执行访存密集型，XPU执行计算密集型）
+
+BCE——Top-K——SparseAttn中Attn计算的输入块是动态地址，动态数据依赖难以高效处理。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2036.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2037.png)
+
+PIM的MAC架构不适配BCE（MCS）：**固定datapath（MAC）**通往乘法器的归约树，无法插入Comp和Max算子。
+
+Host侧完全控制不适配动态数据依赖：控制完全在Host，PIM-Acc消耗指令，无法高效支持动态数据依赖，因为需要Host执行**全局粗粒度算子（DMA）**，**运行时生成细粒度指令/计算地址（指令同步延迟）。**
+
+粗指令粒度Baseline（AttAcc），BCE输出块是动态的（运行时确定），SpAttn需要Host计算全局Softmax，涉及大量高开销的DMA操作。
+
+细指令粒度Baseline（Cent），Top-K完成后由Host实时生成每个XPU/PIM的指令，不能Prefetch，涉及大量指令传输操作，且每个Node需要配置。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2038.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2039.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2040.png)
+
+### PISA设计（围绕PIM Node的系统/应用）
+
+异构Node系统，支持动态类型算子，Node包含PIM（PISA Acc）和XPU。
+
+PIM Node设计若干个PIM-MEM，每个PIM-MEM是一个VFU/BCE/GEMM datapath，来支持BCE/GEMM和通用向量计算。
+
+PIM Node设置一个控制器，替代Host动态生成指令到Node的高延迟传输。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2041.png)
+
+CCU：Logic Die、传统PIM-MAC增加pipeline和配置选项，支持向量指令来提供通用性（**细粒度指令PIM.VM/VC/VS**），支持专用datapath pipeline来支持BCE高效执行（**粗粒度指令PIM.BCE**而非指令序列控制）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2042.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2043.png)
+
+PIM控制器
+
+控制器目标：通用可编程要求细粒度，但细粒度指令动态生成和传输的延迟高。
+
+动态块稀疏算法有复杂的控制决策（标量算法），控制器需要**引入可编程通用Core**来完成。
+
+但通用Core生成指令的时间远远快于PIM的执行时间，Core等待PIM完成（同步）会浪费Core去处理其他任务的性能，因此Core生成PIM指令和PIM执行需要异步。
+
+Core能访问Mem die的HBM内存，HBM作为PIM-CCU和RV-Core组成pipeline的中介Mem。
+
+PIM-CCU独占Logic die上的Buffer（SRAM），设置Buffer来加快CCU访存。
+
+动态稀疏Attn的pipeline是BCE（PIM-CCU）-TopK（PIM-RV）-SpAttn（PIM-CCU），设置Sync指令保持PIM和Core异步执行时的数据依赖。
+
+根据**目标任务（通用计算、特化pipeline），来设计Arch的ISA**进行映射。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2044.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2045.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2046.png)
+
+为了让Core生成指令后不必等待PIM完成指令（PIM传输延迟、执行延迟不浪费Core的周期），PIM-CCU的指令分配和管理职能交给硬件。因此PIM**控制器中给Core增加指令FIFO和硬件Dispatcher**。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2047.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2048.png)
+
+异构系统执行
+
+Host端：
+
+编译：Attn kernel编译成RV-Core的微程序（PIM指令和RV指令），打包控制逻辑。
+
+初始化：推理前，host通过DMA，将RV微程序传到PIM控制器的SPM。
+
+decoding推理执行：host将query vec和KV Cache地址等参数，写入PIM控制器的MemMap Regs，然后启动。
+
+完成后：PIM控制器发送中断给Host。
+
+PIM Node端：
+
+host启动后，PIM自动执行，RV-Core执行微程序。
+
+BCE：Core将KV Cache地址等信息填充PIM.BCE指令，每个指令是一个block并派发给一个PIM-CCU，block分数结果保存（ST）到HBM的指定区域。
+
+Top-K：Core从HBM读取每个block的分数搭配SPM，作Top-K选择，输出最相关的Block信息。
+
+Block SpAttn：Core读取最相关的Block信息，填充PIM.GEMM和PIM.SFMX指令参数，发给Cmd FIFO，等待派发和PIM-CCU执行。
+
+### 实验
+
+**事件驱动的系统模拟器：基于PISA性能、XPU性能，计算推理后端到端延迟。**
+
+PISA模拟器、XPU模拟器；
+
+**Ramulator2**：建模PISA计算单元CCU和BCE pipeline的性能，CCU在logic die上（buffer）；
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%201.png)
+
+**Chipyard模拟一个RV-SoC**，PISA用其生成PIM Controller、RV-Core和dispatcher，并在**Verilator**中模拟时序；
+
+[https://github.com/ucb-bar/chipyard](https://github.com/ucb-bar/chipyard)
+
+[https://chipyard.readthedocs.io/en/latest/](https://chipyard.readthedocs.io/en/latest/)
+
+**FireSim**
+
+[https://fires.im/](https://fires.im/)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%202.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%203.png)
+
+**XPU建模**
+
+A100：基于profile建模，[**NVIDIA Nsight Compute**](https://developer.nvidia.com/nsight-compute)实机测试LLM kernel的结果，将结果加入系统模拟器。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%204.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%205.png)
+
+## CA-NDA
+
+CA-NDA: Connected and Autonomous Near Data Accelerator For Asynchronously Parallel Processing
+
+host+NDA架构，CGRA（tile Acc）作为NDA/PIM改进的实验环境。
+
+PISA实验：基于RV-Core的PIM-Ctrl和标量控制，基于chipyard改造来实现后用Verilator模拟。基于remulator（内存模拟）评估PIM-CCU和kernel pipeline的性能。
+
+不太适合PISA环境，因为NDA/PIM部分使用CGRA仿真，并且PISA没有多任务的ReCfg功能，不能验证NDA的多任务隔离的贡献2。
+
+不同任务在多核/NDA的多线程执行模型。场景中不太存在不同任务同时？
+
+**我的img2col设计能够减少一个tile内任务（4*4 core）的LD次数，因为缓存到本地Buffer**。
+
+Todo1：如何融入？CGRA增加一些指令，软植入，简单修改IO-Ctrl的结构。
+
+Todo2：原本的多线程和packet的实验不改，增加更新的BG。
+
+Todo3：引入新的Conv IO Load方式，弱化Conv的实验，当作implicit gemm，强调LD直接带来的性能提升。
+
+### baseline host+NDA
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%201.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%202.png)
+
+2a：多线程的多核在主存共享数据，统一缓存到LLC，供其他核使用。
+
+2b：多NDA系统的多线程性能不如多核，因为不同线程data location相同导致的使用相同MC。并且，host在同步MPI模型下，一次性卸载多个PIM任务，加剧资源竞争。
+
+2c：多线程之间数据/DFG依赖需要host驱动处理，额外的同步开销。
+
+所以设计分层资源隔离和资源共享的NDA系统。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%203.png)
+
+### 实验环境
+
+CPU运行出MPI kernel的执行流trace，交给MPI-Sim模拟kernel的多任务调度。
+
+CGRA（NDA）转FPGA后模拟时序，NDA的ReCfg和任务执行延迟由**HMC-Sim（3D内存模拟）**模拟，集成到MPI-Sim模拟整体性能。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%204.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%205.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%206.png)
+
+### Host-free ReConfig
+
+避免资源竞争，打包4个Mem Channel为一个QuadCore（8*8 tiles/CGRA）。
+
+每个tile包含标量ALU、SPM（预加载任务CDFG）。
+
+CGRA的ctrl mem预加载多个任务配置，以便4个cycle完成ReCfg。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%207.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%208.png)
+
+无需host同步的CGRA重配置，设计新的HMC packet（多个128bit的FLIT）。
+
+运行时？
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%209.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2010.png)
+
+按照资源runtime，划分命令包
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2011.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2012.png)
+
+GCN kernel，相比Conv更多irregular访问。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2013.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2014.png)
+
+## DynMap
+
+### 多任务和CGRA
+
+CGRA执行前，CPU预加载CfgMem和DataMem。
+
+mapper包含placement（node分配到tile）&scheduler（node次序）和routing（tile之间数据流）。
+
+mapper质量：最小化初始化间隔Π（启动间隔）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2015.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2016.png)
+
+scenario1-优先级：极高优先级kernel的node抢占其他node的tile。
+
+sce2-node依赖&input var：task2、3依赖task1，task1负载和输入相关，预分配的tile存在空闲，需动态分配。
+
+sce3-node依赖&完成：task2、3依赖task1，task1完成后释放tile。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2017.png)
+
+metric让Mapper提高Mapper质量MQ和Mapper速度（MTi）。
+
+（MTi中没有考虑Ctx Switch时间，因为论文卖点不在于这里）
+
+INi个输入的任务i的**最大吞吐THi**可计算，但实际吞吐需要引入动态配置的Mapper开销进行。
+
+在最大吞吐THi基础上，乘一个系数INi / (MTi * Δ + INi)得到**实际吞吐**，Δ是配置前后的任务吞吐THi差值，MTi * Δ表示配置开销。
+
+归一化吞吐THi是实际吞吐/最优吞吐，即系数INi / (MTi * Δ + INi)×MQ，其中MQ是最大吞吐/最优吞吐。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2018.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2019.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2020.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2021.png)
+
+### Mapping算法
+
+DynMap在运行时快速搜索Mapper后进行Ctx Switch，保证Mapper质量。
+
+基于静态Mapper进行动态微调来加速。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2022.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2023.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2024.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2025.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2026.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2027.png)
+
+### 实验
+
+CGRA benchmark for mapper、动态资源分配
+
+不同维度和baseline比较，评估自己的设计是重点。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2028.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2029.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2030.png)
+
+如何模拟多任务？**多任务是场景，实验测量指标中的参数**。
+
+指标包含归一化吞吐=实际吞吐近似/最优吞吐，用于评估Mapper的速度和效果。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2018.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2019.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2021.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2031.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2032.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2033.png)
+
+## PreTrans（Arch tileRDMA）
+
+### 多任务BG和baseline
+
+baseline的CGRA架构：data mng、task mng、tile engine{FU、Data Mem、Cfg/Instr Mem}。
+
+多任务pipeline并行：按照一个请求pipeline的不同kernel分配tiles，但不同kernel时间不同。不同请求期间，存在资源空闲需要动态分配。
+
+多任务Mapping并行：不同kernel按照输入请求Sz打包，每个包分配tiles分别并行，每个包时间不同，同上，动态分配后提高使用率。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2034.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2035.png)
+
+DFG的3-IR运行过程（tile1、2、3）中，tile形状变成4R，3-IR迁移到tile3、4、1，需要进行ctx switch（data mem、cfg mem）来释放tile1。 
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2036.png)
+
+SOTA和paper的从3-IR到4 R的ctx switch对比
+
+SOTA使用A-B双buffer进行任务X的ctx switch，任务X保存ctx时，任务X的tile不能使用A继续执行，因为A作为X的定格镜像迁移到其他tile，新任务的启动延迟仍然很高。双Buffer让被抢占的任务Y的tile能继续运行，直到新任务在B配置完成。
+
+paper使用preMap+Shared Mem，preMap不迁移Cfg Mem而直接配置被抢占tile的Cfg Mem，Shared Mem让被抢占tile从Shared Mem中读取，而非迁移。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2037.png)
+
+### preMapper和Data Transceiver
+
+preMapper（SW）
+
+最小化初始间隔Π来初始化MRRG（modulo resource routing graph）。
+
+preMapper给每个DFG Node生成tileList，表示可能的映射tile。
+
+tile输入modulo scheduling算法，检查MRRG是否存在有效scheduling和route。
+
+Data Transceiver（HW）
+
+管理ctx switch的data migration时，通过shared memory传输并且边执行新任务便传输。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2038.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2039.png)
+
+Node到tileList的pre-Mapping是分层启发式搜索。
+
+基于之前的RefCfg找到RefTile并优先之，减少Ctx传输量。
+
+其次优先FanIO（连接tile个数表示“交通”情况），保证传输路径，便于传输。
+
+最小化Bypass数量，减少传输距离。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2040.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2041.png)
+
+CGRA架构设计（tile之间的RDMA）
+
+命令生成器按照RDMA要求生成对应tile的配置命令。命令接收器在Cfg Switch完成后，执行数据Ctx传输（data switch），同时执行新任务。
+
+每个tile设置Mem Xbar和寄存器组，构成动态配置下的路由网络。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2042.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2043.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2044.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2045.png)
+
+多任务Ctx Switch中RDMA的example（*）
+
+Ctx Switch过程（Cfg Switch）：访问请求、命令生成、指定tile的接收器接受命令。
+
+新配置执行过程：特定tile的接收器依次执行命令，将命令目标tile中数据加载到寄存器后，经过Mem Xbar写到下一站tile的Reg，直到到达命令源头tile的Reg。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2046.png)
+
+### 实验
+
+CGRA的应用benchmark。
+
+CGRA执行请求pipeline并行和kernel并行，baseline由ctx switch和执行覆盖（双Buffer）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2047.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2048.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2049.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2050.png)
+
+## FexMo
+
+### 不同任务Node的不同iter，动态空间tile调度
+
+初始化间隔Π是每个相邻迭代之间的配置周期数，等于tile中Cfg Mem中的配置数量。
+
+load指令延迟不定，阻止不同任务Node在**不同周期跨tile执行**，因为存在LD Miss让整体性能下降。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2051.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2052.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2053.png)
+
+baseline-1：不同任务pipeline**静态分配**不同空间tiles作空间并行，每个任务内中1个iter的不同Node并行，或pipeline并行。
+
+baseline-2：不同任务pipeline**静态分配**不同空间tiles作空间并行，任务内pipeline作循环展开unrolling，pipeline的不同iter作时间并行。
+
+paper：不同任务pipeline在**不同周期动态分配**不同空间tiles作空间并行，不同任务pipeline作循环展开unrolling，不同pipeline的不同iter作时间并行。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2054.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2055.png)
+
+不同任务Node在**不同周期跨tile执行**，LD Node可能存在Cache Miss，导致额外的延迟。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2056.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2057.png)
+
+### 实验
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2058.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2059.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2060.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2061.png)

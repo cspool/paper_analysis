@@ -1,0 +1,131 @@
+# meeting-25/04/08
+
+## GPU channel
+
+**channel是管理CPU和GPU前端间传输数据的容器，传输依赖物理链路，因此channel有数量上限。**work queue管理经过channel传输的命令Stream，因此channel可以称为work queue。
+
+work queue受内存分配限制，channel受传输链路限制，因此不同Stream可能共享work queue（nested Stream超过queue），不同Stream可能共享channel（false Dependency&HyperQ）。
+
+pushbuffer就是work queue，管理GPU执行命令流Stream，work queue一般使用entry的链表实现，entry类型包含互斥Event、同步Event和任务TMD指针等。
+
+应用决定不同pushbuffer的优先级，决定不同Stream优先级。多优先级管理需要存在多个channel。因为channel发射速率显著快于TMU、WDU和SM完成任务的速度，所以TMU可以设计多个task group调度多个优先级Stream的任务。
+
+强调：**channel**是基于传输链路的传输概念，**work queue**是存在于内存中的管理传输命令的队列，**task groups**是存在于TMU中的硬件模块。
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%204.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%207.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%208.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/image%209.png)
+
+![image.png](GPU%20channel%20for%20nested%E3%80%81TSG%E3%80%81QM/df0e1e67-2d1b-488c-be1c-01843ec9e9d5.png)
+
+## GPU UVM
+
+独立地址空间，显式Copy内存。统一虚拟内存的动态分配和静态分配。
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2012.png)
+
+![image.png](GPU%20Memory%20Manage%E3%80%81M1%20Memory%E3%80%81Copy/image%2013.png)
+
+应用的host侧进程和TMD都使用统一虚拟内存UVM，虚拟内存是通过虚拟地址访问内存的物理页，统一虚拟内存是通过不同区间的虚拟地址分别访问不同device内存的物理页。host和TMD的虚拟地址空间指向所有device memory，当不同虚拟空间中地址映射相同物理页时，实现不同进程（host、TMD）的内存共享。
+
+**TMD**有**独立的虚拟地址空间ASID**和对应的页表PT，**页表PT**建立**子虚拟地址空间和统一内存物理页**的映射关系。TLB是页表项PTE的缓存。MMU包含ASID表管理ASID和PT的映射，TMD的页表。
+
+应用抢占channel**一般**需要配置**GPU Ctx（VM Ctx）**，将应用Ctx中的所有页表加载到MMU，SME抢占时，可能保留其他SME的应用Ctx。
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%207.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%208.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%209.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2010.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2012.png)
+
+![image.png](GPU%20Address%EF%BC%88UVM%E3%80%81%E7%8B%AC%E7%AB%8BVAS%EF%BC%89/image%2014.png)
+
+**生命周期Lifetime**是Var存活时段（启动和销毁层），决定**物理资源分配和回收，由负载的生命周期决定**，生命周期内已分配资源只属于分配目标（抢占目标）。
+
+**作用域Scope**是Var可见范围（运行时层），是负载的**虚拟地址空间**，作用域内的线程通过Var来使用资源、影响作用域内线程，不同作用域的资源操作隔离。
+
+Channel和内存partition分配给应用/MPS（lifetime），应用按grid或queue TMD执行（scope），grid执行操作Channel和内存（资源）。
+
+Scope内所有线程共享资源，共享虚拟索引空间（global、SMEM、RF），线程通过指令（grid-base）+blockId+thdId访问虚拟地址进行数据交换。
+
+![Screenshot from 2026-03-26 17-47-36.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_17-47-36.png)
+
+![Screenshot from 2026-03-26 17-34-57.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_17-34-57.png)
+
+![Screenshot from 2026-03-26 19-55-55.png](GPU%20Memory%20Arch/Screenshot_from_2026-03-26_19-55-55.png)
+
+## SA-mult-instr、量化、长序列
+
+ReDas: A Lightweight Architecture for Supporting Fine-Grained Reshaping and Multiple Dataflows on Systolic Array（TC24）
+
+SCALE-Sim v3: A modular cycle-accurate systolic accelerator simulator for end-to-end system analysis
+
+SCALE-Sim: Systolic CNN Accelerator Simulator
+
+![image.png](meeting-25%2004%2008/image.png)
+
+![image.png](meeting-25%2004%2008/image%201.png)
+
+![image.png](meeting-25%2004%2008/image%202.png)
+
+![image.png](meeting-25%2004%2008/image%203.png)
+
+![image.png](meeting-25%2004%2008/image%204.png)
+
+![image.png](meeting-25%2004%2008/image%205.png)
+
+**Amove: Accelerating LLMs through Mitigating Outliers and Salient Points via Fine-Grained Grouped Vectorized Data Type（MICRO25）**
+
+[https://github.com/abdelfattah-lab/BitMoD-HPCA-25](https://github.com/abdelfattah-lab/BitMoD-HPCA-25)
+
+![image.png](meeting-25%2004%2008/image%206.png)
+
+![image.png](meeting-25%2004%2008/image%207.png)
+
+![image.png](meeting-25%2004%2008/image%208.png)
+
+![image.png](meeting-25%2004%2008/image%209.png)
+
+**SNAPSTREAM: EFFICIENT LONG SEQUENCE DECODING ON DATAFLOW ACCELERATORS**
+
+![image.png](meeting-25%2004%2008/image%2010.png)
+
+![image.png](meeting-25%2004%2008/image%2011.png)
+
+![image.png](meeting-25%2004%2008/image%2012.png)
+
+## CoE dataflow
+
+**CoServe: Efficient Collaboration-of-Experts (CoE) Model Inference with Limited Memory（ASPLOS25）**
+
+![image.png](meeting-25%2004%2008/image%2013.png)
+
+![image.png](meeting-25%2004%2008/image%2014.png)
+
+![image.png](meeting-25%2004%2008/image%2015.png)
+
+![image.png](meeting-25%2004%2008/image%2016.png)
+
+**Composition of Experts on the SN40L Reconfigurable Dataflow Unit**
+
+SambaNova SN40L: Scaling the AI Memory Wall with Dataflow and Composition of Experts
+
+**COMPOSITION OF EXPERTS: A MODULAR COMPOUND AI SYSTEM LEVERAGING LARGE LANGUAGE MODELS**
+
+![image.png](meeting-25%2004%2008/image%2017.png)
+
+![image.png](meeting-25%2004%2008/image%2018.png)
+
+![image.png](meeting-25%2004%2008/image%2019.png)
+
+## Agent
+
+AI NATIVE APP ARCH WHITE PAPER

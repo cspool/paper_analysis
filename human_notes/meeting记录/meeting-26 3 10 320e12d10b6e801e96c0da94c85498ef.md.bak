@@ -1,0 +1,157 @@
+# meeting-26/3/10
+
+### **PowerInfer**
+
+**PowerInfer: Fast Large Language Model Serving with a Consumer-grade GPU**
+
+架构是CPU+GPU。
+
+找到LLM负载中冷热Neuron（参数）的特征，发现性能可优化点（大量冷Neuron高稀疏适合CPU计算和存储，少量热Neuron高稠密适合预载和驻留GPU）。
+
+将任务负载和性能优化点（创新点）包装成应用场景（背景和动机）。
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image.png)
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%201.png)
+
+### **FlexLLM（LoRA？）**
+
+**FlexLLM: Token-Level Co-Serving of LLM Inference and Finetuning with SLO Guarantees**
+
+LLM推理是短时LC应用，请求高峰期使用大量GPU，低谷期则浪费分配GPU。
+
+LLM微调是长时BE应用，可用于填补推理低谷期的空闲GPU。
+
+为了不同应用上下文能同时存放，设计共享权重和显存，保证多任务并发的基础。
+
+让长时BE应用切分成短时Token，根据动态请求/比例，将LC和BE以Token为单位按比例打包成kernel，即“按需”共享GPU，将动态需求和GPU算力划分解绑，动态打包成kernel，让GPU以预定义的高效方式执行。
+
+分时共享是按照GPU的timeslice切换机制来定义任务slice，但TS和任务slice很难对齐（任务执行时间不定，LC需要余裕TS，BE需要很短TS），导致浪费GPU时间和产生额外Ctx开销。
+
+分块共享是按照GPU的资源分配给不同任务，来并行不同任务，资源slice和任务slice很难对齐（任务请求动态变化），导致浪费GPU资源和较高资源重分配开销。
+
+### FlashAttention-3
+
+FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision
+
+WG内和SM内WG之间的调度行为，很类似专用（Conv） **Acc硬件定义的静态调度方式**，GPU的多任务并发能力强大，反而设计同步约束，让kernel更**高效使用资源**。
+
+Byte Permute：MMA_QK输出的**中间结果是FP32**寄存器格式保存，和MMA**输入是FP8**寄存器格式不同，需要重排，Byte Permute让每个线程对自身寄存器进行重排，比通过共享内存/L2C更加高效。
+
+重排是为了**FP8推理**的功能而自然引入的设计。
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2027.png)
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2028.png)
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2030.png)
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2031.png)
+
+### **POD-Attention**
+
+**POD-Attention: Unlocking Full Prefill-Decode Overlap for Faster LLM Inference**
+
+BG：让Prefill（计算密集）和Decode（访存密集）请求按比例在SM中同时运行，共享权重，压榨算力和带宽，混合Batch。
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2036.png)
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2037.png)
+
+执行模型是Op的kernel实现，block到SM的调度。Baseline方法不同设计。
+
+Op的kernel实现
+
+两个Op使用不同FA kernel实现（GEMM、GEMV）。
+
+两个Op融合的kernel（HFuse），即block、warp、指令level融合的kernel。
+
+kernel block到SM的调度
+
+不同block在Stream中按顺序交替执行。
+
+不同block使用不同Stream并发。
+
+融合block复用GPU到SM的调度。
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2038.png)
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2039.png)
+
+Paper：
+
+SM领取Attn block时，按比例轮流配置不同Op，让SM按比例执行两类Attn block。改进Baseline中难以压榨SM算力和带宽。
+
+SCG中，SM周期性更换block策略，轮流优先从不同stream中取block。POD参考SCG的原理，因为SCG符合GPU的并发架构。
+
+### Tender
+
+Tender: Accelerating Large Language Models via Tensor Decomposition and Runtime Requantization
+
+混合精度PE/MAC的硬件复杂、开销大，不同精度张量反量化后累加的折中实现：从全局Tmax开始，每组除以2分组，每个通道Cmax落入特定组，2幂次设置简化统一精度的计算。
+
+间接寻址是方法的硬件实现时自然的选择。
+
+将方法套用到LLM中，设计专用加速器（特殊dataflow）进行验证。
+
+架构执行对比图。SA累加过程中进行统一精度的计算，Accum和Dequan融合，而非先整体Accum+Dequan。
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2019.png)
+
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2020.png)
+
+## FexMo
+
+初始化间隔Π是每个相邻迭代之间的配置周期数，等于tile中Cfg Mem中的配置数量。
+
+load指令延迟不定，阻止不同任务Node在**不同周期跨tile执行**，因为存在LD Miss让整体性能下降。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2051.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2052.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2053.png)
+
+不同任务Node的不同iter，动态空间tile调度
+
+baseline-1：不同任务pipeline**静态分配**不同空间tiles作空间并行，每个任务内中1个iter的不同Node并行，或pipeline并行。
+
+baseline-2：不同任务pipeline**静态分配**不同空间tiles作空间并行，任务内pipeline作循环展开unrolling，pipeline的不同iter作时间并行。
+
+paper：不同任务pipeline在**不同周期动态分配**不同空间tiles作空间并行，不同任务pipeline作循环展开unrolling，不同pipeline的不同iter作时间并行。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2054.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1CGRA%E3%80%81%E5%8A%A8%E6%80%81PIM%EF%BC%88PISA%EF%BC%89/image%2055.png)
+
+## GPU Mig
+
+![Picture14.png](GPU%20Virtualization%E5%92%8CMigration%EF%BC%88%E6%94%AF%E6%8C%81VM%E7%BA%A7%E8%B4%9F%E8%BD%BD%E3%80%81vGPC%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/Picture14.png)
+
+![Picture15.png](GPU%20Virtualization%E5%92%8CMigration%EF%BC%88%E6%94%AF%E6%8C%81VM%E7%BA%A7%E8%B4%9F%E8%BD%BD%E3%80%81vGPC%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/Picture15.png)
+
+![Picture16.png](GPU%20Virtualization%E5%92%8CMigration%EF%BC%88%E6%94%AF%E6%8C%81VM%E7%BA%A7%E8%B4%9F%E8%BD%BD%E3%80%81vGPC%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/Picture16.png)
+
+![Picture17.png](GPU%20Virtualization%E5%92%8CMigration%EF%BC%88%E6%94%AF%E6%8C%81VM%E7%BA%A7%E8%B4%9F%E8%BD%BD%E3%80%81vGPC%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/Picture17.png)
+
+## fx
+
+场景：多任务，动态算法？
+
+抢占、多任务场景更适合GPU（block调度、kernel设计）、TiledAcc（Mapping、ReCfg、NoC）。
+
+Co-design是算法pipeline的datapath设计，host+Acc的实现更接近验证。
+
+datapath+通用Core是异构SoC、PIM，面向特殊算法加速，兼容通用性。
+
+LLM Serving，集群调度系统。
+
+FPGA的可重构，CGRA通用性更好。FPGA模拟更简单的CGRA。
+
+dataflow硬件，减少编译时间，增加动态变换可能性。
+
+DL的计算基本算子类型不多。量化精度的变化。
+
+img2col对多任务友好？
+
+GPU基于TS Sharing：一旦kernel（16 个块）卸载到GPU，中途就无法被打断，只能利用SM并发的TS切换进行多任务。因为高并发设计，SM包含多个kernel的block，**硬件无法追踪特定block并将其释放**，特殊的kernel设计可以**软实现抢占**。

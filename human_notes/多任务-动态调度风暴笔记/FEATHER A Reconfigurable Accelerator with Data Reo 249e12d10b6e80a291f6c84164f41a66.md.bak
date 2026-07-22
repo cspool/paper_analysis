@@ -1,0 +1,263 @@
+# FEATHER: A Reconfigurable Accelerator with Data Reordering Support for Low-Cost On-Chip Dataflow Switching
+
+# Abstract
+
+Feather：加速器架构，ZCU104 FPGA实现；
+
+LayoutLoop：基于TimeLoop（dataflow cost model）改进的layout access model，比较不同架构的性能；
+
+将实现的加速器和DPU/Gemmini比较；
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image.png)
+
+# Intro/概述
+
+**最优条件下，每个layer的dataflow不同；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%201.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%202.png)
+
+**改变dataflow需要：**
+
+**1、重配置片上的compute、distribute和reduction网络；**
+
+**2、修改片上Buffer的layout；**
+
+**layout reorder很重要，因为SRAM Bank conflict；但reorder的延迟和能耗代价很高；**
+
+**片外reorder需要在片外存储和computation（计算地址）之间来回数据移动；**
+
+**片上reorder需要额外的存储和关键路径的延时；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%203.png)
+
+加速器将layout reorder过程隐藏在reduction过程中，按最优dataflow完成片上数据的reorder；
+
+加速器能每层切换一次dataflow和layout；
+
+评估不同layout切换配置的加速性能的tool；
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%204.png)
+
+# BG、动机
+
+**dataflow定义为n-loop（tiling、ordering、parrallel、shape）；**
+
+vPE shape，即每个维度parrallel定义的并行shape，映射到实际PE array；
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%202.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%205.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%206.png)
+
+ **片上存储逻辑上看作2D-buffer，word字长固定，line-width是buffer一次读写的word最大个数，line-depth是buffer中line的个数；**
+
+物理实现是FPGA芯片中的BRAM或CPU、GPU中的SRAM（cache）；更底层由Bank组实现，line通过bank的读写port传输，同时读写的line个数有上限（port个数）；
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%207.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%208.png)
+
+**片上存储layout的表达方式是inter-line dimension order，intra-line dimension order，分别表示line间的layout和line内的layout；**
+
+**（line-width=16）**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%209.png)
+
+**同时考虑dataflow和layout是因为bank conflict；**
+
+**没有conflict的dataflow和layout称为concordant，否则discordant；**
+
+**concordant dataflow space of layout：某layout下所有concordant的dataflow；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2010.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2011.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2012.png)
+
+**channel-p dataflow**
+
+PE阵列每行存放不同卷积核（不同输出通道）的多个输入通道权重并固定在原地；
+
+不同输入通道的iAct从上到下流动进行传播，每个cell计算的中间结果从左向右移动进行累加；
+
+输入和权重的读取order完成滑窗卷积；
+
+**sliding-window-p dataflow**
+
+每个cell计算的中间结果留在原地进行累加；
+
+不同宽度坐标（不同位置滑窗）的iAct从上到下流动进行传播，不同卷积核（不同输出通道）的权重从左到右流动进行传播；
+
+输入和权重的读取order完成滑窗卷积；
+
+**channel-last layout：优先排布相邻channel上数据，连续存储channel；**
+
+**row-major：优先排布同一行的数据，连续存储row；**
+
+**和我设计的区别**
+
+**M4/8的dataflow和layout和我设计类似，但M4/8通过地址计算完成滑窗卷积，而我额外设计explicit的img2col模块；**
+
+**固定dataflow下，地址+img2col模块相比纯地址的优势是什么？**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2013.png)
+
+**data reorder**
+
+DL模型一般是静态的，部署运行前确定的每层的最优dataflow和layout；
+
+**权重训练得到因此能提前reorder到最优layout，但iAct运行时产生，因此iAct需要运行时reorder；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2014.png)
+
+**相同reorder pattern有不同实现和延迟，将pattern和implement解耦，来简化硬件设计和延迟；**
+
+**不同reorder得到的不同layout有不同的concordant dataflow space；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2015.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2016.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2017.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2018.png)
+
+**TPU中row reorder支持im2col？基于im2col的conv和distrbute-compute-reduce的区别是什么？**
+
+？？？
+
+**我设计的加速器也能采用文中的reorder&reduce，但我的创新点在哪？im2col的作用？**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2019.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2020.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2021.png)
+
+**reorder implement**
+
+off-chip reorder：通过CPU对内存的操作完成，之后加载到片上；
+
+on-chip reorder（RAR）：reduct之后的激活值，通过layout transform模块完成；
+
+本文的reorder（RIR）：reduct过程中，按照reorder后layout将激活值输出到对应位置；
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2022.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2023.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2024.png)
+
+**不同dataflow本质是spatial reuse和temporal reuse的trade-off；**
+
+**weight-stationary对权重temporal reuse，对输入和中间结果spatial reuse；**
+
+**output-stationary对中间结果temporal reuse，对权重和输入spatial reuse；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2025.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2026.png)
+
+# Arch设计特点
+
+2D PEs vs 1D PEs
+
+**2D的PE组织将数据流固化在PE的连接中，牺牲了数据流的灵活性，换取更大规模的扩展scalability；**
+
+**1D的PE组织设置distribution和reduction的片上网络NoC，有更好的数据流灵活性，但NoC设计复杂、消耗资源，牺牲更大规模的扩展scalability；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2027.png)
+
+**weight-stationary的例子：每行4个PE映射Pco=2和Pci=2，每列4个PE映射Pco=4，每个PE存储im2col后的一个通道的权重；注意Pci映射的2个PE输入需要同步，不同于传统weight-stationary；**
+
+取消原本**weight-stationary中单输入通道卷积结果在行内PE间传播并累加得到部分和，即将行内PE映射到*Pci的乘法累加*；**
+
+**改为将行内PE映射到Pco×*Pci的乘法，*完成Pco个输出通道的单输入通道卷积（Phase 1），单输入通道卷积结果的累加统一由reduction模块完成（Phase 2）；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2028.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2029.png)
+
+**灵活dataflow：reduction&reorder模块将任意形状的中间结果reduce到最终结果，而2D的PEs的因映射由数据排布决定（reorder）；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2030.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2031.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2032.png)
+
+**reduction&reorder模块Bird**
+
+**Bird作为PE和OBuffer之间的接口，接收PE的中间结果，进行reduce后按照输出layout对齐并输出到OBuffer的指定位置；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2033.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2034.png)
+
+**Bird是由Eggs组成的多层网络，每个Eggs两输入两输出，完成4种运算（=、swap、+=、=+）；**
+
+**reduce group定义为归约到1个最终输出的中间结果组；**
+
+**Bird能将多个reduce group规约到最终结果，同时将最终结果route到多个输出port；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2035.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2036.png)
+
+**reduce&reorder的例子**
+
+**去除行内的spatial reuse&reduce，全部在Bird中进行，提高dataflow的灵活性；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2037.png)
+
+**架构是一种dataflow灵活性和设计复杂度的折中、逻辑自洽，但感觉扩展性、reduce&reorder网络的完备性仍然不会理想；**
+
+**配置Birds中Eggs的路由算法**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2038.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2039.png)
+
+**其他工作的distribution设计**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2040.png)
+
+**片上存储和后处理**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2041.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2042.png)
+
+# Arch的运行时
+
+**reorder前后layout示例**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2043.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2044.png)
+
+**RIR避免bank conflict**
+
+**channel last到row major，直接reorder意味着从bank内一行存储的多通道数据reorder到单bank多行存储的多通道数据，发生bank conflict；RIR在每个通道数据reduce产生时就reorder到目标bank，将reduce和reorder进行流水，隐藏bank conflict带来的延迟；**
+
+**row major到channel last，直接reorder意味着从bank内一行存储的多列数据reorder到单bank多行存储的多列数据；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2045.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2046.png)
+
+**当同时产生的激活值超过memory的写入port数时，仍然会产生bank conflict，因为PE算力和memory的读写能力不一定匹配；此时调整dataflow（比如增大Pci）,消除bank conflict；**
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2047.png)
+
+**感觉论文并不完美和完善，但逻辑自洽，方方面面都考虑到了，侧重方法；**
+
+我设计的im2col模块功能等效论文的reorder模块，结构更简单、扩展性更好但不可配置为其他数据流；文中的OS数据流下所需的im2col隐藏在前一个算子的reorder中；
+
+我需要找到我的故事线；
+
+论文的不同dataflow的多样性如何？似乎不支持Pow？若支持Pow，则不存在reduce，reorder无法隐藏在reduce中；

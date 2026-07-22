@@ -1,0 +1,387 @@
+# meeting-26-01-09（实验平台、length-adaptive TF、多任务、idea、LPU、RDU、3DIC项目）
+
+## idea
+
+架构优化技术很常见，重点在于用于实现不同的应用，达到加速或者降内存的效果（别人用什么平台，我就用什么）。
+
+目前：给一个conv算子，加载-计算-存储和固定tiling全在片上，没有ld、st指令，img2col fused在片上。
+
+场景：多任务，VAE（conv）、Diffusion（conv）、VAE在LDM（VAE+Dif）中时间不长。
+
+修改：我实现的conv是一个编程时算子，其中细粒度指令如果可拆分，那对应了指令级抢占？和软件解耦？上下文开销如果能重新计算（不对，传输麻烦？）
+
+希望Acc低开销的抢占、较灵活tiling（或者多输入进入？多输入对应Batch？）。灵活tiling是为了利用率，那不如改为被其他输入抢占？（带宽压力？）
+
+tiling限定单layer，多任务侧重不同layer。
+
+img2col利于降低抢占开销，两种tiling，抢占时，中间结果传出来，进行其他任务，之后再恢复。这其中软件如何参与？
+
+软件发信号，硬件自动抢占，决定tile完成（边算边启动传输）或者立刻停止（直接保留中间结果、启动传输），根据抢占延迟最小自动决策。
+
+GPU Preemption文中的钩子kernel，来加载抢占任务，对应Acc提供抢占接口？；小timeslice是GPU自动按时间分块，对应Acc自动分块？
+
+Acc尽可能用满资源，和小timeslice不兼容，按照硬件space来查看额外输入？（动态性）？
+
+硬件调度和软件控制硬件的区别是？？？
+
+## 实验平台
+
+Diffusion
+
+每个t的动态剪枝、映射到体系架构。
+
+VAE+BackBone * N：是否类似first token+next token？
+
+emulater：？
+
+CPU、GPU simulater：模拟指令集的行为，交互系统。
+
+AI simulator：CPU模拟器发指令，AI-core接收和执行，CPU接收。
+
+profiler：软件描述的硬件行为，得到每个event的时间。
+
+event-level：系统模拟器。
+
+cycle-level：张量模拟器。
+
+模拟器**描述硬件行为**。
+
+multi-core架构：RV、AI core、SRAM。
+
+MP：工艺难、精度固定。
+
+PIM：HBM的logic die作计算（3d），或者logic die隔壁作AI core（2.5d）。
+
+### PISA建模
+
+**事件驱动的系统模拟器：基于PISA性能、XPU性能，计算端到端延迟。**
+
+PISA模拟器、XPU模拟器；
+
+**Ramulator**：建模HBM3-based PIM计算单元，主要建模内存；
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%201.png)
+
+**Chipyard提供一个SoC的模拟（包含CPU、NPU、。。。），**生成PIM Controller、RV-core和dispatcher，**Verilator**模拟时序；
+
+[https://github.com/ucb-bar/chipyard](https://github.com/ucb-bar/chipyard)
+
+[https://chipyard.readthedocs.io/en/latest/](https://chipyard.readthedocs.io/en/latest/)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%202.png)
+
+**FireSim**
+
+[https://fires.im/](https://fires.im/)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%203.png)
+
+### XPU建模
+
+A100：基于profile建模，[**NVIDIA Nsight Compute**](https://developer.nvidia.com/nsight-compute)实机测试LLM kernel的结果，将结果加入系统模拟器。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%204.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%205.png)
+
+## **Length Adaptive Transformer Acc**
+
+**DAC22：A Length Adaptive Algorithm-Hardware Co-design of Transformer on FPGA Through Sparse Attention and Dynamic Pipelining**
+
+attention近似加速
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%206.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%207.png)
+
+把Encoder layer作成硬件pipeline，不同长度输入填充pipeline，但只限于Transformer layer。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%208.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%209.png)
+
+## 多任务抢占
+
+[https://www.usenix.org/conference/osdi25/presentation/shen-weihang](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) 
+
+XPU Preemption：XPU（统一调度框架能**避免重复开发**）、多任务、调度需求
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2010.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2011.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2012.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2013.png)
+
+### 硬件调度、host+XPU调度
+
+NPU执行AI会议：语音转录任务低频长持续（一秒转录一句话，每次800ms）、虚拟背景任务高频短持续（一秒25帧，40ms一次，每次几ms）。**需要抢占机制**，但XPU不支持。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2014.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2015.png)
+
+硬件实现简单的**静态调度**，没有**高级调度策略**。高级调度策略（如MLFQ）在XPU上的运行和硬实现开销高。
+
+不能利用运行时信息（统计QoS、ddl）**灵活切换调度策略**（FCFS+优先调度）。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2016.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2017.png)
+
+调度方式应该是**CPU调度+XPU执行**，但是现有框架不通用：
+
+1、**抢占式调度面向GPU设计**，其他XPU不支持。> **通用的硬件抢占设计**？支持异构硬件？
+
+2、无法利用硬件新特性，因为**特性绑定特定软件栈（运行时）**才可使用。> ？？？
+
+3、不同XPU的**算子抽象和约束不同**，**难以统一调度**异构算力。> ？？？
+
+**host+XPU现有框架的实现**：
+
+GPU可编程性实现**低开销抢占**（设置timeslice、设计**钩子kernel** ），利用嵌入式GPU的**ioctl接口**。
+
+XPU的**软件栈复杂**，调度框架的调度策略受**特定XPU的细节限制**（TimeGraph绑定DRI驱动、REEF绑定AMD的运行时和驱动）。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2018.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2019.png)
+
+host+XPU虚拟化的实现挑战：每个XPU有**自己的垂直软件栈**，**XPU能力不同（可编程性、timeslice、抢占）**。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2020.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2021.png)
+
+### XQueue模型（XPU的线程模型）
+
+CPU（进程）提交命令（指令）到**hwQueue**，XPU基于hwQueue串行执行命令，CPU命令提交后无法干涉命令执行，CPU进程**等待**XPU完成命令而**同步**。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2022.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2023.png)
+
+**XQueue**≈thread是进程的多任务调度模型，便于实现不同调度策略。
+
+XQueue是可被CPU抢占的hwQueue，CPU提交命令到XQueue A后，可以暂停XQueue A的命令执行，恢复XQueue B的命令执行，并将XPU的hwQueue指针引导到XQueue B。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2024.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2025.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2026.png)
+
+**异构XPUs的抢占调度**
+
+调度模型和XPU之间插入**硬件模型层**，**面向XPU模型进行调度**，**不直接面对不同XPU的个性化接口**：XPU+软件栈支持硬件模型定义的接口，调度模型利用硬件模型提供的接口进行调度。
+
+不同硬件抢占能力不同，调度假设单一的硬件抢占能力（模型）不合适：假设统一低的抢占能力，会损失高抢占能力硬件的性能；假设统一高的抢占能力，会不适配能力不足的硬件。
+
+多层次硬件抽象，不同抢占能力的硬件划分到不同抽象模型：GPU可编程因此调度能力最强（timeslice，priority，线程blk or instr level Preemption），NPU部分可编程，ASIC和FPGA几乎不可编程（没有合适的接口）。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2027.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2028.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2029.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2030.png)
+
+hwQueue（待提交pending > 已提交in-flight > 执行中running）、XPU的launch+sync接口
+
+lv1模型：抢占pending state的命令，即进程停止提交当前**XQueue的下一条**指令，XPU都有该接口。
+
+lv2模型：抢占in-flight state的命令，即XPU μ-controller支持停止派发指令，类似GPU的线程块level Preemption，停止SM的dispatch Unit派发指令。
+
+lv3模型：抢占running state的命令（GPU的指令level Preemption，保存或恢复上下文）。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2031.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2032.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2033.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2034.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2035.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2036.png)
+
+30, 44, 46, 55, 72] 
+
+### XSched Lib、Xsched Deamon**实现**
+
+**（涉及GPU、NPU、XPU提供的抢占机制）**
+
+利用硬件MCU提供的接口实现抢占，没有抢占相关接口的XPU用软件机制Flushing-based抢占。
+
+。。。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2037.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2038.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2039.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2040.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2041.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2042.png)
+
+实验，开销很低
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2043.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2044.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2045.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2046.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2047.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2048.png)
+
+## HW Ascend
+
+### AI Core和多线程并行
+
+Cube、Vector（SP）的AI Core，DSA的多层编译。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2049.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2050.png)
+
+硬件实现多线程并行，共享资源的线程之间串行（可**静态调度**），没有共享资源的线程之间同样静态调度，因此没必要增加硬件开销。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2051.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2052.png)
+
+软件编译生成静态多线程序列
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2053.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2054.png)
+
+task scheduler（μ-controller）将指令序列派发给AI Core。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2055.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2056.png)
+
+### SoC设计和3D IC
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2057.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2058.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2059.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2060.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2061.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2062.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2063.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2064.png)
+
+## Groq LPU
+
+[https://medium.com/%40cognidownunder/groqs-lpu-the-ai-accelerator-that-s-leaving-gpus-in-the-dust-bb6fff67a877](https://medium.com/%40cognidownunder/groqs-lpu-the-ai-accelerator-that-s-leaving-gpus-in-the-dust-bb6fff67a877)
+
+[https://groq.com/blog/the-groq-lpu-explained?utm_source=chatgpt.com](https://groq.com/blog/the-groq-lpu-explained?utm_source=chatgpt.com)
+
+编程性：程序员优化性能、线性代数完成功能
+
+DataFlow架构，将MU分散在FU附近，指令控制FU取数据和存数据，控制空间Flow，硬件没有时间上的同步开销。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2065.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2066.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2067.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2068.png)
+
+LPU：Line process，req内pipeline并行
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2069.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2070.png)
+
+GPU：hub and spoke，集中计算，集中存储
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2071.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2072.png)
+
+LPU内和LPU之间的计算、存取的延迟（CC）是确定的，可以预测的。消除对FU和MU的竞争。
+
+计算、存储分布式设置在片上，pipeline的吞吐量更大。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2073.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2074.png)
+
+## Sambanova RDU
+
+[https://sambanova.ai/blog/9-predictions-for-ai-in-2025?utm_source=chatgpt.com](https://sambanova.ai/blog/9-predictions-for-ai-in-2025?utm_source=chatgpt.com)
+
+[https://sambanova.ai/blog/sn40l-chip-best-inference-solution](https://sambanova.ai/blog/sn40l-chip-best-inference-solution)
+
+[https://sambanova.ai/blog/open-source-deep-research-agents](https://sambanova.ai/blog/open-source-deep-research-agents)
+
+[https://sambanova.ai/blog/from-insight-to-action-with-sambanova-agents?utm_source=chatgpt.com](https://sambanova.ai/blog/from-insight-to-action-with-sambanova-agents?utm_source=chatgpt.com)
+
+SambaNova SN40L Reconfigurable Dataflow Unit
+
+PMU和PCU类似积木？
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2075.png)
+
+DRAM > HBM > SRAM
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2076.png)
+
+## 其他idea
+
+transformer中的layernorm能被**tanh**替代：Stronger Normalization-Free Transformer。
+
+也能被误差函数erf替代，但erf是个高斯函数的积分。
+
+qwen-image-layered 速度很慢，图像分图层 
+
+turbo-diffusion生成视频
+
+Agent调用多个AI model？perplexity？多任务场景。
+
+mHC: Manifold-Constrained Hyper-Connections：替代残差块，有约束随机矩阵训练。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2077.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2078.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2079.png)
+
+## 项目
+
+架构：RV-CPU、AI芯片作推理
+
+目前：FPGA AI core实现pipeline。
+
+需要：提供模型输入输出、架构、CFG，给AI core。
+
+AI core输入指令集定义的指令序列。
+
+性能、网络大小
+
+提供：**目标检测tiny**（256MB）、语义识别、超分辨率（FSR）、
+
+xiaomi（3层ResBlk）

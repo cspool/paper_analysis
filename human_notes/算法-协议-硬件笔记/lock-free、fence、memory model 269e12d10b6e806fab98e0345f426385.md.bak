@@ -1,0 +1,177 @@
+# lock-free、fence、memory model
+
+[https://zhuanlan.zhihu.com/p/342921323](https://zhuanlan.zhihu.com/p/342921323)
+
+# lock、lock-free、wait-free
+
+## 概念
+
+[https://blog.csdn.net/wxj1992/article/details/103649056](https://blog.csdn.net/wxj1992/article/details/103649056)
+
+**lock**可能出现的情况：某时刻，获得锁的线程可能被调度、中断、长时间IO而**不释放锁**，导致其余等待锁的**线程全部阻塞且时间不可预测**；
+
+**lock-free**：要求**任意时刻存在线程执行**而不允许全部阻塞，即算法全局**整体推进**，但由于线程串行使用临界区，**存在线程的完成时间不可预期**；
+
+[https://noahyzhang.github.io/2023/10/11/项目/9天带你走进无锁化编程/5.研读C++语言boost库中无锁队列的实现/](https://noahyzhang.github.io/2023/10/11/%E9%A1%B9%E7%9B%AE/9%E5%A4%A9%E5%B8%A6%E4%BD%A0%E8%B5%B0%E8%BF%9B%E6%97%A0%E9%94%81%E5%8C%96%E7%BC%96%E7%A8%8B/5.%E7%A0%94%E8%AF%BBC++%E8%AF%AD%E8%A8%80boost%E5%BA%93%E4%B8%AD%E6%97%A0%E9%94%81%E9%98%9F%E5%88%97%E7%9A%84%E5%AE%9E%E7%8E%B0/)
+
+**wait-free**：要求**每个线程都有确定的完成时间或上界**，不确定的串行调度会导致线程完成时间不可估计，因此每个slice所有线程都要有进展；
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/24358451-ce73-4f42-b1fb-a75cc46a7fde.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%201.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%202.png)
+
+## 例子
+
+**有锁**算法在某个slip中make no progress；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2031.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%203.png)
+
+**lock-free**要求算法**总存在**一个线程make progress；
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%204.png)
+
+**wait-free**要求算法每个操作/线程有执行的**上界**；
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%205.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2033.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%206.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%207.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%208.png)
+
+# fence
+
+[https://zhuanlan.zhihu.com/p/41872203](https://zhuanlan.zhihu.com/p/41872203)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%209.png)
+
+## compiler fence：约束编译器的reorder
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%2010.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%2011.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%2012.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%2013.png)
+
+https://github.com/MengRao/SPSC_Queue/blob/master/SPSCQueue.h
+
+## CPU fence：约束CPU的reorder
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%2014.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%2015.png)
+
+```cpp
+volatile int g_cnt = 0;
+void threadfun(volatile int& loop_cnt, volatile int& x, volatile int& y, volatile int& r) {
+    while(true) {
+        while(g_cnt == loop_cnt) ;
+
+        asm volatile("" ::: "memory");
+
+        nocpufence(x, y, r);
+
+        asm volatile("" ::: "memory");
+        loop_cnt++;
+    }
+}
+
+int main() {
+    alignas(64) volatile int cnt1 = 0;
+    alignas(64) volatile int cnt2 = 0;
+    alignas(64) volatile int x = 0;
+    alignas(64) volatile int y = 0;
+    alignas(64) volatile int r1 = 0;
+    alignas(64) volatile int r2 = 0;
+    thread thr1(threadfun, ref(cnt1), ref(x), ref(y), ref(r1));
+    thread thr2(threadfun, ref(cnt2), ref(y), ref(x), ref(r2));
+
+    int detected = 0;
+    while(true) {
+        x = y = 0;
+        asm volatile("" ::: "memory");
+        g_cnt++;
+        while(cnt1 != g_cnt || cnt2 != g_cnt)
+            ;
+
+        asm volatile("" ::: "memory");
+        if(r1 == 0 && r2 == 0) {
+            detected++;
+            cout << "bad, g_cnt: " << g_cnt << " detected: " << detected << endl;
+        }
+    }
+    return 0;
+}
+```
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%2016.png)
+
+![image.png](lock-free%E3%80%81fence%E3%80%81memory%20model/image%2017.png)
+
+```cpp
+#include <bits/stdc++.h>
+using namespace std;
+
+inline void nocpufence(volatile int& x, volatile int& y, volatile int& r) {
+    x = 1;
+    asm volatile("" ::: "memory");
+    r = y;
+}
+
+inline void mfence(volatile int& x, volatile int& y, volatile int& r) {
+    x = 1;
+    asm volatile("mfence" ::: "memory");
+    r = y;
+}
+
+inline void lockadd(volatile int& x, volatile int& y, volatile int& r) {
+    x = 1;
+    asm volatile("lock; addl $0,0(%%rsp)" ::: "memory", "cc");
+    r = y;
+}
+
+inline void xchg(volatile int& x, volatile int& y, volatile int& r) {
+    int tmp = 1;
+    asm volatile("xchgl %0, %1" : "+r"(tmp), "+m"(x)::"memory", "cc"); // swap(x, tmp)
+    r = y;
+}
+```
+
+# memory model/order
+
+[https://blog.csdn.net/wxj1992/article/details/103649056](https://blog.csdn.net/wxj1992/article/details/103649056)
+
+**lock显式规定**了指令同步的约束，编译器和CPU以lock为依据重排指令，多线程执行不会出错；
+
+**memory order**是**lock-free**程序对内存访问指令次序的约束，以便编译器和CPU正确重排指令；
+
+编程者、编译器、硬件对memory的共识是**memory model**，主要体现在**memory order**；
+
+[https://blog.csdn.net/wxj1992/article/details/103917093](https://blog.csdn.net/wxj1992/article/details/103917093)
+
+# memory order的标准定义
+
+[https://blog.csdn.net/wxj1992/article/details/103656486](https://blog.csdn.net/wxj1992/article/details/103656486)
+
+# 原子变量定义memory order
+
+[https://blog.csdn.net/wxj1992/article/details/103843971](https://blog.csdn.net/wxj1992/article/details/103843971)
+
+# atomic threads fence定义memory order
+
+[https://blog.csdn.net/wxj1992/article/details/103917093](https://blog.csdn.net/wxj1992/article/details/103917093)
+
+# memory order在编译器和CPU的作用
+
+[https://blog.csdn.net/wxj1992/article/details/104266983](https://blog.csdn.net/wxj1992/article/details/104266983)

@@ -1,0 +1,77 @@
+# TLB一致性
+
+[https://blog.csdn.net/u012489236/article/details/104117002](https://blog.csdn.net/u012489236/article/details/104117002)
+
+[https://cloud.tencent.com/developer/article/1521981](https://cloud.tencent.com/developer/article/1521981)
+
+[https://juejin.cn/post/6844904084957315086](https://juejin.cn/post/6844904084957315086)
+
+[https://zhuanlan.zhihu.com/p/669340141](https://zhuanlan.zhihu.com/p/669340141)
+
+[https://blog.csdn.net/shiwei160714/article/details/142518793](https://blog.csdn.net/shiwei160714/article/details/142518793)
+
+# TLB介绍
+
+TLB属于MMU，是多级页表中**页表项的缓存**；
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image.png)
+
+# TLB的地址翻译
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%201.png)
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%202.png)
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%203.png)
+
+# ARMv8的TLB
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%204.png)
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%205.png)
+
+# 单核TLB的多进程
+
+多进程在单核上切换；
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%206.png)
+
+进程切换时将单核TLB和cache内容**全部flush**，进程运行**初始环境全空**；
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%207.png)
+
+TLB和cache**全部flush**，进程初始运行时TLB miss和cache miss都很高（**cold** TLB、**cold** cache），warm up后进程被切换，如此循环的现象是**颠簸**；
+
+**内核空间管理系统资源，是所有进程共享地址空间（global）**，进程切换不需要flush内核空间的页表项和cache，只需要flush挂起进程的**local**空间；
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%208.png)
+
+# 多核TLB的多进程
+
+多进程在**多个核**上切换；
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%209.png)
+
+每个核有自己的TLB，进程可以在多个核之间上调度执行，多个TLB都可能缓存同一进程的页表项，进程切换时**flush所在核的TLB，或其中local项**；
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%2010.png)
+
+# PCID和TLB shootdown
+
+PCID+VA区分不同进程的地址空间，从而**单核场景下进程切换不需要刷新TLB**；
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%2011.png)
+
+**CR3**可以设置PCID，由**CR4**的PCIDE位配置；
+
+![image.png](TLB%E4%B8%80%E8%87%B4%E6%80%A7/image%2012.png)
+
+多核的**多个TLB缓存**同一进程的页表项，因此进程修改页表（如分配释放内存）时会产生一致性问题，需要通过**IPI刷新掉其他核的TLB中该进程的页表项**，产生性能开销；
+
+# TLB shootdown的实例
+
+[https://juejin.cn/post/6844904084957315086#heading-4](https://juejin.cn/post/6844904084957315086#heading-4)
+
+jemalloc中madvise (DONTNEED)函数会释放虚拟地址的物理页，从而修改页表，触发TLB shootdown；
+
+启发：jemalloc为减少内存碎片，即提高利用率，但带来了性能隐患（TLB shootdown）；

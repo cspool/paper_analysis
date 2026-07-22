@@ -1,0 +1,335 @@
+# 内存访问、地址空间、PCIe
+
+[https://zhuanlan.zhihu.com/p/711353535](https://zhuanlan.zhihu.com/p/711353535)
+
+[https://ctf.re/windows/kernel/pcie/tutorial/2023/02/14/pcie-part-1/](https://ctf.re/windows/kernel/pcie/tutorial/2023/02/14/pcie-part-1/)
+
+[https://ctf.re/kernel/pcie/tutorial/dma/mmio/tlp/2024/03/26/pcie-part-2/](https://ctf.re/kernel/pcie/tutorial/dma/mmio/tlp/2024/03/26/pcie-part-2/)
+
+[https://blog.csdn.net/HOOKTTG/article/details/6328178?utm_medium=distribute.pc_relevant.none-task-blog-2~default~baidujs_baidulandingword~default-1-6328178-blog-481705.235^v43^pc_blog_bottom_relevance_base7&spm=1001.2101.3001.4242.2&utm_relevant_index=4](https://blog.csdn.net/HOOKTTG/article/details/6328178?utm_medium=distribute.pc_relevant.none-task-blog-2~default~baidujs_baidulandingword~default-1-6328178-blog-481705.235%5Ev43%5Epc_blog_bottom_relevance_base7&spm=1001.2101.3001.4242.2&utm_relevant_index=4) 
+
+[https://zhuanlan.zhihu.com/p/618143764](https://zhuanlan.zhihu.com/p/618143764)
+
+# 内存访问
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%201.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%202.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%203.png)
+
+# 地址空间
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%204.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%205.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%206.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%207.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%208.png)
+
+# PCIe简介
+
+**PCI>PCIe**：多点共享Bus的Hub，到多点独享不同Link的Switch，PCIe是**点对点传输**，通过多个交换节点传输到目标点，类似网络传输报文；
+
+**点对点传输（P2P）**，用于一个EP设备访问另一个EP设备，而**不需要使用主机RAM作为临时存储**。
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%209.png)
+
+**Root Complex**：位于CPU芯片，负责PCIe数据包TLP的收发；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2010.png)
+
+**Plug and Play**（PNP）：连接就显示，设备连上connect系统就立刻识别recognize；
+
+Root Complex是**PCIe Tree的根**，**Root Port**是Root Complex的物理端口，用于连接PCIe **Endpoint**（Type0，物理设备）和**Switch**（Type 1 路由），Root Port可以直达物理PCIe slot、NVMe slot（Endpoint）或PCIe switching设备（广播多Endpoint）；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2011.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2012.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2013.png)
+
+Bus-Device-Function（BDF/Requestor ID）标识设备位置；
+
+**Bus**是通信链路**Link**，**Bus 0**是**Root Bus**，和CPU直接建立链路的一组设备**逻辑上**位于Bus 0；
+
+**devide**指物理设备如显卡，**function**指物理设备对系统暴露的功能；
+
+暴露多功能的设备是multi-function device（**MFD**）；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2014.png)
+
+位于**Bus 0**的设备，如集成显卡、内存控制器、SATA控制器，和**CPU**组成**chipset**或通过**PCH**通信，称为Root Complex Integrated Cirtuit（**RCIE**）；
+
+位于**Bus 1、2、…**的设备通过位于Bus 0的Root Port（作为**Bridge**）和CPU建立连接；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2015.png)
+
+# Window驱动设备
+
+**WinDbg**输出：缩进表示PCIe的拓扑
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2016.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2017.png)
+
+**device obj**是OS对设备、设备驱动的概述；
+
+**device ext**是存储device obj的空间；
+
+**device stack**是完成设备**IO请求**的设备对象的调用栈，因为IO请求一般**经历多个设备**，比如PCIe>USB>Hub>外设；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2018.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2019.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2020.png)
+
+Physical Device Object
+
+*Functional Device Object*
+
+*Filter Device Object*
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2021.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2022.png)
+
+USB遥感的**设备栈**
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2023.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2024.png)
+
+**device obj例子：Vendor是芯片设计者，SubSystem Vendor是封装者；**
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2025.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2026.png)
+
+**配置空间**
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2027.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2028.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2029.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2030.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2031.png)
+
+# PCIe和device访问
+
+RAM、device memory
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2032.png)
+
+程序访问RAM和PCI设备通过虚拟地址，**MMU**将VA映射到PA；
+
+为**兼容32bit**和64bit设备，RAM和PCI**配置空间**在物理内存分为两部分；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2033.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2034.png)
+
+**Configuration Space**位于物理内存的**ECAM区域，kernel访问**Configuration Space需要将**ECAM映射到虚拟内存**；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2035.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2036.png)
+
+ECAM包含**多个设备对象**的配置空间，可通过偏移和ECAM基地址计算不同配置空间的地址，访问不存在的设备返回全1；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2037.png)
+
+**kernel访问配置空间**的过程
+
+请求发送：请求ECAM中属于device的VA，Root Complex发出TLP，通过PCIe到达设备；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2038.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2039.png)
+
+请求返回：设备返回TLP，通过PCIe到达Root Complex，Root Complex通知CPU更新寄存器Value；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2040.png)
+
+# Win DBG追踪ECAM访问
+
+MCFG in ACPI定位ECAM的内存的**物理地址**
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2041.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2042.png)
+
+**MCFG**返回数据包的解读
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2043.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2044.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2045.png)
+
+基于解读出的ECAM region物理地址，读取配置空间的vendor id
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2046.png)
+
+BDF编码隐含device的配置空间在内存中的**物理地址**，配置空间不超过4KB，末尾12位对应4KB；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2047.png)
+
+# ECAM vs. MMIO vs. DMA
+
+**ECAM**：CPU以**指令访问内存中ECAM**的**VA**，由Root Complex负责收发TLP，以**寄存器**为单位传送device的数据，指令完成前CPU**阻塞**；
+
+**MMIO**：相比ECAM，在内存中分配空间（**memory window**）并**映射**到device RAM，**BAR**记录device RAM**映射**window的**PA**，CPU通过**指令访问**window来访问device；
+
+**DMA**：相比MMIO，CPU以**指令配置**device，让device发起和**完成**DMA传输，传输完成后**中断**CPU；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2048.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2049.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2050.png)
+
+base address register（**BAR**）位于配置空间中，包含**device传输**大小等要求，记录为**device分配**的内存空间的**物理基地址**；
+
+**驱动**访问存于BAR的**物理基地址**的内存空间，由root complex收/发TLP来自/到达device：将device memory window（下图的BAR0）的数据发送到device，或者将device数据更新到device memory window；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2051.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2052.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2053.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2054.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2055.png)
+
+BAR位于配置空间，device的传输要求存在BAR中，**device RAM**映射的**memory window**的**物理地址**记录在BAR中；
+
+每个BAR映射一个region，总共6个BAR；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2056.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2057.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2058.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2059.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2060.png)
+
+# DMA
+
+device的DMA过程由驱动程序控制（配置MMIO Reg），**不同设备DMA过程不同**；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2061.png)
+
+**简单例子**
+
+**step 1**
+
+在内存中为device**分配DMA buffer映射到**device RAM，用于DMA传输；
+
+DMA buffer一般要求连续物理内存，但可通过scatter gather、iommu remapping组织分散内存；
+
+device通过device logical address或**logical address，DMA访问**内存中的**DMA buffer**，**一般是物理地址**，但引入**iommu remapping**技术后**可能不直接对应物理地址**；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2062.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2063.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2064.png)
+
+**step 2**
+
+device驱动的实现是device相关的；
+
+DMA buffer和device RAM之间的**DMA传输**、**传输大小**、**启动**Reg记录在**MMIO Reg**（**BAR**）；
+
+**BAR**分别在内存和device RAM有镜像，分别是BAR MMIO region和device BAR（不同OS的映射方式不同），**驱动配置**BAR MMIO region来配置device BAR，**设置device的DMA传输**；  
+
+不同视角的**source address和destination address**不同，驱动视角下配置device的DMA是从内存到device，因此src addr是**logic address**，dest addr是device address；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2065.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2066.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/0904eea9-ff4b-49fb-b330-35a947379461.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2067.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2068.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2069.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2070.png)
+
+**step 3**
+
+启动后的DMA传输通过数据包**TLP**，**DMA Engine**负责传输TLP，requstor和completer是数据包发送者和完成者的BDF，**memory address**是device的地址段（类似网络IP）；
+
+下图所示是device的读请求的**“High level” TLP**，只表示数据传输方向，实际TLP应由**device发出DMA对内存的写请求**；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2071.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2072.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2073.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2074.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2075.png)
+
+**真实传输过程：驱动配置**device来启动DMA，由**device发起**DMA传输请求，Root Complex响应，因此不需要CPU控制；
+
+**device engine视角**中，DMA请求方向从device到内存，因此src addr是device address，dest addr是**logical address**；
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2076.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2077.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2078.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2079.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2080.png)
+
+# CXL、CCIX
+
+CXL、CCIX：[https://zhuanlan.zhihu.com/p/375519357](https://zhuanlan.zhihu.com/p/375519357)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2081.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2082.png)
+
+# PCIe体系结构
+
+[https://www.cnblogs.com/linhaostudy/p/18612253](https://www.cnblogs.com/linhaostudy/p/18612253)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2083.png)
+
+PCIe体系结构
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2084.png)
+
+不同节点组成PCIe体系结构
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2085.png)
+
+![image.png](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe/image%2086.png)
+
+# PCIe驱动
+
+[https://www.cnblogs.com/LoyenWang/p/14165852.html](https://www.cnblogs.com/LoyenWang/p/14165852.html)
+
+[https://www.cnblogs.com/LoyenWang/p/14209318.html](https://www.cnblogs.com/LoyenWang/p/14209318.html)
+
+[https://www.cnblogs.com/LoyenWang/p/14255906.html](https://www.cnblogs.com/LoyenWang/p/14255906.html)

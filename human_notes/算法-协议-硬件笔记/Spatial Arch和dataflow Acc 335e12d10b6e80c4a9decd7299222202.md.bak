@@ -1,0 +1,213 @@
+# Spatial Arch和dataflow Acc
+
+## FEATHER: 2024
+
+GEMM和Conv的非对称量化的多dataflow加速器，没有细粒度指令，而编译出每层的dataflow配置指令（**dataflow指令**）和每层的输入输出地址。
+
+PE是执行**非对称量化**的MAC，包含AH深度的Weight Ping-Pong RF，缓存flow中AH个fliter的权重，避免循环读取Stream（缓存换访存的优化）。
+
+SA计算不同并行方式的Conv（WS、OS）、GEMM，将数据重排模块融入pipeline中的reduction。
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2075.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2076.png)
+
+![image.png](FEATHER%20A%20Reconfigurable%20Accelerator%20with%20Data%20Reo/image%2032.png)
+
+## Eyeriss v1：2017
+
+row-stationary Conv dataflow。
+
+![Screenshot 2025-11-03 at 14.41.51.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/Screenshot_2025-11-03_at_14.41.51.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%201.png)
+
+## Eyeriss v2：2019
+
+NoC for **dataflow** of DPConv and Conv、GEMM
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%207.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%208.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2018.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2019.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2020.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2021.png)
+
+## Simba：2019
+
+chiplet Acc是tile阵列（tile=chiplet），每个Tile是PE阵列，每个PE包含Buffer和计算单元。
+
+每个PE使用**dataflow执行小张量运算**（buffer+ALUs），等效SM（TensorCores、CUDA Cores）。
+
+PE之间路由组成Spatial架构，执行**大张量dataflow或计算图pipeline**，等效SM组成的GPC。
+
+tile之间路由组成更大Spatial架构，等效GPU或多卡Node。
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2028.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2029.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2027.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2032.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2033.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2034.png)
+
+算子融合Mapping到chiplets上，作pipeline并行。
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2035.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2036.png)
+
+## TPUv4：2021
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2062.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2063.png)
+
+## ButterFly Acc
+
+特殊算法Acc，等效PE（SM）或tile（GPC）。
+
+![image.png](Attn%E4%BC%98%E5%8C%96%E5%92%8CAcc%E8%AE%BE%E8%AE%A1/image%2015.png)
+
+![image.png](Attn%E4%BC%98%E5%8C%96%E5%92%8CAcc%E8%AE%BE%E8%AE%A1/image%2019.png)
+
+![image.png](Attn%E4%BC%98%E5%8C%96%E5%92%8CAcc%E8%AE%BE%E8%AE%A1/image%2020.png)
+
+![image.png](Attn%E4%BC%98%E5%8C%96%E5%92%8CAcc%E8%AE%BE%E8%AE%A1/image%2021.png)
+
+![image.png](Attn%E4%BC%98%E5%8C%96%E5%92%8CAcc%E8%AE%BE%E8%AE%A1/image%2022.png)
+
+## YOLO v3-tiny Acc：2023
+
+dataflow Acc。
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2077.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2078.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2079.png)
+
+## FPGA Overlay：2023
+
+line Buffer实现类似im2col的功能。
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2080.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2081.png)
+
+将2D数据展开成1D，方便通过**Tree**分块卸载到PE Cores，Tree可在每个layer之间重配置，因此支持不同数据流；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2082.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2083.png)
+
+## **ISCA24**:Soter
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2077.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2067.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2086.png)
+
+## 24:GEMINI（Simba架构）
+
+chiplet Processor，每个tile是一个chiplet，Buffer+PE阵列是dataflow Acc。
+
+![image.png](Spatial%20Arch%E5%92%8Cdataflow%20Acc/image.png)
+
+![image.png](Spatial%20Arch%E5%92%8Cdataflow%20Acc/image%201.png)
+
+![image.png](Spatial%20Arch%E5%92%8Cdataflow%20Acc/image%202.png)
+
+## **25：GCC**
+
+GCC pipeline按照GS为任务粒度
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%207.png)
+
+GS preprocess & **render**数据流
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%208.png)
+
+**加速器设计**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%209.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2010.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2011.png)
+
+## **TACO25：RL Scheduler**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2021.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2036.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2037.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2038.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2041.png)
+
+## ISCA21：Cosa
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20121.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20122.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20150.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20138.png)
+
+## TC24:TensorMap
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20162.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20163.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20164.png)
+
+## ICCD24：TileMap
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20183.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20192.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20193.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20188.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20183.png)
+
+## 25：BSMM
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2049.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2064.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2053.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2053.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2056.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2090.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2091.png)
+
+4个边输入4个块，中间十字输入barrier，对比其他PE。
+
+激活稀疏最好在局部SA？
+
+recfg SA可能用于隐藏稀疏解码延迟，dense+sp

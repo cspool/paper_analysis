@@ -1,0 +1,219 @@
+# meeting-25/9/17
+
+# GPU Preeption、多任务动态调度策略
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2029.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2030.png)
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2031.png)
+
+高优先级任务设置**WFI**>pipeline idle后中断
+
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%203.png)
+
+**上文的timeslice是抢占式的任务RR调度，超时中断；**
+
+[GPU的抢占Preemption和Timeslice（WFI/drain、switch）](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89%20262e12d10b6e8048b20cf29d04938602.md)
+
+GPU抢占分为CTA level(线程blk)、指令level;
+
+指令level的实现:**硬件控制**CTA level执行,执行**软件kernel**完成context保存和恢复;
+
+[SCG-SM：取消图形Stream和计算Stream交替启动任务的Ctx切换，由SM申请任务调度到空闲资源](SCG-SM%EF%BC%9A%E5%8F%96%E6%B6%88%E5%9B%BE%E5%BD%A2Stream%E5%92%8C%E8%AE%A1%E7%AE%97Stream%E4%BA%A4%E6%9B%BF%E5%90%AF%E5%8A%A8%E4%BB%BB%E5%8A%A1%E7%9A%84Ctx%E5%88%87%E6%8D%A2%EF%BC%8C%E7%94%B1SM%E7%94%B3%E8%AF%B7%E4%BB%BB%E5%8A%A1%E8%B0%83%E5%BA%A6%E5%88%B0%E7%A9%BA%2025be12d10b6e80549248f51a737054de.md)
+
+计算和图形任务的并发执行采用**贪心计算/图形**的调度策略;
+
+GPC内的MPC(arbiter)根据**实时数据的条件判断,检测空闲资源**后要求MPC scheduler向CWD申请计算任务,或者从图形queue中抓取图形任务,这些任务都是低优先级;
+
+arbiter的条件判断称为profile,profile包含timeslice属性,设置timer在timeslice超时后切换profile,进行**贪心策略的动态切换**,任务A和B设置8:2的timeslice能保证80%的GPU运行时间用于A,20%的时间用于B;
+
+# 异构SoC——Cohort、CXL
+
+Cohort SoC
+
+异构SoC视为多核SoC的扩展，核扩展到CPU和各种加速器，Cache一致性扩展到**CPU Cache和queue的一致性**；
+
+利用SPSC queue作为软件和硬件的**公共模型**，软件接口push、pop进行数据流端到端的输入和输出，register注册queue来定义硬件数据流；
+
+将SPSC queue的多核一致性扩展到加速核，利用invalidate完成硬件数据流的数据传输；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2018.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2019.png)
+
+单加速器数据流
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2021.png)
+
+加速器chain数据流
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%203.png)
+
+软硬件系统
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%207.png)
+
+系统实现
+
+实验环境：**OpenPiton**多核研究框架集成Cohort，在Alveo U200 FPGA实现，Linux；
+
+4-tile设计，2个64位R-Core、2个加速器；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2055.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2056.png)
+
+[https://www.mouser.com/pdfDocs/u280userguide.pdf](https://www.mouser.com/pdfDocs/u280userguide.pdf)
+
+Baseline：**MAPLE**的核外高内存并行的LSU
+
+**MAPLE:slim-in-order**多核间的高效数据传输，侧重**非直接内存访问（如指针）**应用（图计算）的访问-执行解耦的多线程和prefetch model；
+
+基于MAPLE，改成**MMIO-based和DMA-based的多核应用加速**；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2057.png)
+
+MMIO baseline，MMIO传输数据字是不可预测的往返，没有一致性；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2058.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2059.png)
+
+Coherent DMA baseline（RISC-V MMU）
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2060.png)
+
+加速器：SHA256、AES128、H264
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2061.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2062.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2063.png)
+
+BenchMark in Cohort、Baseline:不同的多核、device**传输模型**下的SoC应用
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2064.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2065.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2066.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2067.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2068.png)
+
+**CXL背景**
+
+**内存墙**原因：CPU和内存的**性能提升速度**不同；内存**带宽/传输率**提高难，**核心频率**难提高，**多通道布局布线难**；内存**容量Capicity**扩展难，高带宽>**高刷新**>高发热>内存颗粒密度难提高，**2DPC**增大容量但出现**信号完整性**问题；DRAM的高带宽和高容量**实现对立**；
+
+![image.png](meeting-25%209%2017/image.png)
+
+**内存搁浅Strand**：Core和内存紧耦合，当Core全部出售而内存有剩时，剩余内存无法分配和使用；
+
+**异构内存难以复用Spilled**：新一代CPU（5th AMD EPYC）不兼容DDR4，无法使用DDR4的内存库存；
+
+![image.png](meeting-25%209%2017/image%201.png)
+
+**服务器间通信开销**
+
+数据通过TCP/IP传输的IO开销：数据打包、内存拷贝（用户和kernel空间间的来回拷贝、ring buffer到kernel空间的拷贝）、上下文切换（异步IO需挂起）
+
+**CXL目的**
+
+![image.png](meeting-25%209%2017/image%202.png)
+
+![image.png](meeting-25%209%2017/image%203.png)
+
+**CXL协议**
+
+CXL定义的内存访问包含：host访问host内存和所有device内存，任一device访问host内存，device访问device（本地）内存；
+
+CXL之前，host cache缓存host内存中数据，**host中多核访问内存**需维护一致性；
+
+**CXL.cache**为访问host内存提供一致性，即**异质多核CC**，peer cache缓存host内存中数据副本，**访问host内存遵循CXL.cache协议**；
+
+**CXL.mem3.0-**为host访问device内存提供一致性，host和device内存处于统一可见的地址空间，**若存在peer cache**，peer cache缓存统一地址空间中数据副本，host访问device内存遵循**CXL.mem**，device访问host内存（或Host Bias下device内存）遵循**CXL.cache**；
+
+CXL3.0后，**CXL.mem3.0+**新增Back-Inv（**BIV**）通道和BIV消息，支持**访问host内存和device内存的一致性**；
+
+![image.png](meeting-25%209%2017/image%204.png)
+
+CXL是多个设备同时访问内存，多个设备就是多个任务；                                                                                  
+
+两个任务访问一个CPU的同一块内存(共享),
+
+不同任务数据到片上是独立的,共享内存空间,增大util,**动态最大内存和可能小于静态最大内存和,两个任务在内存上的边界是可变,降低整个内存需求;**
+
+任务的物理隔离,queue;
+
+# paper Highlight
+
+**Main**:多任务推理系统,FPGA实现原型和实验
+
+侧重util和~~QoS~~、吞吐?
+
+时间隔离:两个任务串行,物理隔离:资源分配任务
+
+冷热任务:LC/BE;
+
+消融实验:模块有effect
+
+降低上下文开销;
+
+**Insight**:
+
+1 util
+
+**Acc数据流**决定了**并行shape和size**,影响任务到计算资源的**映射util**;
+
+对映射后的任务,算子参数和硬件性能决定了计算延时和传输延时**overlap**的**理论限制**;
+
+单LC任务reconfigure提升的util有限,那么**空闲资源可以用来计算BE任务**;
+
+2 多任务的LC+BE,提高util,满足QoS
+
+2.1 多任务调度
+
+不同任务的计算和传输延时不同,那么能**分时利用资源**？
+
+多任务运行的**完成时间和调度策略相关**,所以有**动态性,但LC任务有严格的延迟要求(静态调度?动态抢占?)**
+
+2.2 资源重分配
+
+IO限制PE util，支持**多任务轮转**，减小上下文切换开销，BE的数据**片上转移**到LC剩余的PE，因为LC的计算受到IO限制和参数限制无法用满PE;
+
+**BE切换到更少的PE**，延长了计算时间，**IO和COM更能overlap**;
+
+**LC贪心**,抢占分配给BE的部分或全部PE,PE重分配、存储重分配;
+
+3? 实现的动态指令生成的意义?结合策略?
+
+**硬件im2col**能实现较高的端到端性能:**访存指令由硬件生成**,img2col的硬件实现能否提供**更多参数**，以提供动态性,但这个**动态性的意义是什么?**
+
+im2col是硬件队列？
+
+cxl作内存共享 减少拷贝且扩展内存 作peer cache 加速io；
+
+4 基础实验验证
+
+如何证明设计的系统有效?
+
+什么场景?baseline?
+
+多任务先编译在一起,测试性能,实验需要平台/模拟
+
+openpiton,core换成加速核,模拟实验;
+
+策略、方法、体系结构设计(方法的实现)
+
+能耗比:评估体系结构是否有用;
+
+实验证明**设计模块的效果;**
+
+hbm无法一直堆高 因为dram间tsv发热导致信号不稳 功耗受限 基die发热 功耗受限；
+
+gpu和hbm通过2.5d集成 通过基die传输的功耗受限；
+
+nvlink也想共享内存 但效果一直不好，一致性协议开销；

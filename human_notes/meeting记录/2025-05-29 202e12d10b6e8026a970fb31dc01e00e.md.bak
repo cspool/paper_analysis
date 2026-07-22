@@ -1,0 +1,66 @@
+# 2025-05-29
+
+# 1、report
+
+## 1、卷积的数据复用设计
+
+针对pox,poy,pof的超高并行,设计高效片上访问的img2col算法.
+
+地址访问比较规整适合GPU,但需要p、slab等辅助存储和滑动寄存器辅助,又不适合GPU
+
+但片上多访问一次其实问题不大.
+
+其余工作在poy、N、pof、pif的几种并行来回组合.
+
+- 1,1,0
+    
+    ![image.png](2025-05-29/image.png)
+    
+- 3,1,1
+    
+    ![image.png](2025-05-29/image%201.png)
+    
+- 3,2,1
+    
+    ![image.png](2025-05-29/image%202.png)
+    
+- 6,2,2
+    
+    ![image.png](2025-05-29/image%203.png)
+    
+
+## 2、论文
+
+阅读auto-tuning相关文章,转3
+
+## 3、GPU相关
+
+[Temporal vs Spatial：分时 or 分空](../knowledge%20chips/Temporal%20vs%20Spatial%EF%BC%9A%E5%88%86%E6%97%B6%20or%20%E5%88%86%E7%A9%BA%201f3e12d10b6e80a0bb3ecd10a78e6d36.md)
+
+[GPU的SIMT执行模型](../../Notes/AI%20Arch/GPU%E7%9A%84SIMT%E6%89%A7%E8%A1%8C%E6%A8%A1%E5%9E%8B%201ffe12d10b6e80bcbe99c3cb5c0167f6.md)
+
+[GPU WMMA和Tensor Core](../../Notes/AI%20Arch/GPU%20WMMA%E5%92%8CTensor%20Core%20201e12d10b6e80b9a13dd735b5a509f7.md)
+
+[GPU与CUDA](../../Notes/AI%20Arch/GPU%E4%B8%8ECUDA%201fce12d10b6e8099b559dfffe6b13cc7.md)
+
+# 2、discussion
+
+- 我的工作的关联idea:
+    - QKV,SMA的数据访问方式,sp张量,某一channel是0.
+    - sp的输入是固定结构,部分0跳不掉.
+    - tensor core(sp-》dense)
+    - 稀疏场景的动态并行(释放部分资源闲置或改变并行方式).
+    - 混合精度的gating,降低功耗
+    - GPU的稀疏卷积,比较成熟
+    - warp内线程之间作滑动???如何模拟.shuffle?ld&str的模拟方式效率太低
+- 论文思路
+    - 问题(**现在工作哪里没做,什么场景的问题**)
+    - 方法1、2(解决问题)、实现/3
+    - 效果(性能、能耗)
+- 其余idea
+    - sim模拟流/过程:C、RTL、cycle、model(建模),改变架构的参考模拟,用于实验(实现)
+    - 算子融合(软件优化)在端到端硬件上的实现.软件的特性在硬件上的不适配—-》idea.
+- Todo
+    - baseline:加速器工作现状(4大会)、**参考文章list**.(周五中午前完成)
+    - 总结key:背景、动机(问题)、方法、与我的工作的关系
+    - 11月ISCA.

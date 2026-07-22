@@ -1,0 +1,172 @@
+# 量化方法的总结
+
+# 1、量化介绍
+
+一般的训练和推理在GPU上以全精度进行计算，为了达成更快速的训练和推理，尝试降低计算采用的数据精度，即量化。
+
+量化quantization，即用较低精度的计算来近似、替代高精度的浮点运算。近似方式涉及较低精度的数q到高精度数r的双射，一般的映射方式是$*q = r/s + z*$，其中s是量化尺度scale，表示r的数值尺度与q的数值尺度的比值，z是量化零点（偏移）zero。计算过程中，s和z都是训练好的参数，因此以r为自变量的高精度运算（矩阵乘、卷积等）可以转换为以q为自变量的较低精度的计算。
+
+$*scale = (r_{max} − r_{min})/(q_{max} − q_{min})*$
+
+量化计算涉及到s和z参数的获取，也会涉及到较低精度的网络参数的获取。
+
+**量化计算的核心公式就是数据范围的相互映射。**
+
+# 2、量化方法
+
+## 1、训练后量化
+
+方式：s和z参数的获取由训练过程中统计获得。
+
+不足：将量化导致的精度的损失引入损失中，影响参数学习。
+
+## 2、量化感知训练
+
+即便量化成更低的数据精度，训练使用的精度本质仍然是全精度（GPU计算），加入伪量化因子**将真实值量化到低精度再反量化到伪真实值**，从而将量化中低精度截断带来的误差引入损失计算，从而训练出性能更好的参数。
+
+行为上，**量化感知训练让训练和推理时的量化值前向计算一致。**
+
+# 3、应用场景
+
+## 1、conv+BN
+
+### 1、算子融合
+
+在**一般**训练时，卷积层和 BN 是两个模块。
+
+因为训练时是按批次输入数据的，BN 就是为了解决小批次输入数据的分布偏移而提出的，因此训练时需要BN层。
+
+而训练后的推理，是单样本输入，训练时 BN 的参数已经确定，这些参数相当于对前一层的特征图数据做一次线性变换，而卷积层也可以转化为对特征图的线性变换。因此这两个相邻的算子可以融合。
+
+模型训练时通过移动平均的方法近似获得整个样本集的均值和方差。第n个批次的输出的均值的迭代公式如下，总体的均值等于迭代的收敛值。
+
+$$
+\mu = \mu_n = \alpha\mu_{n-1} + (1-\alpha)\times \frac{\sum_i^N{x_{i,n}}}{N}
+$$
+
+对于卷积输出特征图${F_o}_{C_o,i,j}$ （第 c 个通道的 ( i , j ) 的值）进行BN计算，写成矩阵形式如下：
+
+$$
+\begin{pmatrix} \overline {F_o}_{1,i,j}\\ \overline {F_o}_{2,i,j}\\ \vdots \\ \overline {F_o}_{{C_o},i,j}\\  \end{pmatrix} = \begin{pmatrix}  \frac{1}{\sqrt{\sigma_1^2+\epsilon}} & 0 & \cdots & 0\\ 0 & \frac{1}{\sqrt{\sigma_2^2+\epsilon}} & \cdots & 0\\ \vdots & \vdots & \ddots & \vdots \\  0 & 0 & \cdots & \frac{1}{\sqrt{\sigma_{C_o}^2+\epsilon}}\\  \end{pmatrix} \cdot \begin{pmatrix}  {F_o}_{1,i,j}\\ {F_o}_{2,i,j}\\ \vdots \\  {F_o}_{{C_o},i,j}\\  \end{pmatrix} + \begin{pmatrix} \frac{-\mu_1}{\sqrt{\sigma_1^2+\epsilon}} \\  \frac{-\mu_2}{\sqrt{\sigma_1^2+\epsilon}}\\ \vdots \\ \frac{-\mu_{C_o}}{\sqrt{\sigma_{C_o}^2+\epsilon}}  \end{pmatrix}
+$$
+
+即 $\overline F_o=W_{BN} \cdot F_o + b_{BN}$
+
+而卷积输出特征图${F_o}_{C_o,i,j}$ （第 c 个通道的 ( i , j ) 的值）计算的矩阵形式公式如下： 
+
+$$
+\begin{pmatrix}  {F_o}_{1,i,j}\\ {F_o}_{2,i,j}\\ \vdots \\  {F_o}_{{C_o},i,j}\\  \end{pmatrix} = \begin{pmatrix}  {W_{1,1,1} \cdots W_{1,1,k^2}} & {W_{1,2,1} \cdots W_{1,2,k^2}} & \cdots & {W_{1,C_I,1} \cdots W_{1,C_I,k^2}}\\ {W_{2,1,1} \cdots W_{2,1,k^2}} & {W_{2,2,1} \cdots W_{2,2,k^2}} & \cdots & {W_{2,C_I,1} \cdots W_{2,C_I,k^2}}\\ \vdots & \vdots & \ddots & \vdots \\  {W_{C_o,1,1} \cdots W_{C_o,1,k^2}} & {W_{C_o,2,1} \cdots W_{C_o,2,k^2}} & \cdots & {W_{C_o,C_I,1} \cdots W_{C_o,C_I,k^2}}\\  \end{pmatrix} \cdot \begin{pmatrix}  {F_I}_{1,i,j} \\ \vdots \\ {F_I}_{1,i_k,j_k} \\ {F_I}_{2,i,j} \\ \vdots \\ {F_I}_{2,i_k,j_k} \\ \vdots \\  {F_I}_{C_I,i,j} \\ \vdots \\ {F_I}_{C_I,i_k,j_k} \\  \end{pmatrix} + \begin{pmatrix} bias_{1} \\  bias_{2}\\ \vdots \\ bias_{C_o}  \end{pmatrix}
+$$
+
+即 $F_o = W_{conv} \cdot F_I + b_{conv}$.
+
+因此conv和BN的融合计算公式是 $\overline F_o = W_{BN} \cdot (W_{conv} \cdot F_I + b_{conv}) + b_{BN}$
+
+w1a8时，融合的conv和bn（主要是BN中不同输出通道的方差不同）会导致二值化权重中整层公共的E在不同输出通道不一致。
+
+### 2、量化感知训练的计算图
+
+量化感知训练下的conv-bn计算图如下，即先通过conv计算BN层需要的（即该批次输出的均值和方差）$W_{BN}$和 $b_{BN}$，计算出conv-bn融合后的$W$和$b$参数，将参数**量化**后和原始输入通过卷积计算conv-bn的输出（conv-fold）。
+
+**注意：没有在计算出BN参数后直接通过BN层，而是计算融合参数后计算折叠卷积，是为了在训练中模拟推理时conv-bn算子融合的计算模式，从而降低conv和BN在全精度训练（一般情况先conv后BN）和量化推理（conv-BN融合）的不一致的计算模式导致的精度损失。**
+
+![](%E9%87%8F%E5%8C%96%E6%96%B9%E6%B3%95%E7%9A%84%E6%80%BB%E7%BB%93/image1.jpeg)
+
+## 2、混精度CBR的量化计算
+
+推理过程中的BN可以通过修改w和b，来融入conv，因此conv-bn-relu可以融合到conv-relu进行讨论。
+
+由于模型的激活值和权重从全精度r作量化零点为0的对称量化到低精度定点数*q*,二者关系是$*r = q × s*$,其中*s*是真实值对量化值的缩放因子。下面解释卷积-激活的量化推理计算过程。
+
+卷积计算中乘累加的核心计算是$q_{sum} = \sum_{}^{}{q_{w} \times q_{a}}$,而$*r_{w} × r_{a} = q_{w}q_{a} × s_{w} × s_{a} = q_{sum} × s_{sum} = r_{sum}*$。因此卷积乘累加结果的真实值的计算方式是$r_{sum} = \sum_{}^{}{q_{w} \times q_{a}} \times s_{w}s_{a}$，乘累加结果的量化值的计算方式是$q_{sum} = \sum_{}^{}{q_{w} \times q_{a}} \times \frac{s_{w}s_{a}}{s_{sum}}$。
+
+（1）对于w8a8的量化精度，
+
+卷积结果$*r_{conv} = r_{sum} + r_{bias}*$，其中*rbias*作量化零点为0的对称量化，并且设置缩放因子$*s_{bias} = s_{w}s_{a}*$，则$*r_{bias} = q_{bias} × s_{bias} = q_{bias} × s_{w}s_{a}*$，因此卷积结果的真实值$r_{conv} = r_{sum} + r_{bias} = q_{sum} \times s_{sum} + q_{bias} \times s_{bias} = (\sum_{}^{}{q_{w} \times q_{a}} + q_{bias}) \times s_{w}s_{a} = q_{conv} \times s_{conv}$，则卷积结果的量化值的计算方式是$q_{conv} = (\sum_{}^{}{q_{w} \times q_{a}} + q_{bias}) \times \frac{s_{w}s_{a}}{s_{conv}}$。
+
+卷积的激活结果$r_{o} = ReLU8(r_{conv}) = ReLU8((\sum_{}^{}{q_{w} \times q_{a}} + q_{bias}) \times s_{w}s_{a}) = clamp((\sum_{}^{}{q_{w} \times q_{a}} + q_{bias}),0,\frac{8}{s_{w}s_{a}}) \times s_{w}s_{a} = q_{o} \times s_{o}$，则卷积的激活结果的量化值的计算方式是$q_{o} = clamp((\sum_{}^{}{q_{w} \times q_{a}} + q_{bias}),0,\frac{8}{s_{w}s_{a}}) \times \frac{s_{w}s_{a}}{s_{o}}$。
+
+权重$*q_{w}*$是int8类型，激活值$*q_{a}*$是uint8类型，偏置$*q_{bias}*$是int8类型， $r_o$是[0,8]的fp32类型， $q_o$是uint8类型，则$s_{w} = \frac{(\frac{127}{128} + \frac{128}{128})}{255} = \frac{1}{128},s_{a} = \frac{1}{255},{s_{o}} = \frac{8-0}{255-0} = \frac{8}{255}$。综上，$q_{o} = clamp((\sum_{}^{}{q_{w} \times q_{a}} + q_{bias}),0,8 \times 128 \times 255) \times \frac{1}{8 \times 128}$。
+
+（2）w1a8的量化精度
+
+卷积结果$*r_{conv} = r_{sum} × r_{E} + r_{bias}*$，其中*rE*作量化零点为0的对称量化，则$*r_{E} = q_{E} × s_{E}*$，$*r_{bias}*$作量化零点为0的对称量化，并且设置缩放因子$*s_{bias}= s_{w}s_{a}s_{E}*$，因此卷积结果的真实值$r_{conv} = (\sum_{}^{}{q_{w} \times q_{a} \times q_{E}} + q_{bias}) \times s_{w}s_{a}s_{E} = q_{conv} \times s_{conv}$，则卷积结果的量化值的计算方式是$q_{conv} = (\sum_{}^{}{q_{w} \times q_{a} \times q_{E}} + q_{bias}) \times \frac{s_{w}s_{a}s_{E}}{s_{conv}}$。
+
+卷积的激活结果$r_{o} = ReLU8(r_{conv}) = ReLU8((\sum_{}^{}{q_{w} \times q_{a} \times q_{E}} + q_{bias}) \times s_{w}s_{a}s_{E}) = clamp((\sum_{}^{}{q_{w} \times q_{a} \times q_{E}} + q_{bias}),0,\frac{8}{s_{w}s_{a}s_{E}}) \times s_{w}s_{a}s_{E} = q_{o} \times s_{o}$，则卷积的激活结果的量化值的计算方式是$q_{o} = clamp((\sum_{}^{}{q_{w} \times q_{a} \times q_{E}} + q_{bias}),0,\frac{8}{s_{w}s_{a}s_{E}}) \times \frac{s_{w}s_{a}s_{E}}{s_{o}}$。
+
+权重$q_{w}$是{1， − 1}，激活值$*q_{a}*$是uint8类型，偏置$*q_{bias}*$是int8类型，二值化参数*qE*是uint8类型， $r_o$是[0,8]的fp32类型， $q_o$是uint8类型，则$s_{w} = 1,s_{a} = \frac{1}{255},s_{E} = \frac{\frac{255}{256} - \frac{0}{256}}{255} = \frac{1}{256},{s_{o}} = \frac{8-0}{255-0} = \frac{8}{255}$。综上，$q_{o} = clamp((\sum_{}^{}{q_{w} \times q_{a} \times q_{E}} + q_{bias}),0,8 \times 256 \times 255) \times \frac{1}{8 \times 256}$。
+
+综上所示，卷积-激活的量化值*qo*的计算公式如下：
+
+$q_{o} = \left\{ \begin{matrix}
+\frac{clamp((\sum_{}^{}{q_{w} \times q_{a} \times q_{E}} + q_{bias}),0,8 \times 256 \times 255)}{8 \times 256},q_{w}:1bit \\
+\frac{clamp((\sum_{}^{}{q_{w} \times q_{a} \times 1} + q_{bias}),0,8 \times 128 \times 255)}{8 \times 128},q_{w}:8bit
+\end{matrix} \right.$
+
+## 3、残差的量化方式
+
+### 1、残差的计算图
+
+残差的计算图如下，左下图是残差的计算图，残差将经过卷积链后的张量和其旁路张量相加，右图是卷积链的计算图。
+
+![default (1).jpg](%E9%87%8F%E5%8C%96%E6%96%B9%E6%B3%95%E7%9A%84%E6%80%BB%E7%BB%93/default_(1).jpg)
+
+![shortcut.jpg](%E9%87%8F%E5%8C%96%E6%96%B9%E6%B3%95%E7%9A%84%E6%80%BB%E7%BB%93/shortcut.jpg)
+
+标注1的红框是激活和归一化，即ReLU8/8，得到卷积的真实值r。
+
+标注2的红框是伪量化节点，即将全精度的浮点数r量化到8位定点数q8（mul&floor），之后作反量化到浮点数（实际精度为8位定点），分配到GPU上计算。
+
+标注3的红框是卷积，GPU上的全精度计算（实际精度为8bit）或FPGA上的定点数计算（见3.2）。
+
+标注4的红框是残差计算，将原始张量（旁路）与其通过卷积链后的张量相加，得到残差结果。这个加法在GPU上以fp32的精度（实际精度为全精度）进行计算，之后进行激活和归一化。
+
+### 2、全精度残差的量化计算方法
+
+小节（1）中左图所示的残差输入的 $q_{cv}$、 $q_{bypass}$和输出$q_{sc}$**均为32bit**（fp32或int32）。
+
+残差的量化计算公式如下：
+
+$$
+r_{sc}=\frac{ReLU8(r_{cv}+r_{bypass})}{8}\\=\frac{clamp(r_{cv}+r_{bypass},0,8)}{8}\\=\frac{clamp(q_{cv}\times {s_{cv}}+q_{bypass}\times{s_{bypass}},0,8)}{8} \\ = \frac{clamp( \frac { q_{cv}}{s_{bypass}}+  \frac { q_{bypass}}{s_{cv}},0, \frac {8}{s_{cv} \times s_{bypass}}) }{\frac{8}{{s_{cv}}\times{s_{bypass}}}} \\=clamp( \frac { q_{cv}}{s_{bypass}\times 8}+  \frac { q_{bypass}}{s_{cv}\times 8},0, \frac {1}{s_{cv} \times s_{bypass}}) \times {s_{cv} \times s_{bypass}} \\ = q_{sc} \times s_{sc}
+$$
+
+定点计算结果$clamp( \frac { q_{cv}}{s_{bypass}}+  \frac { q_{bypass}}{s_{cv}},0, \frac {8}{s_{cv} \times s_{bypass}})$ 被认为在int32范围内，和$q_{sc}$的精度一致，因此令**$q_{sc}=clamp( \frac { q_{cv}}{s_{bypass}\times 8}+  \frac { q_{bypass}}{s_{cv}\times 8},0, \frac {1}{s_{cv} \times s_{bypass}}) ,s_{sc}= {s_{cv} \times s_{bypass}}$**
+
+**当残差结果需要量化到低精度（假设8bit）输出供下一层使用时**，即 $q_{sc}$为uint8，其计算公式如下，其中$s_{sc}= \frac{1-0}{255-0}=\frac{1}{255}$。
+
+$$
+q_{sc}=clamp( \frac { q_{cv}}{s_{bypass}\times 8}+  \frac { q_{bypass}}{s_{cv}\times 8},0, \frac {1}{s_{cv} \times s_{bypass}}) \times \frac {s_{cv} \times s_{bypass}}{ {s_{sc}}}
+$$
+
+$q_{cv}$的量化计算公式是：
+
+$$
+r_{cv}=(\sum{r_{w} \times r_{a}})+r_{bias} \\ = (\sum{q_{w} \times s_{w} \times q_{a} \times s_{a} \times q_{E} \times s_{E}})+q_{bias} \times s_{bias} \\ = (\sum{q_{w} \times s_{w} \times q_{a} \times s_{a} \times q_{E} \times s_{E} })+q_{bias} \times s_{w} \times s_{a} \times s_{E}\\ = [(\sum{q_{w} \times q_{a}})+q_{bias} ]\times s_{w} \times s_{a} \times s_{E} \\= q_{cv} \times s_{w} \times s_{a} \times s_{E} \\ = q_{cv} \times s_{cv} 
+$$
+
+其中 $(s_{w},s_{a},s_{E})= \left\{ \begin{matrix}(\frac {1}{128},\frac {1}{255},1),q_w:8bit \\ (1,\frac {1}{255},\frac {1}{256}),q_w:1bit \end{matrix}\right.$
+
+$q_{bypass}$是卷积（激活、归一化）时的量化计算公式是：
+
+$$
+r_{bypass}= r_{cv2} \\= \frac {ReLU8((\sum{r_{w2} \times r_{a2}})+r_{bias2})} {8} \\ = \frac {clamp((\sum{r_{w2} \times r_{a2}})+r_{bias2}, 0, 8)} {8} \\= \frac {clamp((\sum{q_{w2} \times q_{a2}})+q_{bias2}, 0, \frac{8}{s_{w2} \times s_{a2}\times s_{E2}}) } {\frac{8}{s_{w2} \times s_{a2} \times s_{E2}}} \\ = clamp((\sum{q_{w2} \times q_{a2}})+q_{bias2}, 0, \frac{8}{s_{w2} \times s_{a2} \times s_{E2}}) \times \frac{s_{w2} \times s_{a2}\times s_{E2}}{8}  \\ = q_{bypass} \times s_{bypass}  
+$$
+
+定点计算结果$clamp((\sum{q_{w2} \times q_{a2}})+q_{bias2}, 0, \frac{8}{s_{w2} \times s_{a2} \times s_{E2}})$被认为在int32范围内，和$q_{sc}$的精度一致，因此：
+
+$q_{bypass}=clamp((\sum{q_{w2} \times q_{a2}})+q_{bias2}, 0, \frac{8}{s_{w2} \times s_{a2} \times s_{E2}})$， $s_{bypass}=\frac{s_{w2} \times s_{a2}\times s_{E2}}{8}$
+
+对于残差的输入为其余精度，即$q_{cv}$、 $q_{bypass}$的精度更低时，本质是量化参数不同（反量化参数不同），量化计算公式推导类似。
+
+### 3、低精度残差的量化计算方法
+
+（3）全网络8bit精度下的残差也为8+8
+
+因为前面的conv提取的特征限定在8bit的精度 那残差作为一个提供恒等映射和传播梯度的模块，8bit的精度不下降性能 也合理
+
+# 4、启发
+
+1、算子融合
+
+将中间结果是高精度的两个算子进行融合，既不丢失精度，也去除了高精度的数据存储。

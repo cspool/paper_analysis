@@ -1,0 +1,82 @@
+# Paper-Chance-LongText-CoT-Spec
+
+### **12. Long Text Generation**
+
+1. [**Suri: Multi-constraint Instruction Following for Long-form Text Generation.**](https://arxiv.org/abs/2406.19371) (2024) [https://github.com/chtmp223/suri](https://github.com/chtmp223/suri)
+2. [**LongWriter: Unleashing 10,000+ Word Generation from Long Context LLMs.**](https://arxiv.org/abs/2408.07055) (2024) [https://github.com/THUDM/LongWriter](https://github.com/THUDM/LongWriter)
+3. [**Language Models can Self-Lengthen to Generate Long Texts.**](https://arxiv.org/abs/2410.23933) (2024) [https://github.com/QwenLM/Self-Lengthen](https://github.com/QwenLM/Self-Lengthen)
+4. [**Beyond Factual Accuracy: Evaluating Coverage of Diverse Factual Information in Long-form Text Generation.**](https://arxiv.org/abs/2501.03545) (2025) [https://github.com/algoprog/ICAT](https://github.com/algoprog/ICAT)
+5. [**LongProc: Benchmarking Long-Context Language Models on Long Procedural Generation.**](https://arxiv.org/abs/2501.05414) (2025) [https://github.com/princeton-pli/LongProc](https://github.com/princeton-pli/LongProc)
+6. [**ExPerT: Effective and Explainable Evaluation of Personalized Long-Form Text Generation.**](https://arxiv.org/abs/2501.14956) (2025) [https://github.com/alirezasalemi7/ExPerT](https://github.com/alirezasalemi7/ExPerT)
+7. [**A Cognitive Writing Perspective for Constrained Long-Form Text Generation.**](https://arxiv.org/abs/2502.12568) (2025) [https://github.com/KaiyangWan/CogWriter](https://github.com/KaiyangWan/CogWriter)
+8. [**CLIPPER: Compression enables long-context synthetic data generation.**](https://arxiv.org/abs/2502.14854) (2025) [https://github.com/chtmp223/CLIPPER](https://github.com/chtmp223/CLIPPER)
+9. [**LongWriter-V: Enabling Ultra-Long and High-Fidelity Generation in Vision-Language Models.**](https://arxiv.org/abs/2502.14834) (2025) [https://github.com/THU-KEG/LongWriter-V](https://github.com/THU-KEG/LongWriter-V)
+10. [**LongEval: A Comprehensive Analysis of Long-Text Generation Through a Plan-based Paradigm.**](https://arxiv.org/abs/2502.19103) (2025) [https://github.com/Wusiwei0410/LongEval](https://github.com/Wusiwei0410/LongEval)
+11. [**From Hours to Minutes: Lossless Acceleration of Ultra Long Sequence Generation up to 100K Tokens.**](https://arxiv.org/abs/2502.18890) (2025) [https://github.com/bigai-nlco/TokenSwift](https://github.com/bigai-nlco/TokenSwift)
+12. [**DeFine: A Decomposed and Fine-Grained Annotated Dataset for Long-form Article Generation.**](https://arxiv.org/abs/2503.07170) (2025) [https://github.com/DeFine-LFAG/DeFine_Dataset](https://github.com/DeFine-LFAG/DeFine_Dataset)
+13. [**Lost-in-the-Middle in Long-Text Generation: Synthetic Dataset, Evaluation Framework, and Mitigation.**](https://arxiv.org/abs/2503.06868) (2025) [https://github.com/OnlyAR/RAL-Writer](https://github.com/OnlyAR/RAL-Writer)
+14. [**Beyond Outlining: Heterogeneous Recursive Planning for Adaptive Long-form Writing with Language Models.**](https://arxiv.org/abs/2503.08275) (2025) [https://github.com/principia-ai/heterogeneous-recursive-planning](https://github.com/principia-ai/heterogeneous-recursive-planning)
+15. [**ThinkPrune: Pruning Long Chain-of-Thought of LLMs via Reinforcement Learning.**](https://arxiv.org/abs/2504.01296) (2025) [https://github.com/UCSB-NLP-Chang/ThinkPrune](https://github.com/UCSB-NLP-Chang/ThinkPrune)
+16. [**SuperWriter: Reflection-Driven Long-Form Generation with Large Language Models.**](https://arxiv.org/abs/2506.04180) (2025) [https://github.com/mozhu621/SuperWriter](https://github.com/mozhu621/SuperWriter)
+17. [**Writing-RL: Advancing Long-form Writing via Adaptive Curriculum Reinforcement Learning.**](https://arxiv.org/abs/2506.05760) (2025) [https://github.com/Tongyi-Zhiwen/Writing-RL](https://github.com/Tongyi-Zhiwen/Writing-RL)
+
+### **13. Long CoT**
+
+### **13.1 LLM**
+
+1. [**LLMs Can Easily Learn to Reason from Demonstrations Structure, not content, is what matters!.**](https://arxiv.org/abs/2502.07374) (2025) [https://github.com/NovaSky-AI/SkyThought](https://github.com/NovaSky-AI/SkyThought)
+2. [**Enhancing Auto-regressive Chain-of-Thought through Loop-Aligned Reasoning.**](https://arxiv.org/abs/2502.08482) (2025) [https://github.com/qifanyu/RELAY](https://github.com/qifanyu/RELAY)
+3. [**CoT-Valve: Length-Compressible Chain-of-Thought Tuning.**](https://arxiv.org/abs/2502.09601) (2025) [https://github.com/horseee/CoT-Valve](https://github.com/horseee/CoT-Valve)
+4. [**DRT: Deep Reasoning Translation via Long Chain-of-Thought.**](https://arxiv.org/abs/2412.17498) (2024/2025) [https://github.com/krystalan/DRT-o1](https://github.com/krystalan/DRT-o1)
+5. [**O1 Replication Journey -- Part 2: Surpassing O1-preview through Simple Distillation, Big Progress or Bitter Lesson?.**](https://arxiv.org/abs/2411.16489) (2024/2025) [https://github.com/GAIR-NLP/O1-Journey](https://github.com/GAIR-NLP/O1-Journey)
+6. [**OpenRFT: Adapting Reasoning Foundation Model for Domain-specific Tasks with Reinforcement Fine-Tuning.**](https://arxiv.org/abs/2412.16849) (2024/2025) [https://github.com/ADaM-BJTU/OpenRFT](https://github.com/ADaM-BJTU/OpenRFT)
+7. [**TokenSkip: Controllable Chain-of-Thought Compression in LLMs.**](https://arxiv.org/abs/2502.12067) (2025) [https://github.com/hemingkx/TokenSkip](https://github.com/hemingkx/TokenSkip)
+8. [**LightThinker: Thinking Step-by-Step Compression.**](https://arxiv.org/abs/2502.15589) (2025) [https://github.com/zjunlp/LightThinker](https://github.com/zjunlp/LightThinker)
+9. [**Can Large Language Models Detect Errors in Long Chain-of-Thought Reasoning?.**](https://arxiv.org/abs/2502.19361) (2025) [https://github.com/OpenStellarTeam/DeltaBench](https://github.com/OpenStellarTeam/DeltaBench)
+10. [**Light-R1: Curriculum SFT, DPO and RL for Long COT from Scratch and Beyond.**](https://arxiv.org/abs/2503.10460) (2025) [https://github.com/Qihoo360/Light-R1](https://github.com/Qihoo360/Light-R1)
+11. [**Dynamic Chain-of-Thought: Towards Adaptive Deep Reasoning.**](https://arxiv.org/abs/2502.10428) (2025) [https://github.com/brucewang123456789/GeniusTrail](https://github.com/brucewang123456789/GeniusTrail)
+12. [**Unlocking General Long Chain-of-Thought Reasoning Capabilities of Large Language Models via Representation Engineering.**](https://arxiv.org/abs/2503.11314) (2025) [https://github.com/txy77/GLoRE](https://github.com/txy77/GLoRE)
+13. [**SimpleRL-Zoo: Investigating and Taming Zero Reinforcement Learning for Open Base Models in the Wild.**](https://arxiv.org/abs/2503.18892) (2025) [https://github.com/hkust-nlp/simpleRL-reason](https://github.com/hkust-nlp/simpleRL-reason)
+14. [**SKIntern: Internalizing Symbolic Knowledge for Distilling Better CoT Capabilities into Small Language Models.**](https://aclanthology.org/2025.coling-main.215/) (2025) [https://github.com/Xnhyacinth/SKIntern](https://github.com/Xnhyacinth/SKIntern)
+15. [**ReTool: Reinforcement Learning for Strategic Tool Use in LLMs.**](https://arxiv.org/abs/2504.11536) (2025) [https://github.com/ReTool-RL/ReTool](https://github.com/ReTool-RL/ReTool)
+16. [**Process Reward Models That Think.**](https://arxiv.org/abs/2504.16828) (2025) [https://github.com/mukhal/thinkprm](https://github.com/mukhal/thinkprm)
+17. [**AdaR1: From Long-CoT to Hybrid-CoT via Bi-Level Adaptive Reasoning Optimization.**](https://arxiv.org/abs/2504.21659) (2025) [https://github.com/StarDewXXX/AdaR1](https://github.com/StarDewXXX/AdaR1)
+18. [**RM-R1: Reward Modeling as Reasoning.**](https://arxiv.org/abs/2505.02387) (2025) [https://github.com/RM-R1-UIUC/RM-R1](https://github.com/RM-R1-UIUC/RM-R1)
+19. [**Reinforcement Learning vs. Distillation: Understanding Accuracy and Capability in LLM Reasoning.**](https://arxiv.org/abs/2505.14216) (2025) [https://github.com/minwukim/RLvsDistillation](https://github.com/minwukim/RLvsDistillation)
+20. [**Soft Thinking: Unlocking the Reasoning Potential of LLMs in Continuous Concept Space.**](https://arxiv.org/abs/2505.15778) (2025) [https://github.com/eric-ai-lab/Soft-Thinking](https://github.com/eric-ai-lab/Soft-Thinking)
+21. [**Learn to Reason Efficiently with Adaptive Length-based Reward Shaping.**](https://arxiv.org/abs/2505.15612) (2025) [https://github.com/hkust-nlp/Laser](https://github.com/hkust-nlp/Laser)
+22. [**QwenLong-L1: Towards Long-Context Large Reasoning Models with Reinforcement Learning.**](https://arxiv.org/abs/2505.17667) (2025) [https://github.com/Tongyi-Zhiwen/QwenLong-L1](https://github.com/Tongyi-Zhiwen/QwenLong-L1)
+23. [**Amplify Adjacent Token Differences: Enhancing Long Chain-of-Thought Reasoning with Shift-FFN.**](https://arxiv.org/abs/2505.17153) (2025) [https://anonymous.4open.science/r/Shift-FFN](https://anonymous.4open.science/r/Shift-FFN)
+24. [**ARM: Adaptive Reasoning Model.**](https://arxiv.org/abs/2505.20258) (2025) [https://github.com/TEAM-ARM/ARM](https://github.com/TEAM-ARM/ARM)
+25. [**Think or Not? Exploring Thinking Efficiency in Large Reasoning Models via an Information-Theoretic Lens.**](https://arxiv.org/abs/2505.18237) (2025) [https://github.com/chicosirius/think-or-not](https://github.com/chicosirius/think-or-not)
+26. [**AlphaOne: Reasoning Models Thinking Slow and Fast at Test Time.**](https://arxiv.org/abs/2505.24863) (2025) [https://github.com/ASTRAL-Group/AlphaOne](https://github.com/ASTRAL-Group/AlphaOne)
+27. [**A*-Thought: Efficient Reasoning via Bidirectional Compression for Low-Resource Settings.**](https://arxiv.org/abs/2505.24550) (2025) [https://github.com/AI9Stars/AStar-Thought](https://github.com/AI9Stars/AStar-Thought)
+28. [**Walk Before You Run! Concise LLM Reasoning via Reinforcement Learning.**](https://arxiv.org/abs/2505.21178) (2025) [https://github.com/nick7nlp/ConciseR](https://github.com/nick7nlp/ConciseR)
+29. [**Route to Reason: Adaptive Routing for LLM and Reasoning Strategy Selection.**](https://arxiv.org/abs/2505.19435) (2025) [https://github.com/goodmanpzh/Route-To-Reason](https://github.com/goodmanpzh/Route-To-Reason)
+30. [**TL;DR: Too Long, Do Re-weighting for Effcient LLM Reasoning Compression.**](https://arxiv.org/abs/2506.02678) (2025) [https://github.com/zzli2022/TLDR](https://github.com/zzli2022/TLDR)
+31. [**Demystifying Reasoning Dynamics with Mutual Information: Thinking Tokens are Information Peaks in LLM Reasoning.**](https://arxiv.org/abs/2506.02867) (2025) [https://github.com/ChnQ/MI-Peaks](https://github.com/ChnQ/MI-Peaks)
+32. [**Kinetics: Rethinking Test-Time Scaling Laws.**](https://arxiv.org/abs/2506.05333) (2025) [https://github.com/Infini-AI-Lab/Kinetics](https://github.com/Infini-AI-Lab/Kinetics)
+33. [**OctoThinker: Mid-training Incentivizes Reinforcement Learning Scaling.**](https://arxiv.org/abs/2506.20512) (2025) [https://github.com/GAIR-NLP/OctoThinker](https://github.com/GAIR-NLP/OctoThinker)
+34. [**Do Thinking Tokens Help or Trap? Towards More Efficient Large Reasoning Model.**](https://arxiv.org/abs/2506.23840) (2025) [https://github.com/Danield21/Dual-Policy-Preference-Optimization](https://github.com/Danield21/Dual-Policy-Preference-Optimization)
+35. [**Ref-Long: Benchmarking the Long-context Referencing Capability of Long-context Language Models.**](https://arxiv.org/abs/2507.09506) (2025) [https://github.com/wujunjie1998/Ref-Long](https://github.com/wujunjie1998/Ref-Long)
+36. [**LAPO: Internalizing Reasoning Efficiency via Length-Adaptive Policy Optimization.**](https://arxiv.org/abs/2507.15758) (2025) [https://github.com/zju-real/lapo](https://github.com/zju-real/lapo)
+37. [**Hierarchical Budget Policy Optimization for Adaptive Reasoning.**](https://arxiv.org/abs/2507.15844) (2025) [https://github.com/zju-real/hbpo](https://github.com/zju-real/hbpo)
+38. [**Pruning the Unsurprising: Efficient Code Reasoning via First-Token Surprisal.**](https://arxiv.org/abs/2508.05988) (2025) [https://github.com/Zengwh02/ASAP](https://github.com/Zengwh02/ASAP)
+39. [**Train Long, Think Short: Curriculum Learning for Efficient Reasoning.**](https://arxiv.org/abs/2508.08940) (2025) [https://github.com/hammoudhasan/curriculum_grpo](https://github.com/hammoudhasan/curriculum_grpo)
+40. [**Are More Tokens Worth More Cost? Token-level Efficiency Optimization for Large Language Model Training.**](https://arxiv.org/abs/2508.07630) (2025) [https://github.com/Xnhyacinth/SparK](https://github.com/Xnhyacinth/SparK) / [TokenSkip: Controllable Chain-of-Thought Compression in LLMs.](https://arxiv.org/abs/2502.12067)
+41. [**BudgetThinker: Empowering Budget-aware LLM Reasoning with Control Tokens.**](https://arxiv.org/abs/2508.17196) (2025) [https://github.com/MobileLLM/BudgetThinker](https://github.com/MobileLLM/BudgetThinker)
+42. [**ParaThinker: Native Parallel Thinking as a New Paradigm to Scale LLM Test-time Compute.**](https://arxiv.org/abs/2509.04475) (2025) [https://github.com/MobileLLM/ParaThinker](https://github.com/MobileLLM/ParaThinker)
+43. [**SmartSwitch: Advancing LLM Reasoning by Overcoming Underthinking via Promoting Deeper Thought Exploration.**](https://arxiv.org/abs/2510.19767) (2025) [https://github.com/dvlab-research/SmartSwitch](https://github.com/dvlab-research/SmartSwitch)
+44. [**Scaling Reasoning Tokens via RL and Parallel Thinking: Evidence From Competitive Programming.**](https://arxiv.org/abs/2604.01302) (2026) [https://github.com/THUDM/slime](https://github.com/THUDM/slime)
+
+### **13.2 MLLM**
+
+1. [**Mitigating Visual Forgetting via Take-along Visual Conditioning for Multi-modal Long CoT Reasoning.**](https://arxiv.org/abs/2503.13360) (2025) [https://github.com/sun-hailong/TVC](https://github.com/sun-hailong/TVC)
+2. [**LongPerceptualThoughts: Distilling System-2 Reasoning for System-1 Perception.**](https://arxiv.org/abs/2504.15362) (2025) [https://github.com/andrewliao11/LongPerceptualThoughts](https://github.com/andrewliao11/LongPerceptualThoughts)
+
+### **14. Speculative Decoding**
+
+1. [**LongSpec: Long-Context Speculative Decoding with Efficient Drafting and Verification.**](https://arxiv.org/abs/2502.17421) (2025) [https://github.com/sail-sg/LongSpec](https://github.com/sail-sg/LongSpec)
+2. [**Long-Context Inference with Retrieval-Augmented Speculative Decoding.**](https://arxiv.org/abs/2502.20330) (2025) [https://github.com/John-AI-Lab/RAPID](https://github.com/John-AI-Lab/RAPID)
+3. [**Efficient Reasoning for LLMs through Speculative Chain-of-Thought.**](https://arxiv.org/abs/2504.19095) (2025) [https://github.com/Jikai0Wang/Speculative_CoT](https://github.com/Jikai0Wang/Speculative_CoT)
+4. [**SpecExtend: A Drop-in Enhancement for Speculative Decoding of Long Sequences.**](https://arxiv.org/abs/2505.20776) (2025) [https://github.com/jycha98/SpecExtend](https://github.com/jycha98/SpecExtend)

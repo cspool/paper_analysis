@@ -1,0 +1,171 @@
+# SmartMem: Layout Transformation Elimination and Adaptation for Efficient DNN Execution on Mobile
+
+注：不过分追求细节，懂得大意即可。
+
+**想法：**
+
+从layout对性能影响、layout custom分类每个算子；fuse/eliminate layout transformation operators；optimize the output layout；
+
+# 1、背景
+
+**transformer引入local attetion降低计算量，需要频繁的explicit layout变换**（reshape、transpose、gather）来划分window；
+
+**conv+attention的模型中有很多implicit layout变换**；
+
+**layout转换消耗时间。**
+
+Q：GPU平台的layout优化，和异构平台的layout优化，哪种更优？CPU+GPU平台的端到端延时？
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%201.png)
+
+**spatial类型算子使用local attention/window**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%202.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%203.png)
+
+**消除reshape、transpose，执行相邻的flatten和spatial类型算子，有如下问题；**
+
+Q1：邻接算子何时使用相同的layout，即何时变换输出layout；
+
+Q2：什么layout最高效。
+
+Q3：基于layout实现算子，优化access pattern和简化index computation。
+
+Q4：将layout映射到内存层次（2.5D mem）。
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%204.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%205.png)
+
+**2.5D Texture vs. 1D Buffer**
+
+texture Buffer 长于stencil、spatial类型计算，但短于reshape。
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%206.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%207.png)
+
+# 2、方法
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%208.png)
+
+**算子分类：**
+
+**1、计算性能和输入layout有关。**
+
+**2、输出layout是否可变（是否由计算模式确定）。**
+
+**不同layout组合的多操作数算子可能有不同分类。**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%209.png)
+
+**张量加法的计算性能和输入layout无关（Input Layout Independent），输出layout可定制（Variable）；**
+
+**张量乘法的性能和输入layout相关（Input Layout Dependent），输出layout可定制；**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2010.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2011.png)
+
+**输入A、输出B、算子O在不同layout的形式化表达**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2012.png)
+
+**表5是不同算子组合的4种优化策略；**
+
+**表6是优化后算子的layout，优化后输出layout被有更高优化复杂度的算子决定、或被保留算子决定。**
+
+直观上：layout对性能影响越大，优化复杂度越大；Variable比Fixed优化复杂度大。 
+
+算子融合基于DNN fusion。
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2013.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2014.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2015.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2016.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2017.png)
+
+**Fixed类型算子可以采用elimination，即reduct到split、merge、identity表达的张量变形。**
+
+fuse是将算子计算的形式表达融合，减少中间结果的搬运；
+
+elimination将算子的内存访问简化，通过Index Comprehension。
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2018.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2019.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2020.png)
+
+**算子fuse、eliminate到只剩下ILD & Var，是贪心策略。**
+
+**只需要探索ILD & Var之间的layout，让生产者的输出满足消费者的输入layout。（确定何时变换layout）**
+
+**reduction dimension是输入张量经reduce类型算子后被规约的维度，比如矩阵乘的乘累加对应的维度k。保证reduction维度内存连续。**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2021.png)
+
+**算子间一对多时，producer算子输出layout的reduction维度允许有k个，当实际reduction超过k时，需要额外拷贝。k由memory的连续访问特性决定，Texture Memory中k是2；**
+
+一对多时，前序算子的输出张量有多个reduction维度，可以综合出统一的输出layout。
+
+L0的输出有D1和D3两个reduction维度，在图5中分别在0.5D和1D上连续存储。
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2022.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2023.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2024.png)
+
+**使用texture memory并探索layout**
+
+**GPU中texure memory是2.5D memory**（x，y，4），x和y分别是1维，4是0.5维；
+
+texure memory可存储2D、3D张量，无需index computation；
+
+**reduction维度尽量连续存储**，可提高locality，因此L0（D1，D2，D3）的D1对应0.5D；
+
+L1（D1，D2，1）、L2（1，D2，D3）没有reduction维度；但其和L0作为fusedconv的输入张量，因此L1、L2和L0的映射方式相似，将L1的D1、L2的D3映射到0.5D。
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2025.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2026.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2027.png)
+
+**layout优化后的效果**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2028.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2029.png)
+
+a→b：fuse、eliminate算子，但未优化算子输出的layout，a和b的layout由LN、reshape等算子原生决定，reduction维度可能不连续存储；
+
+b→c：优化算子输出的layout，让reduction维度连续存储，提高locality；
+
+# 3、实验设计、效果
+
+**exp、baseline**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2030.png)
+
+**实验展示目标：**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2031.png)
+
+**实验环境**
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2032.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2033.png)
+
+![image.png](SmartMem%20Layout%20Transformation%20Elimination%20and%20Ada%20241e-26fc/image%2034.png)
+
+**实验效果**

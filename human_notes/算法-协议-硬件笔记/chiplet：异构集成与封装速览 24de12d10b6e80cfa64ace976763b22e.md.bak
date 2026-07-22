@@ -1,0 +1,95 @@
+# chiplet：异构集成与封装速览
+
+ref：[https://zhuanlan.zhihu.com/p/361000848](https://zhuanlan.zhihu.com/p/361000848)
+
+ref：[https://zhuanlan.zhihu.com/p/621786825](https://zhuanlan.zhihu.com/p/621786825)
+
+ref：[https://www.latitudeda.com/document/688](https://www.latitudeda.com/document/688)
+
+ref：[https://zhuanlan.zhihu.com/p/603355527](https://zhuanlan.zhihu.com/p/603355527) 
+
+ref：[https://blog.csdn.net/sinat_32960911/article/details/145101182](https://blog.csdn.net/sinat_32960911/article/details/145101182)
+
+ref：[https://mp.weixin.qq.com/s/0XMWlXGqkeBzYFpty_hpFw](https://mp.weixin.qq.com/s/0XMWlXGqkeBzYFpty_hpFw)
+
+# 封装和集成
+
+硬件系统，是**集成integration**不同功能部件，让其协作完成设计功能的硬件；
+
+根据集成度不同，可分为芯片（裸片die）上集成SoC、多die集成chiplet、多封装堆叠SiP/MCM和PCB板级集成SoP，系统集成度依次降低；
+
+**封装package包装单个die，或者堆叠、连接多个die/封装**，保留连接外部的接口；
+
+成熟的系统级硬件实现是**SoC和SiP**，工艺、面积限制导致**SoC的集成度难以提高**，并且SoC所有组件统一工艺使得良品率低而chiplet组合使用良品率高的组件来降低成本，因此**系统级硬件朝chiplet方向发展；**
+
+**chiplet的难点是多die的集成，**在多个die和基板之间建立垂直连接，实现的技术栈有2.5D封装、3D封装，3D封装技术分为前端和后端；
+
+**前端3D侧重集成，也称3D集成**，是bumpless的die间直接连接，垂直相连的die视为整体系统；
+
+后端3D侧重封装，是基于bump的die间垂直连接，die原生认为是独立模块并设置IO；
+
+封装、集成技术有2D封装、2.5D封装、3D封装等，2D通过substate进行die间互联，2.5D通过设置tsv的interposer进行die间互联，3D通过bump或die中tsv进行互联；
+
+技术特点：[https://zhuanlan.zhihu.com/p/2220249892](https://zhuanlan.zhihu.com/p/2220249892)；
+
+# chiplet的3D封装
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image.png)
+
+系统级封装 (即System-in-Package ，SiP) 有两个不同的方向。一是把 PCB 上的器件转移到**多芯片组件（MCM）**；二是如同前几年制造大型系统级芯片（即System-on-Chip， SoC）一样进行**集成，但是转换制程利用先进封装来封装裸片（chiplet）**。
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%201.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%202.png)
+
+以 IC 为重心的先进封装改变了设计流程。上图中，20世纪90年代设计采用的是类似 PCB 的设计流程；而**如今已采用类似 IC 的设计流程**。**把多种不同的技术集成到一起，即异构集成HI，结合了多年以来使用的各种制程技术。**特别是**先进封装和先进集成方法，例如晶圆堆叠（Wafer-on-Wafer）和无凸块集成（Bumpless）**。
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%203.png)
+
+**我们可以将基于封装的 3D 视为“后端 3D”（3D封装），把先进集成方式视为“前端 3D”（3D集成）。**
+
+**后端 3D是微型凸块互连（micro-bumped）加上每个裸片都有单独的时序签核和 I/O 缓冲器。**这种方式中，多个裸片之间通常没有采用并行设计。多年来，这一直是用于存储器和 CMOS 图像传感器的常见方法。
+
+**对于前端 3D，裸片通常是直接键合的制程工艺（铜对铜，或采用类似方法）。**裸片之间没有 I/O 缓冲器，这意味着并行设计和分析必不可少，需要时序驱动的布线和静态时序签核（对于数字设计而言）。所以设计将倾向于朝Z 轴上布局，多个裸片会堆叠在一起；这意味着随着设计的推进，一个特定的区域可能被分配给超过一个的裸片。
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%204.png)
+
+这是封装领域的下一个重要转变，也是向真正3D-IC 设计迈出的一大步，即**将众多不同的裸片堆叠在一起，这能大大缩短信号所需的传输距离。**当然，由此产生的**散热问题**也需要加以分析和管理，裸片上方的另一个裸片可能会阻绝散热，这取决于众多的设计细节。
+
+# 不同封装概述
+
+**封装是保护die/堆叠封装并暴露接口，封装是集成硬件系统的实现方式；**
+
+芯片从设计到生产再到消费者手中是个极其复杂的过程，设计公司做完逻辑和物理设计，将最终设计结果交给芯片代工厂。代工厂经过无数复杂的流程，最终会在一块大的晶圆上做出许许多多的小芯片。而这一个个的小芯片，则被称为“**die**”。
+
+die非常非常脆弱，因此不能直接使用，需要再给它加上一层保护壳，而这个过程，就叫做“封装”。简单点说，**封装技术需要将 die 固定在基板（substrate）上，然后将die上的引脚连接到芯片外壳的引脚上。**
+
+**硬件系统可分为芯片（die）上集成（SoC）、封装内集成（SiP）和PCB板级集成（SoP）三种实现；**
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%205.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%206.png)
+
+**单die的封装方法**
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%207.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%208.png)
+
+**多die的封装方法**
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%209.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%2010.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%2011.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%2012.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%2013.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%2014.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%2015.png)
+
+![image.png](chiplet%EF%BC%9A%E5%BC%82%E6%9E%84%E9%9B%86%E6%88%90%E4%B8%8E%E5%B0%81%E8%A3%85%E9%80%9F%E8%A7%88/image%2016.png)

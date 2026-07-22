@@ -1,0 +1,633 @@
+# meeting-25/11/19（LLM调度、FSD、CV Model、Acc、VAE）
+
+# 想法
+
+云的服务模型；云边端；llm拆；
+
+云边端拆LLM：llm的中间数据在边缘cache，多用户共享中间结果和参数；
+
+共享方式：batch；很早batch，底层多样，高层共性没有暴露和共享；
+
+后端SLM生成的结果共享；
+
+隐私放到小模型；
+
+movqgan中有conv
+
+单纯卷性能已经有范式，优化重点在于应用场景的复杂多变；
+
+im2col模块能增大llm、conv调度的选择？llm和conv的同卡调度会有好处吗？不会，不同机器应调度不同类型模型；
+
+冷热LLM在多卡的调度场景，结合调度方法，作单卡体系结构层面的优化（互联、kernel）；
+
+MaaS的两种调度：静态绑定GPU+动态分配GPU，多任务共享GPU；
+
+layer之间的抢占、token之间的抢占，动态DNN；
+
+边缘场景的多任务，自动驾驶的chain of thought，能引入DNN，conv在边缘侧推理；
+
+IoT：每个核的PCIe；
+
+自动驾驶、VR的多任务，体系结构优化？
+
+slam；
+
+多算法内核；
+
+资源受限，DFG不一定最优，引入抢占；
+
+DiT的DFG的输入token不同，动态；
+
+输入的长度动态，资源受限；
+
+MoE的动态FFN；
+
+不同layout下的concate+shortcut（residual），多分支的数据依赖；
+
+# 实验
+
+## LayoutLoop & TimeLoop
+
+[https://github.com/maeri-project/FEATHER/tree/main](https://github.com/maeri-project/FEATHER/tree/main)
+
+[https://github.com/NVlabs/timeloop/tree/master](https://github.com/NVlabs/timeloop/tree/master)
+
+[https://timeloop.csail.mit.edu/](https://timeloop.csail.mit.edu/)
+
+# 动机
+
+## ASPDAC25：KAPLA
+
+张量程序的“**硬件可见**”的Mapping，**stack**表示空间并行，**update**表示时间迭代；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%201.png)
+
+对张量程序搜索：垂直segment、layer pipeline、node并行、node Mapping/loop优化
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%202.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%203.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%204.png)
+
+SeaCache
+
+基于Cache的稀疏加速器；
+
+Buffer Prospector：Buffer？
+
+*
+
+## HPCA25：Lincoln
+
+Lincoln: Real-Time 50***∼***100B LLM Inference on Consumer Devices with LPDDR-Interfaced, Compute-Enabled Flash Memory
+
+在消费设备LLM推理；
+
+Hydrogen：面向Contention
+
+*
+
+Gemini：chiplet加速器的Mapping
+
+*
+
+Fast State Restoration：多任务恢复？
+
+*
+
+medusa：大模型推理 serverless？
+
+*
+
+## ATC25：Weaver（多GPU调度、MLS、attention-offload）
+
+**Weaver: Efficient Multi-LLM Serving with Attention Offloading**
+
+### idea
+
+**冷热模型**，即不同GPU的不同LLM的请求特征不同，比如prompt和token阶段负担均衡（575：340）的balence负载、prompt阶段负担更重（749：232）的input-heavy负载；
+
+执行input-heavy负载的prompt阶段的GPU在负载热模型，将其任务卸载到执行balance负载的token阶段的GPU（负载冷模型的GPU）；
+
+**attention offload将attention layer拆分成含参数proj和无参数attention（解除pipeline对GPU的持续绑定）**，**主要设备计算投影**得到QKV（prompt/token和权重的矩阵乘法），得到的新的QKV传输到辅助设备（因此**KV-Cache存储在辅助设备**），辅助设备使用query计算KV、KV-Cache之间的关联（attention），得到的输出O回传到主要设备，然后循环；
+
+**调度方法**：热模型GPU的attention计算卸载到冷模型GPU上执行；
+
+主要技术：**多GPU调度**、GPU的冷热模型的**负载切换**（attention offload）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%205.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%206.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%207.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%208.png)
+
+### 方法
+
+receiver CPU阻塞式优先调度sender的kernel，严重损耗receiver计算吞吐，让CPU在自身GPU kernel发射后接上一个polling kernel，polling kernel让GPU查看是否存在sender卸载的attention（类似**让receiver GPU轮询**），若存在则执行；
+
+CPU不知道GPU的实时负载情况，让GPU完成自己kernel后查询任务列表，能保证自身任务的吞吐；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%209.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2010.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2011.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2012.png)
+
+分割**长延迟kernel**，先评估分割后的等待时间，再决定是否分割kernel；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2013.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2014.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2015.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2016.png)
+
+### 实验
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2017.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2018.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2019.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2020.png)
+
+## ISCA24：Splitwise（集群调度、CLS ）
+
+Splitwise: Efficient Generative LLM Inference Using Phase Splitting
+
+将Conv和Coding（不同特征）的**request（端到端推理）调度到不同集群**，端到端的request调度浪费内存或算力资源，layer-wise调度的传输开销大且调度复杂而不适合集群调度，将**request粗粒度划分**为prompt阶段和token阶段后进行phase-wise的集群调度；
+
+分析LLM的推理结构，拆解request为prompt、token阶段并部署到不同机器，运行时**动态调度**到GPU**集群**，**集群内模型并行**：算子/pipeline（layer并行）、张量/数据（layer dimension并行）；
+
+### idea
+
+llm推理分为2个阶段：**prompt输入解析**（提供初始的context，计算bound）、**token生成**（gemv逐个生成新K-Q-V和token，KV-Cache的访问bound和容量Bound）；
+
+推理性能的4个指标：**E2E**（从输入到完成的端到端延迟）、**TTFT**（从输入到第一个token，即解析输入和prompt的延迟）、**TBT**（生成每个token的延迟的均值）、**吞吐**（每秒完成的请求/输入 ）
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2021.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2022.png)
+
+批处理方法：request-level、batch-continuous、batch-mixed；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2023.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2024.png)
+
+### LLM推理的运行特征
+
+Azure LLM推理
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2025.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2026.png)
+
+Coding的输入token数量一般很大，Conv的输入token的数量方差很大；
+
+Coding的输出token的数量较少（中位数13），Conv的输出token数量双峰分布（129）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2027.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2028.png)
+
+一个batch中，Prompt解析和token生成过程中耗费的时间对比，Conv大约**60-70%**的时间用于**20个token**的生成，Coding超过**20%**的时间用于**1个token**的生成；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2029.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2030.png)
+
+增大prompt size，会线性增加TTFT延迟（prompt解析是计算bound）；
+
+增大输出token的batch（将不同request的token合并到1个batch），几乎不影响TBT（**不同request的token生成过程近乎“镜像”**）；
+
+无论prompt和输出token size的比例（50，90，99），**E2E延迟中大部分是token生成过程**；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2031.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2032.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2033.png)
+
+prompt解析过程，**适当**增加Batchsize能增加**吞吐**，之后则没有效果；
+
+token生成过程， **增加**Batchsize能线性增加**吞吐**，直到达到内存容量（和传输带宽）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2034.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2035.png)
+
+**内存使用**：prompt解析是计算bound而内存占用不大，token生成的内存占用随着token生成指数增加；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2036.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2037.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2038.png)
+
+prompt解析随着prompt size增加而更耗能，token生成的能耗和token size几乎无关，功耗限制了prompt解析的性能（**power cap**），因此**功耗**应更多提供给prompt解析；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2039.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2040.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2041.png)
+
+prompt解析的性能受到**硬件算力**的影响，token生成则可使用更经济的硬件；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2042.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2043.png)
+
+### Splitwise LLM调度
+
+多机器集群调度**CLS**：动态分配不同任务集群的机器数量和负载；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2044.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2045.png)
+
+单机器调度**MLS**：每种任务机器的request调度，prompt解析阶段的request抢占token生成的request；
+
+KV-Cache的**传输优化**：prompt解析——KV-Cache传输——token迭代1是严格串行，较小的prompt size生成的KV-Cache传输开销不大，较大的prompt size在每个decoder layer计算完成后就开始传输（layer-wise）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2046.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2047.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2048.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2049.png)
+
+Splitwise调度系统
+
+**事件驱动模拟器**：评估不同服务调度到机器集群的性能；
+
+**调度主体**：不同服务{对话、Coding}的运行特征和在特定硬件上的性能模型，类似于张量程序；
+
+**搜索空间**：{AA、HH、HA、HHcap}的集群类型，不同任务{prompt解析、token生成、混池}的机器数量，类似于张量加速器的架构特征；
+
+**约束**：不同服务{对话、Coding}的SLO；
+
+**优化目标**：吞吐、成本、功耗；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2050.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2051.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2052.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2053.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2054.png)
+
+SLO：P50定义50%的时间中系统指标满足的约束，P99定义99%的时间中系统指标满足的约束；
+
+由于P99定义的时间包含P50定义的时间，P99的约束一般比P50更松弛（满足P99约束的系统，一定满足P50约束）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2055.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2056.png)
+
+### 实验
+
+**实现**layer-wise KV-Cache传输机制（vllm、MSCCL++的put原语），**实现**mixed batch方法；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2057.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2058.png)
+
+**模拟器**：分析LLM在硬件上的运行时，构建**性能模型**；模拟器输入request负载、性能模型、性能SLO、硬件配置，**预测性能指标**；实际数据**验证**性能指标；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2059.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2060.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2061.png)
+
+## KDD25：BurstGPT
+
+**BurstGPT: A Real-World Workload Dataset to Optimize LLM Serving Systems**
+
+LLM服务负载Trace
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2062.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2063.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2064.png)
+
+## MuxServe：基于MPS的多llm
+
+## NeurIPS25：FutureSightDrive（MLLM）
+
+MLLM应用于自动驾驶：理解场景，预测未来场景，规划路径（逆向）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2065.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2066.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2067.png)
+
+discrete text CoT用文本表达图像，模态转换过程存在信息丢失；
+
+image-text CoT是预测的文本和生成的图像，不一致的表达导致传达信息低效；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2068.png)
+
+模型预测未来并生成图像（优先道路边界、行人），证明模型理解了所看见的画面，图像作为**CoT的媒介**（类似token）；
+
+空间体现在理解**现实场景**，时间体现在预测**未来画面**；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2069.png)
+
+视觉**理解**：输入图像和指令，输出问题的答案，Model学会了解当前状况并回答关联问题；
+
+视觉**生成**：输入图像和指令（lane、detection），**预测**未来的图像并**生成**，人为设计“道路边界——行人——完整生成”的生成顺序（**思考步骤**）；
+
+思维链**CoT**：道路边界和行人检测提供**物理先验**信息，**指引**Model关注**未来场景**的可行区域和关键物体（**空间**），视觉内容的动态变化表征**时间**流动和场景自身规律；
+
+预训练：通过VQA学习视觉理解和视觉生成（CoT）；
+
+微调：针对自动驾驶场景特化**视觉理解**能力，为CoT增加**路径规划**能力，基于预测的未来场景和当前场景的**逆向**推理（先预测未来）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2070.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2071.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2072.png)
+
+**实现**：**Qwen2-VL-2B**作为MLLM，**MoVQGAN（VQVAE的改进Model）**提供MLLM**表示图像**的能力（decode_code），并将预测的visual token转为图像（生成CoT）；
+
+LLM的CoT中3D检测和lane检测是LLM的CoT，能否换成小模型在边缘侧？2B意味着边缘部署的可能性？
+
+MoVQGAN的normal infer和ema inference**（ema权重）**中用到了Conv、Res blk等等；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2073.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2074.png)
+
+**相关工作**
+
+多模态理解和生成：**VQ-VAE**将image表示成**token**来处理和预测，但**模态转换**丢失语义信息，降低下游任务的性能；**ViT encoder**直接编码**image**（**理解**）后使用difussion或自回归模型预测和**生成**；
+
+LLM for AD：**DriveGPT4**对当前场景的多次问答解释车辆行为和预测车辆控制（token编码图像）；Drivegpt4: Interpretable end-to-end autonomous driving via large language model
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2075.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2076.png)
+
+**DriveVLM**中LLM低频率/粗粒度的预测路径，部署时交给**端到端**模型修正后得到最终规划；
+
+Drivevlm: The convergence of autonomous driving and large vision-language models.
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2077.png)
+
+边缘侧：3D detection——motion prediction——trajectory planning（LLM提供初始解）；
+
+云中心：VLM理解车辆和环境数据，规划未来路径；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2078.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2079.png)
+
+**EMMA**利用多模态模型将non-sensor（非图像）输入和输出都当作文本，和sensor图像一起理解后预测路径；Emma: End-to-end multimodal model for autonomous driving
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2080.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2081.png)
+
+**世界模型** for AD：基于当前观察，理解车辆状况和环境，进行预测未来和作出规划；
+
+场景生成通过LLM+Diffusion（理解、预测），规划（下游任务）和表示学习（理解输入）归属LLM；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2082.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2083.png)
+
+## VAE
+
+**VE是变量分布估计**，比如贝叶斯估计中max_i{似然概率i /（似然概率1 + … + 似然概率N）}进行分类和估计，预测思路是根据后验概率**预测现有结果的内在原因**。VE结合马尔科夫链模型用于**Diffusion和变分自编码器（VAE）**的构建和训练；
+
+**Diffusion**的**BackBone（UNet、DiT）的智能**是预测当前时间步的Xt如何从过去时间步Xt-1添加噪声得到（类似计算后验概率的动机），**推理**时BackBone**预测**输入X（未来时间步N）如何从N-1…1（先验噪声）**逐步添加噪声**得到（去噪过程**denoise**），最后将先验噪声叠加所有噪声还原原始输入X，由于高斯噪声的叠加保持高斯分布，denoise中预测高斯噪声来一次性**加噪**；
+
+训练和推理的目标：**训练原生包含推理过程**，因为训练就是为了推理性能更强；
+
+**VQ-VAE**：VAE是变分自编码，作用是将输入**表达成连续型**隐变量，VQ是将隐变量**量化**到codebook中的向量（codebook是隐向量的取值空间），从而将输入**表达成离散型**隐变量；
+
+隐变量表示学习的逻辑：**encoder**通过**输入x**的高层特征（结果）和**隐变量z**（原因）的先验概率**prior**，计算后验概率**posterior**后估计输入的**隐变量表征**（找到原因），**decoder**通过隐变量表征和先验概率计算似然概率**likelihood来预测输出y**，来**评估**表征学习的效果（训练）或**应用**到下游任务（推理）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2084.png)
+
+**表示学习**的衡量：表示学习是Model学习信息的表示方法（图像、文本、隐变量、特征、函数等），算法对输入图像进行**表示**，基于表示**重建**输出图像的**还原度**；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2085.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2086.png)
+
+## AAAI24：ResDiff（Conv、Attention、FFT、DWT）
+
+**任务**：超分辨率图像重建ISR，image super resolution；
+
+**GAN、Flow、Diffusion**方法；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2087.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2088.png)
+
+CNN推理一次，Diffusion迭代推理（Conv、Attention、Residual Block、FFT/-1傅里叶变换、DWT小波变换）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2089.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2090.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2091.png)
+
+**GAN方法**：Photo-Realistic Single Image Super-Resolution Using a Generative Adversarial Network
+
+generator网络基于LR生成SR（造假），discriminator网络讲SR从HR（真图）中鉴别，训练好的生成网络用于SISR；
+
+**dense layer**是FC layer；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2092.png)
+
+GAN网络的loss：通过loss关于模型参数的梯度，反向传播梯度值来优化参数；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2093.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2094.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2095.png)
+
+**Flow方法**：Hierarchical Conditional Flow: A Unified Framework for Image Super-Resolution and Image Rescaling
+
+假设HR图像x经过一系列双射f得到隐变量z和LR，x经过f得到的中间结果是LR（image rescaling），LR和隐变量z经过一系列f-1得到SR（image super resolution），f是不同layer；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2096.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2097.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2098.png)
+
+**forward推理**是image rescale，**inverse推理**是image super resolution；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%2099.png)
+
+HR图像x前向推理得到LR图像和**隐变量z（NGS分布）**，隐变量z（NGS分布）和LR图像逆向推理得到SR图像；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20100.png)
+
+## AAAI24：SCTNet（Conv+Transformer）
+
+任务：语义分割；
+
+Transformer效果好但代价高，单branch架构的思路是轻量化Transfomer的输入尺寸或分尺寸级联，双branch架构融合Conv和Transfomer特征来保证速度和准确率；
+
+双分支的Transformer使用代价依然高，部分双分支网络的**交互**开销高（数据依赖的等待）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20101.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20102.png)
+
+双分支架构（一种trade-off）：CNN识别分割图像，Transformer对齐实体（语义）；
+
+pointwise conv替换gemm，去除（3D>2D）flatten和reshape的开销；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20103.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20104.png)
+
+**Backbone Feature Alignment**让CNN Branch中的CF Block（Conv计算Attention）对齐Transformer branch中的block能力；
+
+**Shared Decoder Head Alignment**让CNN Branch中Decoder对齐Tranformer branch中的Decoder能力；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20105.png)
+
+NIPS（CCF-B）：HR和LR图像的两个Branch之间的张量交互，引入**数据依赖**，需要调度来减小数据同步的等待时间；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20106.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20107.png)
+
+## TGRS2022（CCF-B）：CNN + Transformer for semantic segment of ISR
+
+# 方法/Acc
+
+## NV MPS、MIG、vGPU
+
+GPU VIRTUALISATION
+
+VIRTUALIZING HARDWARE PROCESSINGRESOURCES INA PROCESSOR
+
+## VLSI2023：Model & HW Co-optimize for sparse CNN+SA
+
+Sense: Model-Hardware Co-design for Accelerating Sparse CNNs on Systolic Array
+
+SA架构作sparse CNN推理：
+
+channel cluster，完成IFM和weight在PE的负载均衡；
+
+负载均衡的weight prune，保证kernel的稀疏比和模型精度；
+
+自适应数据流配置计算策略，根据IFM和weight的存储需求；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20108.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20109.png)
+
+加速器设计目标：增大（有效）计算并行度来降低延迟，增大数据复用来提高能效；
+
+相关工作对模型作硬件友好的稀疏prune，基于稀疏方式设计加速器，挑战是：
+
+因为稀疏的随机性导致**PE负载不均衡**，无法**同时利用weights和IFM**的稀疏性，IFM和weights的随机稀疏导致的**内存低效访问**，稀疏格式的处理需要消耗特定硬件资源而**性能受限**（FPGA Acc的LUT、BRAM）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20110.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20111.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20112.png)
+
+## SPOTS：An Accelerator for Sparse Convolutional Neural Networks Leveraging Systolic General Matrix-matrix Multiplication（Sparse、IM2COL）
+
+**动机**：im2col耗时间且访问耗能，软件完成不能利用im2col和GEMM的pipeline；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20113.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20114.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20115.png)
+
+im2col模块，和我的设计原理类似，但我的存储Buffer粒度更粗，不需要分布式buffer；
+
+im2col过程只读取一次SRAM的特性不同，SPOTS作了H和W两个方向overlap的reserve，我只作了W方向的reserve，多任务场景下我作一个**row-wise的切换**（正好需要重复读取）？；
+
+SPOTS中im2col模块的每个PU需要一个控制器来**分布式**控制3个buffer行为，而我是一个整体控制器控制top buffer的行为；
+
+每个PU中的reserve buffer就是我的slab buffer，但我能**统一每个tile的overlap的大小**（不多消耗buffer），因此控制和设计更简单，pipeline粒度更细；
+
+im2col+GEMM的pipeline相同；
+
+SPOTS中im2col模块的PU分布式控制的对上接口的粒度是layer，即PUs动态协同控制完成layer输入的im2col，我的im2col设计的控制和模块很简单，更适合**多任务场景**？
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20116.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20117.png)
+
+GEMM提供**两种dataflow**（tall tile、sub-tall-tiles），利用稀疏CNN提供的特性；
+
+tall-shape GEMM的设计是为了降低IM2COL吞吐的需求，从而减少IM2COL的资源，意味着论文PU的**资源消耗较大**；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20118.png)
+
+output stationary的特点：128 rows，4 cols；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20119.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20120.png)
+
+**Sparse handling**
+
+以block为粒度的结构化稀疏，column-block的稀疏Map；
+
+Sparse Weight——Buffer——Compress（skip）——GEMM；
+
+Dense Input——Buffer——IM2COL——Compress（bitmap、skip）——GEMM；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20121.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20122.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20123.png)
+
+**GEMM reconfiguration**
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20124.png)
+
+Load Balance
+
+## Swallow：
+
+## DAC24：window-based attention Acc
+
+swin Transformer：sparse attention
+
+[https://zhuanlan.zhihu.com/p/362672090](https://zhuanlan.zhihu.com/p/362672090)
+
+## ITSC24：Inter-Operator Schedule for CNN on GPU
+
+## ICS24：HW-aware(quantization) NAS for ViT
+
+## ISCA23：Eagar Correlation Prediction based FFN-Attention Co-optimized Transformer Acc
+
+## DAC22：length-adaptive sparse transformer Acc
+
+## MICRO16：fused CNN Acc

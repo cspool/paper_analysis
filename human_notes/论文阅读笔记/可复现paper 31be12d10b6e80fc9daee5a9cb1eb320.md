@@ -1,0 +1,1600 @@
+# 可复现paper
+
+## 总结
+
+### **架构研究的抽象逻辑**
+
+多任务场景和动态DL代表**业务/任务负载**特点，需求/指标包含性能、安全/隐私、虚拟化等。
+
+软件系统是面向业务场景的中介系统。
+
+硬件架构决定负载的**底层执行模型**，即指令集和指令集性能（延迟、算能）。
+
+架构创新的本质，是改变算法轻量化-编译映射-架构执行中的模块和流程，来完成性能、应用等需求。
+
+不同环节中，每个环节按照可量化、可实验部分进行创新设计修改和验证。
+
+架构执行：底层指令/**指令包的定义和延迟**。
+
+编译映射：将kernel编译成架构指令流，**映射**到架构。
+
+算法轻量化：模型稀疏、量化、蒸馏等**减少理论计算量和存储需求**。
+
+不同环节之间，可按照需求进行协同设计和验证。
+
+### idea brain
+
+感觉LLM应用中，最关键的是云端？但是不方便实验。
+
+还是找**热门领域的算法（Agent、DiT），搭建（轻量化、编译、架构执行）的仿真环境，然后设计加速架构优化性能，下一步才考虑落地和应用（系统是实现）**。
+
+结合**实验环境**验证idea：
+
+**为多任务DL负载设计异构SoC**，感觉会比较容易有idea，把关键任务动态转移到特定Node执行。但需要考虑通用性来支持多任务场景。同时异构Node之间的数据传输，在多任务背景下的优化。
+
+**动态DNN pipeline**，包括动态稀疏、动态量化、动态运行时操作（反量化）。
+
+## 可复现Paper
+
+### **PowerInfer（SOSP24）**
+
+**PowerInfer: Fast Large Language Model Serving with a Consumer-grade GPU**
+
+架构是CPU+GPU。
+
+找到LLM负载中冷热Neuron（参数）的特征，发现性能可优化点（大量冷Neuron高稀疏适合CPU计算和存储，少量热Neuron高稠密适合预载和驻留GPU）。
+
+将任务负载和性能优化点（创新点）包装成应用场景（背景和动机）。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 7.** The architecture and inference workflow of PowerInfer.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 8.** An illustrative example shows how PowerInfer calculates different neurons for one LLM layer.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%201.png)
+
+**1、面向的应用和场景**
+
+**在配备单张消费级GPU的个人电脑（PC）上进行大语言模型（LLM）的高速本地推理**。
+
+在本地部署场景中，用户的核心诉求是**针对小批量（往往是单条请求）处理的低延迟**，但最大的瓶颈在于大模型的显存占用极大，单张消费级GPU（如24GB显存的RTX 4090）无法完全装载整个模型参数。
+
+**2、baseline是什么，相比baseline的创新是什么，及专用术语解释**
+
+**Baseline（基准）**： 文章主要比较的baseline是当前最主流的本地端LLM推理框架 **llama.cpp**（采用层级划分的CPU-GPU混合卸载方案）和 **SpecInfer**（一种投机解码推理框架）。此外，也提到了传统的数据中心离线系统 FlexGen 和 DejaVu 作为背景对比。
+
+**相比Baseline的创新**： 论文的创新在于提出了 **PowerInfer** 系统，**利用LLM推理中固有的“高度局部性（局部热点）”进行架构和编译映射上的协同优化**。相比于 llama.cpp 粗放的“按层卸载”，PowerInfer 实现了精细的**神经元级卸载与异构计算**：
+
+- **架构执行设计（Neuron-aware Operator/神经元感知算子）**：放弃了传统需要将稠密矩阵转为稀疏格式的算子，直接在底层开发了针对单一神经元（行/列向量）的计算算子，在CPU和GPU上都能跳过无效计算，直接处理被激活的神经元。
+- **编译映射与协同（Offline Policy/离线策略配置）**：通过离线求解器建立整数线性规划模型，综合评估神经元影响力与硬件带宽，将少数但频繁激活的“热神经元”预加载到GPU，而将大量但不常激活的“冷神经元”放在CPU内存。
+- **算法轻量化（Adaptive Predictors/自适应预测器）**：在层内部引入极轻量化的自适应在线预测器，提前预测哪些神经元会被激活，大幅度降低了实际需要进行的计算量。
+
+**专用术语解释**：
+
+- **Activation Sparsity（激活稀疏性）**：指在LLM推理过程中，特别是在多层感知机（MLP）中，只有一小部分神经元会被当前输入激活参与计算，其余大部分输出为零或可忽略。
+- **Hot neurons（热激活神经元）**：模型中一小部分在面对不同输入时**总是被频繁激活**的神经元。它们虽然数量少，却占据了绝大部分的计算激活量。
+- **Cold neurons（冷激活神经元）**：模型中占据绝大多数的神经元，它们仅在遇到**特定输入内容**时才会被激活（具有强输入依赖性）。
+
+**3、图像的解释**
+
+- **image.png (Figure 1)**：展示了Transformer层的网络架构，以及ReLU等激活函数是如何作为“门控”导致前馈网络层（FC1和FC2）产生**神经元级别稀疏激活**的机制（图中绿色代表被激活的行或列）。
+- **image (1).png (Figure 2)**：对比了两种现有的模型卸载策略。左侧是“以GPU为中心的卸载”，需要频繁在CPU和GPU间搬运数据；右侧是“CPU-GPU混合卸载（如llama.cpp）”，按网络层截断，部分层在CPU算，部分层在GPU算。
+- **image (2).png (Figure 3)**：展示了以OPT-30B为例，现有基准框架（FlexGen, DejaVu, llama.cpp）的性能表现和延迟时间分解。反映了现有方案因为频繁的PCIe数据传输或过于依赖慢速的CPU计算，导致推理延迟极高。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> neurons are sparsely activated in FC1 and FC2 layers due to the ReLU function. The neurons that are activated are represented as green rows or columns encircled by red lines. The output vector from FC1 is then supplied to FC2 as its
+> 
+> input vector.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%202.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 2.** Typical existing offloading solutions. (a) shows a GPU-centric approach, while (b) is the CPU-GPU hybrid offloading approach.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%203.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> 30B on NVIDIA RTX 4090 GPU. The yellow blocks refer to FlexGen, the gray blocks refer to DejaVu (UM) and the blue blocks refer to llama.cpp. (a) The Y-axis indicates execution time for one iteration and the X-axis represents batch sizes for input. (b) The Y-axis indicates the proportion of execution time, and the X-axis indicates batch sizes for input.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%204.png)
+
+- **image (3).png (Figure 4)**：展示了LLM神经元激活的累积分布函数（CDF）图。揭示了**“幂律分布（Power-law）”规律**：即少量的神经元包揽了约80%的激活次数，这在整个模型或单个MLP层中都普遍存在。
+- **image (4).png (Figure 5)**：通过热力图展示了OPT-30B模型中不同网络层以及在不同下游任务下的神经元激活频率。图示证明“热神经元”的分布不仅在各层中存在，且在处理不同任务时保持高度一致。
+
+> **[图片提取文字 (image.png)]:**
+> ## 3.1 Insight-1: Power-law Activation
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> **Figure 4.** Cumulative distribution function (CDF) of neuron activation in OPT-30B, LLaMA2(ReGLU)-70B and LLaMA2(SwiGLU)-70B.
+> 
+> (a) CDF in a single MLP block. (b) CDF across the entire model. The X-axis shows neuron proportion. The Y-axis represents the CDF of neuron activation.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%205.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 5.** Activation frequency in OPT-30B. (a) The activation frequency of neurons in different layers. The Y-axis represents the layer id. (b) The activation frequency of neurons in different tasks for 30th layer. The Y-axis represents the tasks. The X-axis shows neuron proportion.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%206.png)
+
+- **image (5).png (Figure 6)**：对比了在小批量请求下，“将数据从CPU内存加载到GPU上计算”与“直接用CPU计算”的耗时。证明了在稀疏度高且Batch Size较小时，**直接在CPU上进行少量向量计算，比跨PCIe总线搬运权重到GPU更快**。
+
+**冷Neuron参数**占据大部分，位于CPU内存，**运行时少许被激活**而负载较轻。热Neuron参数占据少部分，驻留GPU内存，运行时大部分被激活而直接计算。
+
+- **image (6).png (Figure 7)**：展示了**PowerInfer架构和推理工作流的全局概览**。分为离线组件（性能剖析器和策略求解器，用于划分热/冷神经元）和在线组件（CPU/GPU神经元感知执行引擎和动态预测激活器）。
+
+如何确定冷热Neuron，只能根据大量统计数据或者在线决定。
+
+- **image (7).png (Figure 8)**：提供了一个**单层执行的具体案例**。演示了GPU只处理预加载的“热”激活神经元（如3和5），CPU同时并行处理“冷”激活神经元（如4），最后将CPU的结果传到GPU进行合并输出的完整过程。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Load-And-Execute
+> 
+> Direct-Execute
+> 
+> Direct-Execute
+> 
+> Load-And-Execute
+> 
+> X-axis shows input batch sizes, and the Y-axis measures execution time (ms). Load-then-execute involves transferring these neuron weights to GPU memory for computation, whereas direct-execute computes them directly on the CPU.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%207.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 8.** An illustrative example shows how PowerInfer calculates different neurons for one LLM layer.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%201.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 7.** The architecture and inference workflow of PowerInfer.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image.png)
+
+**4、文章的实验环境如何建立？**
+
+- **硬件环境配置**：构建了一高一低两套PC环境。
+    - **PC-High（高端PC）**：Intel i9-13900K处理器，192GB内存，单张 **NVIDIA RTX 4090 GPU（24GB显存）**，PCIe 4.0接口。
+    - **PC-Low（低端PC）**：Intel i7-12700K处理器，64GB内存，单张 **NVIDIA RTX 2080Ti GPU（11GB显存）**，PCIe 3.0接口。
+- **模型准备**：评估了涵盖参数量从4B到175B的多种LLM，包括OPT系列、Falcon、LLaMA2、Yi-34B等，同时应用了FP16精度和INT4量化权重格式。
+- **工作负载集**：从 Alpaca 和真实场景的 ChatGPT prompts 中抽取了不同长度的真实输入输出样本，用来模拟真实的对话场景。
+
+**5、文章和谁进行比较？每个对比实验中比较了什么指标？如何收集？**
+
+文章主要与 **llama.cpp**、**SpecInfer** 进行对比，在讨论缩小与顶级显卡差距时还与基于服务器级 A100 GPU 运行的 **vLLM** 进行了对比。
+
+**核心对比实验及指标收集方式如下：**
+
+1. **端到端生成性能比较（End-to-End Performance）**：
+    - **比较对象**：PowerInfer vs. llama.cpp vs. SpecInfer。
+    - **比较指标**：平均生成速度（tokens/s），即吞吐量；以及对不同基准模型的加速比（Speedup）。
+    - **收集方式**：在batch size为1（模拟本地单用户）的环境下，向系统输入长度为8至512的prompt样本集合，测量系统逐个生成token的耗时，绘制速度柱状图。
+2. **神经元负载分配追踪（Neuron Load Breakdown）**：
+    - **比较对象**：PowerInfer vs. llama.cpp。
+    - **比较指标**：CPU与GPU各自承担的已激活神经元计算比例。
+    - **收集方式**：在线引擎运行时，通过内部探针统计每一轮迭代分配给CPU线程与GPU核处理的实际神经元数量并计算百分比。
+3. **算子微观性能剖析（Neuron-aware Operator Performance）**：
+    - **比较对象**：PowerInfer算子 vs. 稠密运算/PyTorch Sparse（CPU端）vs. 稠密运算/PIT框架（GPU端）。
+    - **比较指标**：不同稀疏度下的算子执行时间（ms）。
+    - **收集方式**：构造固定的局部稀疏矩阵乘法测试用例（如 ×），通过向行中注入零值来调节稀疏度水平，分别调用不同算子库并计时。
+4. **模型准确率与预测器开销评估（LLM Accuracy & Predictor Overhead）**：
+    - **比较对象**：使用了PowerInfer（舍弃预测为非激活神经元）的模型 vs. 原生稠密模型。
+    - **比较指标**：下游常识推理任务的准确率（如PIQA, MMLU, GSM8K的准确度百分比）；以及预测器的运行时间和参数量开销。
+    - **收集方式**：在标准NLP评测数据集上执行模型推理收集准确率得分；并在系统运行中用profiler测量预测器所占的时间百分比（通常小于10%）。
+5. **与顶级服务器显卡的差距分析（Performance Comparison with A100）**：
+    - **比较对象**：PowerInfer (单张RTX 4090) vs. vLLM (单张80GB A100) vs. llama.cpp (单张RTX 4090)。
+    - **比较指标**：生成速度（tokens/s）及相对A100的性能折损率（Slowdown百分比）。
+    - **收集方式**：挑选参数量恰好能完全放入A100显存的模型（OPT-30B, Falcon-40B），通过输入长度为1和64的请求测量极限生成速度并计算相对差距百分比
+
+### **FlexLLM（EuroSys26）**
+
+**FlexLLM: Token-Level Co-Serving of LLM Inference and Finetuning with SLO Guarantees**
+
+LLM推理是短时LC应用，请求高峰期使用大量GPU，低谷期则浪费分配GPU。
+
+LLM微调是长时BE应用，可用于填补推理低谷期的空闲GPU。
+
+为了不同应用上下文能同时存放，设计共享权重和显存，保证多任务并发的基础。
+
+让长时BE应用切分成短时Token，根据动态请求/比例，将LC和BE以Token为单位按比例打包成kernel，即“按需”共享GPU，将动态需求和GPU算力划分解绑，动态打包成kernel，让GPU以预定义的高效方式执行。
+
+分时共享是按照GPU的timeslice切换机制来定义任务slice，但TS和任务slice很难对齐（任务执行时间不定，LC需要余裕TS，BE需要很短TS），导致浪费GPU时间和产生额外Ctx开销。
+
+分块共享是按照GPU的资源分配给不同任务，来并行不同任务，资源slice和任务slice很难对齐（任务请求动态变化），导致浪费GPU资源和较高资源重分配开销。
+
+**1、面向的应用和场景**
+
+**应用场景：** 在同一个GPU集群上，**同时提供大语言模型（LLM）的“实时推理（Inference）”和“微调（Finetuning）”服务**。 **核心痛点：** 现实中用户的推理请求往往是“突发性”的（一会多、一会少），为了保证回复不卡顿，厂商必须预留大量GPU。但在流量低谷时，GPU大量闲置，利用率极低。如果在同一批GPU上，既能优先满足用户的推理回复，又能利用闲暇算力做模型的微调训练，就能大幅提高硬件利用率、节省成本。
+
+**2、Baseline、创新点与专用术语**
+
+**Baseline（基线/现有方案）：**
+
+- **资源隔离（Resource isolation）：** 简单粗暴地将GPU分为两拨，一拨专门做推理（如使用vLLM），一拨专门做微调（如使用LlamaFactory）。缺点是无法动态共享算力。
+- **时间共享（Temporal sharing）：** 推理和微调交替使用GPU的时间片。缺点是微调任务耗时较长，经常会阻塞突发的推理请求，导致延迟超标。
+- **空间共享（Spatial sharing）：** 将GPU底层的计算资源（如流多处理器）按比例划分，同时跑推理和微调的Kernel。缺点是切分不够灵活，依然应对不了推理流量的剧烈波动。
+
+**相比Baseline的创新点：** 从架构执行和编译映射的角度，FlexLLM实现了**Token级别的协同调度（Token-Level Co-Serving）**：
+
+- **编译映射创新（静态编译）：** 提出**依赖并行（Dependent Parallelization）计算图剪枝（Graph Pruning）**。它让微调和推理共享同一个底层大模型的权重和显存，同时在编译期砍掉微调过程中不需要的冗余梯度计算，**节省了高达80%的显存**。
+- **架构执行创新（动态调度）：** 打破了微调必须“一整段话（Sequence）”一起算的传统，把微调切碎成和推理一样的“Token（词元）”级别。在底层Kernel执行时，**把推理Token和微调Token拼在一起发射给硬件**。优先保证推理，剩下的算力空位全部塞满微调Token，实现了极致的“见缝插针”。
+
+**专用术语解释：**
+
+- **PEFT（Parameter-Efficient Finetuning，参数高效微调）：** 一种“轻量化”算法。它冻结大模型原有参数，只外挂一个极小规模的神经网络（如LoRA）进行训练，大幅减少计算量和显存。
+- **SLO（Service Level Objective，服务等级目标）：** 这里特指**推理延迟的要求**（比如生成每个Token不能超过50毫秒）。保证SLO就是保证用户体验不卡顿。
+- **计算图剪枝（Graph Pruning）：** 编译阶段的优化。因为PEFT算法不更新基础模型的参数，系统在编译层面上直接把基础模型反向传播所需的数据流截断、丢弃，省出巨大的激活显存用于接纳更多的请求。
+
+**3、所有“image*”的解释**
+
+论文中包含的多张示意图（image.png 至 image (10).png）涵盖了问题背景、架构设计和核心算法机制：
+
+- **image.png (图1 资源调度对比)：** 直观对比了传统的资源隔离、时间共享、空间共享，与FlexLLM的“Token级协同调度”。展示了FlexLLM如何在保证推理SLO（绿勾）的同时，将微调任务打碎（A', B'等）并与推理任务融合执行。
+- **image (1).png (图2 系统概览)：** FlexLLM的整体系统架构图。展示了三大模块：PEFT即服务接口（统一接入）、静态编译（生成优化后的计算图）、动态调度（混合Token调度和底层执行）。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 1: Comparing different resource sharing approaches for serving finetuning and inference. For spatial sharing and coserving, the height of rounded rectangles illustrates the splitting ratio of GPU resources (e.g., streaming multi-processors).
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%208.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 2: An overview of FlexLLM.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%209.png)
+
+- **image (2).png 到 image (5).png (图3-图6 编译映射优化)：** 解释了**静态编译阶段**的动作。图3和图4展示了如何对张量进行不同的状态切分，让外挂的LoRA小网络自动适配底座大模型的分布式并行策略；图5和图6展示了计算图剪枝，图中标注有“剪刀”符号的地方，代表系统在编译时剔除了微调时不需要保存的中间变量（灰色虚线框），极大节省了显存。
+    
+    > **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 4: Illustration of FlexLLM's different dependent parallelization strategies with the LoRA example. Each green (or gray) box indicates a compute (or parallelization) operator, and each edge between operators represents a parallel tensor, and the parallelization states of the tensor's dimensions are shown next to the edge.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2010.png)
+    
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 3: Four possible parallel states for a tensor dimension and their transitions. For each parallel state, the symbol in parenthesis shows the notation FlexLLM used to represent it.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2011.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 5: Static graph pruning for an MLP model with LoRA.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2012.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 6: An overview of existing parameter-efficient finetuning (PEFT) methods. Green boxes show the operators of the backbone LLM, while blue boxes are the operators introduced by different PEFT methods. Arrows represent intermediate activations to be reserved and the dashed arrows demonstrate they are pruned by FlexLLM.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2013.png)
+
+- **image (6).png 到 image (8).png (图7-图9 架构执行机制)：** 解释了**动态执行阶段**的动作。图7和图8展示了如何使用“滑动窗口”将一条很长的微调文本切分为小块（Token级微调），并在反向传播时累加Key/Value梯度；图9展示了时间线，在Forward（前向）阶段，推理Token和微调Token被拼在同一个GPU Kernel流中（红色框）融合计算；在Backward（反向）阶段，则使用独立的计算流避免干扰。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 7: Illustration of attention module's forward and backward execution with FlexLLM's token-level finetuning mechanism.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2014.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> backward pass of FlexLLM's token-level finetuning mechanism, where  $s_j$  and  $l_j$  are the window length and the starting position of the j-th slice of the sequence.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2015.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 9: Execution timeline and token scheduling when coserving inference requests and a finetuning mini-batch.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2016.png)
+
+- **image (9).png 和 image (10).png (算法1和算法2)：** 分别是静态计算图剪枝（Algorithm 1）和Token级微调机制（Algorithm 2）的伪代码实现。
+
+> **[图片提取文字 (image.png)]:**
+> Algorithm 1 Static graph pruning. For an operator n, UPDATEINPUT(n, O(n)) returns a set of input tensors needed in order only to compute O(n) of the operator.
+> 
+> ```
+> 1: Inputs: PCG of a PEFT model \mathcal{G}
+> ```
+> 
+> 2: **Outputs:**  $\mathcal{A}$  is a set of tensors to be memorized,  $\mathcal{R}$  is a set of tensors to be rematerialized
+> 
+> Step 1: computation graph pruning
+> 
+> ```
+> 3: \overline{\mathcal{G}} = \text{ReverseAutoDiff}(\mathcal{G})
+> ```
+> 
+> 4:  $Q = \emptyset$   $\Rightarrow$  Q is a queue of updated operators
+> 
+> 5: **for** operator  $n \in \mathcal{G}$  **do** 
+> 
+> 6: **for** output tensor  $t \in O(n)$  **do** 
+> 
+> 7: **if** t is the weight gradient of the base LLM **then** 
+> 
+> 8: 
+> $$O(n) = O(n) \setminus \{t\}$$
+> 
+> 9: 
+> $$I(n) = \text{UPDATEINPUT}(n, \mathcal{O}(n))$$
+> 
+> 10:  $Q.push\_back(n)$ 
+> 
+> 11: **while** Q is not empty **do** 
+> 
+> 12: 
+> $$n = Q.pop\_front()$$
+> 
+> 13: **for** output tensor  $t \in O(n)$  **do** 
+> 
+> 14: **if** 
+> $$\nexists u.t \in I(u)$$
+>  **then**
+> 
+> 15: 
+> $$O(n) = O(n) \setminus \{t\}$$
+> 
+> 16: 
+> $$I(n) = \text{UPDATEINPUT}(n, \mathcal{O}(n))$$
+> 
+> 17:  $Q.push\_back(n)$ 
+> 
+> 18: 
+> $$A = \emptyset$$
+> 
+> 19: **for** operator  $n \in \mathcal{G}$  **do** 
+> 
+> 20: **for** tensor t in O(n) **do** 
+> 
+> 21: **if** 
+> $$\exists u \in \overline{\mathcal{G}}.t \in I(u)$$
+>  **then**
+> 
+> 22: 
+> $$\mathcal{A} = \mathcal{A} \cup \{t\}$$
+> 
+> ⊳ Step 2: opportunistically rematerializing tensors
+> 
+> 23: **for** tensor  $t \in \mathcal{A}$  **do** 
+> 
+> 24: Let *n* be the operator that outputs t (i.e.,  $t \in O(n)$ )
+> 
+> 25: **if**  $I(n) \subseteq \mathcal{A}$  and Cost(n) < threshold **then** 
+> 
+> 26: 
+> $$\mathcal{A} = \mathcal{A} \setminus \{t\}, \, \mathcal{R} = \mathcal{R} \cup \{t\}$$
+> 
+> 27: **return**  $\mathcal{A}, \mathcal{R}$
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2017.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## **Algorithm 2** Token-level finetuning mechanism. 1: **Inputs**: PEFT model *M* depth of *N*; Finetuning request *r* with sequence length of L **Outputs**: PEFT model gradients $\Delta M$ **for** *i* ← 0, $l_0$ ← 0; $l_i$ < L; i++ **do** ▶ Forward pass $s_i \leftarrow \text{HYBRIDTOKENSCHEDULER}(l_i, L)$ 4: $r_i \leftarrow \text{SLICE}(r, l_i, s_i)$ 5: $X_{0,i} \leftarrow \text{Tokenize}(r_i)$ 6: **for** model layer index $n \in RANGE(0, N)$ **do** 7: $X_{n+1,i}, Q_{n,i}, K_{n,i}, V_{n,i} \leftarrow \text{FORWARD}(M_n, X_{n,i})$ 8: $QKVCache_n \leftarrow APPEND(Q_{n,i}, K_{n,i}, V_{n,i})$ 9: $Loss_i \leftarrow GENERATIVELOSS(X_{N,i}, r_i)$ 10: $l_{i+1} \leftarrow l_i + s_i$ 11: 12: $Y_N \leftarrow Loss$ 13: **for** model layer index $n \in RANGE(N-1,-1,-1)$ **do** 14: $s_i \leftarrow \text{HYBRIDTOKENSCHEDULER}(l_i, 0)$ 15:
+> 
+> 11: 
+> $$l_{i+1} \leftarrow l_i + s_i$$
+> 
+> 12:  $Y_N \leftarrow Loss$ 
+> 
+> 13: **for** model layer index  $n \in RANGE(N-1,-1,-1)$  **do**
+> 
+> 14: **for**  $j \leftarrow 0, l_0 \leftarrow L; l_j > 0; j++$  **do**  $\triangleright$  Backward pass
+> 
+> 15:  $s_j \leftarrow HYBRIDTOKENSCHEDULER(l_j,0)$ 
+> 
+> 16:  $Y_{n+1,j} \leftarrow SLICE(Y_{n+1},l_j,s_j)$ 
+> 
+> 17:  $Y_{n,j},\Delta K_{n,j},\Delta V_{n,j} \leftarrow BACKWARD(M_n,Y_{n+1,j},QKVCache_n,\Delta KVAccum_n)$ 
+> 
+> 18:  $\Delta KVAccum_n \leftarrow ADD(\Delta K_{n,j},\Delta V_{n,j})$ 
+> 
+> 19:  $G_{n,j} \leftarrow SLICE(\Delta KVAccum_n,l_j,s_j)$ 
+> 
+> 20:  $\Delta M_n \leftarrow \Delta M_n + CALCULATEGRADS(M_n,G_{n,j})$ 
+> 
+> 21:  $l_{j+1} \leftarrow l_j - s_j$ 
+> 
+> 22: **return**  $\Delta M$
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2018.png)
+
+**4、文章的实验环境如何建立？**
+
+- **硬件平台：** 部署在Perlmutter超级计算机节点上，使用AMD EPYC 7763 CPU，256GB内存，以及 **4张 NVIDIA A100-SXM4-80GB GPU**，通过200 Gb/s的HPE Slingshot网络连接。
+- **测试模型：** 选取了三个开源大模型：LLaMA-3.1-8B、Qwen-2.5-14B 和 Qwen-2.5-32B，并采用LoRA算法作为微调基准。
+- **工作负载（数据集模拟）：**
+    - **推理流量：** 使用 ShareGPT 的提示词长度，并叠加真实的 Azure ChatGPT 生产环境流量轨迹（Trace）来模拟真实的突发式请求到达模式。
+    - **微调数据：** 采样自 Sky-T1_data_17k 数据集，用于模拟长文本的微调请求。
+
+**5、文章的对比实验设置**
+
+**比较对象（与谁比）：**
+
+1. **端到端隔离基准：** 将GPU集群切分，一部分运行现有的SOTA推理系统（**vLLM**），另一部分运行微调系统（**LlamaFactory**）。切分比例包括 25%vs75%、50%vs50%、75%vs25%。
+2. **调度策略对比：** 在FlexLLM框架内，关闭协同调度，替换为 **固定频率时间共享（Temporal Sharing）**、**动态时间共享（Dynamic Temporal Sharing）** 以及 **空间共享（Spatial Sharing）**。
+3. **显存消融实验（Ablation Study）：** 逐步关闭FlexLLM的“图剪枝”、“重算（Rematerialization）”和“Token级微调”功能，对比显存占用。
+
+**比较的指标（比什么）：**
+
+1. **SLO Attainment（SLO达成率，%）：** 推理请求满足延迟要求的比例（8B模型要求TPOT<50ms，14B/32B要求<75ms）。
+2. **Finetuning Throughput（微调吞吐量，tokens/sec）：** 每秒能处理多少个微调Token。
+3. **Inference Throughput（推理吞吐量，tokens/sec）：** 每秒处理的推理Token数。
+4. **Activation Memory Requirement（激活显存需求，GB）：** 验证轻量化编译的省显存效果。
+
+**指标收集方法（怎么收集）：** 通过离线复现真实的请求到达分布（Azure ChatGPT Trace），在设定的20分钟时间窗口内，向系统以不同的平均到达率（如4.0至20.0 req/s）持续“发射”推理请求和微调任务。在系统（CUDA/C++ runtime层面）运行期间，追踪记录每个请求的端到端生成延迟（记录TPOT并计算满足比例）、总耗时（计算吞吐量），并监控显存分配器在执行前向/反向计算时的显存水位峰值。
+
+### Tender（ISCA24）
+
+Tender: Accelerating Large Language Models via Tensor Decomposition and Runtime Requantization
+
+混合精度PE/MAC的硬件复杂、开销大，不同精度张量反量化后累加的折中实现：从全局Tmax开始，每组除以2分组，每个通道Cmax落入特定组，2幂次设置简化统一精度的计算。
+
+间接寻址是方法的硬件实现时自然的选择。
+
+将方法套用到LLM中，设计专用加速器（特殊dataflow）进行验证。
+
+架构执行对比图。SA累加过程中进行统一精度的计算，Accum和Dequan融合，而非先整体Accum+Dequan。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 5: Runtime Requantization. Compared to the original computation flow, we retain the reduction axis length by shifting the accumulated partial product sum between decomposed matrices.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2019.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 6: (a) Overview of Tender architecture. (b) Multi-Scale Systolic Array with FIFOs attached for skewing data. (c) Each PE is extended with a 1-bit shifter and a 1-bit control signal for rescaling. The PE updates an accumulated partial sum depending on the rescale signal.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2020.png)
+
+**1、面向的应用和场景**
+
+**应用与场景：** 面向**大型语言模型（LLMs，如OPT、LLaMA等）的低精度（INT4/INT8）推理加速**场景。 由于大模型参数量巨大，部署时面临极高的计算和存储瓶颈。虽然采用低比特量化可以显著缓解这一问题，但LLM的激活值（Activations）中存在极端的**离群值（Outliers）**，导致传统的全量统一量化会严重损失精度。本文的场景就是如何在**不使用复杂的混合精度硬件**的前提下，在商用计算硬件上高效、高精度地执行大模型的量化推理。
+
+**2、Baseline与论文的创新点（含术语解释）**
+
+**Baseline（基线）：**
+
+- **算法/软件端基线：** SmoothQuant（通过缩放权重和激活值转移量化难度，纯软件）、FP16（16位浮点数，作为精度对比的上限）。
+- **硬件架构端基线：** OLAccel（使用4位和16位计算单元的混合精度硬件）、ANT和OliVe（采用自定义非标准数据类型和解码器逻辑的特殊架构）。
+
+**论文相比Baseline的创新（协同设计创新）：** 论文提出了一种名为**Tender**的算法-硬件协同设计方案，没有采用基线方案中昂贵的混合精度计算或复杂的自定义数据类型，而是采用了标准的INT4/INT8。
+
+- **在算法轻量化层面（张量分解量化）：** 提出了**通道分解（Decomposed Quantization）**。它将包含极端值的离群通道与其他正常通道分离，分组进行量化。核心创新是**采用“2的幂（Power of 2）”作为分组阈值**，使得不同组之间的缩放因子（Scale Factors）呈2的倍数关系。
+- **在架构执行层面（运行时重量化）：** 巧妙利用了算法中“2的幂”倍数关系，在脉动阵列（Systolic Array）的底层计算单元（PE）中**增加了一个极其简单的1-bit移位器（Shifter）**。不同通道组的累加只需在硬件上进行简单的移位操作就能对齐缩放比例，实现了**隐式/运行时重量化（Runtime Requantization）**，完全避免了基线方案中繁重且会导致流水线停顿的浮点反量化操作。
+- **在编译映射层面（间接索引）：** 提出了利用索引缓存（Index Buffer）在运行时对乱序的分解通道进行间接寻址读取，避免了在内存中显式重排数据带来的读写开销。
+
+**专用术语解释：**
+
+- **离群值（Outliers）：** LLM在处理特征时，少数特定通道中出现的数值极大（幅度远超其他通道）的值。如果不加处理，会拉大整个张量的量化范围，导致正常值被压缩至0，严重降低精度。
+- **训练后量化（PTQ, Post-Training Quantization）：** 一种算法轻量化技术，不需要重新训练庞大的大模型，而是直接利用校准数据将已训练好的高精度模型转换为低精度（如INT8）以加速推理。
+- **脉动阵列（Systolic Array）：** 一种底层架构执行模块，由二维网格状的计算单元（PE）组成，数据像心跳一样在阵列中规则流动，极其适合做矩阵乘法加速。
+
+**3、所有“image*”的解释**
+
+文章中的所有图片（Figure 1 到 8 以及后续评估图）连贯地展示了问题的发现、算法流程以及架构执行映射：
+
+- **Image (Figure 1)：** 展示了典型的Transformer块架构（即大模型的基础网络模块），标明了注意力层（Attention）和前馈层（FFN）的数据流向。
+- **Image (Figure 2)：** 3D柱状图。直观展示了激活值（左侧）在极少数通道上出现了高耸的“红柱”（即离群值），而权重（右侧）分布很均匀。解释了为何激活值量化困难。
+- **Image (Figure 3)：** 激活值热力图。展示了离群值在LLM不同网络层中总是固定出现在相同的垂直通道（Vertical Lines）上，为“按通道分解”算法提供了理论依据。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 1: Illustration of the Transformer block architecture.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2021.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 2: Values in the activation (left) and weight (right) tensors for the attention and the first FC layers. The values are obtained from the 8th layer in the OPT-6.7B model. The Q, K, V weight tensors are concatenated along the out dimension for better visualization.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2022.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 3: Heatmap of the attention input tensors for sampled layers in the OPT-6.7B model. The values larger than 4.0 or smaller than -4.0 are truncated to 4.0 or -4.0 for better visualization. We also only show channels from 2300 to 3000 for a clearer view.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2023.png)
+
+- **Image (Figure 4)：** 核心算法流程图。清晰展示了Tender算法的四步走：减去偏置 -> 按2的幂阈值对通道进行张量分解 -> 归类分组（A1/A2/A3） -> 送入硬件进行运行时重量化。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 4: Decomposed quantization flow in Tender.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2024.png)
+
+- **Image (Figure 5)：** 架构执行对比图。(a)是传统方法，需要昂贵的浮点反量化模块（Dequantize）；(b)是Tender的运行时重量化，利用累加器旁边的**移位器（<<）**直接在整数域完成不同尺度数据的缩放叠加。
+- **Image (Figure 6)：** 硬件架构全景图。重点放大了计算单元（PE）内部（图c），展示了为此项创新付出的极小硬件代价——仅在PE中增加了一个用于缩放的 1-bit 移位器和一个控制信号。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 5: Runtime Requantization. Compared to the original computation flow, we retain the reduction axis length by shifting the accumulated partial product sum between decomposed matrices.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2019.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 6: (a) Overview of Tender architecture. (b) Multi-Scale Systolic Array with FIFOs attached for skewing data. (c) Each PE is extended with a 1-bit shifter and a 1-bit control signal for rescaling. The PE updates an accumulated partial sum depending on the rescale signal.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2020.png)
+
+- **Image (Figure 7)：** PE计算时序映射图。展示了架构执行的时延：在计算完一组矩阵后，硬件只会插入**1个周期的气泡（1-cycle bubble）**触发重量化（Rescale）信号，随后立刻无缝计算下一组，保证了极高的计算单元利用率。
+- **Image (Figure 8)：** 数据流映射图。展示了如何利用索引缓存（Index Buffer）记录通道执行顺序，指导执行控制器去缓存中以所需的顺序（如1-0-3-2）直接提取数据喂给算力阵列，消除了数据搬运重组的开销。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 7: Execution model of the MSA. (a) A 1-cycle bubble is inserted between the decomposed matrices. (b) Activated datapath inside PE during MAC and Rescale operation.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2025.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 8: Dataflow of Tender.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2026.png)
+
+**4、文章的实验环境如何建立？**
+
+本研究的实验环境兼顾了算法轻量化的功能验证和架构执行的性能/能耗验证，属于典型的软硬协同实验体系：
+
+- **软件（算法）环境：** 基于PyTorch和Hugging Face库搭建。使用The Pile数据集的128个样本进行量化校准（确定阈值和分组），评估模型涵盖了OPT、LLaMA、Llama-2系列及BERT。
+- **硬件（架构）评估环境：**
+    1. **功耗与面积收集：** 使用SystemVerilog编写了Tender的RTL（寄存器传输级）代码，通过RTL仿真验证逻辑正确性后，使用Synopsys Design Compiler在**商业28纳米工艺节点**下进行综合，得出面积和峰值功耗。
+    2. **性能模拟（延迟/加速比）：** 作者开发了一个**周期级模拟器（Cycle-level simulator）**，集成了Ramulator（用于模拟真实的DRAM内存时序）和FG-DRAM能耗模型。模拟器的时序参数严格对齐RTL综合的结果。
+
+**5、文章的对比实验设计**
+
+**对比对象：**
+
+- **量化算法比较对象：** FP16（浮点上限基线）、SmoothQuant（软件优化代表）、ANT、OliVe（架构优化代表）。
+- **硬件加速器比较对象：** OLAccel（离群值感知加速器）、ANT加速器、OliVe加速器。
+
+**比较的指标及收集方式：**
+
+1. **模型性能（精度指标 - Perplexity/Accuracy）：**
+    - **指标：** 主要使用困惑度（Perplexity，针对WikiText-2和PTB数据集，越低越好）评估LLM生成质量；使用准确率（Accuracy，针对GLUE基准）评估BERT大模型。
+    - **收集方式：** 在软件环境中运行经过Tender算法量化后的模型前向推理脚本，统计各数据集的输出结果收集得出。
+2. **执行加速比（性能指标 - Speedup）：**
+    - **指标：** 在相同的内存带宽和片上缓存大小下，端到端推理LLM模型（设定Batch size为1，输入输出长度比为2048:1）的速度提升比例。
+    - **收集方式：** 将模型映射后的指令流输入到周期级模拟器中，统计执行所需的总时钟周期数得出。
+3. **硬件开销（面积Area、功耗Power与能效Energy Efficiency）：**
+    - **指标：** mm²（面积）、W（功耗），以及能效比（归一化为处理同等数据的能耗消耗）。
+    - **收集方式：** 面积和功耗由Synopsys综合工具分析RTL代码生成报告收集；总能耗由周期级模拟器在执行过程中统计计算单元、SRAM、FIFO和HBM2访存的活动次数，乘以各组件的单位能耗模型综合计算得出。
+
+### FlashAttention-3（NIPS24）
+
+FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision
+
+WG内和SM内WG之间的调度行为，很类似专用（Conv） **Acc硬件定义的静态调度方式**，GPU的多任务并发能力强大，反而设计同步约束，让kernel更**高效使用资源**。
+
+Byte Permute：MMA_QK输出的**中间结果是FP32**寄存器格式保存，和MMA**输入是FP8**寄存器格式不同，需要重排，Byte Permute让每个线程对自身寄存器进行重排，比通过共享内存/L2C更加高效。
+
+重排是为了**FP8推理**的功能而自然引入的设计。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 1: Pingpong scheduling for 2 warpgroups to overlap softmax and GEMMs: the softmax of one warpgroup should be scheduled when the GEMMs of another warpgroup are running. The same color denotes the same iteration.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2027.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 2: 2-stage WGMMA-softmax pipelining
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2028.png)
+
+**1、面向的应用和场景** 本文的方法主要面向**大语言模型（LLMs）以及需要处理超长上下文的AI应用场景**。这些场景包括对多篇长文档的理解与推理、超大型代码库的代码分析、高分辨率图像处理以及长音频和视频的生成与处理。在这些应用中，传统的Transformer注意力机制面临随序列长度呈平方级增长的计算和内存瓶颈。
+
+**2、Baseline与核心创新点** **Baseline（基准）**：包括**标准注意力机制（如PyTorch中的实现）、FlashAttention-2、Triton版本的FlashAttention-2，以及NVIDIA官方深度优化的cuDNN闭源库**。
+
+**相比Baseline的创新点**（结合架构执行、编译映射与算法轻量化）：
+
+- **生产者-消费者异步机制（Warp-specialization，映射与架构执行层面）**：将GPU的线程束（Warp）分成负责搬运数据的“生产者”和负责计算的“消费者”，利用GPU底层的张量内存加速器（TMA），将数据在全局内存到共享内存的搬运与张量核心（Tensor Cores）的计算时间完全重叠。
+- **块级矩阵乘法与Softmax的交错执行（架构执行层面）**：Softmax操作（如指数运算）吞吐量极低，论文通过Pingpong调度（多线程束间）和2阶段流水线（单线程束内），**将耗时的Softmax指令巧妙地隐藏在异步的矩阵乘法（WGMMA）指令执行延迟之下**，打破了原有计算流中的串行依赖。
+- **硬件加速的低精度计算与误差对齐（算法轻量化与底层映射层面）**：首次在注意力机制中引入对**FP8低精度的硬件支持**，使计算吞吐量几乎翻倍。为了解决FP8带来的精度下降，采用了**块量化**和**非相干处理**技术，并通过底层寄存器重排解决了FP8运算时内存布局不对齐的硬件限制。
+
+**专用术语解释**：
+
+- **WGMMA**：一种底层异步矩阵乘法指令，允许张量核心直接从共享内存获取数据并在后台计算。
+- **Pingpong调度**：一种线程间协同机制，当一组线程在做矩阵乘法时，强行调度另一组线程去做Softmax，交替掩盖延迟。
+- **块量化（Block Quantization）**：不采用整个张量统一缩放，而是将矩阵分块，每一块使用独立的缩放系数，以减少异常值对整体精度的破坏。
+- **非相干处理（Incoherent Processing）**：在量化前，用一个随机正交矩阵乘以输入数据，打散（平滑）大模型中常见的极端异常值，显著降低量化误差。
+
+3、图片的解释
+
+- **image.png**：展示了**多线程束间的Pingpong调度机制**。图中表明，通过协同调度，可以让线程束1执行矩阵乘法（GEMM）时，线程束2执行Softmax，从而在时间轴上掩盖低效的Softmax运算。
+- **image (1).png**：展示了**单线程束内的2阶段WGMMA-Softmax流水线图**。它解释了如何在同一个计算流程中，将当前轮次的Softmax操作与下一次迭代的异步矩阵运算（WGMMA1）在时间上重叠。
+
+WG内overlap，1个WG的kernel内的调度。
+
+每个Attn Iter（MMA_QK、SFX、MMA_PV）中**MMA_PV延后，和下一个Attn Iter中SFX执行重叠**。
+
+nvcc编译器对调度重叠的SFX和MMA指令拆分后重排，高效使用TensorCore和FPU组。
+
+WG之间pingpong，2个WG之间调度，开头和结尾TL固定，中间TL周期性（三角形）。
+
+TL0：WG1先开始Attn Iter，WG2等待WG1的SFX启动后开始Attn Iter（同步约束），相同Attn Iter内有WG2的MMA_QK和WG1的SFX重叠，WG1的MMA_PV和WG2的SFX重叠。
+
+TL1：WG1的下一个Attn Iter开始后，上一个Attn Iter中WG2的MMA_PV需要延后，和当前Iter中WG1的SFX重叠，同时避免和WG1中MMA_QK竞争TensorCore。
+
+TL2：WG2的下一个Attn Iter开始后，两个WG的调度行为同TL1，但WG的身份互换。
+
+……
+
+TLk：根据当前启动Attn Iter的WG编号，决定两个WG采用TL1还是TL2的执行顺序。
+
+……
+
+TLn-1：和TL0表现的三角形成中心对称的三角形调度顺序，颜色完全相反。
+
+WG内调度和WG间pingpong可以融合使用，但效率没有显著提升，因为本质是将SFX和MMA重叠，WG内重叠还是WG重叠没有资源利用率的区别。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 1: Pingpong scheduling for 2 warpgroups to overlap softmax and GEMMs: the softmax of one warpgroup should be scheduled when the GEMMs of another warpgroup are running. The same color denotes the same iteration.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2027.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 2: 2-stage WGMMA-softmax pipelining
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2028.png)
+
+- **image (2).png**：展示了**底层寄存器内存布局对比图**。分别显示了FP32累加器与FP8操作数在寄存器中的排列方式差异，直观说明了在编译映射时为何需要使用字节重排指令（Byte Permute）来解决硬件布局冲突问题。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> T0 {a0, a1} T0 {a2, a3} T1 {a0, a1} T1 {a2, a3} T2 {a0, a1} T2 {a2, a3} T3 {a0, a1} T3 {a2, a3} T0 {a4, a5} T0 {a6, a7} T1 {a4, a5} T1 {a6, a7} T2 {a4, a5} T2 {a6, a7} T3 {a4, a5} T3 {a6, a7}
+> 
+> Figure 4: FP8 operand A register WGMMA layout – rows 0 and 8, threads 0-3, entries 0-7.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2029.png)
+
+- **image (3).png**：展示了**算法1的伪代码（不含内部重叠的FlashAttention-3前向传播）**。重点描述了在CTA（线程块）视角下，生产者如何加载数据，消费者如何计算的**异步Warp-specialization**基础流程。
+- **image (4).png**：展示了**算法2的伪代码（消费者线程束前向传播）**。这是在算法1的基础上，进一步引入了**WGMMA与Softmax的指令级重叠（Pipelining）**，是论文性能优化的核心代码逻辑。
+
+> **[图片提取文字 (image.png)]:**
+> ## Algorithm 1 FlashAttention-3 forward pass without intra-consumer overlapping – CTA view
+> 
+> - **Require:** Matrices  $\mathbf{Q}_i \in \mathbb{R}^{B_r \times d}$  and  $\mathbf{K}, \mathbf{V} \in \mathbb{R}^{N \times d}$  in HBM, key block size  $B_c$  with  $T_c = \lceil \frac{N}{B_c} \rceil$ .
+> - 1: Initialize pipeline object to manage barrier synchronization with s-stage circular SMEM buffer.
+> - 2: **if** in producer warpgroup **then**
+> - 3: Deallocate predetermined number of registers.
+> - 4: Issue load  $\mathbf{Q}_i$  from HBM to shared memory.
+> - 5: Upon completion, commit to notify consumer of the load of  $\mathbf{Q}_i$ .
+> - 6: **for**  $0 \le j < T_c$  **do**
+> - 7: Wait for the (j % s)th stage of the buffer to be consumed.
+> - 8: Issue loads of  $\mathbf{K}_i$ ,  $\mathbf{V}_i$  from HBM to shared memory at the (j%s)th stage of the buffer.
+> - 9: Upon completion, commit to notify consumers of the loads of  $\mathbf{K}_{j}$ ,  $\mathbf{V}_{j}$ .
+> - 10: end for
+> - 11: **else**
+> - 12: Reallocate predetermined number of registers as function of number of consumer warps.
+> - 13: On-chip, initialize  $\mathbf{O}_i = (0) \in \mathbb{R}^{B_r \times d}$  and  $\ell_i, m_i = (0), (-\infty) \in \mathbb{R}^{B_r}$ .
+> - 14: Wait for  $\mathbf{Q}_i$  to be loaded in shared memory.
+> - 15: **for**  $0 \le j < T_c$  **do**
+> - 16: Wait for  $\mathbf{K}_j$  to be loaded in shared memory.
+> - 17: Compute  $\mathbf{S}_{i}^{(j)} = \mathbf{Q}_{i} \mathbf{K}_{j}^{T}$  (SS-GEMM). Commit and wait.
+> - 18: Store  $m_i^{\text{old}} = m_i$  and compute  $m_i = \max(m_i^{\text{old}}, \text{rowmax}(\mathbf{S}_i^{(j)}))$ .
+> - 19: Compute  $\widetilde{\mathbf{P}}_{i}^{(j)} = \exp(\mathbf{S}_{i}^{(j)} m_{i})$  and  $\ell_{i} = \exp(m_{i}^{\text{old}} m_{i})\ell_{i} + \operatorname{rowsum}(\widetilde{\mathbf{P}}_{i}^{(j)})$ .
+> - 20: Wait for  $V_i$  to be loaded in shared memory.
+> - 21: Compute  $\mathbf{O}_i = \operatorname{diag}(\exp(m_i^{\text{old}} m_i))^{-1}\mathbf{O}_i + \widetilde{\mathbf{P}}_i^{(j)}\mathbf{V}_j$  (RS-GEMM). Commit and wait.
+> - 22: Release the (j % s)th stage of the buffer for the producer.
+> - 23: end for
+> - 24: Compute  $\mathbf{O}_i = \operatorname{diag}(\ell_i)^{-1} \mathbf{O}_i$  and  $L_i = m_i + \log(\ell_i)$ .
+> - 25: Write  $\mathbf{O}_i$  and  $L_i$  to HBM as the *i*th block of  $\mathbf{O}$  and L.
+> - 26: **end if**
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2030.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## Algorithm 2 FlashAttention-3 consumer warpgroup forward pass
+> 
+> **Require:** Matrices  $\mathbf{Q}_i \in \mathbb{R}^{B_r \times d}$  and  $\mathbf{K}, \mathbf{V} \in \mathbb{R}^{N \times d}$  in HBM, key block size  $B_c$  with  $T_c = \lceil \frac{N}{B_c} \rceil$ .
+> 
+> - 1: Reallocate predetermined number of registers as function of number of consumer warps.
+> - 2: On-chip, initialize  $\mathbf{O}_i = (0) \in \mathbb{R}^{B_r \times d}$  and  $\ell_i, m_i = (0), (-\infty) \in \mathbb{R}^{B_r}$ .
+> - 3: Wait for  $\mathbf{Q}_i$  and  $\mathbf{K}_0$  to be loaded in shared memory.
+> - 4: Compute  $\mathbf{S}_{\text{cur}} = \mathbf{Q}_i \mathbf{K}_0^T$  using WGMMA. Commit and wait.
+> - 5: Release the 0th stage of the buffer for **K**.
+> - 6: Compute  $m_i$ ,  $\tilde{\mathbf{P}}_{cur}$  and  $\ell_i$  based on  $\mathbf{S}_{cur}$ , and rescale  $\mathbf{O}_i$ .
+> - 7: **for**  $1 \le j < T_c 1$  **do**
+> - 8: Wait for  $\mathbf{K}_i$  to be loaded in shared memory.
+> - 9: Compute  $\mathbf{S}_{\text{next}} = \mathbf{Q}_i \mathbf{K}_i^T$  using WGMMA. Commit but do not wait.
+> - 10: Wait for  $V_{j-1}$  to be loaded in shared memory.
+> - 11: Compute  $\mathbf{O}_i = \mathbf{O}_i + \mathbf{P}_{cur} \mathbf{V}_{j-1}$  using WGMMA. Commit but do not wait.
+> - 12: Wait for the WGMMA  $\mathbf{Q}_i \mathbf{K}_i^T$ .
+> - 13: Compute  $m_i$ ,  $\mathbf{P}_{\text{next}}$  and  $\ell_i$  based on  $\mathbf{S}_{\text{next}}$ .
+> - 14: Wait for the WGMMA  $\mathbf{P}_{cur}\mathbf{V}_{i-1}$  and then rescale  $\mathbf{O}_i$
+> - 15: Release the (j % s)th, resp. (j 1 % s)th stage of the buffer for **K**, resp. **V**.
+> - 16: Copy  $S_{next}$  to  $S_{cur}$ .
+> - 17: end for
+> - 18: Wait for  $V_{T_c-1}$  to be loaded in shared memory.
+> - 19: Compute  $\mathbf{O}_i = \mathbf{O}_i + \mathbf{P}_{\text{last}} \mathbf{V}_{T_c-1}$  using WGMMA. Commit and wait.
+> - 20: Epilogue: Rescale  $\mathbf{O}_i$  based on  $m_i$ . Compute  $L_i$  based on  $m_i$  and  $\ell_i$ . Write  $\mathbf{O}_i$  and  $L_i$  to HBM as the *i*-th block of  $\mathbf{O}$  and L.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2031.png)
+
+**4、实验环境的建立**
+
+- **硬件环境**：使用单张 **NVIDIA H100 80GB SXM5 GPU**。为了消除频率波动带来的测试误差，**将GPU的时钟频率严格锁定在1830MHz**。
+- **软件环境**：依赖于最新的底层编译与映射生态，包括 CUDA 12.3、cuDNN 9.1.1.17、CUTLASS 3.5（提供WGMMA和TMA底层接口）、FlashAttention 2.5.8、Triton nightly版本以及 PyTorch 2.3.0。
+- **实验执行**：所有性能测试基准均**重复运行100次并取平均时间**，以确保数据的可靠性。
+
+**5、对比实验的比较对象、指标及收集方法**
+
+- **比较对象**：标准的PyTorch注意力实现、FlashAttention-2、基于Triton编译的FlashAttention-2，以及目前H100上最快的闭源库 cuDNN。
+- **每个对比实验中比较的指标**：
+    1. **运算吞吐量/速度（TFLOPs/s）**：在FP16和FP8精度下，模型在前向传播和反向传播时的绝对计算速度。
+    2. **数值误差（RMSE）**：低精度（FP8/FP16）计算结果与绝对准确的FP64基准计算结果之间的均方根误差。
+- **指标的收集方法**：
+    1. **吞吐量数据收集**：固定总Token数（如16k），通过动态调节序列长度（512至16k）和批次大小进行测试。首先根据公式 `4 × 序列长度² × 头部维度 × 注意力头数` 算出理论计算量（如有因果掩码则除以2，反向传播乘以2.5），然后除以测试收集到的平均运行时间，得出最终的TFLOPs/s吞吐量。
+    2. **数值误差数据收集**：考虑到真实LLM中存在的极端异常值，实验**利用正态分布叠加极少量的超大异常值（N(0,1) + N(0,100)*。将这些输入分别送入测试算法与高精度FP64实现，对比输出张量并计算均方根误差（RMSE）。
+
+### **Arbitrary Precision Acceleration on TC**
+
+**Efficient Arbitrary Precision Acceleration for Large Language Models on GPU Tensor Cores**
+
+**1、面向的应用和场景**
+
+**应用与场景**：本文面向**大语言模型（LLMs）在现代GPU上的超低比特（如2-bit、3-bit等任意精度）量化推理加速**。 简而言之，就是解决大模型在被极度压缩（量化）后，如何在GPU的专用硬件（张量核心 Tensor Cores）上跑得更快、更高效的问题。
+
+**2、Baseline与论文创新点（含术语解释）**
+
+**Baseline（基线）**：
+
+- **算法与数据格式基线**：传统的带符号（signed）或无符号（unsigned）整数格式，以及现有的INT4/INT8量化标准。
+- **架构执行与映射基线**：NVIDIA官方的加速库（CUTLASS的INT1/INT4）、传统的全精度（FP16/FP32），以及现有针对特定位宽的加速工作（如APNN-TC、BSTC等）。传统的内存调度往往依赖较慢的全局内存进行数据重组。
+
+**论文的创新点（协同设计）**：
+
+- **算法轻量化层的创新（数据格式定义）**：提出了**Bipolar-INT（双极性整数）**数据格式。它摒弃了传统带符号整数复杂的符号位，将所有比特位的权重统一，完美支持对称量化并消除了冗余，极大地利于底层的并行计算。
+- **编译映射层的创新（指令流与矩阵拆组）**：提出了**任意精度矩阵乘法重建**和**矩阵预处理**策略。将原本GPU不支持的特殊位宽（如3-bit）在编译映射阶段按比特位拆解为1-bit矩阵，再重新组装为GPU原生支持的32-bit格式进行传输，不仅兼容了底层硬件，还成倍减少了显存访问冗余和传输指令。
+- **架构执行层的创新（存储层次与延迟隐藏）**：提出了**面向数据恢复的内存调度机制**。通过精心设计数据在多级存储中的流动，把原本在较慢的全局内存中进行的数据还原操作，转移到超快的共享内存（Shared Memory）和寄存器碎片（Fragment）中执行，大幅降低了访存延迟。
+
+**专用术语解释**：
+
+- **Tensor Cores (TCs / 张量核心)**：GPU内部专门用于加速矩阵乘法（MatMul）的底层硬件执行单元，但原生仅支持INT1、INT4等有限数据格式。
+- **Bipolar-INT**：论文首创的数据格式，它将传统二进制中的“0”在计算时映射为“-1”，使得数据分布严格对称，避免了传统量化中引入的零点偏移（Zero-point）和额外的乘加开销。
+- **Global Memory（全局内存）与 Shared Memory（共享内存）**：GPU的存储架构模块。全局内存容量大但访问极慢；共享内存位于流式多处理器（SM）内部，容量小但速度极快。论文的核心执行优化就是将计算搬迁至共享内存。
+
+**3、所有“image*”的解释**
+
+论文提供的图像直观地展示了其架构执行与映射的具体流程：
+
+- **image.png (Figure 1)**：**展示了Bipolar-INT与传统整数格式的对比**。图中清晰地表达了传统带符号整数在位拆分时符号位处理复杂（难以并行），而无符号整数需要额外计算零点偏移量。相比之下，Bipolar-INT每个比特的计算逻辑一致，范围对称，非常容易拆分成1-bit进行并行矩阵乘法。
+- **image (1).png (Figure 2)**：**展示了任意精度矩阵乘法的拆解与还原流程**。图中以2-bit为例，将权重矩阵（W）和特征矩阵（X）的每一位拆开成多个1-bit矩阵，送入硬件完成1-bit矩阵乘法后，再通过位移（shift）和累加操作将结果还原。该流程可扩展至任意位宽。
+- **image (2).png (Figure 3)**：**展示了矩阵预处理（分解与重组）以节省访存的流程**。Step 1把GPU不支持的数据格式拆解为1位；Step 2把它们拼装成GPU友好的32位无符号整数；Step 3将多个矩阵串联组合，从而将多次慢速的数据搬运合并为一条高效的传输指令。
+- **image (3).png (Figure 4)**：**展示了面向恢复的内存调度策略**。对比了传统直接在全局内存（Global Mem）中做还原导致高延迟的做法（左侧），以及本文创新的做法（右侧）：利用共享内存（SHMEM）的乒乓缓存（交替读写隐藏延迟），并在更快的Fragment（寄存器级）中直接完成部分结果的累加还原，极大降低了架构执行延迟。
+
+**4、文章的实验环境如何建立？**
+
+实验环境建立在基于Ubuntu 18.04操作系统的服务器上，核心架构硬件使用的是**NVIDIA RTX 3090 GPU**。在编译和驱动环境方面，使用了**CUDA-11.8**和NVIDIA官方的矩阵计算库**CUTLASS-2.11**来构建和验证底层执行流。
+
+**5、对比实验设计（对比对象、指标及收集方法）**
+
+**比较对象**：
+
+1. **全精度基线**：PyTorch框架下的FP32和FP16矩阵乘法。
+2. **官方底层库**：NVIDIA利用Tensor Cores优化的CUTLASS INT4 和 CUTLASS INT1。
+3. **其他体系架构加速方案**：现有的基于张量核心的任意精度加速器，如 APNN-TC、BSTC、BTC。
+4. **端到端大模型量化框架**：QLoRA、GPTQ、OneBit等前沿大模型量化方案。
+
+**比较的指标**：
+
+1. **延迟 (Latency)**：核心模块（矩阵乘法）的执行时间，单位为微秒(us)或毫秒(ms)。
+2. **吞吐量 (Throughput/TOPS)**：每秒万亿次操作数，衡量硬件计算效率绝对值。
+3. **加速比 (Speedup)**：相对于全精度（FP16/FP32）或现有加速库的相对速度提升倍数。
+
+**指标如何收集**：
+
+- **微观（Kernel级）收集**：通过构建标准方阵（从128x128到4kx4k不同维度），以及直接从Llama2-7B模型的各个层中提取真实的非方阵（如1k×4k×4k等），让核心代码循环运行**1000次**，取平均执行时间（mean execution time）来统计延迟和吞吐量，以消除系统误差。
+- **宏观（端到端应用级）收集**：将设计的算子直接作为执行引擎替换到真实的开源大模型（Llama2-7B, OPT-6.7B, BLOOM-7B）中，在相同的位宽配置下运行推理任务，收集并对比端到端推理的加速比。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 1: Comparison between bipolar-INT and traditional integers. Bipolar-INT is well-suited for TCs' parallel computing due to its symmetric quantization and unified operations.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2032.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 2: Illustration of the decomposition and recovery process for bipolar-INT MatMuls. Here matrices W and X are both 2-bit, which can be extended to arbitrary bit widths.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2033.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 3: Procedure of matrix decomposition and reassembly to save GPU's memory and data transfer instructions.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2034.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 4: Recovery-oriented memory scheduling strategy for arbitrary precision MatMul on GPUs, leveraging shared memory and fragments to reduce global memory access and accelerate computation.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2035.png)
+
+### **POD-Attention（ASPLOS25）**
+
+**POD-Attention: Unlocking Full Prefill-Decode Overlap for Faster LLM Inference**
+
+BG：让Prefill（计算密集）和Decode（访存密集）请求按比例在SM中同时运行，共享权重，压榨算力和带宽，混合Batch。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 3.** Computation in hybrid batches. Current systems compute prefill inputs  $(e_1...e_p)$  and decode inputs  $(e_{p+1}...e_{p+d})$  together for linear operations. However, they compute prefill and decode attention separately using specialized kernels.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2036.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 2.** Impact of scheduling strategies on TTFT and TBT.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2037.png)
+
+执行模型是Op的kernel实现，block到SM的调度。Baseline方法不同设计。
+
+Op的kernel实现
+
+两个Op使用不同FA kernel实现（GEMM、GEMV）。
+
+两个Op融合的kernel（HFuse），即block、warp、指令level融合的kernel。
+
+kernel block到SM的调度
+
+不同block在Stream中按顺序交替执行。
+
+不同block使用不同Stream并发。
+
+融合block复用GPU到SM的调度。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 5. GPU execution model.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2038.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 8.** SM-aware CTA scheduling.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2039.png)
+
+Paper：
+
+SM领取Attn block时，按比例轮流配置不同Op，让SM按比例执行两类Attn block。改进Baseline中难以压榨SM算力和带宽。
+
+SCG中，SM周期性更换block策略，轮流优先从不同stream中取block。POD参考SCG的原理，因为SCG符合GPU的并发架构。
+
+**1、面向的应用和场景**
+
+本论文面向的应用场景是**大语言模型（LLM）的推理服务**，特别是在**长上下文（Long-context）**需求日益增加的背景下，追求高吞吐量（Throughput）和低延迟（Latency）的在线与离线生成场景。 在架构创新体系中，这属于通过底层算子（Kernel）优化来直接满足上层模型应用端对性能（高并发请求、低首字延迟和低字间延迟）的严苛需求。
+
+**2、Baseline是什么，论文的创新是什么？（附专用术语解释）**
+
+- **Baseline（基线系统）**：
+    - **架构执行/内核级基线**：现有的独立注意力算子，如 **FlashAttention (FA)** 和 **FlashInfer (FI)**。它们通常被串行调用，或通过 CUDA Streams 简单并行，也有使用线程束级融合（HFuse）的方案。
+    - **系统级基线**：现有的 LLM 推理调度框架，包括优先处理 Prefill 的原始 **vLLM** 调度器，以及支持分块混合批处理（Chunked-prefill & Hybrid batching）的 **Sarathi-Serve**。
+- **论文的创新（POD-Attention）**： 在**架构执行与编译映射**层面，论文提出了一种全新的 GPU Kernel 设计——**POD-Attention (Prefill-Decode Overlap)**。相比于基线方案将 Prefill 和 Decode 拆分为独立算子导致 GPU 计算单元或访存带宽闲置，POD-Attention 的创新在于实现了**CTA（协作线程阵列）级别的并发融合**。它通过一种**“感知 SM（流多处理器）的动态 CTA 调度”**软件机制，让原本在不同架构指令流中的计算密集型（Prefill）和访存密集型（Decode）任务，能够在同一个 GPU SM 上**同时（Concurrent）**执行，从而完美协同榨干 GPU 的计算和内存带宽资源。
+- **专用术语解释**：
+    - **Prefill（预填充阶段）**：LLM 处理用户输入的提示词（Prompt）并生成第一个 token 的过程。它是并行处理的，属于**计算密集型（Compute-bound）**。
+    - **Decode（解码阶段）**：LLM 逐个自回归生成后续 token 的过程。由于每次只处理少量 token 且需要反复读取显存中的 KV Cache，属于**访存密集型（Memory-bandwidth-bound）**。
+    - **Hybrid Batching（混合批处理）**：一种调度策略，将不同请求的 Prefill 任务和 Decode 任务拼成一个批次（Batch）一起扔给 GPU 计算，目的是**复用**模型权重的**访存**。
+    - **SM (Streaming Multiprocessor)**：流多处理器，GPU 硬件内部的核心计算执行模块。
+    - **CTA (Cooperative Thread Array)**：协作线程阵列，是 GPU 并行执行的逻辑划分块。同一个 CTA 中的线程一定会被调度到同一个 SM 上执行，共享 L1 缓存。
+
+*3、图像”的解释**
+
+以下是论文中各图表的简练解释：
+
+- **image.png (Figure 1)**：展示了研究动机。单独跑 Prefill 算子只用了计算资源但闲置了显存带宽，单独跑 Decode 算子则相反。而本文的 POD-Attention 在混合批次下能**同时高效利用计算和显存带宽**。
+- **image (1).png (Figure 2)**：对比了不同的请求调度策略。vLLM 调度容易导致生成停顿（高 TBT），而混合批处理（Hybrid-batching）通过分块调度平衡了首字延迟（TTFT）和字间延迟（TBT）。
+
+**单类**请求的计算密集型Prefill和访存密集型Decode分别浪费GPU带宽和算力，性能不能达到理想值。
+
+vLLM（PagedAttn提高内存利用率）优先调度新请求的Prefill，导致TTFT很低但TBT很高。
+
+单个请求的Prefill延迟太大，将**Prefill拆分方便调度，并且和其他请求的Decode打包成kernel**，压榨带宽和算力，平衡TTFT和TBT。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 1.** State-of-the-art attention kernels utilize either compute or memory (FA: FlashAttention, FI: FlashInfer). POD-ATTENTION utilizes both compute and memory to accelerate attention computation in hybrid batches (see Table 1 for configurations. Model: Llama-3-8B on 2 A100 GPUs).
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2040.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 2.** Impact of scheduling strategies on TTFT and TBT.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2037.png)
+
+- **image (2).png (Figure 3)**：展示了混合批处理在单层 LLM 中的执行流程。现有的线性运算已经合并处理，但注意力（Attention）计算依然是分离的，这是当前优化的痛点。
+- **image (3).png (Figure 4)**：量化了性能瓶颈。图表说明当上下文长度变长（如16K）时，注意力计算占整个迭代时间的比例极速上升（超过60%），证明了优化 Attention 的重要性。
+
+**混合Batch的LLM layer pipeline**：1个Prefill请求/分块（p个token）和d个Decode请求的当前token（d个token）打包成1个混合Batch，进行preProj（复用权重）。Prefill和Decode总计对应1+d个不同请求输入。
+
+**LN**：平稳数据分布。
+
+**preProj**：layer的起始线性层，**投影**token维度到当前layer空间的维度（d-dim到d’-dim）。
+
+1个Prefill请求的输入X{不同tokens}分别**投影**K、Q、V。
+
+不同Decode请求的当前token分别**投影k、q、v**。
+
+Prefill的输入X{不同tokens}和Decode的不同token的**投影复用相同权重Wk、Wq、Wv**。
+
+**PrefillAttn**：Q * KT，SFX，P * V，保留KVCache，得到输入序列X{p个token}的一种隐张量表达。
+
+**输入序列X**经过Attn计算，得到每个token关于p个token的**自回归编码**，Layer初始隐含Mask。
+
+**DecodeAttn**：更新KVCache，q * {Kcache}T，SFX，P * {Vcache}，得到下一个token的一种隐向量表达。
+
+k和v写回Cache后再读，会浪费少许计算时间，但方便Transpose。
+
+d个token分别更新**d个KVCache**后读取，得到d个下一个token的隐向量。
+
+**postProj**：layer的结尾线性层，**投影/还原**token维度到layer输入时维度（d’-dim到d-dim）。
+
+**shortcut**：稳定梯度传输，提供恒等映射。
+
+**LN、FFNs、shortcut**：Transformer架构中FFN-Layer。
+
+不同Ctx Length下，Attn（Prefill Attn和Decode Attn）和FFN的比例逐渐变大（都占大头）。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 3.** Computation in hybrid batches. Current systems compute prefill inputs  $(e_1...e_p)$  and decode inputs  $(e_{p+1}...e_{p+d})$  together for linear operations. However, they compute prefill and decode attention separately using specialized kernels.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2036.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 4.** Contribution of different operations in iteration runtime with hybrid batching (model: Llama-3-8B, batch size: 60, chunk size: 1K). For each context length, we show runtime of iteration that processes the last chunk of a prompt.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2041.png)
+
+- **image (4).png (Figure 5)**：**架构执行层**示意图。展示了 GPU 的底层执行模型，包括 Stream、CTA 调度器、SM 以及内部的 Warp（线程束）是如何分配和执行的。
+- **image (5).png (Table 2 & 3)**：对比了不同并行映射执行方案（如使用 Streams、CTA 分配、Warp 融合、线程内融合）能否保证操作共置（Co-location）和缓解波段量化问题（Wave quantization），并列举了实验对比配置。
+
+Stream队列内线程block串行调度，不同Stream队列之间无序并发（可以同步）。
+
+Stream是Host卸载任务的命令队列（传输、计算、图形），不同Stream是不同任务的命令队列。
+
+1次kernel调用是1个计算命令，是1个线程grid，包含若干线程block（CTA）。
+
+Stream队列中block到DPC/SM的调度。
+
+**M-Pipe Ctrl调度计算block到SM内执行，根据SM的并发余量和调度策略从Stream中申请block**。M-Pipe Ctrl（包含Scheduler和Arbiter）、图形Engine和SM等组成DPC。
+
+**前端调度器接受SM的block申请后裁决，从Stream中调度block发往申请者SM。**裁决根据不同GPC负载均衡、Stream优先级等策略进行。
+
+**CGA是多个SM组织成Tile**，将block cluster调度到Tile，SM之间线程通过DSMEM通信。
+
+**Guarantee Co-location（GC）**是将Prefill和Decode kernel中指令在SM内并发来压榨算力和带宽。
+
+**Wave Quantization（WQ）**是一个批次中所有block调度到SM时很难整除，让最后一波的block很少而闲置很多SM，调度策略需要让SM空闲时间尽量少。
+
+**PrefillAttn和DecodeAttn Op**的输入无关（不同请求），权重共享，适合**并发**，设计融合**kernel**。
+
+Stream并发：PrefillAttn和DecodeAttn使用不同FA kernel，在**不同Stream**中并发。
+
+GC：n；Stream并发不保证kernel在相同SM内。
+
+WQ：y；DecodeAttn的block**更快结束**让SM空闲时，SM申请Stream内block来填充。
+
+CTA分配：PrefillAttn和DecodeAttn使用**融合kernel实现**，**划分kernel的不同比例线程block**到PrefillAttn和DecodeAttn Op**。**
+
+GC：n；CTA并发不保证2种block在相同SM内。
+
+WQ：y；DecodeAttn的block**更快结束**让SM空闲时，SM申请Stream内block来填充。
+
+Warp融合：PrefillAttn和DecodeAttn使用**融合kernel实现，划分block的不同比例warp**到PrefillAttn和DecodeAttn Op**。**
+
+GC：y；block在SM内执行能保证2种warp在相同SM内。但是，block等待最慢的warp完成后才完成并释放SM，SM中大部分时间只有少数最慢的warp执行，虽然GC但仍然**浪费带宽或算力**。
+
+WQ：n；PD比例失衡的**block执行时间显著增大**，遭受WQ影响更大。
+
+线程内融合：**线程内交错执行**PrefillAttn和DecodeAttn的**操作**，即指令level融合的kernel。
+
+GC：y；线程交替执行2种Op的操作，2种Op一定执行在相同SM内。但是高效利用TensorCore一般要求进行block级别的访存同步，导致block内线程的同步等待，浪费算力和带宽。
+
+WQ：n；PD交错的线程间同步开销让**block执行时间普遍更长**，遭受WQ影响更大。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 5. GPU execution model.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2038.png)
+
+> **[图片提取文字 (image.png)]:**
+> | <b>Execution method</b> | <sub>L</sub> GC | WQ       | Notes                            |
+> |-------------------------|-----------------|----------|----------------------------------|
+> | Streams [45]            | ×               | ✓        | Easiest to implement             |
+> | CTA                     | ×               | <b>√</b> | Easy load balancing              |
+> | Warp (e.g., HFuse [42]) | <b>√</b>        | ×        | Suffers from straggler problem   |
+> | Intra-thread [53, 59]   | <b>√</b>        | ×        | Cannot overlap with CTA barriers |
+> | SM-aware CTA (Ours)     | <b>✓</b>        | <b>✓</b> | Minimizes operation interference |
+> 
+> **Table 2.** Methods of concurrently executing or fusing different operations along different levels of the GPU execution hierarchy (GC=guarantees op co-location, WQ=reduces wave quantization).
+> 
+> | Config.    | Description                                    |
+> |------------|------------------------------------------------|
+> | FA_Serial  | Serial execution with FA kernels               |
+> | FA_Streams | Parallel execution via streams with FA kernels |
+> | FA_HFuse   | Horizontally fused FA kernels with HFuse [42]  |
+> | POD (Ours) | Optimized fused computation with our kernel    |
+> 
+> **Table 3.** Different methods of computing attention in hybrid batches (FA: FlashAttention).
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2042.png)
+
+- **image (6).png (Figure 6)**：实验结果图。在一系列混合批次的 Attention 计算耗时对比中，POD-Attention 显著快于串行执行（FA_Serial）、流并发（FA_Streams）和线程束融合（FA_HFuse）。
+- **image (7).png (Figure 7)**：微基准验证。通过定制的计算密集与访存密集混合函数，证明在不同的计算比例下，论文提出的“感知 SM 的 CTA 融合”最贴近理想性能界限（Optimal）。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> FA HFuse
+> 
+> FA Serial ---- FA Streams
+> 
+> **Figure 6.** Per layer attention runtime of 32 hybrid batches corresponding to chunked prefills of a request of 16K tokens (chunk size: 512, model: Yi-6B, d\_bs: decode batch size).
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2043.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 7. Fine-grained fusion versus serial computation.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2044.png)
+
+- **image (8).png (Figure 8)**：核心架构创新机制图。展示了**SM-aware CTA scheduling（感知 SM 的 CTA 调度）**的工作原理：利用**计数器记录每个 SM 上正在运行的操作，动态决定下一个 CTA 该分配给 Prefill 还是 Decode**。
+- **image (9).png (Figure 9)**：核心机制的代码级映射。展示了实现上述 SM 动态感知的 CUDA 代码，Leader 线程如何通过原子操作（atomicAdd）认领身份（Prefill 或 Decode）。
+- **image (10).png (Figure 10)**：**算法轻量化与指令块设计**的体现。分析了调整 Decode 分块维度（Tile Dimension）的影响。图表证明缩小 Decode 的分块（如降至16）可以大幅让出计算核心给 Prefill 使用，同时毫不影响 Decode 自身的访存带宽利用率。
+
+SM-aware CTA scheduling
+
+灰色 CTA 落在 SM 1 上时，它的 **Leader 线程优先执行，动态决定PrefillAttn还是DecodeAttn**：看自己在哪个 SM → 查计数器取票 → 认领互补任务（按照ratio轮转）的流程，强行在每个单独的 SM 内部凑出完美的 Prefill + Decode 混合排列。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 8.** SM-aware CTA scheduling.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2039.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 10.** Impact of decode tile size on compute and HBM BW utilization for batch sizes 8, 16 and 32.
+> 
+> **(b)** DRAM BW utilization.
+> 
+> (a) Compute utilization.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2045.png)
+
+> **[图片提取文字 (image.png)]:**
+> ```
+> if (threadIdx.x == 0) { // Leader thread finds assignment
+> 1
+>          int sm_id; // Find which SM this CTA is on
+> 2
+>          asm volatile("mov.u32 %0, %smid;" : "=r"(sm_id));
+> 3
+>          // For this SM, what do we want to run?
+> 4
+>          const int ratio = (prefill_ratio + decode_ratio);
+> 5
+>          int op, ticket = (atomicAdd(&sm_ctr[sm_id], 1) % ratio);
+> 6
+>          if(ticket < prefill_ratio) op = PREFILL;</pre>
+> 7
+>          else op = DECODE;
+> 8
+>          // Get the next CTA for operation
+> 9
+>          int cta_id = atomicAdd(&cta_assign[op], 1);
+> 10
+>          // If the CTA exceeds the max CTA for that op switch ops
+> 11
+>          if (op == PREFILL && cta_id >= prefill_ctas) {
+> 12
+>              op = DECODE;
+> 13
+>              cta_id = atomicAdd(&cta_assign[op], 1);
+> 14
+>          } else if (op == DECODE && cta_id >= decode_ctas) {
+> 15
+>              op = PREFILL;
+> 16
+>              cta_id = atomicAdd(&cta_assign[op], 1);
+> 17
+> 18
+>          // Write the CTA ID and operation to shared memory
+> 19
+>          shared_mem[0] = cta_id;
+> 20
+>          shared_mem[1] = op;
+> 21
+> 22
+>      __syncthreads(); // Barrier: waits for scheduling to finish
+> 23
+>      // Fetch the assigned CTA and operation.
+> 24
+>      int cta_id = shared_mem[0];
+> 25
+>      const int op = shared_mem[1];
+> 26
+>      __syncthreads();
+> 27
+>      // Perform the appropriate operation
+> 28
+>      if (op == PREFILL) prefill_op(cta_id);
+> 29
+>      else decode_op(cta_id)
+> ```
+> 
+> **Figure 9.** CUDA code for SM-aware CTA scheduling.
+> 
+> 30
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2046.png)
+
+**4、文章的实验环境如何建立？**
+
+- **硬件平台**：基于 x86 机器，配备 1 到 2 张 **NVIDIA A100 (80GB HBM)** GPU。
+- **软件栈**：Ubuntu 22.04 操作系统，编译及运行环境使用 CUDA 12.4, GCC 11.4, Python 3.12, 以及 PyTorch 2.4。提供基于 Docker 的部署镜像。
+- **评测模型**：选择了主流开源大语言模型 Yi-6B、Llama-2-7B 和 Llama-3-8B。
+- **评测框架**：基于最先进的推理服务系统 **Sarathi-Serve** （其底层基于 vLLM 构建）集成 POD-Attention 进行系统级测试。
+- **测试负载（Workloads）**：使用了两个包含 2K 个请求的长文本真实数据集：一个是平均长度 10.5K tokens 的内部企业应用请求集，另一个是平均长度 9.5K tokens 的开放 arXiv 论文摘要数据集。
+
+**5、文章和谁进行比较？比较了什么指标？指标如何收集？**
+
+- **每个对比实验和谁比较？**
+    1. **算子内核级比较（Kernel-level）**：与最顶级的串行算子 **FA_Serial**（FlashAttention）、**FI_Serial**（FlashInfer）比较；同时也与其他架构执行融合方案 **FA_Streams**（CUDA流并行）、**FA_HFuse**（线程束级水平融合）、**FI_Batched**（批处理调用）进行了比较。
+    2. **系统端到端比较（System-level）**：与原始的 **vLLM** 调度器以及未加入该算子的 **Sarathi-Serve** 调度器进行了端到端比较。
+- **每个对比实验中比较了什么指标？**
+    1. **算子性能指标**：底层计算资源利用率（Compute Utilization）、显存带宽利用率（Mem BW Utilization）、以及单个批次的注意力计算延迟（Runtime/ms）和内核执行加速比。
+    2. **离线推理指标（Offline Inference）**：系统吞吐量，即每分钟完成处理的请求总数（Requests per minute）。
+    3. **在线推理指标（Online Inference）**：首字延迟分位数（TTFT - P50/P99）、字间延迟分位数（TBT - P50/P99）、端到端请求响应延迟（Request Latency）、以及遇到生成停顿的请求比例（% Requests with Stalls）。
+- **每个对比实验中的指标如何收集？**
+    1. **内核指标收集**：通过针对单个 Kernel 编写独立的微基准测试（Micro-benchmark）程序，输入一系列不同 Context Length 和 Batch Size 的混合张量配置，直接在 GPU 侧记录底层执行消耗时间与硬件计数器数据。
+    2. **离线吞吐量收集**：一次性向系统灌入固定总数（1K或2K个）、固定长度（如输入 16K，输出 1K/2K）的长文本请求，记录处理完所有请求所需的总墙上时钟时间，从而算出每分钟请求数。
+    3. **在线延迟指标收集**：编写压力发流客户端，根据**泊松分布（Poisson distribution）**在给定 QPS 下动态向系统发送长文本请求，模拟线上并发拥挤场景。服务端测记录每个请求从进入系统到输出第一个 token 的时间（TTFT），以及随后吐出每个 token 之间的时间戳差值（TBT）。
+
+### Tally（ASPLOS25）
+
+**Tally: Non-Intrusive Performance Isolation for Concurrent Deep Learning Workloads**
+
+TS、Preemption：
+
+TS- Priority：SM/DPC的scheduler按照TS切换优先策略，向不同队列申请block。
+
+MPS：
+
+MPS-Priority：
+
+vGPU：
+
+高优先级任务绝对优先，低优先级任务见缝插针，但**低优先级需要及时释放资源**。
+
+**kernel提交到GPU后不接受host干预，GPU没有接口来中断特定kernel**，Tally将**BE kernel改造出软接口**，让特定kernel及时“被抢占”后释放资源。
+
+高优先级任务按照原有配置执行（Tally改造会引入开销），低优先级任务按照轮转时间约束和BE策略，作**slicing或者preemption**改造。
+
+低优先级任务的Slicing大小和数量，Preemption的Worker数量是调度参数。
+
+分析不同调度参数下的轮转时间，选择达到不违反轮转时间约束下最大Slicing或Worker的配置。
+
+GPU是支持CTA level和Instr level的Preemption，文章和原生GPU的区别是什么？
+
+**1、面向的应用和场景** 本文面向的应用场景是**大型深度学习GPU集群**。其核心目的是在同一块GPU上**混合部署高优先级的在线推理任务**（如实时自然语言处理预测，对延迟极其敏感）与**低优先级的尽力而为型离线训练任务**。这种混合部署旨在解决生产环境中GPU利用率极低的问题，同时确保高优先级任务的严格SLA（服务等级协议）低延迟要求不受干扰。
+
+**2、Baseline与论文创新及术语解释** **Baseline（基线）**：现有的GPU共享机制，主要包括基于内核级别（Kernel-level）调度的非侵入式解决方案，如NVIDIA原生的**Time-Slicing**、**MPS**、**MPS-Priority**，以及专门针对深度学习的**TGS**系统。这些基线系统要么缺乏有效的性能隔离（导致推理延迟激增），要么需要大量修改用户代码（侵入性高）。
+
+**论文创新**：相比于基线，本文提出了**Tally系统**。从**编译映射与架构执行**的角度来看，其最大创新是实现了一种**非侵入式的、细粒度的线程块级别（Thread-block-level）GPU内核调度策略**。Tally在中间层截获底层设备API，通过自动转换底层指令流（PTX代码），在不需要修改算法和上层代码的前提下，将**大的Kernel拆分或改造**，从而实现微秒级的任务切换和抢占，实现了极高的性能隔离和硬件吞吐量。
+
+**专用术语解释**：
+
+- **Performance Isolation (性能隔离)**：在多个任务共享同一GPU架构资源时，确保高优先级任务的性能（如尾部延迟）不被并发的其他低优先级任务所拖累干扰的能力。
+- **Kernel Slicing (内核切片)**：一种编译映射层的转换技术，将原本需要一次性发射的巨大GPU内核，切分为多个包含部分线程块（Thread Block）的子内核，以便在执行流中插入其他调度指令。
+- **Kernel Preemption (内核抢占)**：通过指令修改将内核改造为持久化工作线程（Worker）模式，使其能在执行特定任务周期后检查抢占信号，从而允许高优先级任务随时打断并抢占执行架构资源。
+- **Thread Block (线程块)**：GPU架构执行中的基础独立调度模块。GPU通过将多个线程组合为线程块，将其分配到流式多处理器（SM）上并行执行。
+
+*”的解释**
+
+- **image.png (图1)**：展示了**GPU的层次化编程和执行模型**。直观呈现了内核（Kernel）由多个独立的线程块（Thread Block）组成，线程块内包含Warp和线程。这解释了为何在架构执行层面可以基于线程块进行安全的切片和抢占设计。
+- **image (1).png (图2)**：描述了**Tally的整体系统架构**。上层是不同深度学习框架，下层是GPU。核心中间件“Tally虚拟化服务器”包含了内核转换器（负责编译映射修改）、透明分析器和优先级感知调度器，负责接管并改造内核执行流。
+- **image (2).png (表1)**：展示了**不同调度粒度与周转延迟的量化对比**。通过对比迭代级、内核级、块级和线程级的切换延迟，论证了只有将**架构执行干预到微秒级的“线程块”或“线程”层面，才能不影响耗时仅3.93ms的BERT推理任务**。
+
+LC推理任务要求4ms内完成一个请求，BE训练任务的不同调度粒度（pipeline iter、kernel grid、kernel block、kernel thd）的Ctx切换所需时间不同（周转时间），粒度越细越难（Conv？架构设计？）。
+
+Tally拦截上层客户的device code和API call到中介server。
+
+将kernel作**slicing成sub-kernel**（sub-kernel内不可抢占），**或者改造成可抢占的kernel（Worker block）。**
+
+之后评估改造后kernel（sub或者worker）的**周转延迟**。不违背周转延迟限制下，尽可能最大BE执行时间来设置Slicing和Worker的Size参数。
+
+根据优先级建立**队列**，按照策略将sub-kernel或worker发给GPU。
+
+应用无感代表**通用性**，但本质面向**不同优先级的张量算子**。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Picture_0.jpeg)
+> 
+> **Figure 1.** Overview of the GPU programming model.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2047.png)
+
+> **[图片提取文字 (image.png)]:**
+> **Table 1.** Comparison of BERT inference latency against turn-around latency of different scheduling granularity for Whisper training on NVIDIA A100 GPU.
+> 
+> | Inference time | Turnaround latency (Whisper) |        |         |        |
+> |----------------|------------------------------|--------|---------|--------|
+> | (BERT)         | Iteration                    | Kernel | Block   | Thread |
+> | 3.93ms         | ~ 3s                         | ~ 10ms | ~ 304µs | ~ 38µs |
+![image.png](GPU%E5%B9%B6%E5%8F%91%E6%9C%BA%E5%88%B6TS%E3%80%81MPS%E3%80%81MIG%E3%80%81vGPU/image%2026.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Figure 2. Tally architecture.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2048.png)
+
+- **image (3).png (图3)**：揭示了**编译映射环节的指令转换细节**。左侧(a)直观展示了原始内核如何被转换成Slicing（通过偏移量切分子块）和Preemption（持久化Worker持续拉取任务）；右侧(b)展示了对同步指令（sync）和返回指令的统一修改逻辑，以防止GPU死锁。
+
+Slicing：将大kernel切分成多个相同的sub-kernel，不同sub-kernel利用block-offset参数进行不同计算。
+
+Preemption：大kernel改写成少数常驻Worker block在**运行时申请所在kernel的其他block**，Worker**申请前轮询所在kernel是否被抢占（Flag）**，若被抢占则释放资源。避免大kernel在SM内一直并发、占据资源。**不存在线程内的指令level中断，每个Worker要么执行完毕（block wait），要么不会开始，要么流掉（block flush）。**
+
+Preemption改造的注意点：
+
+Worker block中可能存在“较快的”线程**等待同步sync**，但Worker**被抢占（if flag）会提前结束ret（flush）**，等待同步的线程无法同步，导致死锁。
+
+因此Preemption改造需要**修改sync和ret指令，block中线程跳到统一区域等待同步或者结束，让等待同步的线程越过同步直到正常结束ret，之后一起结束后被抢占（flush），虽然仍会等待部分线程越过sync并且ret，但不再需要等待block内其他线程并且它们不占用资源**。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 3.** Kernel transformations: (a) slicing and preemption transformations (b) unified synchronization transformation.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2049.png)
+
+- **image (4).png (图4)**：展示了**优先级感知调度器的伪代码**。说明了系统如何在运行时实时抢占低优先级任务，并利用透明分析器为低优先级任务选择最佳的底层指令包启动配置。
+
+> **[图片提取文字 (image.png)]:**
+> ```
+> def launch_and_profile(kernel):
+>        candidates = get_candidate_configs(kernel)
+> 2
+>        for cfg in candidates:
+> 3
+>            est_turnaround = lookup_measurement(kernel, cfg)
+> 4
+>            if est_turnaround is None:
+> 5
+>                est_turnaround = profile(kernel, cfg)
+> 6
+>            if has_launched():
+> 7
+>                 return
+> 8
+>        set_launch_config(kernel, candidates,
+> 9
+>                           bound=TUNEAROUND_LATENCY_BOUND)
+> 10
+>   def scheduler():
+> 11
+>        while True:
+> 12
+>            for client in sort_by_priority(clients):
+> 13
+>                 if client.is_high_priority():
+> 14
+>                     kernel = client.fetch_next_kernel()
+> 15
+>                     if kernel is not None:
+> 16
+>                         preempt_best_effort_kernel()
+> 17
+>                         kernel.launch(Config::DEFAULT)
+> 18
+>                     if client.has_kernel_running():
+> 19
+>                         break
+> 20
+>                else:
+> 21
+>                     kernel = client.get_curr_ex_kernel()
+> 22
+>                     if kernel is None:
+> 23
+>                         kernel = client.fetch_next_kernel()
+> 24
+>                         cfg = lookup_launch_config(kernel)
+> 25
+>                         if cfg is not None:
+> 26
+>                             kernel.launch(cfg)
+> 27
+>                         else:
+> 28
+>                             launch_and_profile(kernel)
+> 29
+>                     elif kernel.running():
+> 30
+>                         pass
+> 31
+>                     elif kernel.stopped():
+> 32
+>                         kernel.resume()
+> 33
+> ```
+> 
+> **Figure 4.** Tally's priority-aware scheduling algorithm.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2050.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 5.** Analysis of 99th-percentile latency and system throughput across different high-priority inference and best-effort training workload combinations under various GPU sharing mechanisms.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2051.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 6.** (a) Latency and throughput for high-priority BERT and Llama2-7B inference co-located with BERT, GPT-2, and Whisper training under Tally and TGS across different traffic loads. (b) Time-series visualization of user traffic, tail latency, and throughput over time for BERT inference co-located with BERT training across different GPU sharing systems.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2052.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 7.** (a) Scalability performance of Tally with respect to number of concurrent workloads. (b) Performance decomposition of Tally for BERT inference. (c) Latency and throughput under different turnaround latency threshold settings.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2053.png)
+
+**4、文章的实验环境如何建立**
+
+- **硬件架构**：使用主流生产级服务器 AWS EC2 p4d.24xlarge 实例，配备 96核 Intel CPU、1152GB 内存 和 8张 **NVIDIA A100 SXM GPU (40GB)**。
+- **软件栈**：基于 Ubuntu 20.04 运行 Docker 容器环境，底层软件依赖包括 CUDA 12.2，应用层框架使用了 PyTorch 2.2.0、ONNX Runtime GPU 1.17.0 和 Hidet 0.3.0。
+- **测试基准与闭环改造**：选择了覆盖CNN、大语言模型(LLM)和扩散模型的12个工作负载（6个训练，6个推理）。为了支持底层的块级PTX指令转换，作者将部分闭源的 cuBLAS 库函数在运行时自动替换为性能相近的开源 CUTLASS 库函数。
+- **流量模拟**：采用公开的 Microsoft Azure Function Trace 2021 (MAF2) 真实生产环境流量数据集，用于模拟并回放高优先级在线推理任务的请求到达规律。
+
+**5、对比实验比较了什么**
+
+- **比较对象**：Tally 与目前业界最先进的四种非侵入式GPU共享机制进行比较，包括 **Time-Slicing**, **MPS**, **MPS-Priority**, 以及 **TGS**。同时还加入了一个基线“Ideal”，即**任务单独独占运行**的理想性能。
+- **比较指标**：
+    1. **99th-percentile latency (99分位尾部延迟)**：用于衡量高优先级推理任务是否受到了性能干扰（隔离性）。
+    2. **Throughput (吞吐量)**：用于衡量训练和推理任务每单位时间处理的样本数量。
+    3. **System Throughput (整体系统吞吐量)**：所有并发任务的归一化吞吐量之和，用于衡量架构的整体利用率。
+- **指标如何收集**：
+    - **延迟收集**：在基于 MAF2 数据集模拟真实流量注入推理服务期间，系统持续记录请求的响应时间，并在实验结束时计算得出99分位数值。
+    - **吞吐量收集**：通过运行时连续测量各个并发任务在单位时间内（如每秒/每分钟）成功处理的样本批次数量（it/s）。
+    - **周转延迟(Turnaround Latency)收集**：Tally内部的透明分析器(Transparent Profiler)在任务运行初期，会在GPU后台对不同调度配置执行约10次试运行（Profiling），通过监测实际执行时间并套用公式 `(内核延迟 * worker块数)/总块数` 来动态计算并复用收集该指标。
+
+### **Carat**
+
+**Carat: Unlocking Value-Level Parallelism for Multiplier-Free GEMMs**
+
+无乘法GEMM，Co-design。
+
+**1、面向的应用和场景**
+
+**面向场景：** 具有**大批量数据（Large Batch Size）**处理需求且对**高吞吐量（High Throughput）**要求极高的深度神经网络（DNN）推理场景。 比如信用评分（每天数百万次查询）、高频交易、医疗诊断等。在这些应用中，系统通常会收集大量用户的请求，同时使用**低精度数据（如FP8，即8位浮点数）**进行推理计算。由于数据量大且精度低，运算中会产生极其大量的“重复数值”。
+
+**2、Baseline（基线）与 核心创新点**
+
+**Baseline（基线架构）：**
+
+- **bSA (Binary Computing Systolic Array)**：传统的脉动阵列架构，主要通过“数据复用”（让数据在计算单元阵列中流动）来提升效率。
+- **RIS (Reuse computation based on Input Similarity)**：基于输入相似性的计算复用架构，通过对比前后输入的差异，跳过相同的计算。
+- **uSA (uSystolic)**：早期的基于时间编码的架构，但它针对的是定点数据，且完成一次乘法需要消耗几百个周期，效率较低。
+
+**论文的创新（相比Baseline）：** 提出了一种名为 **Carat** 的全新架构，实现了**无乘法器（Multiplier-Free）**的矩阵乘法计算。它打破了传统的乘加（MAC）执行逻辑，将传统的“乘法”转化为时间维度上的“加法”，彻底移除了极其占用面积和功耗的硬件乘法器。
+
+**专用术语解释：**
+
+- **GEMM（通用矩阵乘法）**：深度学习算法中最底层、最耗时的核心数学计算。
+- **Value-Level Parallelism（值级并行）**：论文的核心创新。传统的并行是“多组数据同时算”，而值级并行是：无论输入向量里有多少个`5`，我只算一次`5×权重`，然后所有值为`5`的输入直接**“共享/订阅”**这个结果。
+- **Temporal Coding（时间编码）**：用“时间脉冲”来代表数值的大小。比如某个输入值是`6`，硬件就会在第`6`个时钟周期发出一个电脉冲信号。
+- **FP8（8位浮点数）**：一种低精度的算法轻量化数据格式。用较少的比特位表示小数，减少了数据的理论存储量和可能的数值种类。
+
+**3、所有“image*”的解释（配图内容通俗解析）**
+
+- **image.png (Figure 1)**：**核心概念图**。生动展示了“值级并行”如何工作。它画出了把“乘法”变为“顺次累加”，并展示输入数值如何像订闹钟一样，通过时间脉冲“精准截取”属于自己的累加结果。
+- **image (1).png (Tables 1 & 2)**：**背景论证表**。表1证明了把算法轻量化到FP8格式不会导致模型掉点；表2对比了本文的“值级并行”与传统的指令级、线程级、数据级并行在本质上的不同。
+- **image (2).png (Figure 2)**：**基线架构图**。展示了传统的脉动阵列（bSA）长什么样，特别标出了它内部使用的是传统的MAC（乘加）单元。
+- **image (3).png (Figure 3)**：**潜力分析图**。通过统计视觉和语言模型的数据证明，在使用低精度数据时，网络中出现了海量的“重复值”，这就是本文架构能够大显身手的理论依据。
+- **image (4).png (Figures 4 & 5)**：**底层模块机制图**。图4通俗解释了“时间转换器”是如何把数值变成某个时钟周期的“脉冲信号”的；图5展示了这个脉冲信号如何充当一个“开关”，把刚累加好的部分结果抓取出来。
+- **image (5).png (Figure 6)**：**Carat 整体架构设计图**。详细展示了论文设计的 TC（时间转换器）和 PE（处理单元）的微架构连线，证明里面真的没有乘法器硬件。
+- **image (6).png (Figure 7)**：**执行流程拆解图**。像放慢动作一样，逐个周期（Cycle-by-cycle）展示数据在一个8x8的硬件阵列中是如何流动、脉冲是如何触发，并最终算出结果的。
+- **image (7).png (Figure 8)**：**多节点扩展图**。展示了如何利用片上网络（NoC）技术，把多个单体的 Carat 模块拼起来，构成一个更大规模的计算系统。
+
+**4、文章的实验环境如何建立？**
+
+文章的实验验证建立在两个定制的模型之上：
+
+- **周期级性能模拟器（Cycle-level Performance Simulator）**：用于精确模拟架构的执行流程。内置了数据调度（Tiling）、SRAM访存冲突建模、HBM（带宽128GB/s）内存延迟建模以及多节点NoC网络延迟计算。
+- **事件驱动的成本评估模型（Event-based Cost Model）**：用于评估面积和能耗。首先通过性能模拟器跑出各种“事件”的发生次数（例如SRAM读写了几次、计算触发了几次）；接着使用标准的芯片设计工具（CACTI7 评估SRAM，Synopsys Design Compiler 在32nm工艺下综合逻辑门）获取单次事件的基础面积和能耗，两者相乘得到系统级表现。
+
+**5、文章的对比实验设计**
+
+**对比对象：** 前文提到的三大基线架构：**bSA（传统脉动阵列）**、**RIS（输入相似性复用架构）**、**uSA（多周期时间编码架构）**。
+
+**比较的指标：**
+
+1. **Throughput（吞吐量）**：单位时间内完成的浮点运算数（Gflop/s）。
+2. **Utilization（硬件利用率）**：实际吞吐量与理论峰值吞吐量的比值。
+3. **On-chip Area（片上面积）**：芯片硬件模块占用的物理面积（mm²）。
+4. **Energy Efficiency / Power Efficiency（能效和功率效率）**：每消耗1焦耳或1瓦特能完成多少运算（Gflop/s/J 或 Gflop/s/W）。
+
+**指标如何收集：**
+
+- **吞吐量和利用率**：让模拟器运行标准的 MLPerf 深度学习测试集（如ResNet50、BERT等真实模型），在改变不同的Batch Size（批处理大小）和阵列尺寸（Array Shape）下，记录总计算周期数来计算得出。
+- **面积和能/功效**：在保证同等面积（iso-area）或同等算力（iso-FLOPS）的公平约束条件下，汇总性能模拟器输出的全部“事件发生计数”，并乘以上文提到的 Synopsys综合工具 和 CACTI7 评估出的“单次操作成本”，累加得出最终数据。
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 1.** Illustration of value-level parallelism. (a) Value-level parallelism synergizes two emerging trends: data are both more abundant and lower precision. (b) **Concept**: A vector input multiplies a scalar weight w. Multiplication is transformed to accumulation. All unique products are calculated only once, and product values are reused, shown in yellow rectangles for all 4-bit inputs  $\in [0, 15]$ . Each circled input element subscribes to (selects) its product, i.e., each unique product is reused by multiple inputs with the same value. (c) **Architecture**: The weight is accumulated (ACC) over time, and each vector input subscribes to its product (Val) by selecting the weight accumulation result via a temporal signal, whose spike timing depends on the input value.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2054.png)
+
+> **[图片提取文字 (image.png)]:**
+> accumulation, reported by Arm, Intel and NVIDIA in [48]. The adopted FP8 for DNN inference has a 4-bit exponent and a 3-bit mantissa (E4M3). IC/LT/NLP denote image classification, language translation and natural language processing, respectively. For all metrics but perplexity, higher values are
+> 
+> better. Data marked with \* are from [72, 73].
+> 
+> **Table 1.** DNN evaluation with FP8 multiplication and BF16
+> 
+> | Model          | Size  | Task | Metric     | Metric measurement |       |        |
+> |----------------|-------|------|------------|--------------------|-------|--------|
+> |                |       |      |            | BF16               | FP8   | INT8   |
+> | VGG16          | 138M  | IC   | Acouroou   | 71.27              | 71.11 | 70.75* |
+> | Resnet50       | 26M   |      | Accuracy   | 76.71              | 76.76 | 75.82* |
+> | GNMT           | 255M  | LT   | BLEU       | 24.83              | 24.65 | 24.53* |
+> | Transformer    | 165M  | LI   | BLEO       | 26.87              | 26.83 | 21.23* |
+> | BERT           | 110M  | NLP  | F1         | 88.19              | 88.09 | 76.89  |
+> | Transformer-XL | 0.46B |      |            | 22.98              | 22.99 | -      |
+> | GPT            | 175B  | NLP  | Perplexity | 6.65               | 6.68  | _      |
+> 
+> 6.7B 10.29 8.51
+> 
+> 8.41
+> 
+> Carat
+> 
+> | <b>Table 2.</b> Comparison of approaches to exploit parallelism. |                            |                  |  |  |  |
+> |------------------------------------------------------------------|----------------------------|------------------|--|--|--|
+> | Parallelism level                                                | Source of opportunity      | Example          |  |  |  |
+> | Instruction                                                      | Independent instructions   | CPUs, GPUs, etc. |  |  |  |
+> | Thread                                                           | Independent threads        |                  |  |  |  |
+> | Memory                                                           | Concurrent memory accesses | Caches, etc.     |  |  |  |
+> | Data                                                             | Vectorized data            | SIMD, etc.       |  |  |  |
+> | _                                                                | Few unique values          | _                |  |  |  |
+> 
+> for abundant data
+> 
+> Value
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2055.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> ary dataflow [33]. Each processing element (PE) contains a multiply-accumulate (MAC) unit and required pipeline buffers. Weights (W) are stationary in a PE, while inputs (I) and outputs flow in and out from the top and right of the PE.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2056.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 4.** A temporal signal, which is generated by comparing source binary data with a deterministic counter output at each cycle, i.e., temporal converter. In this example, as the 3-bit binary data is 6, the temporal signal spans across  $2^3 = 8$  cycles; and a spike (logic-1) only occurs at the 6-th cycle, when the data value equals the counter value.
+> 
+> ![](_page_0_Figure_2.jpeg)
+> 
+> **Figure 5.** Value-level parallelism for vector-scalar multiplication. TC denotes a temporal converter in Figure 4. ACC denotes an accumulator. Yellow blocks are output product registers, with Val and En referring to the write value (a partial product) and write enable (a temporal signal). (a) Multiplication of an input i and a weight w. (b) Accumulation of the weight w to obtain all partial products. (c) The temporal converter generates a temporal signal for the input i as in Figure 4. At the i-th cycle, a spike occurs, and the weight is accumulated i times, i.e., the partial product is  $i \cdot w$ . Therefore,  $i \cdot w$  is written/selected as the result. (d) Given an input vector  $\vec{i}$ , the temporal signal for each input i[k] can independently select the product between i[k] and the weight w, achieving value-level parallelism.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2057.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> ![](_page_0_Figure_1.jpeg)
+> 
+> **(c)** Value reuse. The x-axis ticks are unique mantissa values, which are maximally 127 and 7 for BF16 and FP8. The y axis is in log scale.
+> 
+> Figure 3. Opportunities for GEMM acceleration. (a) Vision models with ReLU activation [50] have high value sparsity, which is the opposite of value density (y-axis). In contrast, language models without ReLU have almost zero value sparsity. (b) Due to higher value sparsity, vision models also exhibit higher bit sparsity, opposite of bit density, than language models. (c) The opportunity for value reuse is the number of inputs for each unique mantissa value. More details are explained in Section 3 and Section 4.5. From top to bottom, three curves for each color are the maximum, average and minimum reuse opportunities in interested layers.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2058.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> systolic arrays (Figure 2). Green and yellow mark temporal converters (TCs) and processing elements (PEs). (b) **PE**. A is the weight accumulation result (partial product) from the row above.  $M_T$  is the temporal signal generated from the mantissa  $M_D$  in the TC. (c) **TC**. PR means pre-processing FP8 data. S, E, and M stand for sign, exponent and mantissa of the input from the left, respectively;  $E_D$  and  $M_D$  are the adjusted exponent and mantissa, depending on whether the input is a subnormal number, indicated by a flag D. N and Z are 1-bit flags indicating whether the input is NaN and Zero, respectively. G is the OR gate selection flag for PE outputs. C is the counter number from the row above. All rectangle registers (REG in (b) and (c)) pipeline data to either the right or bottom, either directly or after simple operations, e.g., AND or equality check (EQ). (d) **PE column** for value reuse. (e) **PE row** for output accumulation. PO means post-processing products for correct accumulation.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2059.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> **Figure 7.** Cycle-level Carat walkthrough example on an  $8 \times 8$  PE array. (a) shows the key components selected from Figure 6. The left and right clusters denote the TC column and PE array. CNT and ACC denote counter and accumulator. The C and M<sub>D</sub> are registers for the counter number and adjusted mantissa, that together generate the temporal signal with the equality check logic in triangle. The A denotes the pipeline register for partial products generated by the accumulator at the top. (b)-(l) draw the transition of cycle-level register states in the array, among which (b)-(k) are continuous in cycle. At every cycle, the array takes in a new input and updates the M<sub>D</sub> register. There are two sets of inputs marked with red and green, with each set sharing the same partial products. We distinguish two corresponding sets of partial products by whether they are bold or not. Each column works on a different weight, with the two sets of weights marked with A-H and I-P, respectively. For each set, we fill the TC (represented by equality check logic in triangle) and the PE (represented by the A register) with the color of this set, upon the occurrence of a temporal spike. A colored TC means a temporal spike is generated, i.e., the counter number equals the adjusted mantissa; a colored PE mean the current partial product is selected as the output. At every cycle, the TCs and PEs pipeline the counter number and partial products downward, and the temporal signals to the right. The counter number begins with 0 and resets to 0 after 7, while accumulated partial products start from  $8\times$  to  $15\times$  the weights. We mark the multiples of weights for conciseness. (m)-(p) show the output FIFOs for accumulating outer products element-wise to compute a GEMM result. Subscribed products from each row are accumulated into their position in their corresponding FIFO. Products are accumulated into the FIFO in a circular fashion via a feedback loop. At cycle 24 (p), 8I is added to 15A, which is the sum of the leftmost entries of the green and red first-row outer products, respectively.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2060.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> and oSRAM denote on-chip input, weight and output SRAMs. The NoC in yellow has a 2-D mesh topology. Each node is a Carat connected to the router, and only one off-chip memory exists at a corner. Each node only works on a subset of all GEMM computation.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2061.png)
+
+### UniNDP
+
+UniNDP: A Unified Compilation and Simulation Tool for Near DRAM Processing Architectures
+
+仿真器
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Fig. 1. (a) Basic DRAM organization structure; (b) Bank-level NDP architecture; (c) Rank-level NDP architecture; (d) Device-level NDP architecture.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2062.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## TABLE I ABBREVIATIONS OF DRAM TIMING PARAMETERS USED IN THIS PAPER.
+> 
+> | Abbr. | Meaning                | Abbr. | Meaning                     |
+> |-------|------------------------|-------|-----------------------------|
+> | tCCD  | Column-to-column delay | tRCD  | Row-to-column delay         |
+> | tRP   | Row precharge time     | tWR   | Write recovery time         |
+> | tRTP  | Read to precharge time | tWTR  | Write to read time          |
+> | RL    | Read latency           | WL    | Write latency               |
+> | tREF  | Refresh interval       | tRTRS | Rank-to-rank switch time    |
+> | tRAS  | Row access strobe      | tRRD  | Row-to-row activation delay |
+> | tCK   | Clock cycle time       | BL    | Burst length                |
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2063.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Fig. 2. Overview of UniNDP.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2064.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Fig. 3. (a) Tree-based NDP abstraction; Example of (b) bank-level and (c) device-level NDP architectures.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2065.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Fig. 4. Overview of UniNDP simulator.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2066.png)
+
+> **[图片提取文字 (image.png)]:**
+> ## TABLE II UNIFIED INSTRUCTION SET FOR NDP
+> 
+> | Type                    | Instruction           | Description                                                                                |
+> |-------------------------|-----------------------|--------------------------------------------------------------------------------------------|
+> | Compute                 | MAC-DRAM              | Perform MAC operations, both input operands from DRAM, store results in register           |
+> |                         | MAC-GB                | Perform MAC operations, inputs from DRAM and global buffer, store results in register      |
+> |                         | MAC-LB                | Perform MAC operations, inputs from DRAM and local buffer of PU, store results in register |
+> | Data<br>Movements       | REG2LB, LB2REG        | Copy data between result/input register and local buffer of PU                             |
+> |                         | LB2DRAM, DRAM2LB      | Copy data between local buffer of PU and DRAM                                              |
+> |                         | GB2DRAM, DRAM2GB      | Copy data between global buffer and DRAM                                                   |
+> | Host-side<br>Operations | READ-DRAM, WRITE-DRAM | Read/write data from/to DRAM as conventional memory                                        |
+> |                         | WRITE-GB              | Write data to the global buffer from the host                                              |
+> |                         | WRITE-LB              | Write data to the local buffer of PU from the host                                         |
+> |                         | READ-REG, WRITE-REG   | Read/write MAC results/input from/to PU register to/from the host                          |
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2067.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Fig. 5. Examples of instruction execution.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2068.png)
+
+> **[图片提取文字 (image.png)]:**
+> ![](_page_0_Figure_0.jpeg)
+> 
+> Fig. 6. Overview of UniNDP compiler.
+![image.png](%E5%8F%AF%E5%A4%8D%E7%8E%B0paper/image%2069.png)

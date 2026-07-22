@@ -1,0 +1,433 @@
+# meeting-25/11/6（张量加速器）
+
+# My BS
+
+## 多任务BS
+
+isca、tc、taco:多算子融合有一个**算子生命周期分析**挺有意思的，还是**冷热张量**？
+
+算子融合中，有的算子loop长，有的短，所以提出**生命周期，即若干算子融合后的延迟**；
+
+按照生命周期（执行延迟）的标准，融合算子，提高Mapping的效率，简化硬件抽象难度；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20239.png)
+
+预见性的分配和调度能降低开销吗
+
+io瓶颈是io慢且cache小，多任务能否改善？
+
+硬件队列的作用和层次和AXI类似；
+
+多任务的切换开销隐藏；
+
+多任务的负载调度，占用io和内存，设计算子数据的生命周期？be插lc的空？
+
+RL的分步搜索，分步更新设计空间和ODG，引申为动态多任务调度？
+
+动态配置；
+
+## My Work
+
+加速器都用**tensor**,因为这个抽象灵活而通用,那么优化的是张量的尺寸和执行流(数据流);
+
+多数据流的抽象？硬件重排的抽象？
+
+本质上重排是数据在存储层次之间**route**的一种方式；
+
+重排逻辑实现是缓存和读写，加速？；
+
+**重排**能改善Acc对Mapping的约束吗？增加LD/ST类型的语义，或者增加**重排kernel**？
+
+混合精度的数据格式？dense排布的地址计算开销？
+
+硬件im2col减小配置开销，不会占用IO带宽，用于多任务的IO？或者两个任务都需要im2col，则更有加速作用;
+
+im2col是功能组件，是程序工作流的一环，需要一个应用场景来包含它；
+
+![image.png](meeting-25%2010%2029%EF%BC%88ML%20schedule%E3%80%81tvm%E3%80%813DGS%EF%BC%89/image%2042.png)
+
+Mapping/schedule侧重选出**相对**最优，而硬件设计侧重**实际延迟**等指标；
+
+多数据流feather、MathModel-Cosa、Transformer-Soter、TVM三个工作应该有联系?
+
+多数据流Acc提出新的模拟器是因为硬件架构不同于TimeLoop的抽象；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20240.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20241.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20242.png)
+
+异构并行方式核，适合做算子融合pipeline，但通用性较差；
+
+Mapping中搜索不同的spatial Mapping，但Acc可配置数据流的约束限制schedule；
+
+DLA和GPU
+
+现有poly模型**没有协同优化tile-size**和loop order(每层memory的7-loop slot分配factor),只是把tile-size作为Mapping的输入,因为他们面向CPU和GPU支持的细粒度指令(tiling放在软件编译成指令),而非DLA支持的粗粒度指令(硬件内部tiling由Mapping配置);
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20109.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20110.png)
+
+DLA实验很喜欢用ResNet而非YOLO，因为YOLO的数据依赖关系更复杂，是否说明依赖关系都是通过软件来简化，硬件专注于layer，而非fused-layer？fused-layer通用性难以协调，除非常见算子MHA的融合；
+
+子tile PEs作为小核,处理同层tile或者不同层tile,或者不同任务tile,不同pe支持异构/重配置;
+
+不同tile PEs的灵活schedule，丰富硬件的抽象需求，不局限于timeloop所定义的；
+
+多任务场景下,抢占资源时不刷新slab;
+
+## DDR特性
+
+利用ddr传输的BL特性：约束最小突发访问数据量为BL*2*clk-ratio*word-width，即**数据传输率*****word-width**；
+
+tiling可以考虑设计访存长度和地址变化，**ddr的不同延迟参数**会有访存长度和地址变化的不同倾向吗？ddr接口封装ddr请求,但实际延迟由ddr决定,比如最好延迟的访问方式和最差延迟的访问方式?
+
+## 异构设计
+
+异构interconnect的设计:no internel change,即不要求节点内部作出大的改变：Cohort论文提出的编程模型和硬件架构,新增加速器时不要求修改code和加速器结构,**统一一致灵活**;
+
+## 实验Todo
+
+多dataflow（FEATHER）的实验
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20243.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20244.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20245.png)
+
+follow别人工作来看实验：清华 高明宇
+
+# 加速器insight
+
+## Eyeriss v1：2017
+
+**逐卷积层执行**，每层执行前先配置片上数据流，最大程度复用所有类型数据，减少数据在（大容量）存储单元间的移动，**降低功耗**；
+
+![Screenshot 2025-11-03 at 14.41.51.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/Screenshot_2025-11-03_at_14.41.51.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%201.png)
+
+row-stationary：PE作一维卷积，14*12的2D阵列的数据流同时复用I、W、psum数据，将psum留在PE原地节省数据存储和移动；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%202.png)
+
+但**依赖NoC每周期**将I、W、psum数据送到指定位置的PE；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%203.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%204.png)
+
+## Eyeriss v2：2019
+
+分析DNN Acc的设计挑战：
+
+pre-selected dimension，Acc执行的loop order、parallel shape和parallelsz固定；
+
+不同layer的dimension参数让array utilization可能很低；
+
+DW conv中没有psum accum，让WS Acc的Array Util更低，但RS Acc中psum是不同channel的**一维卷积**，因此psum数据能够流动起来；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%205.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%206.png)
+
+WS是psum spatial accum，OS是psum temporal accum，img2col似乎能节省Psum Buffer？
+
+节省的Psum Buffer用于其他作用？
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%207.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%208.png)
+
+PE的utilization可能很低，因为NOC为高数据复用情况设计，多播N个data的带宽受限，导致PE等待（stall）；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%209.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2010.png)
+
+relu、upsample引入稀疏性，利用稀疏性减少无效计算、降低功耗，压缩格式表达、减少存储和数据移动；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2011.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2012.png)
+
+利用稀疏性的挑战：下一个非零值位置难以预测；压缩格式变长和串行访问导致难以分割压缩数据搭配PE；很难同时确定权重和输入的稀疏性以便在任一方为0时跳过计算；跳过计算引入无规律访问而让prefetch技术不再管用；很难均衡PE执行的稀疏性负载，负载最重的PE成为瓶颈；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2013.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2014.png)
+
+Eyeriss v2工作过程
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2015.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2016.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2017.png)
+
+NoC完成灵活数据流/Mapping，压缩格式利用稀疏性，针对tile的片上高效计算作设计而不预设DNN所需存储；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2018.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2019.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2020.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2021.png)
+
+NoC实现和细节：分层mesh和分类route；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2022.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2023.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2024.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2025.png)
+
+## Simba：2019
+
+36 chiplet MCM，设计tiling方式，提高数据局部性，以降低chiplet间的通信开销；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2026.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2027.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2028.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2029.png)
+
+基础tiling方式：同样数量PE下，多chiplet的性能不如单chiplet性能，甚至性能和核心数倒挂；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2030.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2031.png)
+
+非一致的通信延迟和非一致分块；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2032.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2033.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2034.png)
+
+算子融合Mapping到chiplets上，作pipiline并行；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2035.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2036.png)
+
+## TPUv4i：2021
+
+芯片设计生产周期长于模型更新周期、多种DNN负载
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2037.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2038.png)
+
+NAS搜索**模型架构**，维持准确率同时，在目标平台上有达到更好运算性能；
+
+性能指标是**延迟**，但不能牺牲BatchSize换取低延迟，DSA能利用更高的BatchSize并行；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2039.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2040.png)
+
+**多租户**功能：不同用户的不同模型推理请求，应用工作流涉及多个模型，不同模型需求不同BatchSize（吞吐）；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2041.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2042.png)
+
+**能耗**限制了集成电路的性能，更高的算力需要更高的传输支持，但传输的能耗远高于计算所需的能耗导致传输性能不如计算；因此设计更多的计算单元（提高算力），希望数据尽可能在片上流动使用（数据复用），降低传输的压力（脉动阵列），**提高性能/功耗（能效 ）**；
+
+Dennard缩放比例定律（Dennard scaling, 1974）表明，随着晶体管变得越来越小，它们的**功率密度保持不变**，因此**功率的使用与面积成比例**；电压和电流的规模与长度成比例。
+
+因此模型需要**优化传输**；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2043.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2044.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2045.png)
+
+特定领域但需要**灵活**，TPUv2支持训练，相比TPUv1做的优化：
+
+1、**Psum**存储和激活存储**从pipeline中独立**出来，提供更丰富的数据流和可编程性；
+
+2、将激活pipiline改为**可编程**的Vector Unit（VU）；
+
+3、MXU和VU直接和VMEM互联，**共享存储**，相互协作；
+
+4、v1推理时只需要从DDR3取权重，v2训练需要**更新权重**，DDR和VMEM直接相联，并将DDR3升级为HBM；
+
+5、HBM和VMEM之间增加**互联**，以便TPU集群成为超级计算机；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2046.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2047.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2048.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2049.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2050.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2051.png)
+
+计算、存储、wire组件的**发展速度相差巨大**，计算逻辑进化快于存储快于布线；
+
+双核的短布线设计对**编译器预测性能后优化程序**更优好；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2052.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2053.png)
+
+TPU v3相比v2没有架构上的升级，只在设计上进行优化；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2054.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2055.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2056.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2057.png)
+
+多种类型并行（Core并行、XUnit的数据并行、VLIW指令并行），没有硬件Cache，程序性能提升和  强相关，**适配已有的编译优化**方法和体系；
+
+**ML向后兼容**：新一代硬件上能部署之前硬件平台上训练好的模型，而**不需要重新训练**来保持性能；由于浮点运算没有结合律，不同计算顺序的结果bit级不同，需要支持训练时的数据类型；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2058.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2059.png)
+
+二进制向后兼容：新一代的硬件能直接运行前一代硬件运行的二进制程序，而不需要重新编译；
+
+编译器向后兼容：新一代的硬件能使用现有编译器编译现有源码，可能需要更新编译器后端（新的指令）；
+
+**XLA**（accelerate linear argebra）编译器将模型负载作**HLO优化、LLO优化后，生成TPU的VLIW指令**；
+
+![image.png](meeting-25%2010%2029%EF%BC%88ML%20schedule%E3%80%81tvm%E3%80%813DGS%EF%BC%89/image%206.png)
+
+持有成本包含**购买成本（面积）和运行成本（能耗）**，需要评估性能/成本；
+
+v1单核推理，v2/v3多核训练+推理，v4一次设计（Core）分开实现（芯片）：v4i单核推理芯片，v4双核训练芯片；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2060.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2061.png)
+
+CMEM：相比VMEM和片外存储，增加Common MEM片上存储层次；
+
+分散布局的4D DMA engine：任意维度的正反方向的任意步长读写，从tensorCore（转置单元）上卸载同芯片上或跨芯片间的**copy、reshape、scatter、gather、memset**等任务；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2062.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2063.png)
+
+选择读写DMA**不同维度**的步长，不影响DMA带宽（传输速度），以便编译器自由搜索维度和评估延迟，并发射大数据量的DMA；
+
+片上存储通过DMA、ld/st访问，片外存储通过DMA访问，并行的DMA内或之间的请求无序执行，出现访问冲突则显式使用**core-DMA同步**；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2064.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2065.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2066.png)
+
+OCI：静态pipeline的点对点连接昂贵且考验“前瞻性”，设计片上互联网络连接片上所有组件，为支持超大字长的流量，参考**NUMA**设计分区存储的NoC；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2067.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2068.png)
+
+**MXU SA**：支持fp32、bf16、int8，128*128的输入不是每周期1个数，而是每周期4个数，SA缩短延迟到1/4；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2069.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2070.png)
+
+## GPU Tensor Core
+
+MMX core
+
+## Medusa：2018
+
+FPGA的DDR channel的读写字长是512bit（DDR width * DDR rate/FPGA CC），许多FPGA加速器（layer processor）假设的DDR读写字长是16bit或8bit，是通过memory interconnect模块缓存来调整DDR的读写字长，比如AXI模块；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2071.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2072.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2073.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2074.png)
+
+## Feather：2024
+
+不同layer的Mapping需要不同layout，Acc中设计NoC改变layout，同时考虑Bank port Confict（Buffer Linewidth），该论文OS的数据排列是如何？；
+
+im2col属于特定loop order的实现方式，但不同于常规的OS实现方式，还有种设计是im2col+OS（k*k，W）来实现，并结合其他数据流（一篇CCF-B），我的实现方式和它类似，但缺少延伸用法（可变layer参数和张量尺寸下，规整的内存访问排布？）；
+
+两个layer（C小，C大） × 两个dataflow{WS、IS}；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2075.png)
+
+Feather和OS SA（GEMM）的运行比较，摒弃使用OS-GEMM，因此不需要类似im2col过程；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2076.png)
+
+## YOLO v3-tiny Acc：2023
+
+类似im2col（flatten）的片上重排，两种并行方式；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2077.png)
+
+多个小核（阵列）的两种Mapping方式，具备扩展性，但只支持k=3/1；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2078.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2079.png)
+
+## FPGA Overlay：2023
+
+line Buffer实现类似im2col的功能
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2080.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2081.png)
+
+将2D数据展开成1D，方便通过**Tree**分块卸载到PE Cores，Tree可在每个layer之间重配置，因此支持不同数据流；
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2082.png)
+
+![image.png](meeting-25%2011%206%EF%BC%88%E5%BC%A0%E9%87%8F%E5%8A%A0%E9%80%9F%E5%99%A8%EF%BC%89/image%2083.png)
+
+# 讨论
+
+NV大规模GPU：面向训练；
+
+新的Model，激活**多专家模型，模型灵活性**，稀疏性；
+
+冷热任务：；
+
+应用需求：资源抢占；
+
+灵活并行方式：；
+
+小核的im2col；
+
+brunch；
+
+粗粒度重排，细粒度route；
+
+陆游游：找到新的场景，引导到现有工作；
+
+timeloop做实验：！
+
+故事，timeloop修改，架构设计和验证：motivation实验，改进实验；

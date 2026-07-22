@@ -1,0 +1,1 @@
+# MECLA: Memory-Compute-Efficient LLM Accelerator with Scaling Sub-matrix Partition

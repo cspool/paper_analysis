@@ -1,0 +1,211 @@
+# LLM架构（Transformer、KV Cache、Flash Attention、vLLM）
+
+ref：[https://zhuanlan.zhihu.com/p/642923989](https://zhuanlan.zhihu.com/p/642923989)
+
+ref：[https://blog.csdn.net/m0_63855028/article/details/146239674](https://blog.csdn.net/m0_63855028/article/details/146239674)
+
+ref：[https://www.modb.pro/db/1800545561119641600](https://www.modb.pro/db/1800545561119641600)
+
+ref：[https://cloud.tencent.com/developer/article/2547435](https://cloud.tencent.com/developer/article/2547435)
+
+ref：[https://www.zhihu.com/question/636301026](https://www.zhihu.com/question/636301026)
+
+ref：[https://zhuanlan.zhihu.com/p/682352630](https://zhuanlan.zhihu.com/p/682352630)
+
+# Transformer
+
+encoder block的attention不需要mask，因为需要学习prompt和输入token序列中的所有关系；
+
+decoder block中mask attention layer用于剪除token去query其后续token的关系，以保证输出的“逻辑性”，mask具体表现在矩阵中上三角为0（下到上、左到右是过去到未来的token）；
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%201.png)
+
+# LLM架构
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%202.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%203.png)
+
+**自回归**的数学模型是序列联合概率是条件概率的链式乘法，在Transformer构建中的体现是Transformer逐个token生成（多轮inference pipeline），pipeline中transformer block的堆叠**；**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%204.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%205.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%206.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%207.png)
+
+**encoder-only**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%208.png)
+
+**next-sentence prediction & mask language modeling**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%209.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2010.png)
+
+**decoder-only**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2011.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2012.png)
+
+应该没有encoder部分？
+
+**encoder-decoder**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2013.png)
+
+# KV Cache
+
+**动机和原理**
+
+**原始Transformer的并行性很好，但计算复杂度很高，需要降低计算开销；**
+
+**观察到：过往输出tokens的K和V结果不变，所以能复用；隐态随最新输出token而变化，和隐态关联的Q需重新计算，属于GEMV；**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2014.png)
+
+# **KV Cache & PD分离**
+
+**基于KV Cache优化，考虑分布式需求，llm推理架构的范式是prefill和decode（PD），属于较广泛使用的decoder-only架构；**
+
+**猜测：**
+
+**1、decoder-only中的prefill是将原来encoder-decoder架构中decoder输入的原始状态扩展成提示词（prompt）的输入，效果上能替代原有encoder从输入文本中提取的上下文向量；**
+
+**2、在文本对话任务中，pretrain的llm在decoder中包含了足够多的信息提取方式，encoder-decoder是应用场景更广的架构，但decoder-only架构+prompt性价比更高；**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2015.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2016.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2017.png)
+
+**Prefill & Decode数据流**
+
+这个图有问题。当前token的k、q、v应该先更新KV cache后再进行Decode。
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2018.png)
+
+# llm和Transformer的区别
+
+**llm推理的主要需求**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2019.png)
+
+**llm和Transformer的结构区别**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2020.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2021.png)
+
+**llm出于经济和并发量考虑基于Transformer进行优化，效果等价于无限存储、算力和模型深度的Transformer。**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2022.png)
+
+**为了多用户的并发请求，LLM使用Prefill和Decode的分离架构进行推理。**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2023.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2024.png)
+
+**prefill计算密集，decode访存密集，多用户的输出长度不一，访存效率更低。**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2025.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2026.png)
+
+# LLM的推理优化
+
+**prefill阶段的优化**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2027.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2028.png)
+
+**decode阶段的优化**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2029.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2030.png)
+
+**prefill和decode协同优化**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2031.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2032.png)
+
+**llm推理库**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2033.png)
+
+ref：[https://blog.vllm.com.cn/2023/06/20/vllm.html](https://blog.vllm.com.cn/2023/06/20/vllm.html)
+
+# Flash Attention
+
+attention在GPU上高性能优化：算子融合、内存优化等；
+
+[https://www.cnblogs.com/menkeyi/p/18800377](https://www.cnblogs.com/menkeyi/p/18800377)
+
+# Paged Attention（vllm）
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2034.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2035.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2036.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2037.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2038.png)
+
+由于块不需要在内存中是连续的，我们可以像操作系统虚拟内存中那样以更灵活的方式管理键和值：可以将块视为页面，将 token 视为字节，将序列视为进程。序列的连续逻辑块通过块表映射到非连续物理块。**物理块在生成新 token 时按需分配。**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2039.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2040.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2041.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2042.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2043.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2044.png)
+
+在分页注意力中，内存浪费仅发生在序列的最后一个块中。在实践中，这实现了接近最佳的内存使用率，仅浪费不到 4%。内存效率的提高被证明是非常有益的：它允许系统批量处理更多序列，提高 GPU 利用率，从而显着提高吞吐量，如上面的性能结果所示。
+
+分页注意力还具有另一个关键优势：**高效的内存共享**。例如，在**并行采样中，从同一提示生成多个输出序列**。在这种情况下，提示的计算和内存可以在输出序列之间共享。
+
+**采样是指模型在生成文本时，从可能的下一个词（token）的分布中选择一个特定的词；并行采样通过获得不同采样/decode策略下的序列输出，增加输出多样性；**
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2045.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2046.png)
+
+分页注意力通过其块表自然地实现了内存共享。类似于进程如何共享物理页面，分页注意力中的**不同序列**可以通过将其逻辑块映射到相同的物理块来共享块。为了确保**安全共享**，分页注意力会跟踪物理块的引用计数并实现***写入时复制 (Copy-on-Write)*** 机制。
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2047.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2048.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2049.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2050.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2051.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2052.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2053.png)
+
+![image.png](LLM%E6%9E%B6%E6%9E%84%EF%BC%88Transformer%E3%80%81KV%20Cache%E3%80%81Flash%20Attention%E3%80%81vLLM%EF%BC%89/image%2054.png)
+
+分页注意力的内存共享大大降低了复杂采样算法（如并行采样和束搜索）的内存开销，将其内存使用量减少了高达 55%。这可以转化为高达 2.2 倍的吞吐量提升。这使得此类采样方法在 LLM 服务中变得实用。
+
+分页注意力是 vLLM 背后的核心技术，我们的 LLM 推理和服务引擎支持各种模型，具有高性能和易于使用的界面。有关 vLLM 和分页注意力的更多技术细节，请查看我们的 [GitHub 仓库](https://github.com/vllm-project/vllm)，并请关注我们的论文。

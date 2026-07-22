@@ -1,0 +1,275 @@
+# meeting-25/12/11（DiT、Diffusion、GPU虚拟化）
+
+# 想法
+
+DiT的不同step数，是不是又多种Mapping方式？     
+
+数据的多个用处，重排 内存 schedule
+
+冷模型推理加载热模型的重排？
+
+GPU的pipeline推理过程：从硬盘加载参数到host memory，之后加载到GPU memory，因此loading pipeline component（的进度条）是分为两个阶段推进达到100%；
+
+img2col conv、gemm能提供介于thread和instr之间的抢占粒度吗？  大于instr，小于layer，比如row-wise，顺便支撑attention，row-wise或channel-wise？；
+
+DiT、Z-image：**context parallel**、tensor parallel，conv主要用于decode或encode的前后处理，而不是BiT的Back；？？decoder和encoder中还有UNet？
+
+LDM中denoise stage比encode和decode stage慢很多，所以或许能够拆分端到端的request？但设计统一架构？
+
+加速器可以用在云端，类似TPUi；
+
+1 gemm，n conv，cpu non- leaner
+
+row-wise更方便重排列？IW和OC的并行容易产生channel和width的layout；
+
+云的服务模型；云边端；llm拆；
+
+云边端拆LLM：llm的中间数据在边缘cache，多用户共享中间结果和参数；
+
+共享方式：batch；很早batch，底层多样，高层共性没有暴露和共享；
+
+后端SLM生成的结果共享；
+
+隐私放到小模型；
+
+单纯卷性能已经有范式，优化重点在于应用场景的复杂多变；
+
+im2col模块能增大llm、conv调度的选择？llm和conv的同卡调度会有好处吗？不会，不同机器应调度不同类型模型；
+
+冷热LLM在多卡的调度场景，结合调度方法，作单卡体系结构层面的优化（互联、kernel）；
+
+MaaS的两种调度：静态绑定GPU+动态分配GPU，多任务共享GPU；
+
+layer之间的抢占、token之间的抢占，动态DNN；
+
+边缘场景的多任务，自动驾驶的chain of thought，能引入DNN，conv在边缘侧推理；
+
+IoT：每个核的PCIe；
+
+自动驾驶、VR的多任务，体系结构优化？
+
+slam；
+
+多算法内核；
+
+资源受限，DFG不一定最优，引入抢占；
+
+DiT的DFG的输入token不同，动态；
+
+输入的长度动态，资源受限；
+
+MoE的动态FFN；
+
+不同layout下的concate+shortcut（residual），多分支的数据依赖；
+
+# 方法/Acc
+
+## NV MPS、MIG、vGPU
+
+GPU VIRTUALISATION
+
+VIRTUALIZING HARDWARE PROCESSINGRESOURCES INA PROCESSOR
+
+## **DiT**
+
+**DiT**将Difuusion的backbone中convolution-UNet替换为Transformer，但decoder和encoder依然是conv-based UNet（Resnet、conv、upsample等）；
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%201.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%202.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%203.png)
+
+## Zimage：Diffusion的蒸馏方法
+
+Diffusion蒸馏→减少扩散的时间步；一般方法是分布匹配蒸馏DMD来**训练**学生模型；
+
+论文发现：在短时间步的扩散中，DMD过程的CFG（无分类引导）是效果好的核心；
+
+论文设计：将**DMD拆解成core engine+regularizer**，regularzer为了生成稳定、去除非自然），core是CFA，而regularizer替换成更简单的规则约束或GAN；
+
+实现：noise scheduler→ engine + regularizer，**两种latent**而非一种（推理过程不同）；
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%204.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%205.png)
+
+diffusion推理的Model**蒸馏方法**：轨迹匹配、GAN蒸馏、 得分蒸馏（**DMD**）；
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%206.png)
+
+**DMD方法**
+
+**Zt**是t时刻的隐变量，Z0是随机噪声，Zt是t时刻的某种分布；
+
+**G（Zt）**是Zt基于text生成的图像（Diffusion推理），G（Zt）加噪声扩散得到**Xr**，Xr用于计算老师模型和蒸馏模型的分数S-real-cond和S-fake-cond，最小化分数差来更新参数，cond表示基于text输入的条件；
+
+实际应用中，对老师模型计算分数**S-real-cfg**=**a** * S-real-cond - **（a-1）*** S-real-uncond，a是CFG优化scale；
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%207.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%208.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%209.png)
+
+CFG engine和DM Regularizer的**训练对比**
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2010.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2011.png)
+
+DMD分解成CFG和DM**两种latent**后的不同**schedule**方式
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2012.png)
+
+**推理**：text2img的**文生图**，img2img的图片自动编辑；
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2013.png)
+
+**核心算子**：
+
+pipe→ZimagePipeline→encoder-Transformer_denoise-decoder→conv-UNetMidBlk→ResNet；
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2014.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2015.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2016.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2017.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2018.png)
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2019.png)
+
+## Cerebras WSE vs. NV GPU
+
+A COMPARISON OF THE CEREBRAS WAFER-SCALE INTEGRATION TECHNOLOGY WITH NVIDIA GPU-BASED SYSTEMS FOR ARTIFICIAL INTELLIGENCE
+
+## Groq LPU
+
+[https://medium.com/%40cognidownunder/groqs-lpu-the-ai-accelerator-that-s-leaving-gpus-in-the-dust-bb6fff67a877](https://medium.com/%40cognidownunder/groqs-lpu-the-ai-accelerator-that-s-leaving-gpus-in-the-dust-bb6fff67a877)
+
+[https://groq.com/blog/the-groq-lpu-explained?utm_source=chatgpt.com](https://groq.com/blog/the-groq-lpu-explained?utm_source=chatgpt.com)
+
+## Sambanova RDU
+
+[https://sambanova.ai/blog/9-predictions-for-ai-in-2025?utm_source=chatgpt.com](https://sambanova.ai/blog/9-predictions-for-ai-in-2025?utm_source=chatgpt.com)
+
+[https://sambanova.ai/blog/sn40l-chip-best-inference-solution](https://sambanova.ai/blog/sn40l-chip-best-inference-solution)
+
+[https://sambanova.ai/blog/open-source-deep-research-agents](https://sambanova.ai/blog/open-source-deep-research-agents)
+
+[https://sambanova.ai/blog/from-insight-to-action-with-sambanova-agents?utm_source=chatgpt.com](https://sambanova.ai/blog/from-insight-to-action-with-sambanova-agents?utm_source=chatgpt.com)
+
+SambaNova SN40L Reconfigurable Dataflow Unit
+
+## VLSI2023：Model & HW Co-optimize for sparse CNN+SA
+
+Sense: Model-Hardware Co-design for Accelerating Sparse CNNs on Systolic Array
+
+SA架构作sparse CNN推理：
+
+channel cluster，完成IFM和weight在PE的负载均衡；
+
+负载均衡的weight prune，保证kernel的稀疏比和模型精度；
+
+自适应数据流配置计算策略，根据IFM和weight的存储需求；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20108.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20109.png)
+
+加速器设计目标：增大（有效）计算并行度来降低延迟，增大数据复用来提高能效；
+
+相关工作对模型作硬件友好的稀疏prune，基于稀疏方式设计加速器，挑战是：
+
+因为稀疏的随机性导致**PE负载不均衡**，无法**同时利用weights和IFM**的稀疏性，IFM和weights的随机稀疏导致的**内存低效访问**，稀疏格式的处理需要消耗特定硬件资源而**性能受限**（FPGA Acc的LUT、BRAM）；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20110.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20111.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20112.png)
+
+## TACO22：SPOTS：Sparse CNN by SA+GEMM（Sparse、IM2COL）
+
+**动机**：im2col耗时间且访问耗能，软件完成不能利用im2col和GEMM的pipeline；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20113.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20114.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20115.png)
+
+im2col模块，和我的设计原理类似，但我的存储Buffer粒度更粗，不需要分布式buffer；
+
+im2col过程只读取一次SRAM的特性不同，SPOTS作了H和W两个方向overlap的reserve，我只作了W方向的reserve，多任务场景下我作一个**row-wise的切换**（正好需要重复读取）？；
+
+SPOTS中im2col模块的每个PU需要一个控制器来**分布式**控制3个buffer行为，而我是一个整体控制器控制top buffer的行为；
+
+每个PU中的reserve buffer就是我的slab buffer，但我能**统一每个tile的overlap的大小**（不多消耗buffer），因此控制和设计更简单，pipeline粒度更细；
+
+im2col+GEMM的pipeline相同；
+
+SPOTS中im2col模块的PU分布式控制的对上接口的粒度是layer，即PUs动态协同控制完成layer输入的im2col，我的im2col设计的控制和模块很简单，更适合**多任务场景**？
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20116.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20117.png)
+
+GEMM提供**两种dataflow**（tall tile、sub-tall-tiles），利用稀疏CNN提供的特性；
+
+tall-shape GEMM的设计是为了降低IM2COL吞吐的需求，从而减少IM2COL的资源，意味着论文PU的**资源消耗较大**；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20118.png)
+
+output stationary的特点：128 rows，4 cols；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20119.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20120.png)
+
+**Sparse handling**
+
+以block为粒度的结构化稀疏，column-block的稀疏Map，M1跳过列和行的0计算，M2用于gate行或列部分0的PE计算；
+
+Sparse Weight——Buffer——Compress（skip）——GEMM；
+
+Dense Input——Buffer——IM2COL——Compress（bitmap、skip）——GEMM；
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20121.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20122.png)
+
+![image.png](meeting-25%2011%2019%EF%BC%88LLM%E8%B0%83%E5%BA%A6%E3%80%81FSD%E3%80%81CV%20Model%E3%80%81Acc%E3%80%81VAE%EF%BC%89/image%20123.png)
+
+**GEMM reconfiguration**
+
+两个数据流的NoC细节：IM2COL的多对多网络，SA是PE之间传递数据。
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2020.png)
+
+**Load Balance**
+
+部分PE计算0而空闲，部分PE则需要计算负载，不同PE的计算负载不同，降低利用率；
+
+SPOTS在PE前分别去除weights和IFM都是0的block（O(n+m )），从而跳过无效计算，但其中之一为0的block时会出现负载不均衡，SPOTS没有处理；
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2021.png)
+
+**实验**
+
+![image.png](meeting-25%2012%2011%EF%BC%88DiT%E3%80%81Diffusion%E3%80%81GPU%E8%99%9A%E6%8B%9F%E5%8C%96%EF%BC%89/image%2022.png)
+
+## ITSC24：Inter-Operator Schedule for CNN on GPU
+
+## ICS24：HW-aware(quantization) NAS for ViT
+
+## ISCA23：Eagar Correlation Prediction based FFN-Attention Co-optimized Transformer Acc
+
+## DAC22：length-adaptive sparse transformer Acc
+
+## MICRO16：fused CNN Acc

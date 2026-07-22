@@ -1,0 +1,1143 @@
+# meeting-25/10/17（多核仿真、3DGS、RL schedule）
+
+# OpenPiton
+
+## Ariane RV64IMAC Core
+
+类似RV64IMAC RTL Modeling Repo：[https://github.com/MuhammadMajiid/RV64IMAC/tree/main](https://github.com/MuhammadMajiid/RV64IMAC/tree/main)
+
+RV微架构命名
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%201.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%202.png)
+
+## Cohort对OpenPiton的修改
+
+[https://github.com/cohort-project](https://github.com/cohort-project)
+
+[https://github.com/cohort-project/cohort-soc](https://github.com/cohort-project/cohort-soc)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%203.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%207.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2055.png)
+
+AES和SHA如何修改？测试如何进行？
+
+## somebody & somepaper
+
+[https://morenes.github.io/](https://morenes.github.io/)
+
+[https://dl.acm.org/doi/pdf/10.1145/3470496.3527400](https://dl.acm.org/doi/pdf/10.1145/3470496.3527400)
+
+Tiny but Mighty: Designing and Realizing Scalable **Latency Tolerance** for Manycore SoCs
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%204.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%205.png)
+
+# 3DGS的数据流优化
+
+**GCC: A 3DGS Inference Architecture with Gaussian-Wise and Cross-Stage Conditional Processing**
+
+基础:[https://zhuanlan.zhihu.com/p/26101040053](https://zhuanlan.zhihu.com/p/26101040053)
+
+[https://cyfedu-dlut.github.io/PersonalWeb/posts/2025/05/3DGS/](https://cyfedu-dlut.github.io/PersonalWeb/posts/2025/05/3DGS/)
+
+[https://blog.csdn.net/weixin_48978134/article/details/141218932](https://blog.csdn.net/weixin_48978134/article/details/141218932)
+
+## idea
+
+**Q：**3DGS预处理的结果在**render中不进行计算**而无效;
+
+**src**：视锥外的GS、α-blend中权重小于阈值的GS不参与render，不需要preprocess；
+
+**方法：交替**预处理和render来动态跳过无效的预处理，按照**深度**选择GS的**垂直**pipeline，而非GS全集的平推pipeline；
+
+**Q：**不同tile render中**重复加载**GS;
+
+**src：**跨多个tile的GS被重复加载到SM；
+
+**方法：GS级别**的render来消除tile间的重复GS加载，render的不同并行方法；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%206.png)
+
+## 方法和实现
+
+GCC pipeline按照GS为任务粒度
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%207.png)
+
+GS preprocess & **render**数据流
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%208.png)
+
+**加速器设计**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%209.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2010.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2011.png)
+
+**实验设计**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2012.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2013.png)
+
+## 3DGS基础
+
+[图形渲染和3DGS三维重建](%E5%9B%BE%E5%BD%A2%E6%B8%B2%E6%9F%93%E5%92%8C3DGS%E4%B8%89%E7%BB%B4%E9%87%8D%E5%BB%BA%20286e12d10b6e806f90aff7c39d5faeac.md)
+
+**3DGS的个体属性**：均值、协方差、球谐系数（颜色函数）、透明度；
+
+**均值**表示GS的中心位置，**协方差**表示GS的形状，**球谐系数**描述GS粒子（反射出）的颜色，**透明度α**衡量GS在建模中的参与程度（0表示不需要该GS）；
+
+协方差（概率密度）和透明度决定GS在x位置粒子的**贡献透明度α‘**，**多个GS**在x位置的粒子颜色按贡献透明度来**混合α-blend**（**有序 & α加权**）是3DGS模型渲染出**图像x位置的颜色**，**混合前**按照3DGS的深度（离相机的距离）进行**排序sorting**，因为距离远的粒子颜色会被距离近的粒子**遮挡**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2014.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2015.png)
+
+x位置颜色/**渲染**的数学原理是多个3DGS分布粒子的颜色Ray到相机的叠加（按概率密度**积分**），使用傅里叶变换等方式转为基于**多项式**的计算方法：3DGS投影到2DGS>2DGS的光栅化（筛选）>2DGS的sorting和blending；
+
+3DGS的椭球**坐标系变换和投影变换到2DGS（projection）**认为是为**预处理**过程；
+
+利用GPU的并行算力，将3DGS的**像素颜色计算（渲染**过程**）**过程按照图像位置分块（1 tile = 16×16 pixels）并行计算，每个tile分配1个线程块（256个threads）在SM上执行；
+
+分别筛选出分布在**pixels tile或相互重叠**的**2DGS椭球（光栅化raster）**，加载tile内的GS属性到SM的shared memory，每个pixel由1个core负责计算颜色（**sort & blend**）；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2016.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2017.png)
+
+# **TACO25：RL Scheduler**
+
+**TACO25**:Ceiba: An Efficient and Scalable DNN Scheduler for Spatial Accelerators
+
+通用的**多层存储+PE**的Acc arch模型**没有考虑重排等特殊数据流**，通过**不同Arch**来支持不同的parrallel，而**不是单Arch多数据流**；
+
+面向更大DNN**（layers）**和不同**加速器**的（scalable）组合的调度搜索；
+
+layer计算在spatial和temporal上的**形式化表达**，RL作调度更快，因此降低调度开销；
+
+## idea
+
+**静态调度**：观察DNN负载和资源分配情况，生成DNN mapping的best-fit策略；
+
+**不是基于实时**数据的online调度，而是生成offline调度来完成workflow；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2018.png)
+
+调度器分类：暴力搜索/遍历空间、ML-based(模拟退火、遗传、梯度下降)、整数规划ILP(优化变量、约束、优化目标)；
+
+对更大负载和算力时，**次优解和无效解过多**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2019.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2020.png)
+
+spatial Acc：设计指令的硬件pipeline；
+
+temporal tiling是负载按**时间**分块后调度到Acc，不同tile在不同时间执行**统一的pipeline**；
+
+spatial tiling/parallel是负载按**硬件pipeline**分块后调度，不同tile运行在硬件pipeline的**不同stage**；
+
+**每层buffer**都有7个sub_loop，每个sub_loop可以tiling成sub_loop-spatial和sub_loop-temporal，loop-size为1的loop省略，sub_loop的order可优化；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2021.png)
+
+**搜索空间**：对loop-*的素因子x，每层buffer最多分p个，p是loop-*分解质因数后x的个数；每层buffer的loop order是7!；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2022.png)
+
+**右侧的search space**：
+
+7!是loop order，order^4是4个level；
+
+2^4是level bypass，bypass^3是input/output/weight？；
+
+size是**level内**7个loop的搜索空间；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2023.png)
+
+RL **Motivation**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2024.png)
+
+## **RL scheduler** **example**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2025.png)
+
+**优先给spatial capacity更大的存储/计算level**分配tile size，尽量用满算力和容量；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2026.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2027.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2028.png)
+
+## 方法
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2029.png)
+
+**RL flow**：面向**动态的**Acc资源和DNN **layer**，**动态调度**到Acc执行；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2030.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2031.png)
+
+SAS交互系统：**可用**资源执行DNN计算，用**分析模型**来模拟Acc架构；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2032.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2033.png)
+
+Acc结构的**限制**：parallel-size/shape、memory size等
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2034.png)
+
+**多阶段**决定调度参数、每个阶段需要维护资源**Capacity**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2035.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2036.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2037.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2038.png)
+
+**policy**网络采样action space给出**action（order、tsize、ssize）**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2039.png)
+
+## 实验
+
+**TimeLoop**来模拟加速器；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2040.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2041.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2042.png)
+
+调度性能：超过了brute-force？因为**暴力搜索**搜索时间不可能无限大，**难搜索到最优解；**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2043.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2044.png)
+
+调度开销
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2045.png)
+
+不同**DNN**和**Arch**的Scalability实验；
+
+# ISPASS19：TimeLoop
+
+## idea
+
+DLA的**体系结构模型**、**性能**分析
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2046.png)
+
+Arch的**设计参数**，**没有包含操作延迟**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2047.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2048.png)
+
+## Mapping
+
+**操作**space和**数据**space**分块**到每个层次（tiling level）上的存储实例；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2049.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2050.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2051.png)
+
+Acc的**架构约束**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2052.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2053.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2054.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2055.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2056.png)
+
+## Model
+
+**tile access**：多个层次**tile之间**的数据传输，和overlap data（**delta**）相关；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2057.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2058.png)
+
+**tile access**统计：利用dense张量的格式和计算过程**规整**，优化统计；
+
+tile access**发生在Arch**的不同组件上：Mux、Buffer、NoC、Address Gen等，基于**tile access**统计，建模不同组件的操作；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2059.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2060.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2061.png)
+
+基于不同组件的操作频率和组件开销，建模Arch的**面积/功耗**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2062.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2063.png)
+
+基于不同组件的操作频率和操作延迟，建模Arch的**性能和功耗**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2064.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2065.png)
+
+# ISCA24（pret）
+
+**ISCA24**:Soter: Analytical Tensor-Architecture Modeling and Automatic Tensor Program Tuning for Spatial Accelerators
+
+研究问题：基于现有的**张量程序**，生成**目标硬件**上执行的，**有效、高效**的张量程序；
+
+现有方法：vendor lib由芯片设计方**人工编写**；poly model基于硬件的Modeling，建立张量程序的优化空间，但需要**某类**硬件的**具体**Model，不能直接用在不同硬件上；
+
+本文：基于Cosa提出的**硬件和程序抽象**，使用**多步**优化目标函数，**逐步裁剪**设计空间，弱化通过建模硬件来精准刻画设计空间的需求；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2066.png)
+
+## idea
+
+auto-tuning
+
+Q：生成**无效或低效**的程序，程序生成/Mapping过程中**不能准确评估不完整**的程序性能；
+
+方法：**分析模型**生成高性能程序的设计空间；
+
+不完整程序：设计参数没有完全确定的张量程序；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2067.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2068.png)
+
+Tensor Mapping:张量映射到Acc执行,包含vendor lib、polyhedral model、auto-tuning;
+
+vendor lib由芯片设计方人工编写功能函数到DLA的tensor mapping;
+
+poly model基于**人工设计**目标函数和约束的优化方法,对loop order和tiling的整数规划,性能可推断;
+
+**auto**-tuning构建**映射后程序的设计空间**后搜索**生成**,生成方法包含beam搜索（每步增加候选项，如同光束beam）、模拟退火、遗传、分析的cost模型、DL的cost模型;
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2069.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2070.png)
+
+poly model和auto-tuning区别是?
+
+cost model是**线性**目标函数和张量计算的n-loop优化过程是**非线性的**；
+
+poly model**建模**特定类型（Spatial）硬件架构，建立程序**设计空间**后，优化目标函数进行**搜索**，不能直接推广到不同硬件架构;
+
+**auto**-tuning是降低硬件建模获得的知识（**不确定的参数和不细致的约束**），通过多步优化目标函数来直接搜索空间，本质在搜索中近似硬件架构
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2071.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2072.png)
+
+auto-tuning方法分为sequence-guided和template-guided;
+
+seq-g**逐个评估**每个参数的可能值下程序性能,选择每个参数top-k性能的可能值,但**不完整**(未完全确定所有参数)的程序性能难以评估,影响序列化决策的优化;
+
+temp-g**同时优化确定**所有参数,评估不同参数组合的完整程序性能,但无法准确约束每个参数的搜索子空间,因为不同参数搜索子空间之间存在影响和约束,所以生成大量**无效**(违背Acc约束)和**低效**(低资源使用率)程序;
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2073.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2074.png)
+
+基于seq-g,使用**Transformer来评估不完整程序**后给出下一步优化方向,避免top-k方法无法准确评估不完整的程序性能的问题;
+
+seq-g的分析模型**更新参数搜索子空间**,auto-tunner优化tensor程序的设计参数;
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2075.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2076.png)
+
+张量计算Mapping到Acc张量程序,设计**Acc张量程序的生成空间**;
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2077.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2078.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2079.png)
+
+seq-g很难评估不完整程序,temp-g没有筛选无效的搜索子空间;
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2080.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2081.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2082.png)
+
+## 方法
+
+Soter workflow
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2083.png)
+
+**分析模型**生成tensor程序设计空间,优化参数后去除无效和低效的搜索子空间;
+
+**auto-tunner**面向Acc生成高性能程序,分步确定设计参数**范围**,**全部确定后评估性能**;
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2084.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2085.png)
+
+建模空间base: tensor计算、Acc架构**建模** >> tensor程序的**设计空间**;
+
+操作逻辑:在搜索空间中,分阶段优化设计参数 && 去除无效和低效的子空间;
+
+结果:高性能tensor程序(loop order、time tiling、spatial tiling/parallel);
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2086.png)
+
+**分析模型**建立有效、高效程序的搜索空间;
+
+valid:tile-size不超过所在层的存储容量,parallel-size不超过所在层的计算容量;
+
+efficient:tilesize-p需要超过所在层的计算容量,tilesize-p是tile-size和parallel-size的函数;
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2087.png)
+
+GEMM和CONV的**存储容量约束**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2088.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2089.png)
+
+**不等式的可行解求解**:假设其余参数最小,获得特定参数最大值,之后**根据搜索确定特定参数**后,确定其余参数的最大值;
+
+确定特定参数的最大值的顺序不重要?重要的是**约束搜索空间**?
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2090.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2091.png)
+
+计算容量的valid约束
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2092.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2093.png)
+
+计算容量的efficient约束
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2094.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2095.png)
+
+auto-tuner:每个参数视为1个token,Transformer作为策略（agent），分步输出优化参数子空间上的概率分布，无效或低效的选择概率是0，隐态h（上下文信息）迭代B次；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2096.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2097.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2098.png)
+
+Transformer模型训练**不使用标签**，用Reward（**延迟**）和策略参数（概率分布）的乘积作为优化函数，延迟通过评估tensor程序性能得到；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%2099.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20100.png)
+
+分析模型和auto-tuner的协作coordinate：分析模型根据tuner的每一步的优化参数裁剪搜索空间，tuner每一步优化基于裁剪后的搜索空间；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20101.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20102.png)
+
+## 实验
+
+程序性能{单算子、模型端到端}、加速器{不同架构、不同容量}、不同Mapping方法；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20103.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20104.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20105.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20106.png)
+
+# ISCA21：Cosa
+
+CoSA: Scheduling by Constrained Optimization for Spatial Accelerators
+
+Cosa、TVM、Soter的区别？Cosa和Soter的描述互博？Soter是把启发式剪枝改为多步优化中用Transformer剪枝;
+
+## idea
+
+**Q**：**DNN Arch**提供的数据复用、高峰值吞吐，**运行时参数**需要软件作**offline/online调度**，来提高程序Mapping后的性能；
+
+**M1**：基于**分析Cost Model**评估schedule，**Arch约束**剪枝schedule的搜索空间，暴力搜索最优解；
+
+**M2**：基于**feedback**方法，黑盒tuning、beam搜索、ML搜索通过**迭代采样来计算feedback**，优化schedule的决策；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20107.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20108.png)
+
+**SOTA**
+
+暴力搜索：结合启发式方法来人工剪枝schedule空间，分析Cost Model不能准确评估**片上通信开销**，搜索**很慢**而难找到最优解；
+
+反馈模型搜索：通过基于**feedback**的统计方法提高Cost Model的**评估准确率**，大量schedule和性能数据训练Cost Model来学习**schedule空间的特征**，主要用于成熟架构，难用于架构预研；
+
+约束优化方法：常用于执行**细粒度**指令和**硬件管理Cache**的CPU/GPU中，没有用于软件管理的Spatial Acc(粗粒度算子，硬件不支持Cache，读写完全由指令控制访存)的方法；
+
+memory partition:gpu partition unit和memory device一一配对,负责将访问请求映射到物理内存;
+
+algorithm selection:?
+
+现有poly模型**没有协同优化tile-size**和loop order(每层memory的7-loop slot分配factor)？只是把tile-size作为Mapping的输入,因为他们面向CPU和GPU支持的细粒度指令(tiling放在软件编译成指令),而非DLA支持的粗粒度指令(硬件内部tiling由Mapping配置);
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20109.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20110.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20111.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20112.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20113.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20114.png)
+
+**K**：将schedule定义成**约束**优化问题，数学方法**一步**解决，降低不同DNN的搜索时间；
+
+**regularity**：DNN(张量程序)和加速器(存储、并行方式)的规律,**抽象**出张量程序的设计空间和约束；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20115.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20116.png)
+
+**schedule**
+
+spatial mapping:bind loop dimensions with hardware resource,若干子循环表示的tile程序是硬件实现的数据流pipeline;
+
+**random sample** schedules from search space, **insight invalid or inefficient tiling**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20117.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20118.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20119.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20120.png)
+
+## 方法
+
+约束优化问题
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20121.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20122.png)
+
+Var表达schedule，约束表达DNN dimension和Acc Arch参数，目标函数表达优化目标；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20123.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20124.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20125.png)
+
+schedule example
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20126.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20122.png)
+
+不同order、spatial Mapping的性能
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20127.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20128.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20129.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20130.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20131.png)
+
+定义 **schedule** configuration = prime factor allocation，用variable矩阵X表示调度；
+
+factor（**n**）-dimension（**j**）allocation decision：memory level（**i**）、permutation order（**z**）、spatial Mapping（**k**）；
+
+每个factor**仅使用一次**，即仅分配到一个memory level的slot；
+
+factor分配到相同level memory中不同rank的slot，根据**rank大小**决定该factor-dimendion的次序；  
+
+**相同dimension的不同factor**分配到相同rank的不同slot时，会**合并**到相同的factor-dimendion；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20132.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20133.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20134.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20135.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20136.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20122.png)
+
+用constant表示程序和Acc中的规律regularity；
+
+张量I、W、A和**程序**dimension的关系A，张量I、W、A和**Acc** Buffer的关系B；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20137.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20138.png)
+
+用variable、constant**表达Acc约束**，用于在约束下搜索设计空间
+
+**Buffer Capacity约束**：register（level-**0**）、I/W/O-Buffer（level-**1**）、Global Buffer（level-**2**）、DRAM（level-**3**），确定level-I memoryt和确定张量v的存储占用**U（I，v）**；
+
+空白slot默认分配**prime-factor=1**，便于用固定上下标累乘来收集factor，非线性的乘法约束**取对数**，转为线性约束求解；
+
+下面公式的累乘i的**上标应是I？或者B（I-1，v）**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20139.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20140.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20141.png)
+
+X***A（j，v）**统计属于**张量v所定义dimension-j的factor**，X*A***B（I，v）**统计**存储在level-I memory里张量v的factor**，比如张量O不在global buffer（level-2）中，占用为0；
+
+！！！：B（I，v）在累乘计算U（I，v）过程中是定值！
+
+**（j，n）**累乘是**不同dimension的不同factor累乘**，dimension质因数分解的逆过程；
+
+**k**累乘是**dimension时间tiling或空间映射的factor累乘**，dimension按时间tiling的factor表示**串行#factor次tile**（记为k=1），dimension映射到空间的factor表示**#factor个tile并行**（记为k=0）；
+
+**i**累乘是level-I memory的**I/W/O tiles**存储需求需要将分配到level-**0~I memory的factor累乘**，高层tile按时间tiling或空间映射到若干低层的sub-tile，对应程序的嵌套loop；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20122.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20136.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20138.png)
+
+Spatial Resource约束：估计schedule在**level-I** memory的**空间**资源占用（i=I，k=0），X（j，n，I，0）是factor分配标记；
+
+每个factor分配到temporal或spatial，公式3中应该是 $\forall (j,n) \ \exist i$ ？
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20142.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20143.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20136.png)
+
+目标函数——Utilization：提高Buffer使用率，达到更低的通信开销；
+
+最大化**系统Util**，**Util**是每个存储层次**level-i**下**张量I、W、O**的**U（i，v）**求和；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20144.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20145.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20138.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20141.png)
+
+目标函数——Compute Latency：用**迭代次数量化延迟**进行优化，而不是具体延迟数值；
+
+最小化计算延迟，延迟是每个存储层次**level-i**下每个temporal **factor（j，n，k=1）**求和；
+
+这个函数和schedule的k=1处的factor分配有关；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20146.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20136.png)
+
+目标函数——Traffic：每次传输的**数据量**、#spatial factor数量的**广播和单播**、#temporal factor数量的**迭代**；
+
+data size per transfer：类似张量v在level-l的占用U（I，v），但**不需要B（I，v）**判断level-I是否存储张量v，计算**张量v在全部level memory的占用**，即将分配后张量v的dimension-factor重新收集；
+
+？？？可以直接用张量demension计算，不需要从factor构建，和schedule无关？
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20147.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20136.png)
+
+#spatial factor数量的**广播和单播**
+
+映射后的#spatial factor空间的GB（**level I**） traffic可能是multicast、unicast和reduction，spatial mapping（**k=0**）且dimension-j和tensor-v无关的#factor空间的traffic是multicast或reduction，统计traffic时需**多次传输张量v**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20148.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20149.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20150.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20138.png)
+
+#temporal factor数量的**迭代**
+
+Y：是否外层NoC loop bound需要被不同变量X使用（计算traffic），即相同level下不同loop order中外层loop蕴含的迭代计算和传输；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20151.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20122.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20152.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20136.png)
+
+Traffic=D*L*T：张量每个标量的traffic基本相同，用张量size乘次数；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20153.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20154.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20155.png)
+
+overall objective：最大化Util、最小化Comp、最小化Traffic设计综合的目标函数，或者平衡Comp和Traffic的目标函数；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20156.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20157.png)
+
+## 实验
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20158.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20159.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20160.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20161.png)
+
+# TC24:TensorMap
+
+**TC24**:TensorMap: A Deep RL-Based Tensor Mapping Framework for Spatial Accelerators
+
+## idea
+
+tensor Mapping背景
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20162.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20163.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20164.png)
+
+**搜索方法**问题：暴力开销大而难求最优解、模拟退火和遗传是黑盒且陷入局部最优解、DL方法没有考虑不同Acc架构；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20165.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20166.png)
+
+RL的**优势**是：
+
+1、序列优化而容易找到较优解；
+
+2、可微分可训练而应用更多算法和Acc架构（**泛化？但重点是抽象不同架构的特征引入训练？**）；
+
+3、不用人工构建Mapping的搜索过程而使用agent（Mapping**建模**依赖人工假设）
+
+RL的挑战是：
+
+1、Action空间**离散且动态变化**，policy网络如何从分布广泛的空间中决策Action；
+
+2、稀疏的Reward，序列化优化需要做出一系列Action才能评估性能来计算Reward，每一步需要设置dense reward（设置初始配置，之后每一步改变后都是**完整**配置）；
+
+3、最优解和可用性：巨大搜索空间收敛到最优解较慢，增大搜索粒度更快但不一定最优解（RL粗筛+GA精细优化）；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20167.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20168.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20169.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20170.png)
+
+## 方法
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20171.png)
+
+tensorMap
+
+RL Sys：time step序列优化、agent输入环境状态后输出概率分布（解决分布离散）、环境给出Reward和状态（性能）；
+
+stop信号支持**多level**的优化，RL粗筛+**GA**精筛给出最优解；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20172.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20173.png)
+
+policy网络：FC+LSTM
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20174.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20175.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20176.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20177.png)
+
+## 实验
+
+**tensor-stationary** mapping：OS、WS、IS；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20178.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20179.png)
+
+# ICCD24：TileMap
+
+**ICCD24**:TileMap: Mapping Multi-Head Attention on Spatial Accelerators with Tile-based Analysis
+
+算子融合MHA的Mapping，GEMM和CONV的Mapping扩展；
+
+## idea
+
+MHA的**计算强度**远低于Acc的性能期望，中间结果传输开销可优化；
+
+**算子融合**让中间结果留在片上继续计算，降低传输开销；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20180.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20181.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20182.png)
+
+MHA算子融合的挑战：
+
+1、MHA的**算子依赖约束**算子之间的**tile shape**相匹配；
+
+2、每个层次下，**不同BMM**的数据**访问**方式可能不同，如K**不**tiling、V按**列**tiling、Q按**行**tiling，可能需要**off-chip重排或on-chip缓存等**数据route； 
+
+3、Acc**资源约束**tiling；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20183.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20184.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20185.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20186.png)
+
+## 方法
+
+基于tile分析，约束M-S-M间的**tile shape**，估计计算和存储**资源消耗**；
+
+>建立**MHA算子融合**后的程序设计空间；
+
+>**RL**搜索；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20187.png)
+
+构建MHA**算子融合**的设计空间，on-chip代码是融合后tile计算，off-chip代码是MHA的**融合tiling**（inter-op tiling）：
+
+1、**对齐**片上BMM-SFM-BMM的tile shape，直接复用片上的中间结果，对应M-S-M的**统一最外层for-loop**；
+
+2、shared mem层确定tile shape后（即1），每个算子在**内层**存储上**独立优化**数据访问，对应**第二层各自的for-loop**；
+
+3、估计数据占据的存储空间；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20188.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20189.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20190.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20191.png)
+
+**Mapping空间**
+
+inter-op tiling优化参数是off-chip tile factor：B1、H1、L1-1；
+
+intra-op tiling是算子内tiling优化：B0、H0、L1-0、L2和D；
+
+intra-op parallel是算子内的**spatial**数据流优化；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20192.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20193.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20188.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20183.png)
+
+**资源约束**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20194.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20195.png)
+
+Mapping后程序的**性能估计**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20196.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20197.png)
+
+**RL搜索**优化
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20198.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20199.png)
+
+## 实验
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20200.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20201.png)
+
+# DATE25：HLS>ODG>RTL
+
+**DATE25**:Operation Dependency Graph-Based Scheduling for High-Level Synthesis
+
+basic：[https://docs.amd.com/r/zh-CN/ug1399-vitis-hls/认识高层次综合的调度与绑定](https://docs.amd.com/r/zh-CN/ug1399-vitis-hls/%E8%AE%A4%E8%AF%86%E9%AB%98%E5%B1%82%E6%AC%A1%E7%BB%BC%E5%90%88%E7%9A%84%E8%B0%83%E5%BA%A6%E4%B8%8E%E7%BB%91%E5%AE%9A)
+
+HLS代码**Mapping**到实现：Datapath、Ctrl、Memory、IO；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20202.png)
+
+HLS > **compile > schedule > bind > ctrl > IO > RTL**；
+
+**schedule**：分析运算的**数据依赖和资源依赖**，调度运算完成kernel定义的功能，给出**kernel延迟**；
+
+数据依赖是kernel原生的运算**顺序**，资源依赖是运算分配**空闲**资源或**共享**资源；
+
+**schedule & bind**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20203.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20204.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20205.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20206.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20207.png)
+
+**性能评估**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20208.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20209.png)
+
+## idea
+
+Q：HLS实现出高性能的RTL代码（数据流加速器），**调度**决定生成RTL的性能；
+
+数据依赖和资源依赖决定**算子**顺序;
+
+在DFG中引入**资源约束**，构建ODG；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20210.png)
+
+问题：；
+
+启发式方法
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20211.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20212.png)
+
+LP、ILP、GNN
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20213.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20214.png)
+
+## 方法
+
+GNN+RL
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20215.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20216.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20217.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20218.png)
+
+将运算的**特征**编码成node；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20219.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20220.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20221.png)
+
+GNN**感知**运算的关系
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20222.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20223.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20224.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20225.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20226.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20227.png)
+
+RL迭代schedule并**更新ODG**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20228.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20229.png)
+
+## 实验
+
+benchmark
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20230.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20231.png)
+
+## basic
+
+HLS代码**Mapping**到实现：Datapath、Ctrl、Memory、IO；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20202.png)
+
+HLS > **compile > schedule > bind > ctrl > IO > RTL**；
+
+**schedule**：分析运算的**数据依赖和资源依赖**，调度运算完成kernel定义的功能，给出**kernel延迟**；
+
+数据依赖是kernel原生的运算**顺序**，资源依赖是运算分配**空闲**资源或**共享**资源；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20232.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20233.png)
+
+schedule & bind **example**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20234.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20204.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20207.png)
+
+硬件实现代码的优势是比CPU使用**时钟周期更少**，但FPGA时钟频率远低于CPU，需要用更高**并行度弥补**；
+
+ctrl & IO **example**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20205.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20206.png)
+
+性能指标 **example**
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20208.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20209.png)
+
+使用AXI**突发**传输的优化LD/ST
+
+**流水线突发**：ReadReq、WriteReq、WriteResp等命令传输**不需要等待**数据传输，而**各自连续传输**；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20235.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20236.png)
+
+**顺序突发**：ReadReq、WriteReq、WriteResp等命令传输**需要等待**数据传输；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20237.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20238.png)
+
+# My BS
+
+## 多任务BS
+
+isca、tc、taco:多算子融合有一个**算子生命周期分析**挺有意思的，还是**冷热张量**？
+
+算子融合中，有的算子loop长，有的短，所以提出**生命周期，即若干算子融合后的延迟**；
+
+按照生命周期（执行延迟）的标准，融合算子，提高Mapping的效率，简化硬件抽象难度；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20239.png)
+
+预见性的分配和调度能降低开销吗
+
+io瓶颈是io慢且cache小，多任务能否改善？
+
+硬件队列的作用和层次和AXI类似；
+
+多任务的切换开销隐藏；
+
+多任务的负载调度，占用io和内存，设计算子数据的生命周期？be插lc的空？
+
+RL的分步搜索，分步更新设计空间和ODG，引申为动态多任务调度？
+
+动态配置；
+
+## My Work
+
+加速器都用**tensor**,因为这个抽象灵活而通用,那么优化的是张量的尺寸和执行流(数据流);
+
+多数据流的抽象？硬件重排的抽象？
+
+本质上重排是数据在存储层次之间**route**的一种方式；
+
+**重排**能改善Acc对Mapping的约束吗？增加LD/ST类型的语义，或者增加**重排kernel**？
+
+混合精度的数据格式？dense排布的地址计算开销？
+
+多数据流feather、MathModel-Cosa、Transformer-Soter、TVM三个工作应该有联系?
+
+多数据流Acc提出新的模拟器是因为硬件架构不同于TimeLoop的抽象；
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20240.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20241.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20242.png)
+
+异构并行方式核，适合做算子融合pipeline；
+
+Mapping中搜索不同的spatial Mapping，但Acc可配置数据流的约束限制schedule；
+
+DLA和GPU
+
+现有poly模型**没有协同优化tile-size**和loop order(每层memory的7-loop slot分配factor)？只是把tile-size作为Mapping的输入,因为他们面向CPU和GPU支持的细粒度指令(tiling放在软件编译成指令),而非DLA支持的粗粒度指令(硬件内部tiling由Mapping配置);
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20109.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20110.png)
+
+## DDR特性
+
+利用ddr传输的BL特性：约束最小突发访问数据量为BL*2*clk-ratio*word-width，即**数据传输率*****word-width**；
+
+tiling可以考虑设计访存长度和地址变化，**ddr的不同延迟参数**会有访存长度和地址变化的不同倾向吗？ddr接口封装ddr请求,但实际延迟由ddr决定,比如最好延迟的访问方式和最差延迟的访问方式?
+
+## 异构哲学
+
+异构interconnect的设计哲学:no internel change,即不要求节点内部作出大的改变：Cohort论文提出的编程模型和硬件架构,新增加速器时不要求修改code和加速器结构,**统一一致灵活**;
+
+## 实验Todo
+
+多dataflow（FEATHER）的实验
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20243.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20244.png)
+
+![image.png](meeting-25%2010%2017%EF%BC%88%E5%A4%9A%E6%A0%B8%E4%BB%BF%E7%9C%9F%E3%80%813DGS%E3%80%81RL%20schedule%EF%BC%89/image%20245.png)
+
+follow别人工作来看实验：清华 高明宇

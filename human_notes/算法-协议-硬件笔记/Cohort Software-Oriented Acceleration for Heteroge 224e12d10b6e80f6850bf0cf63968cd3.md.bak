@@ -1,0 +1,579 @@
+# Cohort: Software-Oriented Acceleration for Heterogeneous SoCs
+
+异构SoC视为多核SoC的扩展，核扩展到CPU和各种加速器，Cache一致性扩展到**CPU Cache和queue的一致性**；
+
+利用SPSC queue作为软件和硬件的**公共模型**，软件接口push、pop进行数据流端到端的输入和输出，register注册queue来定义硬件数据流；
+
+将SPSC queue的多核一致性扩展到加速核，利用invalidate完成硬件数据流的数据传输；
+
+**一致性**是每个核对系统造成的影响，能够被其他核感知，让系统内所有核对系统的认知一致（对相同事物的感知一致）；
+
+# Abstract
+
+异构设计：**硬件最大化性能，软件弥补其余**；
+
+软件编程缺少数据格式（layout？）、手动存储、一致性管理等？
+
+软件使用共享内存queue的抽象和硬件交互，硬件运行时重配置；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image.png)
+
+# intro
+
+异构SoC中，加速器为CPU服务，CPU管理内存分配、调度和通信；
+
+但是，SoC的需求由加速器完成，**加速器有特殊需求和定制的编程范式**，缺乏统一性的加速器需求，需要为每个加速器编写定制代码；
+
+并且，加速器的组合需要特权软件层（**CPU**）来做中间通信；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%201.png)
+
+理想异构SoC需要：
+
+**通用、灵活的硬件接口**，完成软件和硬件之间的通信；
+
+使用**现有硬件抽象**的编程范式，新增加速器时的**最小化软件修改（底软和编译）**；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%202.png)
+
+尽可能复用**现有底层软件**环境，**不希望新ISA和硬件接口**来增大底软和编译环境的设计难度；
+
+## Fig 1
+
+**Cohort：共享内存queue**的抽象、Core和Acc的点对点通信 ；
+
+面向使用SBIO（stream、buffer）通信模式的加速器，DMA、MMIO属于SBIO；
+
+[内存访问、地址空间、PCIe](%E5%86%85%E5%AD%98%E8%AE%BF%E9%97%AE%E3%80%81%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4%E3%80%81PCIe%20264e12d10b6e80138167c60d97b8e20d.md)
+
+软件产生数据**入队**，被硬件、软件（没有特殊内存分配和cache一致性管理）**使用**，加速器无需修改而通过**AXI**接口接入；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%203.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%204.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%205.png)
+
+## Fig 2
+
+Cohort engine在SoC上实现，基于**原生一致性协议**（CXL等）；
+
+FPGA上异构原型（core、加速器、Cohort engine互联）
+
+**consistency、Coherence**：多核对相同内存读写时，保证行为正确性需要的协议；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%206.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%207.png)
+
+# motivation
+
+软件编程问题
+
+加速器的**软件接口**：编译pass、DSL、特权kernel call、自定义库；
+
+加速器要求特殊**memory分配、cache flush**，因为需求IOMMU、一致性、编址、对齐；
+
+MMIO的ld/st操作**语义开销大**，需要映射到kernel虚拟内存，损伤性能；
+
+MMIO执行**无法预测（kernel执行）**，MMIO期间通常**无法处理中断**，MMIO一般**阻塞CPU**/同步；
+
+编程者使用MMIO会担忧编译优化或重排指令引发的问题，**MMIO的性能和可编程性弱**，因此**只作为备选**传输方法；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%208.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%209.png)
+
+硬件接口问题
+
+加速器、core的**数据传输**：MMIO读写寄存器、DMA读写内存；
+
+加速器的**一致性模型**：部分一致性、不支持、全一致性均有，全一致性的代价是性能；
+
+桌面、服务级的基于PCIe的CXL、CCIX、CAPI：基于**PCIe传输有开销、延迟**（90%），不利于LC；
+
+**CCIX**将一致性管理卸载到加速器负责，对加速器管理的内存区域的**访问绑定特定的PCIe拓扑**；
+
+移动SoC很少使用PCIe（功耗、面积高），**加速器使用原生/共享memory**；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2010.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2011.png)
+
+# Cohort方法
+
+软件中心的架构SOA，不需要采用特殊IO操作、内存和cache管理、加速器定制驱动；
+
+SOA以user为中心，向app和runtime提供灵活、隔离、安全；
+
+SOA使用**kernel interposition？**的机制来支持system level policy、profiling，**不支持损伤性能的context switch、kernel interaction？**；
+
+## Q-A
+
+**kernel interposition（介入）**是软件提供起始输入、接收最终输出、配置硬件数据流而中间无交互；
+
+**kernel interaction（交互）**是软件调用kernel-硬件执行kernel的多次交互；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2012.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2013.png)
+
+## Fig 3
+
+queue Coherence：通用抽象，**拆解线程kernel**，增加并行和tuning；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2014.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2015.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2016.png)
+
+## Tab 1
+
+lock-free queue lib：减小一致性开销；
+
+**SPSC queue** **coherence**：producer数据入队，consumer看到写指针改变时，queue中数据也改变；
+
+基于cache coherence system的**cohort engine**实现queue coherence；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2017.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2018.png)
+
+## Fig 4
+
+软件、硬件的拆解
+
+Cohort接口的加速器**输入连接软件queue，输出连接软件queue**；
+
+软件只看到数据在queue中的移动，硬件在shared memory中读写数据；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/f1c7b00b-2a96-4635-aff8-b036c51cb3d5.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2019.png)
+
+## Fig 5
+
+**多硬件协作**完成算子是queue的读写数据流，**软件只考虑数据在queue之间的移动**，不关心硬件；
+
+编程 ease：增加queue registration routine（不改底层内存分配），软件queue位于片上Cohort；
+
+通过**软件queue的运行时配置**，完成多硬件协作的运行时重配置；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/197bcda4-d5b6-4e89-8276-d22b40f2f322.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2020.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2021.png)
+
+# Cohort实现
+
+启动**SMP**（对称多处理器）
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2022.png)
+
+[UMA、NUMA、MPP、CMP；AMP、SMP、BMP辨析](UMA%E3%80%81NUMA%E3%80%81MPP%E3%80%81CMP%EF%BC%9BAMP%E3%80%81SMP%E3%80%81BMP%E8%BE%A8%E6%9E%90%2026fe12d10b6e801ba9bcfa11b4a7198c.md)
+
+编程模型支持：Cohort driver、Cohort MMU、虚存上连续-串行访问、多核性能优化（大页）
+
+**queue 描述符**
+
+**注册**queue：data structure（fifo_t）配置Cohort engine；
+
+**queue属性**：
+
+fifo-base-adr：fifo在内存中的基地址；
+
+fifo-element-size：每个数据元素的大小（block）；
+
+fifo-length：fifo的长度；
+
+read/write pointers：用于读写的指针（队列头尾）；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2023.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2024.png)
+
+## Fig 7
+
+用户态API
+
+**fifo_t**结构初始化queue，**cohort_register**将queue连接到加速器acc，push、pop对queue操作，**cohort_unregister**结束acc对queue的使用；
+
+Cohort kernel **driver**：cohort_register、cohort_unregister；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2025.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2026.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2027.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2028.png)
+
+**Cohort queue library**：基于现有SPSC queue lib的C实现，也能基于C++ Boost Lockfree库；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2029.png)
+
+**锁自由lock-free**是多线程函数的**属性**/特点，**无锁lock-less**是多线程函数的**实现**规则/约束；
+
+[https://zhuanlan.zhihu.com/p/342921323](https://zhuanlan.zhihu.com/p/342921323)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2030.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/d443ff31-8b58-48b3-bcd5-fb85f23445f9.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2031.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2032.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2033.png)
+
+[https://zhuanlan.zhihu.com/p/53012280](https://zhuanlan.zhihu.com/p/53012280)
+
+lock-free一般通过**原子操作**实现（如CAS），存在**ABA**问题
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2034.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2035.png)
+
+## Fig 6
+
+基于**queue一致性**，Cohort Engine将软件线程安全queue操作转为对硬件queue的FIFO/AXI操作；
+
+Cohort Engine属于**cache一致性**系统，处理一致性细节，对SBIO的加速器**透明**；
+
+**架构**：P-Mesh（一致性基系统）、Cohort Engine（Register、MTE、EndPoint）、Accelerator；
+
+**Uncached Register**用于CPU通过MMIO配置；
+
+Producer、Consumer **EndPoint**生成queue操作，endpoint将软件数据结构转为加速器数据流；
+
+**MTE（MMU）**将EndPoint的高层内存操作转为一致性物理地址；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2036.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/9f8bab06-d12d-4d8a-9379-4f7907ed5fbc.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2037.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/97984766-d172-43bb-b64c-5b63f8734db1.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%207.png)
+
+**consumer**将数据输入acc：queue注册后，consumer追踪queue的**读写指针**，queue写指针被producer改变后，consumer收到**invalidation**后为acc读取数据；
+
+consumer实现时**优化**，收到**invalidation后等待period（cache flush）**以降低一致性开销；
+
+endpoint一旦有数据（写指针改变**blksz**），就拉高**valid**来通知acc并等待ready，acc一旦接收数据，consumer就更新queue读指针（读指针改变**blksz**），被**producer捕获**更新；
+
+**producer**执行consumer的关联操作：acc产生数据**valid**且queue not full，acc将**数据写入queue后更新写指针**，更新操作保证一致性，被**consumer捕获**更新；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2038.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2039.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%203.png)
+
+**一致性**和代码语义
+
+## Q-A
+
+lock-free queue和Cohort多线程的底层关联是什么？一致性如何体现？
+
+一个队列的生产者是加速器输出过程或软件线程，消费者是加速器输入过程或软件线程，对应**多线程共享队列**，线程对队列的操作满足一致性；
+
+push、pop函数是**数据流**暴露给软件的IO接口，**register**函数是对加速器、软件间**内部数据流**的定义，数据流中数据传输由每个endpoint对队列的操作完成，endpoint读取queue是**利用Cache的一致性更新**（invalidate&flush），即producer入队、触发consumer更新cache并输入acc；
+
+**代码视角**，endpoint修改queue指针，意味着数据出入队，**SoC视角**中，内存中queue改变，相关cache line在另一侧Cache中**invalidate**，通知endpoint进行cache更新；
+
+**RCM**监控uncached register传递的地址（fifo-base-adr）是否invalidate，某地址invalidate后进入backoff，backoff结束后，RCM发起读操作，取回最新数据的副本，维护cache一致性；
+
+lock-free **SPSC queue lib**：writer通过**fence、store语义**，在改变写指针之前完成数据写入，保证一致性；
+
+类似queue lib，**WCM**排序写操作，确保reader先看到写指针更新，后看到数据更新；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2040.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2041.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2027.png)
+
+**cache invalidation**：**多核共享内存**时，每个cache都有相同数据的副本，当某个核修改数据时只维护更新自身cache数据，此时其他cache的数据需要**invalidate**；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2042.png)
+
+[https://www.geeksforgeeks.org/system-design/cache-invalidation-and-the-methods-to-invalidate-cache/](https://www.geeksforgeeks.org/system-design/cache-invalidation-and-the-methods-to-invalidate-cache/)
+
+Cohort **MMU**：基于原有MMU，扩展queue的VA，简化对加速器的编程，TLB、page table walker分页管理；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2043.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2044.png)
+
+加速器**接口**：valid-ready握手、AXI-Stream；
+
+consumer从queue中取数给acc时，传递**valid**给acc，等待加速器可消耗数据的**ready**；
+
+acc传递**valid**给producer，表示acc产生数据到producer endpoint，endpoint更新queue；
+
+SBIO模式的加速器直接使用Cohort Engine，其余可将LSU替换成Cohort Engine；
+
+acc产生数据的发送/消耗数据的获取，以可设定大小的**data block**被Cohort**封装/解包**，以block size更新指针，降低一致性开销；
+
+在queue注册、初始化执行时，用户可通过CSR Bank**配置**加速器；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2045.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2046.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2047.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2037.png)
+
+OS支持
+
+**Cohort kernel driver**建立数据流，抽象和封装硬件细节，user API只需要**queue Cohort语义**，通过system call传递底层细节到kernel；
+
+**运行时流程**：
+
+kernel boot时，Cohort driver**申请**中断和MMU notifier**资源**（resource）；
+
+app启动时，cohort_register**注册**queue，**push/pop**到注册的queue；
+
+app结束时，cohort_unregister**释放**内存和MMU notifier**服务**（service）；
+
+**driver feature**：
+
+**MMU notifier**用于按照多核TLBs来flush MMU，维持TLB一致性，加速器是新的core；
+
+Cohort driver申请并注册**Irq handler**，处理Cohort MMU触发的缺页中断；
+
+**cohort_register**引发driver将Cohort配置注册Bank**映射到应用虚拟空间**，**注册**MMU notifier和Irq handler，之后driver传递**queue描述符**给Cohort；
+
+**cohort_unregister**释放并**取消映射**上述资源；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2048.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2049.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2050.png)
+
+Cohort**能力和扩展**
+
+queue抽象用于**线程/进程间通信**：分配一次queue，Cohort从一个process接收数据，产生数据到另一个process；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2051.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2052.png)
+
+Cohort组成**加速器链**处理多负载，SoC设计者可将现有解耦的软件线程替换成加速器，用于线程通信的queue使用Cohort注册，加速器链可**运行时重配置**（Cohort数据流）；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2053.png)
+
+Cohort基于SPSC模型，限制应用的数据流，**多生产者/消费者是未来扩展**；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2054.png)
+
+# 实验方法
+
+环境：**OpenPiton**多核研究框架集成Cohort，在Alveo U200 FPGA实现，Linux；
+
+4-tile设计，2个64位R-Core、2个加速器；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2055.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%207.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2056.png)
+
+[https://www.mouser.com/pdfDocs/u280userguide.pdf](https://www.mouser.com/pdfDocs/u280userguide.pdf)
+
+Baseline：**MAPLE**的核外高内存并行的LSU;
+
+**MAPLE:slim-in-order**多核间的高效数据传输，侧重**非直接内存访问（如指针）**应用（图计算）的访问-执行解耦的多线程和prefetch model；
+
+基于MAPLE，改成**MMIO-based和DMA-based的多核应用加速**；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2057.png)
+
+MMIO baseline，MMIO传输数据字是不可预测的往返，没有一致性；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2058.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2059.png)
+
+Coherent DMA baseline（RISC-V MMU）
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2060.png)
+
+加速器：SHA256、AES128、H264
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2061.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2062.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2063.png)
+
+## Tab 2
+
+BenchMark in Cohort、Baseline
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2064.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2065.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2066.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2067.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2068.png)
+
+# 实验结果
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2069.png)
+
+## Fig 8-9、Tab 3
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2070.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2071.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2072.png)
+
+延迟
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2073.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2074.png)
+
+## Fig 10-11
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2075.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2076.png)
+
+**IPC**
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2077.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2078.png)
+
+## Tab 4
+
+FPGA实现的面积开销
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2079.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2080.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%207.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2081.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2082.png)
+
+# 相关工作
+
+异构、DSA for **功耗性能比**，使用加速器通过编程配置或DSL；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2083.png)
+
+**数据访问和计算的分离**
+
+[访存-计算解耦的处理器架构](%E8%AE%BF%E5%AD%98-%E8%AE%A1%E7%AE%97%E8%A7%A3%E8%80%A6%E7%9A%84%E5%A4%84%E7%90%86%E5%99%A8%E6%9E%B6%E6%9E%84%20275e12d10b6e8042ae35f27917277c44.md)
+
+**隐藏向processor提供数据的延迟**,**访问core**访问数据后投喂给**计算core**进行计算;
+
+相关体系结构设计是**通过queue**传输数据来隐藏传输延迟,作为设计**超标量处理器**的更简单替代；超标量是同时获取、发射、执行多个指令来**增大IPC并且隐藏访存指令的延迟**；多个指令之间可能存在冒险(控制冒险、数据冒险),需要暂停发射某些指令和转发结果到已发射指令,同时将没有冒险的后序指令提前发射和执行,以进一步增大IPC和隐藏长延迟指令的延迟,即**乱序执行**；
+
+**DeSC**的解耦设计设置supply core（**ReOrder Buffer的OoO pipeline**）和compute core（**OoO core**或**加速器**），软件接口是新ISA（需要底软和编译适配），并且supply和compute的元素有严格**一对一关系（硬件queue和Buffer的entry粒度）**且在**tapeout**（指流片）时确定；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2084.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2085.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2086.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2087.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2088.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2089.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2090.png)
+
+**数据流模式**
+
+MAD和HWPE的数据流Engine优化数据访问，但**集成在硬件中会约束ISA或需要新ISA**，Cohort的数据访问对ISA透明；
+
+MAPLE将数据访问解耦到memory-fetching engine，但对所有访问引入不小的**保底开销**；Cohort利用一致性协议进行完成SPSC传输，开销低；  
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2091.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2092.png)
+
+松耦合加速器有独立存储和控制，紧耦合加速器作为CPU的附庸执行特定功能的加速（可能共享CPU Cache）；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2093.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2094.png)
+
+互联
+
+Cohort也可基于CXL、UCIe一致性协议通信；
+
+Intel的Alder Lake处理器的PCIe链路占2.4mm2，CPU core（L1）占5.37mm2，PCIe开销不小；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2095.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2096.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2097.png)
+
+系统级设计
+
+松耦合加速器不改变CPU和ISA，通过互联**即插即用**，不需要紧耦合的验证开销，符合**chiplet**思想；
+
+紧耦合能利用CPU处理**VM地址翻译**；
+
+松耦合（driver-triggered）加速器需要**预填充特定TLB和pin mem（没有缺页处理）**；
+
+NVDLA使用**reserved、no-cacheable** memory，OS不可访问，只有DLA和driver可访问；
+
+Cohort没有紧耦合所需的集成验证，但利用**全功能MMU**提供的**缺页处理**和**TLB shootdown**（TLB一致性的机制）；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2098.png)
+
+可编程性
+
+松耦合Acc一般通过中断通知cpu表示完成，紧耦合Acc一般通过ISA指令读写寄存器；
+
+松耦合Acc的中断开销较大，开销优化方法侧重IO加速器，Cohort是片上加速器的通信模型；
+
+许多工作将硬件语义融入OS机制（垂直直通）来获得简单高效可扩展的异构通信机制，但引入新的OS kernel和硬件；Cohort使用现有OS和多线程queue构造；
+
+DTU是个硬件queue？baseline？
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%2099.png)
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%20100.png)
+
+加速器标准
+
+许多加速器编程模型暴露硬件细节用于编程，是面向硬件的fashion；
+
+Cohort将软件语义嵌入加速器集成环境；让加速器集成后适配现有os？但加速器设计仍然是面向硬件？
+
+软件语义？硬件语义？
+
+面向硬件是底软和编译适配硬件接口和硬件ISA；
+
+面向软件是硬件系统适配现有底软、编译和OS；
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%20101.png)
+
+Queue Lib和语言支持
+
+Cohort软件库能使用linux io kernel
+
+![image.png](Cohort%20Software-Oriented%20Acceleration%20for%20Heteroge/image%20102.png)

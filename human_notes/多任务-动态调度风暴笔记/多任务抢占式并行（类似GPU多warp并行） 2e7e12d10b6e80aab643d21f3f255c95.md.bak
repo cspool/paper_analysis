@@ -1,0 +1,911 @@
+# 多任务抢占式并行（类似GPU多warp并行）
+
+目前：给一个conv算子，加载-计算-存储和固定tiling全在片上，没有ld、st指令，img2col fused在片上。
+
+场景：多任务，VAE（conv）、Diffusion（conv、attention）、VAE在LDM（VAE+Dif）中时间不长。
+
+修改：我实现的conv是一个编程时算子，分块-加载-计算-传输只由硬件控制完成，将硬件控制改为参数化的**粗粒度XPU指令**。
+
+抽象出**设计参数**，自动生成？
+
+flexible tiling？context parallel？token大小？动态DNN？
+
+细粒度指令会需要wait or flush，intra pipeline没有，因为细指令没有完整pipeline。
+
+较粗粒度指令很适合多任务的intra pipeline。
+
+simd core temporal pipeline
+
+plug-in Acc？不值得用GPU的，多进程抢占的加速器？
+
+天然适配异构，GPU+XPU比多GPU的整体性能更好，性能功耗比更高，抢占开销更低。
+
+## 抢占调度（idea）
+
+### 多进程**抢占 vs. 抢占式并行**
+
+多进程抢占是**时间驱动**的**进程**抢占资源，即某时刻的“新进程“抢占“旧进程”的资源。
+
+算子抢占式并行是**闲置资源驱动**的**算子**抢占资源，即空闲资源”吸引“算子抢先执行。
+
+云边场景下，可以用边缘加速卡抢占式调度DiT，云端负责LLM生成修饰词，由于云和网络延迟，边缘DiT需要**多进程的Preemption**，即多个请求的DiT推理的抢占式调度。（为什么不用GPU？吞吐率不如DLA高）
+
+DiT是静态串行的采样，算子并行的场景是多进程或多请求的DiT，**侧重点是优化上下文保存和恢复的开销（wait-based、flush-based）**，而不是探索并行方式。
+
+**多进程的Preemption需要软硬件协同设计**，如GPU需要支持**kernel抢占式调度**（host命令、SCG的timeslice抢占），GPU及软件栈支持多请求/多进程的**MPS、vGPU、MIG**。
+
+**算子的抢占式并行**，提高吞吐率和资源使用率，如GPU上**kernel的多个warp的pipeline并行**，以及kernel间抢占式调度。
+
+**体系结构设计**类似GPU设计，利用**Spatial Acc的空间并行和模型特点**，研究**算子的抢占式并行**。探索Arch如何设计来更高效执行算子：**Spatial Acc**设计DataFlow结构（**Core结构**）和资源的动态分配方式，RV **SoC**是设计异构Core的**SoC指令集**。
+
+### **算子的抢占式并行（idea）**
+
+Spatial Acc的理想抢占式并行
+
+**任务的CFG重排能力**：片上资源的弹性变换支撑多算子并行。
+
+抢占：**根据闲置资源匹配插入的算子，动态插入算子**，让算子并行，不浪费Acc的空间资源（类似GPU的多warp并发，不浪费memory时间）。
+
+flexible tiling是最大资源利用，抢占式并行是否提供充分利用带宽或者overlap的策略？
+
+MoE中根据gate输出决定使用什么expert Decoder进行推理，gate输出是动态的。
+
+假设5个expert，GPU与运行BatchSz=5的request并行推理，每个request使用Transformer原生的Context并行，**显存需要保存5个expert**的权重：
+
+假设每个req当前token的gate输出相同，则使用相同的expert权重和不同context进行计算，GPU加载并**复用**相同的expert权重。
+
+假设每个req当前token的gate输出不同，则使用不同的expert权重和不同context进行计算，GPU加载不同的expert权重而无法**复用**。
+
+因为单个或少数Request在计算token时，可能专门使用特定expert，但GPU需要保存所有expert的权重。云边场景下，**边缘加速卡分别部署不同expert的权重**，并支持多Request的并行和抢占。本质是拆分LLM的推理，映射到云边架构中。
+
+根据MoE的动态激活特点，加速器通过batch pipeline支持request的batch parallel：先计算request A的gate，加载expert A的权重，使用expert A推理，保存expert A的结果，组成Batch Pipeline。
+
+每个request的context长度不同，pipeline的使用率待定。
+
+最坏情况下，每个expert仍然需要反复加载而无法复用，而且保存结果占用带宽。
+
+batch parallel将所有req并行计算gate，之后加载激活的expert，计算并保存结果。
+
+MoE一般用MV？因为每个V有自己的expert，这个重整怎么做？
+
+LLM、Transformer的KV Cache（PD）计算需要MMU和MVU，模型的多卡调度时，attention的offload schedule（**W和KVCache分GPU存放和运算，GPU之间传输QKV向量，缓解显存压力**）更常见，因为attention的负载很大，每个decoder块有一个KV Cache（token loop优化）。
+
+ViT、DiT的T steps和llm的逐个输出token很相似，是否意味着DiT的BackBone也能利用KV-Cache的策略来减少计算复杂度？不行❌，**ViT和DiT的推理模式不属于自回归，不能使用KV Cache优化，由于DiT的time loop**，可以设置Cache来替换ViT BackBone。
+
+batch parallel是不同请求，中间可能有请求提前结束？浪费BatchSz？
+
+### **多进程的算子抢占（idea）**
+
+DiT、ViT中Transformer Decoder比VAE的负载更重，因此**attention抢占Conv和attention之间抢占的可能性更大。**
+
+相同抢占场景下，**指令粒度**的影响和区别？
+
+GPU线程块的细粒度kernel指令，计算尺度等价于spatial acc的张量粗粒度指令。但指令级抢占粒度，GPU比ACC更灵活。
+
+多进程的优化目标是满足运行时的QoS，以及整体的QoS等，让特定进程kernel尽快抢占计算。
+
+领域spatial acc的粗粒度指令，将new kernel和old kernel也作为pipeline，进一步压榨计算能力，相当于粗指令之间中断，粒度等价于GPU的细粒度指令抢占。
+
+ref： Adyna: Accelerating Dynamic Neural Networks with Adaptive Scheduling
+
+## 张量依赖和layout变换（idea）
+
+利用转置变换等**等价变换，设计和定义硬件的运行时重排**，提供高效的重排-计算融合算子给编译使用？
+
+### **Conv flexible tiling、因果Conv？**和DiT-decoder static tiling（idea）
+
+高of高ox，高of高if在conv中能取得较高的使用率。涉及double layout transformation，SA的double-dataflow设计。
+
+layout transformation：if紧密排布和ix紧密排布的相互转换。
+
+ix紧密排布时，SA逐行输出ox或者逐列输出of到输出buffer。ix-img2col中，输入是列Banks，每行ix，每次左移s个数，每次输出前k个数。
+
+**if**紧密排布时，输入是if Banks，每行if，每次一行，若干行对应x，按列输出是of，转为ix需要sa输出一个就写一个O Bank，每个O Bank是一个x的of列，维持if需要集齐一列一起写入一组O Banks。
+
+DiT只涉及**Decoder的MM和重排**，patchify是原生的tiling，DiT是静态分辨率，因此只需要**参数化静态tiling**，但需要设计重排和MM的融合。
+
+### DiT
+
+每个t的动态剪枝、映射到体系架构。
+
+ref：**Layer- and Timestep-Adaptive Differentiable Token Compression Ratios for Efficient Diffusion Transformers**
+
+[https://www.haoranyou.com/diffcr/](https://www.haoranyou.com/diffcr/)
+
+### Hyper-Connect
+
+ref：Hyper-Connections
+
+多branch的复杂依赖，交给编译解决，那么硬件抽象什么？支持什么新机制？软件和编译无法解决的是什么？
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%201.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%202.png)
+
+### 双Head
+
+ref：Hymba: A Hybrid-head Architecture for Small Language Models
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%203.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%204.png)
+
+## 稀疏（idea）
+
+稀疏的激活值，动态激活expert（多任务），SpMM和SpMV？
+
+权重稀疏
+
+结构化稀疏，对权重进行结构化分解，结构化缩小了权重的训练空间，需要结合训练。
+
+非结构化稀疏，设计任意稀疏分布的权重编码，推理时使用稀疏权重和dense激活进行计算，权重编码的**解码和计算开销**一般较大。
+
+激活值稀疏
+
+结构化稀疏，但是动态生成的激活值往往不满足结构化，会丢失精度，最好结合训练？
+
+非结构化稀疏，设计任意稀疏分布的激活值编码，推理时使用稀疏权重和稀疏激活进行计算，权重编码的**解码和计算开销**一般较大，激活值编码的**解码、计算和运行时编码开销**一般较大。
+
+激活值tile的稀疏编码的动态合并？边缘0的检测？
+
+Hyper-Connection（mHC）中，激活值稀疏编码在多个branch中，存储多份？存储一份然后重排？硬件实现重排就只需要存一份（折中？），能够节省存储和带宽
+
+## 实验平台
+
+emulater：？
+
+CPU、GPU simulater：模拟指令集的行为，交互系统。
+
+AI simulator：CPU模拟器发指令，AI-core接收和执行，CPU接收。
+
+profiler：软件描述的硬件行为，得到每个event的时间。
+
+event-level：系统模拟器。
+
+cycle-level：张量模拟器。
+
+模拟器**描述硬件行为**。
+
+multi-core架构：RV、AI core、SRAM。
+
+MP：工艺难、精度固定。
+
+PIM：HBM的logic die作计算（3d），或者logic die隔壁作AI core（2.5d）。
+
+### PISA建模
+
+**事件驱动的系统模拟器：基于PISA性能、XPU性能，计算端到端延迟。**
+
+PISA模拟器、XPU模拟器；
+
+**Ramulator2**：建模PISA计算单元CCU和BCE pipeline的性能，CCU在logic die上（buffer）；
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%201.png)
+
+**Chipyard模拟一个SoC**，PISA用其生成PIM Controller、RV-Core和dispatcher，并在**Verilator**中模拟时序；
+
+[https://github.com/ucb-bar/chipyard](https://github.com/ucb-bar/chipyard)
+
+[https://chipyard.readthedocs.io/en/latest/](https://chipyard.readthedocs.io/en/latest/)
+
+**FireSim**
+
+[https://fires.im/](https://fires.im/)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%202.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%203.png)
+
+**XPU建模**
+
+A100：基于profile建模，[**NVIDIA Nsight Compute**](https://developer.nvidia.com/nsight-compute)实机测试LLM kernel的结果，将结果加入系统模拟器。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%204.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%205.png)
+
+### MICRO22：Butterfly Acc实验
+
+[https://github.com/SamsungLabs/Butterfly_Acc](https://github.com/SamsungLabs/Butterfly_Acc)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%205.png)
+
+### HPCA21：SpAtten
+
+SpAtten: Efficient Sparse Attention Architecture with Cascade Token and Head Pruning
+
+[https://github.com/mit-han-lab/spatten](https://github.com/mit-han-lab/spatten)
+
+LLM Attn，级联token和head剪枝
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%206.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%207.png)
+
+剪枝算法
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%208.png)
+
+剪枝Token、剪枝Head和Local Value
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%209.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2010.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2011.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2012.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2013.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2014.png)
+
+量化Softmax，不同layer动态精度，混合精度量化
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2015.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2016.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2017.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2018.png)
+
+硬件加速运行时量化剪枝Attn，需要统计运行时Score。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2019.png)
+
+ISCA25：HYTE
+
+[https://github.com/tsinghua-ideal/HYTE-sim](https://github.com/tsinghua-ideal/HYTE-sim)
+
+任意稀疏张量计算的动态tiling和mapping。
+
+构建张量的Mapping Cost模型，考虑Buffer，PE使用率，稀疏存储CSR/RSR，loop优化（order、shape、tilingSz）。
+
+按照Mapping模型静态设置tiling和mapping，根据运行时采样估计张量稀疏结构，动态伸缩tileSz，即调整tiling和mapping方式。
+
+host是scheduler，Acc是PEs-SRAM-DRAM结构。
+
+![image.png](HYTE%20Flexible%20Tiling%20for%20Sparse%20Accelerators%20via%20H/image%2029.png)
+
+![image.png](HYTE%20Flexible%20Tiling%20for%20Sparse%20Accelerators%20via%20H/image%2028.png)
+
+MICRO25：SeaCache
+
+[https://github.com/tsinghua-ideal/SeaCache-sim/tree/main/src](https://github.com/tsinghua-ideal/SeaCache-sim/tree/main/src)
+
+存储Cache相关
+
+MICRO24：对数LLM
+
+Bridging the Gap Between LLMs and LNS with Dynamic Data Format and Architecture Codesign
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2020.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2021.png)
+
+ 
+
+## LLM架构
+
+### Engram
+
+ref：Conditional Memory via Scalable Lookup: A New Axis of Sparsity for Large Language Models
+
+**ref：Understanding Transformers via** *N***-gram Statistics**
+
+MoE增加LLM的参数量，但不增加计算开销。
+
+LLM的能力主要分为**组合理解和知识检索**，组合推理对文本的绝大部分（如命名实体、公式类序列）进行深入和动态的计算，学习**局部、静态和高度模式化的特征**。
+
+组合推理，进行语义的**形式推理**，学习通用逻辑让tokens形成语义逻辑正确的句子。
+
+知识检索，从训练数据中取得**客观事实**，作为形式推理的出发点或确定事实节点。
+
+N-gram统计模型擅长**组合理解**，N-gram的主要操作是查询规则，Transformer没有查询算子，因此LLM的组合理解能力是**通过计算模拟规则推理**，如多个attention和FFN理解多token实体。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2022.png)
+
+Engram架构将N-gram编码的生成规则通过训练提取出来作为**静态的先验Rules**。
+
+Engram块推理时，**host将输入token基于规则生成N-gram编码**，即理解输入tokens。
+
+N-gram编码和整体上下文无关，和上一层输出的隐状态，进行**注意力综合、卷积修正**后输出。
+
+**Engram块的N-gram编码只和输入tokens相关，和上一层输出隐状态无关**，**因此生成N-gram编码和前序块异步并行，在综合输出时同步**。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2023.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2024.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2025.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2026.png)
+
+Engram架构推理时，输入后的3个Block{A、B、C}，块A和B是显存-计算的pipeline，块C只需要host读取存储，因此A+B和C可以**分资源异步并行**计算。块C的位置影响硬件推理性能和模型效果，需要软硬件协同设计。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2027.png)
+
+### MoE
+
+ref：Deepseekmoe: Towards ultimate expert specialization in mixture-of-experts language models.
+
+MoE：拆分FFN为N个expert FFNi，每个token embedding输入K个expert后综合输出。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2028.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2029.png)
+
+细粒度MoE：每个FFNi拆分为m个，共mN个expert，每个token embedding激活并输入**mK**个expert，综合**mK**个expert的结果输出。
+
+Shared Expert：mN个expert中选择**Ks**个expert固定激活，每个token embedding激活并输入**{mK-Ks}**个expert，综合**mK**个expert的结果输出。。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2030.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2031.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2032.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2033.png)
+
+### 混合Head Layer
+
+ref：**Hymba: A Hybrid-head Architecture for Small Language Models**
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2034.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2035.png)
+
+### 激活稀疏
+
+ref：Amber Pruner: Leveraging N:M Activation Sparsity for Efficient Prefill in Large Language Models
+
+## PISA（LLM块稀疏）（top-K？）
+
+ref：PISA: Supporting Dynamic Block Sparse Attention in Long-Context LLMs via Programmable and Decoupled PIM System
+
+### BCE in 动态块稀疏
+
+BCE加速器，BCE是动态块稀疏Attn中的主要耗时算子，Host Core的吞吐不够大。
+
+架构挑战：高效执行BCE——Top-K——SparseAttn
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2036.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2037.png)
+
+PIM的**datapath固定**通往乘法器的归约树，无法插入Comp和Max算子。
+
+PIM-Acc只作为Host指令的Consumer，Host控制PIM-Acc的**指令粒度难以设计**，太小的指令粒度浪费PIM性能（**带宽比PIM计算慢**），太粗的指令粒度**灵活性不足**，无法支持动态不连续的块选择。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2038.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2039.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2040.png)
+
+### PISA
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2041.png)
+
+PISA可配置CCU：Vector-wise instr、BCE instr。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2042.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2043.png)
+
+PISA控制器
+
+动态块稀疏算法有复杂的控制决策，需要可编程通用Core来完成，但Host已有的细粒度指令浪费带宽。因此**PISA Acc中引入RV-Core进行决策**，并设计**task-level的指令集**。
+
+RV-Core访问HBM内存，CCU独占logic die Buffer（SRAM）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2044.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2045.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2046.png)
+
+增加指令FIFO和Dispatcher，RV-Core发送指令和CCU计算异步进行。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2047.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2048.png)
+
+## MLX（BSMM、FFT、Att、FFN fusion→Spatial）
+
+ref：MLX: Multi-Layer Execution for Structured LLM Workload Acceleration on Spatial Architectures
+
+BP分解的本质是平移后是固定大小的矩阵？
+
+算法中layer定义为运算过程和输入输出。
+
+算子是**layer定义的运算过程**，或者已有硬件定义的运算过程。
+
+出发点：BS-ProjPQV、FFT、ProjAttn layer的计算都是BSMM算子（**块稀疏**）。
+
+什么场景：需要同时FFT和BS-Proj layer？FFTKQV-Attn layer来加速ProjAttn layer的MM过程。
+
+设计训练FFTKQV-Attn layer，设计3个layer的加速器。
+
+再出发：GPU的结构不能高效支持BSMM的计算，分别实现3个layer调度的BSMM浪费加速器资源，BS-ProjPQV、FFT、ProjAttn layer的BSMM算子间有统一的数据依赖关系。
+
+设计FFTKQV-Attn layer定义的cross-layer算子，基本算子是BSMM，cross-layer是调度方式。
+
+### 动机
+
+LLM的ProjKQV layer、ProjAttn layer、FFN layer的dense计算开销巨大，限制模型扩大。
+
+**Butterfly Sparse ProjKQV的算子是BSMM，降低X投射到Q、K、V的开销**，但ProjAttn的算子是dense-MM，开销很大。
+
+BP分解权重W（n*n）为logn个稀疏对角阵，进行ProjKQV、ProjAttn和FFN。BP分解让X和sub-W依次相乘时利用对角分块阵简化计算。但是Q、K和V的稀疏性未知（认为dense），ProjAttn的算子是**dense-MM**。FFN的W同样可BP分解，因此**FFN的算子是BSMM**。
+
+**FFT-Attn**激进地混合输入token来计算**Attn**（不使用N^2的复杂度），但不能捕捉token间的关系，**丢失Attn精度**。FFT-Attn的**实际加速效果不佳**，因为**串行和跳跃的内存访问**模式。
+
+FFN方法的复杂度写错了，应该是DNlogN。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2049.png)
+
+### 创新思路
+
+FFT、BSMM和MM在Spatial Acc上融合成cross-layer算子，能否设计基于上述算子的算法达到较高的精度？FFTKQV-Attn layer。
+
+利用**FFT压缩BS后的Q、K和V**，**使用FFT-Q/K/V投影Attn**来捕捉token间的关系（复杂度），最后**FFT解压Attn**输出，即设计出FFTKQV-Attn layer。
+
+BS-ProjKQV的算子是BSMM，BSMM和FFT在GPU上执行效率低。
+
+FFT可以实现为**BS-FFT系数矩阵和dense-X的矩阵乘法（BSMM算子）**，但由于访存的跳跃性和数据的稀疏性，FFT-Attn在PD推理架构上性能不佳。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2050.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2051.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2052.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2053.png)
+
+cuFFT呈现**内存bound（斜率明显小于roof-line）**，对GPU的cuda core或tensor core的使用率低。
+
+BSMM和FFT**存在深层次和渐复杂的跨层依赖**，不能表达成GPU的**大张量计算-等待完成的bulk-sync类原语**。BSMM和FFT需要**不同计算阶段之间的细粒度数据交换（和GPU对layer tiling的假设不同）**，映射到固定稀疏结构的Tensor Core需要大跨度变换（**data shuffling**），引入额外开销后仍然不能完全被TCU支持。
+
+BSMM和FFT在GPU上执行效率低是因为**结构性不匹配**而不是实现问题，利用其**深度、多阶段的依赖设计Spatial的MLX**。
+
+但BSMM、FFT和MM**算子在Spatial的设计异构性**，降低Spatial资源的使用率（复用率）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2054.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2055.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2056.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2057.png)
+
+BSMM、FFT和dense-MM：算子内统一的计算模式、算子间统一的依赖模式
+
+BS-ProjKQV是dense-X和BS-Weight相乘，FFT是dense-P/Q/V和BS-FFT相乘，二者算子都是BSMM。BSMM、FFT和MM算子都能分解成**固定分层模式的N个2元向量内积**，能抽象出**统一的数据计算模式（计算单元）**。
+
+但是BSMM引入了跨度大的stride混合加载，并且GPU**等待不同stride数据加载**（**地址不连续且解码单元不支持BS结构**），限制GPU在矩阵-向量变换中探索**layer内的细粒度复用**。
+
+因此BSMM和FFT的**算子间有统一的数据复用/依赖模式**，而MM的数据复用性高，BSMM-FFT-MM能设计**cross-layer的dataflow（freq-BS pipeline）**，而不需要重复读取显存。
+
+FFT的hidden-level（D）和BSMM的token-level（N）分别是维度内无关的并行度。FFT和FFT-1在N-dim乘累加，BSMM在N-dim乘累加，KQ-MM在D-dim乘累加，SV-MM在N-dim乘累加。不同layer的依赖并行维度D和N正交，不会存在vector-wise的串行依赖，适合多layer并行，增大spatial实例来支持更大并行度。
+
+（可以细化讨论）
+
+[Attn优化和Acc设计](Attn%E4%BC%98%E5%8C%96%E5%92%8CAcc%E8%AE%BE%E8%AE%A1%202f2e12d10b6e80ffa20fe4566a23a8b2.md)
+
+Spatial架构特性
+
+mesh上显式操作数路由和确定数据流，高效捕捉stage-wise的依赖，通过mesh分区扩展并行度。
+
+Spatial架构将PEs和NoC**直接暴露**给软件，GPU（SIMT/SIMD）则封装PEs和NoC并抽象出**指令集（bulk-sync类原语）**。Spatial和GPU都允许软件offline或运行时配置。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2058.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2059.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2053.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2056.png)
+
+### layer：FFTKQV-Attn和分块BS-ProjKQV
+
+FFT-Attn用FFT压缩输入tokens，FFTKQV-Attn用FFT压缩K、Q、V后计算Attn。
+
+FFT压缩：不同时间token（的能量/注意力分布）经过FFT得到不同频率token的能量（注意力）分布，其中**能量（注意力）最高的频率称为支配频率**。
+
+浅层Attn的支配频率是**高频分量**，说明注意力在部分token处有较大值，即关注多个局部高频特征。深层Attn的支配频率是**低频分量**，说明少有局部关注，注意力在token上“平铺”，关注整体特征。
+
+设fH=2^k是最大支配频率（相同能量的支配频率中选频率最大的），**2^k是保证L是2的幂次，让大小是L*L的矩阵W-FFT可以进行BP分解**，从而和BMM统一数据依赖模式。
+
+将N个时间步划分成fH块，每块包含L=N/fH个token，则经过FFT后，**每块“平均拥有一个“支配频率中的token**，**去除重复多次的高频s部分**，进行信息的压缩，因为支配频率的tokens平均化后在每个L-size块中是低频部分。fH个L-size块[D, L]参与后续Attn计算。
+
+分块BS-ProjKQV：先分块W-K/Q/V，后进行BP分解，和BS-ProjKQV。
+
+**大矩阵的BP分解后推理的访存模式效率很低（D很大、stride很大）**，因此BS-Attn限制模型大小。使用**FFTKQV-Attn layer**，W-P/Q/V可以**先分块成B*B大小的tiles，每个tile内对tile-D进行BP分解和投影**。
+
+分块BS-ProjKQV是粗粒度tiling，定义tile间的全局dataflow。FFTKQV-Attn是细粒度freq-BS pipeline，定义tile内的局部dataflow：论文计算复杂度不对！！
+
+输入X[N, D]，Wproj[D, D]，**输入X[N, D]在D-dim按照B-size分块出{D/B}个X[N, B]**，X[N, B]作BMM得到KQV[N, B]的复杂度是$N*(D/B * BlogB + D/B * B)=NDlogB+ND$。因为D/B个X[1, B]和Wproj[B, B]作BMM(BlogB)，D/B个KQV[1, B]作向量累加(B)，N个X[1, B]和KQV[1, B]需要计算。
+
+每个**KQV[N, B]在N-dim按照L-size分块出{N/L}个KQV[L, B]**，KQV[L, B]作FFT得到KQVfft[L, B]的复杂度是$D*(N/L * LlogL + N/L * L)=DNlogL + DN$。因为N/L个KQV[L, 1]和Wfft[L, L]作BMM(LlogL)，N/L个KQVfft[L, 1]作向量累加(L)，D个KQV[L, 1]和KQVfft[L, 1]需要计算。
+
+输入X[N, D]作分块Proj和FFT的复杂度是$NDlogB + ND + DNlogL + DN = ND * (logB + logL + 2)$。
+
+对X和W在D-dim按照B-size分块而不降低性能的原因可能是BP分解的性质。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2060.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2061.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2062.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2063.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2064.png)
+
+BSMM-FFT Kernel：**分块BS-ProjKQV、FFTKQV-Attn定义的cross-layer调度的算子**
+
+BS-Attn layer直接对W-K/Q/V进行BP分解的模式限制D-dim不能太大。FFT-Attn layer替代BS-Attn layer后准确率太低。
+
+将W-K/Q/V在D-dim上按B-size分块到tile，对tile进行BP分解和ProjKQV（**分块BS-ProjKQV**），FFT压缩K/Q/V后计算ProjAttn（**FFTKQV-Attn**）。
+
+FFT将B*N的K/Q/V压缩到B*sN的过程中，D（B）是无关并行，N是依赖并行（累加）。BSMM将BS-W投影到K/Q/V的过程中，N是无关并行，D（B）是依赖并行（累加）。
+
+数据流定义
+
+BSMM的数据流是SA作粗粒度tiling，FFT的数据流是tile内细粒度的freq-BS pipeline：两个操作数遵循**loop-regular、layer-aligned的依赖，映射到在SA mesh上pipeline执行**。
+
+算子抽象
+
+分块后的逐层BSMM、tile内FFT和MM**算子能映射到相同SA**，算子间依赖关系一致，SA同一时间只存在一个算子，fusion算子的不同执行阶段在SA上沿着时间折叠（生产者和消费者）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2065.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2066.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2067.png)
+
+### MLX架构（Spatial的多layer并发，类似GPU的多warp并发）
+
+Acc设计：一般Acc架构是单个layer作tiling后的张量算子，MLX架构设计cross-layer调度的fusion算子，即cross-layer算子。
+
+BSMM是设计**基本运算单元**的依据：BS-Weights的每行和dense-X的每列相乘，是**相同stride的2元向量内积**，stride由BS-Weights的稀疏结构决定（1，2，4，8，…）。
+
+cross-layer BSMM的数据流很大很长，不能一次性完整地映射到固定大小SA，因此cross-layer BSMM**分时复用**计算单元：
+
+调度不同层指令，让**不同层的BSMM交错执行**，提高使用率。
+
+中间结果通过**短距且可预测的路径**传到下游。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2068.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2056.png)
+
+SA mesh设计
+
+**Xfer指令**编码PE传递数据的目标（方向、hops、Reg-ID），控制SA mesh的PE间路由。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2069.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2070.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2071.png)
+
+每个PE功能是加载下一层数据，计算当前层，转发之前层的结果。PE需要内存操作、数据流转发、避免细粒度计算指令的并发冒险（layer间依赖）。
+
+将**PE功能解耦到不同pipeline**，3个pipeline负责不同功能，Xfer-pipe、Ld/Str-pipe、Com-pipe。
+
+降低控制单个复杂pipeline需要的指令序列长度。让PE以layer为工作粒度，和其他layer工作独立（在不同的pipeline上）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2072.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2073.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2071.png)
+
+**PE并发执行cross-layer pipeline**，需要保存和调度不同layer的大量指令，开销过大。
+
+每个**logical layer**是BSMM/FFT/MM kernel作tiling后tile的一个stage计算（**tiling后的folded layer**），设计成配置参数的固定模板指令序列（地址、loop-iter、loop大小等参数），称为**tagged block**。
+
+tag field让**block满足实际layer的执行依赖**，n field表示**block（tile指令）的迭代次数**。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2074.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2071.png)
+
+全动态调度需要运行时跟踪三种算子指令之间的所有依赖，类似GPU的计分板SB。全静态调度需要编译器精准建模路由和执行的时序。
+
+**折中调度：folded layer内是局部静态调度（固定的模板指令序列），folded layer之间根据tag大小和pipeline是否空闲动态调度**。
+
+tag编码block的执行次序，优先调度小tag的block满足tile指令之间的依赖。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2075.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2076.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2071.png)
+
+设计参数：SA-mesh大小和指令模板大小
+
+**Batch-based SIMD Width设置，在无硬件约束下优化算子延迟。**MM的计算传输比约束tileSz超过4，BS稀疏的必要性约束tileSz超过8，因此设计tileSz=8。使用SIMD指令，则每条SIMD指令完成8个结果计算，FFT的8个D-dim的结果，BMM的8个N-dim的结果。
+
+**SA-meshSz(C)和PE-InstrBufSz(BT)定义并发Block的指令容量，Block内指令间？存在结构化的数据复用，尽量复用数据让Block内计算覆盖Block间传输**。？？不同于instr-level执行数据没有复用？？
+
+> inter-layer load的延迟**Tload**和BS exchange的延迟**Txfer**是Block数据加载的时间，让Block的计算延迟Tcom覆盖Tload和Txfer。
+
+> **SA-meshSz(C) * PE-InstrBufSz(BT) > Tload + Txfer，mesh增大恢复coverage？动态收敛到静态？**
+
+> **coverage window**是平摊stride-inflated load、transfer延迟所需的指令，决定存储指令的容量。
+
+保证folded FFT（BS-FFT）的计算精度，需要8192个点模拟积分， 需要**fp16表示数据**。
+
+**RV Core控制**Spatial Acc的外层loop，负责加载MLX的指令参数和配置，计算内存访问地址。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2077.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2078.png)
+
+**线性层的BP分解(FFT、Butterfly分解)**
+
+ref： Learning Fast Algorithms for Linear Transforms Using Butterfly Factorizations
+
+**Butterfly矩阵**$B^{(N)}$和**Permutation矩阵**$P^{(N)}$是DFT矩阵$F_N$递归计算的矩阵表达。
+
+BP分解发明于DFT的矩阵$F_N$递归算法，可应用于线性变换的矩阵$T_N$乘法分解，通过**BP或BPBP形式构造并训练线性层T**。
+
+**Butterfly因子**$B_{N/2^k}$是大小为$N/2^k$的**三对角矩阵**。
+
+**Butterfly因子块矩阵$B_{N/2^k}$**是由$2^{k}$个$B_{N/2^k}$块**按对角线堆叠**成的大小为N的矩阵。
+
+**Butterfly矩阵**$B^{(N)}$是$k$从$0$到$(log_2^N-1)$的因子矩阵$B_{N/2^k}$**累乘**，即$log_2^N$个$B_{N/2^k}$**矩阵的矩阵乘法。**
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2079.png)
+
+$P_N$是重排矩阵，将矩阵X中的奇数坐标元素和偶数坐标元素分开，或将奇数/偶数坐标元素反向。
+
+**Permutation矩阵**$P^{(N)}$是$k$从$0$到$(log_2^N-1)$的$P_{N/2^k}$**矩阵累乘**，即$log_2^N$个$P_{N/2^k}$**矩阵的矩阵乘法。**
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2080.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2081.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2082.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2083.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2084.png)
+
+**Butterfly矩阵**$B^{(N)}$的大小是N*N，是$k$从$0$到$(log_2^N-1)$的因子块矩阵$B_{N/2^k}$**累乘**。
+
+$B^{(N)}B^{'(N)*}$定义为BP分解形式的矩阵乘法得到的矩阵（类似FFN矩阵$F_N$），依然存在P。
+
+**$(B^{(N)}B^{'(N)*})^w$**是w个矩阵$B^{(N)}B^{'(N)*}$作乘法得到的矩阵，相比矩阵$B^{(N)}B^{'(N)*}$有更大的秩。
+
+$(B^{(N)}B^{'(N)*})^w_e$是K矩阵，允许$B^{(N)}$的大小扩展到eN，则$(B^{(N)}B^{'(N)*})^w$是大小为eN的矩阵，而$(B^{(N)}B^{'(N)*})^w_e$只取$(B^{(N)}B^{'(N)*})^w$的左上角（1/e）。
+
+**K矩阵**的大小是N*N，**$e$让$B^{(eN)}$捕捉**更大N或D的矩阵，**$w$让$(B^{(eN)}B^{'(eN)*})^w$捕捉**更大秩的矩阵。
+
+ref：Kaleidoscope: An Eﬃcient, Learnable Representation For All Structured Linear Maps
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2085.png)
+
+$n*n$**的矩阵$M$和向量$v$的乘积，s是运算逻辑门数，d是逻辑层次深度，则运算可分解**：
+
+$M(n*n)$可以被拆分成$(B^{(s)}B^{'(s)*})^d$，即$2d$个大小为$s*s$的Butterfly矩阵$B^{(s)}$和其转置矩阵$B^{'(s)*}$累乘，每个Butterfly矩阵是$logs$个大小为$s*s$的因子块矩阵$B$累乘，每个因子块矩阵包含$2s$个非零值$NNZ$。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2086.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2087.png)
+
+**算子Mapping**
+
+layer的block指令映射到SA上，**不同logic layer映射的PE可以重叠**：因为block内指令按固定次序调度，block间按照tag次序动态调度到PE，将**layer映射到时空SA**。
+
+每个Block（folded layer）尽量铺满SA，**若Block无法用满SA时，因为SA的时空属性，PE内自动调度其他Block的指令填补空闲pipeline**。
+
+Block指令结构：load * m + com * n + str * k。
+
+每层BSMV算子的tiling和unrolling：BSMV的每层计算是N个2元向量的内积，16个PE并行16个2元向量内积，每个PE内串行4个2元向量内积。
+
+这个BMM的伪代码不对。
+
+想想我该如何设计？
+
+每个PE的tag blk是一个layer的tile，写清楚每一个PE的指令，在探讨下面的pipeline
+
+不同层BSMV的pipeline
+
+不同层BSMV的PE内pipeline
+
+MM算子：每个PE计算8*8的指令序列，PE之间设计数据流。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2088.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2089.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2056.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2090.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2091.png)
+
+layout transformation
+
+BSMM和FFT的layout倾向不同，BSMM在D-dim上乘累加，FFT和FFT-1在N-dim上乘累加。
+
+BS locality、SIMD在PE-pipeline上temporal并行。
+
+closed-set locality：将计算依赖的数据“团”局部化存储。
+
+radix幂次表示BS递归stride，stage阶段表示BS递归分块。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2092.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2053.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2093.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2094.png)
+
+MLX的通用性
+
+结构化算子
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2095.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2096.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2097.png)
+
+### 实现和使用
+
+RTL仿真关键cycles，模拟器建立Acc整体性能。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2098.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%2099.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20100.png)
+
+其他Acc的性能来源于其原论文。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20101.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20102.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20103.png)
+
+## HPCA25：动态DNN Mapping
+
+ref：Adyna: Accelerating Dynamic Neural Networks with Adaptive Scheduling
+
+nvdla hw tile
+
+[https://nvdla.org/hw/v1/ias/unit_description.html](https://nvdla.org/hw/v1/ias/unit_description.html)
+
+[https://nvdla.org/primer.html](https://nvdla.org/primer.html)   interrupt
+
+[https://nvdla.org/hw/v2/scalability.html](https://nvdla.org/hw/v2/scalability.html)
+
+### 框架
+
+软件调度，多tile SoC。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20104.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20105.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20106.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20107.png)
+
+switch算子，**动态算子图**，动态Batch来统一表达所有DDNN
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20108.png)
+
+运行时采样动态性，软件Scheduler追踪动态性
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20109.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20110.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20111.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20112.png)
+
+使用采样的分支、路径、张量大小的统计期望，作静态DNN的Mapping。
+
+运行时确定最优Mapping，作tile之间的负载均衡，tile支持多kernel（tile-sharing）。
+
+tile-sharing设计人工约束作均衡，branch-grouping打包低频分支kernel到相同tile。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20113.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20114.png)
+
+运行时采样和基于期望的mapping导致的**硬件重配置开销很小**，因为发生频率很低。
+
+### 硬件设计
+
+设计软硬件架构的执行Flow，硬件设计支持所需要的功能
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20115.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20116.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20117.png)
+
+**模板指令和参数表达kernel**
+
+n-loop的模板指令，关键参数写成寄存器读取。每个kernel只保存自身loop层数和每层的loop参数。kernel运行前将参数加载到对应寄存器。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20118.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20119.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20120.png)
+
+动态路由，软件基于运行时Sample调度
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20121.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20122.png)
+
+### 实验
+
+21，68
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20123.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20124.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20125.png)
+
+## tiled Acc inter-layer调度
+
+ref：Inter-layer Scheduling Space Definition and Exploration for Tiled Accelerators
+
+tiled Acc调度映射，类似NVDLA HW tile
+
+### 方法
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20126.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20127.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20128.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20129.png)
+
+### 实验
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20130.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20131.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20132.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20133.png)
+
+**调度框架的比较**
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20134.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20135.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0%E5%BC%8F%E5%B9%B6%E8%A1%8C%EF%BC%88%E7%B1%BB%E4%BC%BCGPU%E5%A4%9Awarp%E5%B9%B6%E8%A1%8C%EF%BC%89/image%20136.png)
+
+Planaria: Dynamic Architecture Fission for Spatial Multi-Tenant Acceleration of Deep Neural Networks
+
+fused preemption
+
+调度paper：appt，动态调度加入PIM，实现、方法优化
+
+hmcsim
+
+host端不参与，直接ISA和runtime在PIM调度

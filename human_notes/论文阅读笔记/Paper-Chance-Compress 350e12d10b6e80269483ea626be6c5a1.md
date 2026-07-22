@@ -1,0 +1,80 @@
+# Paper-Chance-Compress
+
+### **9. Compress**
+
+### **9.1 Context**
+
+1. [**Compressing Context to Enhance Inference Efficiency of Large Language Models.**](https://arxiv.org/abs/2310.06201) (2023/2024) [https://github.com/liyucheng09/Selective_Context](https://github.com/liyucheng09/Selective_Context)
+2. [**LLMLingua: Compressing Prompts for Accelerated Inference of Large Language Models.**](https://arxiv.org/abs/2310.05736) (2023/2024) [https://github.com/microsoft/LLMLingua](https://github.com/microsoft/LLMLingua)
+3. [**LongLLMLingua: Accelerating and Enhancing LLMs in Long Context Scenarios via Prompt Compression.**](https://arxiv.org/abs/2310.06839) (2023/2024) [https://github.com/microsoft/LLMLingua](https://github.com/microsoft/LLMLingua)
+4. [**Soaring from 4K to 400K: Extending LLM's Context with Activation Beacon.**](https://arxiv.org/abs/2401.03462) (2024) [https://github.com/FlagOpen/FlagEmbedding](https://github.com/FlagOpen/FlagEmbedding)
+5. [**Flexibly Scaling Large Language Models Contexts Through Extensible Tokenization.**](https://arxiv.org/abs/2401.07793) (2024) [https://github.com/FlagOpen/FlagEmbedding](https://github.com/FlagOpen/FlagEmbedding)
+6. [**Say More with Less: Understanding Prompt Learning Behaviors through Gist Compression.**](https://arxiv.org/abs/2402.16058) (2024) [https://github.com/OpenMatch/Gist-COCO](https://github.com/OpenMatch/Gist-COCO)
+7. [**LLMLingua-2: Data Distillation for Efficient and Faithful Task-Agnostic Prompt Compression.**](https://arxiv.org/abs/2403.12968) (2024) [https://github.com/microsoft/LLMLingua](https://github.com/microsoft/LLMLingua)
+8. [**PCToolkit: A Unified Plug-and-Play Prompt Compression Toolkit of Large Language Models.**](https://arxiv.org/abs/2403.17411) (2024) [https://github.com/3DAgentWorld/Toolkit-for-Prompt-Compression](https://github.com/3DAgentWorld/Toolkit-for-Prompt-Compression)
+9. [**Compressed Context Memory for Online Language Model Interaction.**](https://arxiv.org/abs/2312.03414) (2023/2024) [https://github.com/snu-mllab/context-memory](https://github.com/snu-mllab/context-memory)
+10. [**LLoCO: Learning Long Contexts Offline.**](https://arxiv.org/abs/2404.07979) (2024) [https://github.com/jeffreysijuntan/lloco](https://github.com/jeffreysijuntan/lloco)
+11. [**In-Context Learning State Vector with Inner and Momentum Optimization.**](https://arxiv.org/abs/2404.11225) (2024) [https://github.com/HITsz-TMG/ICL-State-Vector](https://github.com/HITsz-TMG/ICL-State-Vector)
+12. [**OpenBA-V2: Reaching 77.3% High Compression Ratio with Fast Multi-Stage Pruning.**](https://arxiv.org/abs/2405.05957) (2024) [https://github.com/OpenNLG/OpenBA-v2](https://github.com/OpenNLG/OpenBA-v2)
+13. [**Imagination Augmented Generation: Learning to Imagine Richer Context for Question Answering over Large Language Models.**](https://arxiv.org/abs/2403.15268) (2024) [https://github.com/Xnhyacinth/IAG](https://github.com/Xnhyacinth/IAG)
+14. [**xRAG: Extreme Context Compression for Retrieval-augmented Generation with One Token.**](https://arxiv.org/abs/2405.13792) (2024) [https://github.com/Hannibal046/xRAG](https://github.com/Hannibal046/xRAG)
+15. [**Compressing Lengthy Context With UltraGist.**](https://arxiv.org/abs/2405.16635) (2024) [https://github.com/namespace-Pt/UltraGist](https://github.com/namespace-Pt/UltraGist)
+16. [**In-context Autoencoder for Context Compression in a Large Language Model.**](https://openreview.net/forum?id=uREj4ZuGJE) (2024) [https://github.com/getao/icae](https://github.com/getao/icae)
+17. [**Retaining Key Information under High Compression Ratios: Query-Guided Compressor for LLMs.**](https://arxiv.org/abs/2406.02376) (2024) [https://github.com/DeepLearnXMU/QGC](https://github.com/DeepLearnXMU/QGC)
+18. [**Recurrent Context Compression: Efficiently Expanding the Context Window of LLM.**](https://arxiv.org/abs/2406.06110) (2024) [https://github.com/WUHU-G/RCC_Transformer](https://github.com/WUHU-G/RCC_Transformer)
+19. [**LoCoCo: Dropping In Convolutions for Long Context Compression.**](https://arxiv.org/abs/2406.05317) (2024) [https://github.com/VITA-Group/LoCoCo](https://github.com/VITA-Group/LoCoCo)
+20. [**InstructCMP: Length Control in Sentence Compression through Instruction-based Large Language Models.**](https://arxiv.org/abs/2406.11097) (2024) [https://github.com/JuseonDo/InstructCMP](https://github.com/JuseonDo/InstructCMP)
+21. [**UIO-LLMs: Unbiased Incremental Optimization for Long-Context LLMs.**](https://arxiv.org/abs/2406.18173) (2024) [https://github.com/wenhaoli-xmu/UIO-LLMs](https://github.com/wenhaoli-xmu/UIO-LLMs)
+22. [**QUITO: Accelerating Long-Context Reasoning through Query-Guided Context Compression.**](https://arxiv.org/abs/2408.00274) (2024) [https://github.com/Wenshansilvia/attention_compressor](https://github.com/Wenshansilvia/attention_compressor)
+23. [**Prompt Compression with Context-Aware Sentence Encoding for Fast and Improved LLM Inference.**](https://arxiv.org/abs/2409.01227) (2024) [https://github.com/Workday/cpc](https://github.com/Workday/cpc)
+24. [**Familiarity-aware Evidence Compression for Retrieval Augmented Generation.**](https://arxiv.org/abs/2409.12468) (2024) [https://github.com/luka-group/FaviComp](https://github.com/luka-group/FaviComp)
+25. [**FineZip: Pushing the Limits of Large Language Models for Practical Lossless Text Compression.**](https://arxiv.org/abs/2409.17141) (2024) [https://github.com/fazalmittu/FineZip](https://github.com/fazalmittu/FineZip)
+26. [**EXIT: Context-Aware Extractive Compression for Enhancing Retrieval-Augmented Generation.**](https://arxiv.org/abs/2412.12559) (2024) [https://github.com/ThisIsHwang/EXIT](https://github.com/ThisIsHwang/EXIT)
+27. [**Layer- and Timestep-Adaptive Differentiable Token Compression Ratios for Efficient Diffusion Transformers.**](https://arxiv.org/abs/2412.16822) (2024) [https://github.com/GATECH-EIC/DiffRatio-MoD](https://github.com/GATECH-EIC/DiffRatio-MoD)
+28. [**Knowing When to Stop: Dynamic Context Cutoff for Large Language Models.**](https://arxiv.org/abs/2502.01025) (2025) [https://github.com/ruoyuxie/when-to-stop](https://github.com/ruoyuxie/when-to-stop)
+29. [**Hybrid-Level Instruction Injection for Video Token Compression in Multi-modal Large Language Models.**](https://arxiv.org/abs/2503.16036) (2025) [https://github.com/lntzm/HICom](https://github.com/lntzm/HICom)
+30. [**Efficient Dynamic Clustering-Based Document Compression for Retrieval-Augmented-Generation.**](https://arxiv.org/abs/2504.03165) (2025) [https://github.com/Tsinghua-dhy/EDC-2-RAG](https://github.com/Tsinghua-dhy/EDC-2-RAG)
+31. [**Dynamic Compressing Prompts for Efficient Inference of Large Language Models.**](https://arxiv.org/abs/2504.11004) (2025) [https://github.com/Fhujinwu/DCP](https://github.com/Fhujinwu/DCP)
+32. [**An Empirical Study on Prompt Compression for Large Language Models.**](https://arxiv.org/abs/2505.00019) (2025) [https://github.com/3DAgentWorld/Toolkit-for-Prompt-Compression](https://github.com/3DAgentWorld/Toolkit-for-Prompt-Compression)
+33. [**Video Compression Commander: Plug-and-Play Inference Acceleration for Video Large Language Models.**](https://arxiv.org/abs/2505.14454) (2025) [https://github.com/xuyang-liu16/VidCom2](https://github.com/xuyang-liu16/VidCom2)
+34. [**Beyond Hard and Soft: Hybrid Context Compression for Balancing Local and Global Information Retention.**](https://arxiv.org/abs/2505.15774) (2025) [https://github.com/Xnhyacinth/HyCo2](https://github.com/Xnhyacinth/HyCo2)
+35. [**QwenLong-CPRS: Towards ∞-LLMs with Dynamic Context Optimization.**](https://arxiv.org/abs/2505.18092) (2025) [https://github.com/Tongyi-Zhiwen/QwenLong-CPRS](https://github.com/Tongyi-Zhiwen/QwenLong-CPRS)
+36. [**Sentinel: Attention Probing of Proxy Models for LLM Context Compression with an Understanding Perspective.**](https://arxiv.org/abs/2505.23277) (2025) [https://github.com/yzhangchuck/Sentinel](https://github.com/yzhangchuck/Sentinel)
+37. [**SecurityLingua: Efficient Defense of LLM Jailbreak Attacks via Security-Aware Prompt Compression.**](https://arxiv.org/abs/2505.23277) (2025) [https://github.com/microsoft/LLMLingua](https://github.com/microsoft/LLMLingua)
+38. [**LongCodeZip: Compress Long Context for Code Language Models.**](https://arxiv.org/abs/2510.00446) (2025) [https://github.com/YerbaPage/LongCodeZip](https://github.com/YerbaPage/LongCodeZip)
+39. [**DeepSeek-OCR: Contexts Optical Compression.**](https://arxiv.org/abs/2510.18234) (2025) [https://github.com/deepseek-ai/DeepSeek-OCR](https://github.com/deepseek-ai/DeepSeek-OCR)
+40. [**Simple Context Compression: Mean-Pooling and Multi-Ratio Training.**](https://arxiv.org/abs/2510.20797) (2025) [https://github.com/lil-lab/simple-context-compression](https://github.com/lil-lab/simple-context-compression)
+41. [**Context Cascade Compression: Exploring the Upper Limits of Text Compression.**](https://arxiv.org/abs/2511.15244) (2025) [https://github.com/liufanfanlff/C3-Context-Cascade-Compression](https://github.com/liufanfanlff/C3-Context-Cascade-Compression)
+42. [**Density-aware Soft Context Compression with Semi-Dynamic Compression Ratio.**](https://arxiv.org/abs/2603.25926) (2026) [https://github.com/yuyijiong/semi-dynamic-context-compress](https://github.com/yuyijiong/semi-dynamic-context-compress)
+
+### **9.2 Model**
+
+1. [**LLM-Pruner: On the Structural Pruning of Large Language Models.**](https://openreview.net/forum?id=J8Ajf9WfXP1) (2023/2024) [https://github.com/horseee/LLM-Pruner](https://github.com/horseee/LLM-Pruner)
+2. [**Your Transformer is Secretly Linear.**](https://arxiv.org/abs/2405.12250) (2024) [https://github.com/AIRI-Institute/LLM-Microscope](https://github.com/AIRI-Institute/LLM-Microscope)
+3. [**Feature-based Low-Rank Compression of Large Language Models via Bayesian Optimization.**](https://arxiv.org/abs/2405.10616) (2024) [https://github.com/Dereck0602/Bolaco](https://github.com/Dereck0602/Bolaco)
+4. [**Merging Feed-Forward Sublayers for Compressed Transformers.**](https://arxiv.org/abs/2501.06126) (2025) [https://github.com/nverma1/merging-ffs-compression](https://github.com/nverma1/merging-ffs-compression)
+5. [**Mamba-Shedder: Post-Transformer Compression for Efficient Selective Structured State Space Models.**](https://arxiv.org/abs/2501.17088) (2025) [https://github.com/IntelLabs/Hardware-Aware-Automated-Machine-Learning](https://github.com/IntelLabs/Hardware-Aware-Automated-Machine-Learning)
+6. [**AdaSVD: Adaptive Singular Value Decomposition for Large Language Models.**](https://arxiv.org/abs/2502.01403) (2025) [https://github.com/ZHITENGLI/AdaSVD](https://github.com/ZHITENGLI/AdaSVD)
+7. [**QuEST: Stable Training of LLMs with 1-Bit Weights and Activations.**](https://arxiv.org/abs/2502.05003) (2025) [https://github.com/IST-DASLab/QuEST](https://github.com/IST-DASLab/QuEST)
+8. [**Forget the Data and Fine-Tuning! Just Fold the Network to Compress.**](https://arxiv.org/abs/2502.10216) (2025) [https://github.com/nanguoyu/model-folding-universal](https://github.com/nanguoyu/model-folding-universal)
+9. [**Delta Decompression for MoE-based LLMs Compression.**](https://arxiv.org/abs/2502.17298) (2025) [https://github.com/lliai/D2MoE](https://github.com/lliai/D2MoE)
+10. [**Efficiently Editing Mixture-of-Experts Models with Compressed Experts.**](https://arxiv.org/abs/2503.00634) (2025) [https://github.com/yifei-he/Compressed-Experts](https://github.com/yifei-he/Compressed-Experts)
+11. [**SVD-LLM V2: Optimizing Singular Value Truncation for Large Language Model Compression.**](https://arxiv.org/abs/2503.12340) (2025) [https://github.com/AIoT-MLSys-Lab/SVD-LLM](https://github.com/AIoT-MLSys-Lab/SVD-LLM)
+12. [**70% Size, 100% Accuracy: Lossless LLM Compression for Efficient GPU Inference via Dynamic-Length Float.**](https://arxiv.org/abs/2504.11651) (2025) [https://github.com/LeanModels/DFloat11](https://github.com/LeanModels/DFloat11)
+13. [**One Shot vs. Iterative: Rethinking Pruning Strategies for Model Compression.**](https://arxiv.org/abs/2508.13836) (2025) [https://github.com/janumiko/pruning-benchmark](https://github.com/janumiko/pruning-benchmark)
+
+### **9.3 Long CoT**
+
+1. [**Reasoning Path Compression: Compressing Generation Trajectories for Efficient LLM Reasoning.**](https://arxiv.org/abs/2505.13866) (2025) [https://github.com/jiwonsong-dev/ReasoningPathCompression](https://github.com/jiwonsong-dev/ReasoningPathCompression)
+2. [**Not All Tokens Are What You Need In Thinking.**](https://arxiv.org/abs/2505.17827) (2025) [https://github.com/Faustrazor/Not-All-Thinking-Tokens](https://github.com/Faustrazor/Not-All-Thinking-Tokens)
+3. [**Efficient Reasoning via Chain of Unconscious Thought.**](https://arxiv.org/abs/2505.19756) (2025) [https://github.com/Rohan-GRH/CoUT](https://github.com/Rohan-GRH/CoUT)
+4. [**Hybrid Latent Reasoning via Reinforcement Learning.**](https://arxiv.org/abs/2505.18454) (2025) [https://github.com/Yueeeeeeee/HRPO](https://github.com/Yueeeeeeee/HRPO)
+5. [**Optimizing Length Compression in Large Reasoning Models.**](https://arxiv.org/abs/2506.14755) (2025) [https://github.com/zxiangx/LC-R1](https://github.com/zxiangx/LC-R1)
+6. [**MEMENTO: Teaching LLMs to Manage Their Own Context.**](https://arxiv.org/abs/2604.09852) (2026) [https://github.com/microsoft/memento](https://github.com/microsoft/memento)
+
+### **9.4 Latent**
+
+1. [**Language Models are Hidden Reasoners: Unlocking Latent Reasoning Capabilities via Self-Rewarding.**](https://arxiv.org/abs/2411.04282) (2024) [https://github.com/SalesforceAIResearch/LaTRO](https://github.com/SalesforceAIResearch/LaTRO)
+2. [**Training Large Language Models to Reason in a Continuous Latent Space.**](https://arxiv.org/abs/2412.06769) (2024) [https://github.com/facebookresearch/coconut](https://github.com/facebookresearch/coconut)
+3. [**Scaling up Test-Time Compute with Latent Reasoning: A Recurrent Depth Approach.**](https://arxiv.org/abs/2502.05171) (2025) [https://github.com/seal-rg/recurrent-pretraining](https://github.com/seal-rg/recurrent-pretraining)
+4. [**LLM Pretraining with Continuous Concepts.**](https://arxiv.org/abs/2502.08524) (2025) [https://github.com/facebookresearch/RAM](https://github.com/facebookresearch/RAM)

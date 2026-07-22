@@ -1,0 +1,160 @@
+# Paper总结
+
+### **StreamTensor: Make Tensors Stream in Dataflow Accelerators for LLMs（dataflow编译，未开源，但stream-hls开源，token建模）**
+
+[https://github.com/UCLA-VAST/Stream-HLS](https://github.com/UCLA-VAST/Stream-HLS)，FPGA25
+
+编译dataflow：convertor、kernel、DMA设计搜索。
+
+论文是FIFOs+PE的dataflow架构加速器的编译框架，iter tensor定义layout和遍历顺序，stream是硬件fifo抽象，定义相关Operation来表示kernel过程，便于编译器优化。
+
+基于论文的dataflow表示的编译pipeline、搜索空间和方法设计是什么？Operation抽象是什么？如何利用这些表示经过编译得到机器指令？
+
+只用FIFO作为缓存，是为了减少地址计算指令，有Buffer相关Operation进行converter layout和局部缓存。
+
+论文成果的设计策略或思路是什么？架构是以PE+FIFO+Convertor+DMA为主要指令的dataflow架构，推理是pytorch表达，论文明确了输入和输出，并探索编译框架。
+
+此外，FIFO是架构抽象，FPGA可以自定义FIFO来执行编译结果，但ASIC呢，或者说编译框架是辅助DLA设计的generator。**编译输出面向dataflow架构的硬件调度，可以在FPGA直接验证**。
+
+![image.png](Paper-2026%2004%2022/image%20101.png)
+
+token的行为建模是kernel的描述，pipeline间隔是相邻token输出间隔（=多久有新输入），执行延迟是端到端延迟，初始化延迟是第一个输出的间隔（计算依赖）。**token建模帮助确定相邻kernel之间的FIFO容量（可能有用）**。
+
+编译框架是为LLM推理优化的，但对于动态形状（KVCache大小或序列长度）等存在容量妥协，按照最大输入设计。
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image.png)
+
+![image.png](Paper-2026%2004%2022/image%2096.png)
+
+![image.png](Paper-2026%2004%2022/image%2097.png)
+
+### **S-DMA: Sparse Diffusion Models Acceleration via Spatiality-Aware Prediction and Dimension-Adaptive Dataflow（MICRO25）**
+
+图像编辑和生成的Diffusion模型：SpS、SeS**算法复杂度**高，稀疏预测的**硬件开销**很大，多种算子的稀疏方式不同导致**PE低使用率**。
+
+token是图像feature的patch，或者prompt序列的token。
+
+**SeS**将图像token将全局token划分为src和dst，对每个dst token计算dst token的**相似度**，聚类成更少token进行计算。本文对每个dst token计算周围K*K窗口范围内dst token的**相似度**，进行**局部**token划分和相似度计算、聚类。
+
+**SpS**根据整体prompt的index attn map（图像中对应prompt的部分）和每个prompt token i的attn map计算相似度（找到prompt中的实词toker），找到prompt最相关的图像部分。本文将图像分为9个区域，对每个区域进行上述计算（attn map更小），进行**局部**相似度计算。
+
+**NAND**替代XNOR的线上相似度计算，实现稀疏预测模块。
+
+**Transformer+SeS推理，Unet+SpS推理模式**的数据流+重排设计。
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%201.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%202.png)
+
+![Screenshot from 2026-04-17 09-57-59.png](Paper-2026%2004%2022/Screenshot_from_2026-04-17_09-57-59.png)
+
+![image.png](Paper-2026%2004%2022/image%20103.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%203.png)
+
+### Focus: A Streaming Concentration Architecture for
+Efficient Vision-Language Models（HPCA26，开源）
+
+[https://github.com/dubcyfor3/Focus](https://github.com/dubcyfor3/Focus)
+
+**速读**
+
+Video输入的token冗余，AdapTiV作frame内的token merging（frame内冗余），CMC用编解码器检测frame间冗余，都忽略了prompt对图像的concentration引入的稀疏。
+
+tokenwise的稀疏可以细化成sub-token（vector）。稀疏算法和硬件架构不对齐，稀疏的性能提升可优化（local tokenwise）。
+
+三个层次的稀疏concentration（vector、block、token）。稀疏处理单元**focus**支持三个层次的concentration，作为GEMM的辅助单元。
+
+**精读**
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%204.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%205.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%206.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%207.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%208.png)
+
+dataflow设计、kernel的loop tiling、unrolling调度。layouter支持不同在线稀疏处理的数据格式对齐，memory访问不冲突。
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%209.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2010.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2011.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2012.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2013.png)
+
+### **ORCHES: Orchestrated Test-Time-Compute-based LLM Reasoning on Collaborative GPU-PIM HEterogeneous System（MICRO25，attaccsim扩展，未开源）**
+
+TTC-based LLM是思维链ToC推理的超集。**TTC**包含PRM验证branch，Policy生成branch，二者互相依赖执行branch Dependency inter step。
+
+TTC不是投机推理，**投机推理**是小模型一次生成多个token后，大模型并行验证这些token，语句输入，计算联合概率分布（包含不同prefix条件分布）。
+
+边缘decoding是memory bound，TTC的prefilling（PRM）和decoding（policy）都存在。
+
+失败branch的内存释放，导致内存碎片和不规则访问。
+
+**workload**是**动态**的memory bound和computing bound。
+
+架构设计是基于分析的**动态调度**，减少GPU和PIM不均衡导致的空闲。**投机生成branch，**不等待完成验证就提前猜测结果来生成下一个branch。**pipeline**验证，动态branch的**内存管理**。
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2014.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2015.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2016.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2017.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2018.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2019.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2020.png)
+
+### V-Rex: Real-Time Streaming Video LLM Acceleration via Dynamic KV Cache Retrieval（HPCA26，未开源，Stream输入场景）
+
+KV Cache稀疏（offload+load）：[https://zhuanlan.zhihu.com/p/1928404067799003721](https://zhuanlan.zhihu.com/p/1928404067799003721)
+
+不同于offline的prompt或video输入中一次prefill+多轮decode，Stream输入中frame按时间顺序到达，prefill占据主要循环，相当于更频繁的更大长度的多次prompt输入。
+
+算法侧加速每个frame的prefill过程（训练无关），硬件单元加速特定算子。
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2021.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2022.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2023.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2024.png)
+
+论文主要优化频繁大量的**frame prefill**。
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2025.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2026.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2027.png)
+
+### Cambricon-D: Full-Network Differential Acceleration for Diffusion Models（ISCA24）
+
+每个pass的核心是Conv（线性算子），差分方式计算Conv，Diffy是空间差分来加速（相邻空间的δ数值小），本文是时间差分来加速（相邻时间步的δ数值小），差分Conv的数学推导是什么？
+
+Attn算子、Relu、GN算子非线性，数学上无法准确差分计算是为什么？本文不处理Attn，对GN和Relu近似差分计算。
+
+用差分δ进行Conv、ReLU、残差的计算或近似，低精度乘法开销更低。Diffy中Unet每个layer差分计算后计算中间结果的raw数据并写回（因为ReLU需要raw数据），而本文则不需要（ReLU也使用δ近似）。
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2028.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2029.png)
+
+![image.png](Paper%E6%80%BB%E7%BB%93/image%2030.png)
+
+![image.png](Paper-2026%2004%2022/image%20125.png)
+
+![image.png](Paper-2026%2004%2022/image%20126.png)

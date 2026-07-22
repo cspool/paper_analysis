@@ -1,0 +1,437 @@
+# CXL分解内存、一致性协议
+
+[https://zhuanlan.zhihu.com/p/14268243479](https://zhuanlan.zhihu.com/p/14268243479)
+
+# 背景
+
+**内存墙**
+
+内存性能跟不上core性能；
+
+![image.png](meeting-25%209%2017/image.png)
+
+**内存墙**原因：
+
+CPU和内存的**性能提升速度**不同；
+
+内存**带宽/传输率**提高难，**核心频率**难提高，**多通道布局布线难**；
+
+内存**容量Capicity**扩展难，高带宽>**高刷新**>高发热>内存颗粒密度难提高，**2DPC**增大容量但出现**信号完整性**问题；
+
+DRAM的高带宽和高容量的**实现对立**；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%201.png)
+
+**DDR5的刷新频率**
+
+[https://zhuanlan.zhihu.com/p/24058437821](https://zhuanlan.zhihu.com/p/24058437821)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%202.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%203.png)
+
+**数据中心内存成本**
+
+数据中心的**低延迟应用**：将数据**全部加载（参数预载到内存）**到内存；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%204.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%205.png)
+
+**内存搁浅Strand**：Core和内存紧耦合，当Core全部出售而内存有剩时，剩余内存无法分配和使用；
+
+**异构内存难以复用Spilled**：新一代CPU（5th AMD EPYC）不兼容DDR4，无法使用DDR4的内存库存；
+
+![image.png](meeting-25%209%2017/image%201.png)
+
+**服务器间通信开销**
+
+数据通过TCP/IP传输的IO开销：数据打包、内存拷贝（用户和kernel空间间的来回拷贝、ring buffer到kernel空间的拷贝）、上下文切换（异步IO需挂起）
+
+[TCP握手、拷贝、实现栈速览](TCP%E6%8F%A1%E6%89%8B%E3%80%81%E6%8B%B7%E8%B4%9D%E3%80%81%E5%AE%9E%E7%8E%B0%E6%A0%88%E9%80%9F%E8%A7%88%2026fe12d10b6e8068aaa6e5cf4325b54a.md)
+
+**基于CXL的分离内存架构**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%206.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%207.png)
+
+# CXL概述
+
+**CXL演进**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%208.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%209.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2010.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2011.png)
+
+CXL是**运行在PCIe物理层**，增加**扩展内存、扩展缓存和缓存一致性等特性**的协议；
+
+CXL**向后兼容**：不同CXL版本device互联则降级到低版本；
+
+CXL支持GPU、FPGA、Acc device、存储device等**不同设备互联**：device**通过PCIe接入CPU**，CPU内存通过CXL接入后**在内部转接DDR接口**后接入CPU；
+
+CXL支持**CPU对CXL device内存**的一致性load/store访问语义（类似host MMIO、扩展内存），**CXL device对CPU内存**的一致性load/store访问语义（类似device DMA）；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2012.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2013.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2014.png)
+
+融合Gen-Z和OpenCAPI
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2015.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2016.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2017.png)
+
+# CXL协议
+
+## 内容：for 异构系统、共享内存、扩展Cache
+
+CXL让host（群）和多个device（加速器、xPU、网卡）之间**共享内存以减少数据拷贝**，并且在**不同device引入peer cache**利用局部性能**加速共享内存的传输IO**，但数据的多点访问和多副本需要维护**缓存一致性**；
+
+**CXL.io**：为IO device提供**不保证一致性的load/store接口**；
+
+**CXL.cache**：提供对host内存的缓存一致性访问，**扩展host cache到peer cache**，允许**peer cache缓存host内存来加速device的IO**，由于只提供访问host内存的一致性，一般实现在没有本地内存的device；
+
+**CXL.mem3.0-**：提供**host**对device内存的缓存一致性访问，建立**device内存和host内存的统一可见地址空间**，device访问host内存（含Host Bias下devixe内存）需遵循**CXL.cache协议**；
+
+**CXL.mem3.0+**：增加BIV，提供对host内存和device内存的一致性访问，有本地内存的device访问host内存**只需要遵循CXL.mem**，而不需要额外遵循CXL.cache；
+
+![image.png](meeting-25%209%2017/image%204.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2018.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2019.png)
+
+**三种设备实现不同CXL协议类型**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2020.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2021.png)
+
+## 数据一致性
+
+**peer cache中数据副本访问的一致性**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2022.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2023.png)
+
+***何时何地需要cache一致性？***
+
+一致性协议保证内存数据在**多访问(多副本多修改)下和访问语义一致**；
+
+**cache**是为所在host/device**缓存**某个数据的**共享、独占、无效、修改副本**，**数据源**是某个内存；
+
+Cache Line（CL）的**一致性访问过程**是读取副本（>共享CL）、获取权限（>独占CL）后修改副本（>修改CL）、丢弃时写回源头（>无效CL）;
+
+数据**源头负责响应**一致性请求和维护CL状态,“每个节点维护自身挂载的内存数据”;
+
+CXL.cache中**访问host数据**的一致性由host中Home Agent维护一致性状态，CXL.mem3.0+中**访问统一地址空间中数据**的一致性由每个device(包含host)中DCOH维护一致性状态；
+
+***CXL协议的设计策略:维护什么数据在什么访问下的一致性？***
+
+CXL定义的内存访问包含：host访问host内存和所有device内存，任一device访问host内存，device访问device（本地）内存；
+
+CXL之前，host cache缓存host内存中数据，**host中多核访问内存**需维护一致性；
+
+CXL.cache为访问host内存提供一致性，即**异质多核CC**，peer cache缓存host内存中数据副本，**访问host内存遵循CXL.cache协议**；
+
+CXL.mem3.0-为host访问device内存提供一致性，host和device内存处于统一可见的地址空间，**若存在peer cache**，peer cache缓存统一地址空间中数据副本，host访问device内存遵循**CXL.mem**，device访问host内存（或Host Bias下device内存）遵循**CXL.cache**；
+
+CXL3.0后，CXL.mem3.0+新增Back-Inv（**BIV**）通道和BIV消息，支持**访问host内存和device内存的一致性**；
+
+# CXL.cache
+
+## ***协议用途和基本规范***
+
+**1、允许CXL device缓存host内存**，使用MESI协议维护CXL device中cache line的一致性；
+
+**2、非对称的一致性协议**，host设置**Home Agent**，Home Agent负责维护peer cache状态和一致性控制，host通过**Snoop请求**发给peer cache来维护一致性，**Snoop Filter**减少不必要的Snoop流量；
+
+3、CXL device的**请求地址是host的物理地址PA**，CXL device设置**设备快表DTLB**来加速地址翻译（统一虚拟地址->host PA），**ATS**向host发送地址翻译请求（虚拟地址对应的物理地址），**DTLB表项缓存**host的翻译结果（host PA）；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2024.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2025.png)
+
+**PCIe ATS：**缓解主机iommu的查表/地址翻译压力；
+
+[PCIe ATS](PCIe%20ATS%2026fe12d10b6e804e8dc1e8998ef5053d.md)
+
+## ***协议通道和消息类型***
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2026.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2027.png)
+
+**device2host请求：访问host内存**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2028.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2029.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2030.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2031.png)
+
+**host2device请求：嗅探，维护一致性**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2032.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2033.png)
+
+**host2device的内存请求响应**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2034.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2035.png)
+
+**device2host：peer cache被嗅探后的状态变化**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2036.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2037.png)
+
+## ***缓存一致性维护流程***
+
+**CXL.cache读**：device发送读取请求，Host嗅探查找副本peer，更新副本peer cache状态，数据传输到device，Home Agent指示device更新cache line状态；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2038.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2039.png)
+
+**CXL.cache写（自增指令）**：device发送请求，Host嗅探获取权限（flush、写回），读取内存数据，权限获取后，Home Agent指示device更新cache line状态，数据写入device cache时状态修改；
+
+**脏数据**丢弃时需要**写回**：向Home Agent申请，写回主存的申请全局可见后，更新device cache状态并且传输数据；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2040.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2041.png)
+
+**CXL.cache流式写**：device请求写入，Host嗅探获取权限后，device写数据到peer Cache（ItoMWr）以更新缓存或直接写到主存（MemWr）；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2042.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2043.png)
+
+# CXL.mem
+
+## ***协议用途和基本规范***
+
+**1、host直接访问device内存，而不必先拷贝到DMA buffer**；
+
+**2、通过host物理地址**进行device内存访问，**device内部转换**为device的媒体地址空间；
+
+3、host通过CXL.mem**向Type 2 device内存输入数据和命令，从device内存接收数据和信号**，降低一致性开销，否则每次DMA前都需要flush host cache中属于DMA buffer的cache line；
+
+[https://learn.microsoft.com/zh-cn/windows-hardware/drivers/kernel/flushing-cached-data-during-dma-operations](https://learn.microsoft.com/zh-cn/windows-hardware/drivers/kernel/flushing-cached-data-during-dma-operations)
+
+**没有CXL时，每次DMA前需flush host cache**，防止DMA读取DMA buffer得到陈旧数据（最新的在cache），防止DMA写入DMA buffer但host读取cache中的陈旧数据（host cache未更新DMA写入数据）；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2044.png)
+
+4、**device内存和host内存扩展到统一可见地址空间**，device内存称为主机管理设备内存**HDM**，具有设备管理一致性**DMC**，device中的设备一致性引擎**DCOH维护HDM和host内存数据的一致性**；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2045.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2046.png)
+
+***HDM和host memory的一致性管理***
+
+传统的device memory一般是**device私有内存PDM**，如GPU的GDDR或HBM，**host对PDM访问受device接口限制，无法执行一致性协议**；CXL device可将device memory**部分设置为PDM，部分设置为HDM；**
+
+**HDM-H**：用于**内存扩展（Type 3）**，device中没有依赖内存数据的计算，故**不设peer cache也没有一致性问题，host直接对HDM-H读写**；
+
+**HDM-D**：用于Type 2设备（FPGA、Acc、GPU），使用**CXL.cache维持device访问host/device memory时的一致性；**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2047.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2048.png)
+
+CXL3.0后，CXL.mem引入**Bank Inv**来支持device访问host/device memory，只需CXL.mem维持一致性的设备是**HDM-DB**；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2049.png)
+
+HDM-H
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2050.png)
+
+***HDM-D中基于偏置的一致性模型***
+
+**Host Bias**：**device内存被视为host内存的一部分**，host快速访问device内存，device对host/device内存的访问遵循CXL.cache协议；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2051.png)
+
+**Device Bias**：**host cache没有device内存数据的副本**，device对device内存直接访问，host访问device内存前需转为Host Bias模式；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2052.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2053.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2054.png)
+
+***偏置模型的实现和管理***
+
+地址页的Bias记录和修改，host冲刷device页的缓存；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2055.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2056.png)
+
+## ***协议通道和消息类型***
+
+**M2S**方向：host对device内存的访问请求；
+
+**S2M**方向：device对host请求的回应；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2057.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2058.png)
+
+cache line的**meta**信息：简化一致性维护；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2059.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2060.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2061.png)
+
+**M2S的Req通道的请求**
+
+Host向HDM读取/无效请求
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2062.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2063.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2064.png)
+
+MemRdFwd和MemWrFwd
+
+对CXL.cache中D2H请求的响应，用于device读写device内存的一致性协议；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2065.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2066.png)
+
+**M2S RwD通道的请求**
+
+Host向HDM进行写请求（Request with Data)；
+
+写完之后Host是否还有副本通过MetaValue告知Device；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2067.png)
+
+**S2M NDR通道的响应**
+
+用于告知Host读/写/无效请求已经完成
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2068.png)
+
+**S2M DRS通道的响应**
+
+只有一种类型即MemData，用于告知接下来会传输数据；
+
+## ***缓存一致性维护流程***
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2069.png)
+
+**Host发起读**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2070.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2071.png)
+
+**Host发起写**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2072.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2073.png)
+
+**device发起读，host没有修改数据**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2074.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2075.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2076.png)
+
+**device发起读，但host修改了数据**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2077.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2078.png)
+
+**设备发起写**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2079.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2080.png)
+
+**设备发起流式写**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2081.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2082.png)
+
+**CXL3.0引入Back Inv**
+
+[https://0x10.sh/back-invalidate-in-cxl-3-0](https://0x10.sh/back-invalidate-in-cxl-3-0)
+
+**访问host内存(包含Host Bias下device内存)**时，发出**Back Inv**申请无效化其他副本，而**不需要CXL.cache**向host申请，因此**一致性维护完全由每个节点承担，能扩展到多host的统一内存空间**；
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2083.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2084.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2085.png)
+
+**HDM内存空间不再受限SF大小**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2086.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2087.png)
+
+**对多host内存的统一访问**
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2088.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2089.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2090.png)
+
+# CXL分离内存特性
+
+待续。。。
+
+CXL1.0
+
+CXL2.0
+
+CXL3.0
+
+CXL3.1
+
+# CXL挑战、问题
+
+CXL内存访问**延迟**比DDR访问更大,需要**分层存储**管理;
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2091.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2092.png)
+
+CXL访问延迟可能难以满足QoS,CXL动态资源调度考虑资源利用率,还需要**考虑QoS**;
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2093.png)
+
+![image.png](CXL%E5%88%86%E8%A7%A3%E5%86%85%E5%AD%98%E3%80%81%E4%B8%80%E8%87%B4%E6%80%A7%E5%8D%8F%E8%AE%AE/image%2094.png)

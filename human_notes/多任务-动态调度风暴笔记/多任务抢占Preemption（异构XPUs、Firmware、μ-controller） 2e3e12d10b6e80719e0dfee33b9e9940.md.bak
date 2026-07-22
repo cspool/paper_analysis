@@ -1,0 +1,565 @@
+# 多任务抢占Preemption（异构XPUs、Firmware、μ-controller）
+
+## idea
+
+目前：给一个conv算子，加载-计算-存储和固定tiling全在片上，没有ld、st指令，img2col fused在片上。
+
+场景：多任务，VAE（conv）、Diffusion（conv、attention）、VAE在LDM（VAE+Dif）中时间不长。
+
+修改：我实现的conv是一个编程时算子，分块-加载-计算-传输只由硬件控制完成，将硬件控制改为参数化的**粗粒度XPU指令**。
+
+### 背景
+
+云边场景下，可以用**边缘加速卡**抢占式调度解码和编码和DiT，云端负责llm生成修饰词，由于云和网络延迟，边缘需要抢占式DiT调度。
+
+为什么不用GPU？吞吐率不如SA更高。
+
+云边DiT不常见，找并行。
+
+边端小模型，MoE的小专家并行（粗粒度），和多任务，
+
+稀疏激活，动态激活（多任务），SpMM和SpMV，算子抢占（时间抢占、算力抢占）
+
+抢占：preemption、flush、Spatial Acc的多任务并行（片上资源的动态分配）类似RDU？
+
+任务的CFG重排能力：片上资源的弹性变换支撑多任务。抢占开销，结合LLM特点。
+
+抢占：进一步利用性能，动态插入算子、让算子并行，不浪费acc的空间资源，只算一个warp，动态插入算子，（类似GPU的多warp并发，不浪费memory时间）。
+
+根据资源匹配插入的任务。
+
+而不是任务抢占并发。
+
+LLM的可分拆点。
+
+Conditional Memory via Scalable Lookup: A New Axis of Sparsity for Large Language Models
+
+**什么算子抢占什么算子？**
+
+DiT、ViT中Transformer Decoder比VAE的负载更重，因此**attention抢占Conv和attention之间抢占的可能性更大。**
+
+LLM、Transformer的KV Cache（PD）计算需要MMU和MVU，多卡调度时，attention的offload schedule（W和KVCache分GPU存放和运算，GPU之间传输QKV向量，缓解显存压力）更常见，因为attention的负载很大，每个decoder块有一个KV Cache（token loop）。
+
+ViT、DiT的T steps和llm的逐个输出token很相似，是否意味着DiT的BackBone也能利用KV-Cache的策略来减少计算复杂度？不行❌，ViT和DiT的推理模式不属于自回归，由于DiT的time loop，可以设置Cache来替换ViT BackBone。
+
+### 相关工作
+
+相同抢占场景下，指令粒度的影响和区别？
+
+GPU线程块的细粒度kernel指令，计算尺度等价于spatial acc的张量粗粒度指令。但指令级抢占粒度，GPU比ACC更灵活。
+
+抢占的核心是满足运行时的QoS，以及整体的QoS，功耗等，优化目标是特定kernel尽快部署计算。
+
+领域spatial acc的粗粒度指令，将new kernel和old kernel也作为pipeline，进一步压榨计算能力，相当于粗指令之间中断，粒度等价于GPU的细粒度指令抢占。
+
+### 设计考虑
+
+观察1：GPU支持指令level抢占，其他Acc一般不支持。
+
+指令级抢占的过程：XPU中断执行，保存上下文，（恢复上下文），新指令执行。
+
+观察2：host命令XPU（可能包含μ-controller）是异步的，host提交多个（TH）命令给XPU。
+
+host和XPU异步，即host一般提交多条指令给XPU，因此XPU保存还需要保存这些接受的指令，多任务时，XPU的（部分）**指令序列需要保存**，**指令粒度不宜过细**。
+
+μ-controller和XPU同步，辅助XPU完成通用计算和控制。
+
+策略交给软件决定，硬件需要提供给软件所需的接口。比如保存上下文时反映资源使用率？设计合适的硬件接口。
+
+观察3：img2col重排算子需要和GEMM计算融合，否则重排后的数据保存时浪费带宽（比原来输入更大）。
+
+img2col+GEMM需要作融合算子的tiling+中断设计，即**指令设计+保存/恢复上下文的格式**。
+
+img2col本身是融合GEMM的tiling设计，tile重排时不中断。
+
+脉动阵列具备很高自由度的pipeline设计，能在GEMM被抢占时，将中间结果传出。保持MAC之间的内部位宽24bit而不需要拓宽，每个MAC两个cycle传出32bit结果，需要2*SA-size个cycle，硬件资源开销不大。
+
+观察4：SA的中间结果，Conv输入的Overlapped data（input row、slab），权重都需要保存，开销很大。
+
+**计算传输覆盖pipeline**是计算时**写回**上一个tile的结果，**加载**下一个tile的输入和权重。
+
+XPU收到中断后，恢复新指令的上下文（加载），同时完成当前指令的（部分？）计算，之后新指令执行，进行被抢占指令的上下文保存（写回），类似的**计算传输覆盖pipeline。**（新指令在SA计算的同时，SA传出被抢占指令的中间结果，能利用SA的输入输出脉动特性）
+
+观察5：接受抢占信号后，XPU直接中断需要保存的上下文可能很多，影响多任务整体吞吐，如何决定**什么时候中断（动态中断？）**，达到整体性能和高优先级任务抢占延迟的甜点？
+
+Conv、GEMM等locality强的算子被抢占时，输入Overlapped data无法复用（若存在），设计用其**“偷偷”**完成下一个tile的部分计算，**保存中间结果**后直接丢弃。
+
+img2col在重排后数据进入GEMM作reduction后才执行中断。
+
+上下文不保存全部而是压缩后重新计算（传输延迟？）
+
+当新指令的数据加载完成后，上述行为若完成，则继续pipeline，若未完成，根据新指令的优先级程度，决定强行中断还是算完才中断。
+
+观察6：**Conv flexible tiling**和Decoder static tiling
+
+高of高ox，高of高if在conv中能取得较高的使用率：涉及layout transformation（if紧密和ix紧密的im2col，sa逐行或者列输出到输出buffer）和double-dataflow，两种parallel的计算模型和抢占设计。
+
+ix-img2col：输入是列Banks，每行ix，每次左移s个数，每次输出前k个数。
+
+**if-**img2col：输入是if Banks，每行if，每次一行，若干行对应x，按列输出是of，转为ix需要sa输出一个就写一个O Bank，每个O Bank是一个x的of列，维持if需要集齐一列一起写入一组O Banks。
+
+原生DiT参数量没那么大，只涉及**MM和重排**，所以能否设计抢占式DiT或UNet。patchify是原生的tiling，DiT是静态分辨率，因此只需要**参数化静态tiling**，但需要设计重排和MM的融合。
+
+### 实现和实验
+
+RV SoC DLA模拟，Verilog实现关键部件（重排、MMU、抢占）。
+
+RV Core作为DLA的控制，协同完成抢占和指令集。
+
+## 多任务抢占
+
+[https://www.usenix.org/conference/osdi25/presentation/shen-weihang](https://www.usenix.org/conference/osdi25/presentation/shen-weihang) 
+
+XPU Preemption：异构XPUs的统一调度框架能**避免重复开发**、多任务、调度需求
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2010.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2011.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2012.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2013.png)
+
+### 硬件调度、host+XPU调度
+
+NPU执行AI会议：语音转录任务低频长持续（一秒转录一句话，每次800ms）、虚拟背景任务高频短持续（一秒25帧，40ms一次，每次几ms）。**需要抢占机制**，但XPU不支持。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2014.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2015.png)
+
+硬件实现简单的**静态调度**，没有**高级调度策略**。高级调度策略（如MLFQ）在XPU上的运行和硬实现开销高。
+
+不能利用运行时信息（统计QoS、ddl）**灵活切换调度策略**（FCFS+优先调度）。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2016.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2017.png)
+
+调度方式应该是**CPU调度+XPU执行**，但是现有框架不通用：
+
+1、**抢占式调度面向GPU设计**，其他XPU不支持。> **通用的硬件抢占设计**？支持异构硬件？
+
+2、无法利用硬件新特性，因为**特性绑定特定软件栈（运行时）**才可使用。> ？？？
+
+3、不同XPU的**算子抽象和约束不同**，**难以统一调度**异构算力。> ？？？
+
+**host+XPU现有框架的实现**：
+
+GPU可编程性实现**低开销抢占**（设置timeslice、设计**钩子kernel** ），利用嵌入式GPU的**ioctl接口**。
+
+XPU的**软件栈复杂**，调度框架的调度策略受**特定XPU的细节限制**（TimeGraph绑定DRI驱动、REEF绑定AMD的运行时和驱动）。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2018.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2019.png)
+
+host+XPU虚拟化的实现挑战：每个XPU有**自己的垂直软件栈**，**XPU能力不同（可编程性、timeslice、抢占）**。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2020.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2021.png)
+
+### XQueue模型（XPU的线程模型）
+
+CPU（进程）提交命令（指令）到**hwQueue**，XPU基于hwQueue串行执行命令，CPU命令提交后无法干涉命令执行，CPU进程**等待**XPU完成命令而**同步**。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2022.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2023.png)
+
+**XQueue**≈thread是进程的多任务调度模型，便于实现不同调度策略。
+
+XQueue是可被CPU抢占的hwQueue，CPU提交命令到XQueue A后，可以暂停XQueue A的命令执行，恢复XQueue B的命令执行，并将XPU的hwQueue指针引导到XQueue B。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2024.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2025.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2026.png)
+
+**异构XPUs的抢占**
+
+调度模型和XPU之间插入**硬件模型层**，**面向XPU模型进行调度**，**不直接面对不同XPU的个性化接口**：XPU+软件栈支持硬件模型定义的接口，调度模型利用硬件模型提供的接口进行调度。
+
+不同硬件抢占能力不同，调度假设单一的硬件抢占能力（模型）不合适：假设统一低的抢占能力，会损失高抢占能力硬件的性能；假设统一高的抢占能力，会不适配能力不足的硬件。
+
+**分层硬件抽象**，不同抢占能力的硬件划分到不同抽象模型：GPU可编程因此调度能力最强（timeslice，priority，线程blk or instr level Preemption），NPU部分可编程，ASIC和FPGA几乎不可编程（没有合适的接口）。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2027.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2028.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2029.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2030.png)
+
+hwQueue（待提交pending > 已提交in-flight > 执行中running）、XPU的launch+sync接口
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2031.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2032.png)
+
+**lv1抢占**：抢占pending state的命令，即进程停止提交当前**XQueue的下一条**指令，XPU都有该接口。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2033.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image.png)
+
+**lv2抢占**：抢占in-flight state的命令，即**XPU μ-controller支持停止派发指令**，类似GPU的线程块level Preemption，停止SM的dispatch Unit派发指令。
+
+stall-based deactive让**μ-controller停止当前queue的命令派发，选择派发其他queue命令。（GPU、Ascend、iGPU）**
+
+flush-based deactive让**μ-controller清空当前queue的命令，r**eactive**时重新填充queue。（GPU的钩子kernel）**
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2034.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%201.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%202.png)
+
+**lv3抢占**：抢占running state的命令，保存或恢复上下文（GPU的指令level Preemption）。
+
+[GPU的抢占Preemption和Timeslice（WFI/drain、switch）](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89%20262e12d10b6e8048b20cf29d04938602.md)
+
+[https://docs.nvidia.com/cuda/pascal-tuning-guide/index.html#compute-preemption](https://docs.nvidia.com/cuda/pascal-tuning-guide/index.html#compute-preemption)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%203.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2035.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%204.png)
+
+### XSched Lib、Xscheduler**实现**
+
+**运行时库**：**XShim**为应用提供API，**XPreempt**实现XQueue接口，**XAL**实现分层硬件模型接口。
+
+**调度器**：后台进程XScheduler通过Agent报告的XQueue行为，监控运行时状态，按policy决策调度。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2036.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2037.png)
+
+**XPreempt的设计**
+
+host提交命令比XPU执行命令快很多，因此host等待XPU完成的**性能浪费大**，如果host提交过多命令到XPU（in-flight），**Lv1的XPU抢占延迟会很高**。因此host XQueue设计**可配置in-flight threshold**，当host提交命令达到threshold时，调用sync()来等待XPU完成或被抢占。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%205.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%206.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%207.png)
+
+**XScheduler的设计**
+
+Xscheduler是event驱动的调度器，根据agent发送信息，维持XQueue状态，根据policy做决策（抢占或者恢复），policy可用户配置。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%208.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%209.png)
+
+**XAL的实现（XPU相关）**
+
+**LV1 XAL：抢占host未提交的XQueue，支持所有XPU。**
+
+所有XPU的driver API会提供launch和sync接口（完成后通知）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2010.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2039.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2040.png)
+
+**LV2 XAL：抢占in-flight但未执行的命令，支持GPU和Intel NPU。**
+
+Stall-based基于**XPU的μ-controller**提供的硬件接口。
+
+Flush-based基于**动态二进制插桩DBI**，插入**Guardian kernel**，让in-flight kernel执行时先执行Guardian来检测是否被抢占（Xsche设置flag），如果被抢占，这些kernel被Guardian保存信息，并强制退出（flush）。
+
+DBI方法不需要修改XPU的PTX，而是基于CUDA编程即可。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2011.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2012.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2038.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2013.png)
+
+**LV3 XAL：抢占运行中指令，支持NV GPU。**
+
+TSG-based：通过ioctrl设置线程块的**timeslice**，被中断的线程块设置timeslice为0，**GPU自动切换超时的线程块**，恢复的线程块设置正常timeslice，包括**instr-level和Thread Blk(CTA)-level切换**。
+
+Queue-based：调用**ioctrl会中断GPU所有kernel**，**通过DBI在trap handler segment中注入代码**，检测Xsche是否要求抢占，**被Xsche要求抢占的kernel退出执行**，其余kernel中断后恢复执行。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2014.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2015.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2041.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2042.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2016.png)
+
+### 实验
+
+开销很低
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2043.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2044.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2045.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2046.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2047.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2048.png)
+
+## Intel & NV μ-controller
+
+ref：**NVIDIA RISC-V Story**
+
+ref：[https://envytools.readthedocs.io/en/latest/hw/falcon/index.html](https://envytools.readthedocs.io/en/latest/hw/falcon/index.html)
+
+ref：**Exploring microcontrollers in GPUs**
+
+ref：[https://docs.kernel.org/gpu/nova/core/falcon.html](https://docs.kernel.org/gpu/nova/core/falcon.html)
+
+ref：**Enabling the GuC/HuC Firmware for Linux* on New Intel GPU Platforms**
+
+ref：[https://riscv.org/blog/how-nvidia-shipped-one-billion-risc-v-cores-in-2024/](https://riscv.org/blog/how-nvidia-shipped-one-billion-risc-v-cores-in-2024/)
+
+### μ-controller for GPU
+
+NV的μ-controller之前通过**Falcon实现**。目前设计**RV-Cores实现μ-controller功能，同时完成虚拟化等高级功能且向后兼容。**
+
+μ-controller专为XPU服务，和XPU同步。易混淆的是host CPU和XPU是异步的，host CPU提交任务给XPU完成。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2017.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2018.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2019.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2020.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2021.png)
+
+**GPC、Hub是GPU中的μ-controller**。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2022.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2023.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2024.png)
+
+**GPC和Hub执行的firmware code**
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2025.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2026.png)
+
+**Intel iGPU Firmware**
+
+Intel的**iGPU和CPU集成在一个SoC中**，**CPU兼任μ-controller的职能**来执行GPU的**Firmware**。**Firmware**调度GPU硬件，提高硬件性能和降低功耗，引入新特性。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2027.png)
+
+**GuC（GPC-used Code？）**负责在不同并行图形引擎上，调度图形负载。
+
+**HuC（Hub-used Code？）**负责将CPU的媒体功能卸载到GPU，减少CPU和GPU同步的等待开销。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2028.png)
+
+### NV RV-Cores扩展μ-controller
+
+NV的RV Cores支撑：**功能控制**（图形功能、内存、GPU间传输、上下文切换）、**芯片/系统控制**（资源管理、功耗、安全）、**数据处理**（收发网络数据包）。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2029.png)
+
+**RV Cores**替代支撑原有简单功能的Falcon。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2030.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2031.png)
+
+### NV RV Cores for SoC
+
+扩展**RV Cores**作为μ-controller的用途，设计**RV Cores对上提供屏蔽外设细节的更简单的接口**。
+
+RV Core和常见外设构建的**Peregrine子系统参数化管理**任意组合的外设（普通外设、RV扩展、Cache和TCM大小可配置），通过**模块化策略来最大化软硬件复用。**
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2032.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2033.png)
+
+基于Peregrine子系统（RV Cores+外设IP）构建统一的软硬件栈，**显著复用boot、OS、分离kernel和应用库**。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2034.png)
+
+安全功能：分离kernel是底层软硬件栈的虚拟化，类似VMM，也可用于调度。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2035.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2036.png)
+
+### NV RV Cores for GPU
+
+**GPU的GSP代表GPU和host交互**，而不是host通过kernel driver直接访问GPU内硬件。
+
+GSP承担kernel driver职能、管理部分MMIO、隐藏GPU底层细节，简化host和GPU的接口。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2037.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2038.png)
+
+host的多VM访问GPU，每个VM使用**GSP管理的vGPU**，分离kernel提供vGPU之间的隔离性。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2039.png)
+
+### NVIRV Cores for DLA
+
+DLA compiler将layer graph的node变为的kernel code，使用RV ISA是使用RV的编译器将kernel code编译成RV指令。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2040.png)
+
+RV32控制，RVV作向量计算，结合Conv等专用张量核组成RV SoC。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2041.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2042.png)
+
+## HW Ascend
+
+ref：**DaVinci: A Scalable Architecture for Neural Network Computing**
+
+ref：**Atlas AI Computing Platform**
+
+### AI Core和多线程并行
+
+Cube、Vector（SP）的AI Core，DSA的多层编译。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2049.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2050.png)
+
+硬件实现多线程并行，共享资源的线程之间串行（可**静态调度**），没有共享资源的线程之间同样静态调度，因此没必要增加硬件开销。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2051.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2052.png)
+
+软件编译生成静态多线程序列
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2053.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2054.png)
+
+task scheduler（**μ-controller**）将指令序列派发给AI Core。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2055.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2056.png)
+
+### Ascend SoC和3D IC
+
+AP SoC中，或许Little CPU作为NPU和GPU的μ-controller，类似Intel的iGPU。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2057.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2058.png)
+
+AI Infer SoC中A55 Task Scheduler（CPU Core）是AI-Core的μ-controller。
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2059.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2060.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2061.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2062.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2063.png)
+
+![image.png](meeting-26-01-09%EF%BC%88%E5%AE%9E%E9%AA%8C%E5%B9%B3%E5%8F%B0%E3%80%81length-adaptive%20TF%E3%80%81%E5%A4%9A%E4%BB%BB%E5%8A%A1%E3%80%81idea%E3%80%81/image%2064.png)
+
+### Da Vinci Core
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2043.png)
+
+计算：cube、vector、scalar
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2044.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2045.png)
+
+存储：IO buffer、Regs、Convention Unit（**img2col**、unzip、transpose）
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2046.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2047.png)
+
+控制：task块（tensor算子）同步、指令Prefetch、指令译码queue、指令执行queue。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2048.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2049.png)
+
+### Ascend 软件栈和推理流程
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2050.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2051.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2052.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2053.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2054.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2055.png)
+
+## RV-Arch SoC
+
+[https://riscv.org/blog/risc-v-ai-native/](https://riscv.org/blog/risc-v-ai-native/)
+
+[https://riscv.org/blog/design-approaches-and-architectures-of-risc-v-socs/](https://riscv.org/blog/design-approaches-and-architectures-of-risc-v-socs/)
+
+[https://riscv.org/blog/semidynamics/](https://riscv.org/blog/semidynamics/)
+
+### RV Architecture
+
+x-bit kernel、x-bit OS、x-bit CPU、x-bit SoC是指支持x-bit的地址空间，**每个x-bit（虚拟地址）编码一个字节/entry**。
+
+为了向后兼容，64-bit地址空间的**低32bit部分和32-bit地址空间一致**。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2056.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2057.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2058.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2059.png)
+
+x-bit虚拟地址经过MMU翻译成y-bit的内存物理地址，y>x说明**内存同时驻留多个进程的地址空间**，翻译模式记为Sv-y。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2060.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2061.png)
+
+### RV as AI platform
+
+RV ISA设计**模块化、可定制和标准化**，作为集成NPU、TPU、CiM和类脑计算等各种架构的**SoC** **ISA**。每种架构处理器被视为RV ISA的扩展。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2062.png)
+
+**RV SoC是可编程的异构AI SoC。**
+
+GPU是**CUDA SoC**，其中RV Cores支撑计算之外的**控制和管理功能**。
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2063.png)
+
+![image.png](%E5%A4%9A%E4%BB%BB%E5%8A%A1%E6%8A%A2%E5%8D%A0Preemption%EF%BC%88%E5%BC%82%E6%9E%84XPUs%E3%80%81Firmware%E3%80%81%CE%BC-controller%EF%BC%89/image%2064.png)

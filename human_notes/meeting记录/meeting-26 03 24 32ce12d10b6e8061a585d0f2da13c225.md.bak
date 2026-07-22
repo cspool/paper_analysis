@@ -1,0 +1,115 @@
+# meeting-26/03/24
+
+Hardware Compute Partitioning on NVIDIA GPUs for Composable Systems
+
+## 单应用的任务在GPU上的生命周期
+
+host定义负载
+
+device程序通过编译和驱动转为若干命令流**Stream（CudaStream）**。
+
+命令流包含内存、计算、图形命令，Stream存储在内存的**pushbuffer**区域，1个pushbuffer对应1个Stream，也称计算queue或图形queue（扩展到GTMD queue、QTMD和TMDQs）。
+
+GPU前端
+
+从pushbuffer中读取命令流Stream，Mem命令发给Mem模块、处理命令（**TMD**）发到TMU。
+
+TMU中硬件模块task group（**channel**）管理收到的TMD，一个channel对应1个Stream。HyperQ之前，只存在1个channel且没有TMU，一个channel被多个Stream共享（False Dependency）。
+
+TMU从task group中调度任务到WDU，WDU将grid TMD解包出CTA阵列、将queue TMD解包成CTA队列，派发**CTA**到GPC来完成TMD。
+
+GPC&SM执行、暂停、切换、完成CTA。
+
+WDU到SM的CTA调度，没有考虑运行时SM的资源使用进行调度，因此存在POD中的kernel优化。
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%202.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%205.png)
+
+![image.png](GPU%E7%9A%84%E6%8A%A2%E5%8D%A0Preemption%E5%92%8CTimeslice%EF%BC%88WFI%20drain%E3%80%81switch%EF%BC%89/image%2047.png)
+
+![image.png](meeting-26%2003%2024/a3242fa0-b890-4f2f-8e5c-93c80a3ebc8e.png)
+
+![image.png](nested%20grid%E3%80%81stream%E5%9C%A8GPU%E4%B8%8A%E6%89%A7%E8%A1%8C%EF%BC%88TG%E3%80%81CTA%E3%80%81nested%E3%80%81runtime%EF%BC%89/image%203.png)
+
+## GPU的多应用处理
+
+### channel分时 & 应用抢占
+
+TMU的**channel管理Stream**中的任务，一个Stream只能属于一个应用，因此**channel被应用独占**。
+
+将**channel分时**，每个时间片的channel属于一个应用的Stream，TO后下一个Stream抢占channel。让GPU轮流读取不同应用的pushbuffer（顺序为**runlist**），轮流抢占channel来管理自己的Stream。
+
+HyperQ中设置多个channel，每个**TSG占用的channel**视为一个整体，被下一个应用抢占或耗尽时被一起抢占。TSG按照时间划分资源，和任务执行的颗粒度不完全匹配。
+
+![image.png](meeting-26%2003%2024/image.png)
+
+![Screenshot from 2026-03-24 11-30-04.png](meeting-26%2003%2024/Screenshot_from_2026-03-24_11-30-04.png)
+
+![image.png](meeting-26%2003%2024/image%201.png)
+
+![image.png](meeting-26%2003%2024/image%202.png)
+
+### MPS
+
+HyperQ增加多个channel，可以管理多个Stream，MPS将多个应用的Stream打包，共享一个应用Ctx，被GPU视为一个应用运行。
+
+![image.png](meeting-26%2003%2024/image%203.png)
+
+![image.png](meeting-26%2003%2024/image%204.png)
+
+### MIG和vGPU
+
+MIG作物理划分，不同划分类型，每个MIG是一个独立GPU执行。
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2010.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2042.png)
+
+MIG超卖，分时Migration出多个vGPU。
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2043.png)
+
+![image.png](GPU%20Multi-Context%20Engine%EF%BC%88MPS%20MIG%E5%92%8CSME%E8%BD%AE%E8%BD%AC%E4%B8%8D%E5%90%8CStream%EF%BC%8C%E4%B8%8D%E5%90%8CS/image%2044.png)
+
+## GPU的架构优化
+
+1、TC相关的异步传输（不占用RF）和屏障来增加Overlap机会，多精度Engine，TMEM专属缓存，TMA硬件线程。
+
+2、动态并行（nested kernel/Stream）、安全性、特殊算法加速指令（DPX）。
+
+3、独立线程调度（SIMT）、Cache、Core等通用优化。
+
+4、block Cluster & GPC、DSMEM的新执行模型，比block&SM更大，更适配strong-scaling负载，CG API提供更大范围的线程同步，适配特殊应用。
+
+5、细粒度抢占（pixel、instr）、MIG&vGPU、MPS、Stream（nested）分别支撑多用户、多应用、多任务场景，隔离性不同。
+
+## Spatial Acc多任务特性
+
+极端能效，增加适当场景需求（安全、多任务、隔离）。
+
+单卡的架构设计，模拟器提供设计环境（芯片平台），测试负载（DiT）的运行指标。
+
+[https://github.com/PSAL-POSTECH/ONNXim](https://github.com/PSAL-POSTECH/ONNXim)
+
+[https://github.com/PSAL-POSTECH/PyTorchSim](https://github.com/PSAL-POSTECH/PyTorchSim)
+
+[https://github.com/UCSBarchlab/OpenTPU](https://github.com/UCSBarchlab/OpenTPU)
+
+POD希望SM按照Com-Int（P）+Mem-Int（D）的任务组合执行，但GPU没有类似接口，因此设计相同kernel而让SM执行时设置op（Com或者Mem），运行时绑定P和D到SM。
+
+FlashAttn增加SF和MMA的Overlap。
+
+架构定义了资源的划分方式，时间、空间，但不一定贴合负载。SIMT用线程作为负载（指令、数据、控制）的容器，设计异步、并发、datapath来加速。
+
+抢占是因为host指定但没有空闲资源（高优先级任务）、分时TO或任务耗尽（超卖短任务）。
+
+并发是资源划分给多任务来提高使用率，空间划分（多存储资源并发、多计算资源并行）。
+
+分时存在Ctx切换开销，分空存在资源开销，tradeoff。
+
+dataflow架构的通用性增加什么？决定实验背景，比如多任务对应负载流抢占。
+
+软件模拟、cuda-stream比较
+
+RV调度比PIM慢，成为bottle
