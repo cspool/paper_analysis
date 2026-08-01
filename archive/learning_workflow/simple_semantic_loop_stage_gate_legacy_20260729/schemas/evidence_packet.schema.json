@@ -1,0 +1,640 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:simple-semantic-loop:evidence_packet:v1",
+  "title": "EVIDENCE_PACKET",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "messageType": {
+      "type": "string",
+      "const": "EVIDENCE_PACKET"
+    },
+    "workflowId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taskId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "attemptId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stageId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stageContractHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "stateBinding": {
+      "type": "object",
+      "properties": {
+        "snapshotVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "canonicalRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eventCursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workflowPlanRevision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "snapshotVersion",
+        "canonicalRevision",
+        "eventCursor",
+        "workflowPlanRevision"
+      ],
+      "additionalProperties": false
+    },
+    "inputHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "packetId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "needId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "needRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "type": "string",
+          "const": "complete"
+        },
+        "searches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "searchId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "logicalQueryLevel": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2,
+                  3
+                ]
+              },
+              "dimension": {
+                "type": "string",
+                "enum": [
+                  "idea",
+                  "knowledge",
+                  "experiment",
+                  "human",
+                  "paper"
+                ]
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pathFilter": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The exact path filter token executed in query, including the path: prefix, for example path:idea_notes/."
+              },
+              "terms": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "term": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "task",
+                        "context"
+                      ]
+                    },
+                    "sourceRef": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "introducedAtSequence": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "term",
+                    "source",
+                    "sourceRef",
+                    "introducedAtSequence"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1
+              },
+              "page": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "cursorUsed": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nextCursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "toolCallIndex": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "pageHitCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cumulativeHitCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "hits",
+                  "no_hits",
+                  "insufficient_context"
+                ]
+              },
+              "stopReason": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "success_criteria_met",
+                      "next_level_required",
+                      "budget_exhausted",
+                      "topic_boundary",
+                      "no_more_pages"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "searchId",
+              "sequence",
+              "logicalQueryLevel",
+              "dimension",
+              "query",
+              "pathFilter",
+              "terms",
+              "page",
+              "cursorUsed",
+              "nextCursor",
+              "toolCallIndex",
+              "pageHitCount",
+              "cumulativeHitCount",
+              "outcome",
+              "stopReason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "hitsConsidered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "hitId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "searchId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "score": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sourceFamily": {
+                "type": "string",
+                "minLength": 1
+              },
+              "selected": {
+                "type": "boolean"
+              },
+              "selectionReason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "hitId",
+              "searchId",
+              "sequence",
+              "path",
+              "score",
+              "sourceFamily",
+              "selected",
+              "selectionReason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "contextsRead": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "contextId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "hitId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "document-map",
+                  "section",
+                  "content",
+                  "full"
+                ],
+                "description": "Ledger entry for one actual obsidian_get_note call. Include the document-map call and every subsequent content-bearing read as separate entries."
+              },
+              "heading": {
+                "type": "string"
+              },
+              "sectionTarget": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sourceUnitId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourceFamily": {
+                "type": "string",
+                "minLength": 1
+              },
+              "exactContext": {
+                "type": "string",
+                "minLength": 1
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "contextId",
+              "sequence",
+              "hitId",
+              "path",
+              "format",
+              "heading",
+              "sectionTarget",
+              "sourceUnitId",
+              "sourceFamily",
+              "exactContext",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "evidenceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "claimKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "claim": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidenceRole": {
+                "type": "string",
+                "enum": [
+                  "scenario",
+                  "baseline",
+                  "mechanism",
+                  "modification",
+                  "implementation",
+                  "measurement",
+                  "constraint",
+                  "counterexample",
+                  "human_prior"
+                ]
+              },
+              "directness": {
+                "type": "string",
+                "enum": [
+                  "direct",
+                  "inferred"
+                ]
+              },
+              "attribution": {
+                "type": "string",
+                "enum": [
+                  "source_report",
+                  "workflow_inference"
+                ]
+              },
+              "applicableConditions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "comparisonBaseline": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sourcePath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourceUnitId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourceFamily": {
+                "type": "string",
+                "minLength": 1
+              },
+              "heading": {
+                "type": "string"
+              },
+              "quoteOrExactContext": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "evidenceId",
+              "claimKey",
+              "claim",
+              "evidenceRole",
+              "directness",
+              "attribution",
+              "applicableConditions",
+              "comparisonBaseline",
+              "sourcePath",
+              "sourceUnitId",
+              "sourceFamily",
+              "heading",
+              "quoteOrExactContext"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "contradictions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "contradictionId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "findingIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "claim"
+                      },
+                      "claimKey": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "claimKey"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "object"
+                      },
+                      "objectRef": {
+                        "type": "object",
+                        "properties": {
+                          "objectType": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "objectId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 1
+                          }
+                        },
+                        "required": [
+                          "objectType",
+                          "objectId",
+                          "revision"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "objectRef"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "critical": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "contradictionId",
+              "findingIds",
+              "target",
+              "summary",
+              "critical"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "unanswered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "unansweredId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "successCriterion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "no_matching_source",
+                  "insufficient_context",
+                  "budget_exhausted",
+                  "topic_boundary"
+                ]
+              },
+              "attemptedSearchIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "unansweredId",
+              "successCriterion",
+              "reason",
+              "attemptedSearchIds"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "conclusion": {
+          "type": "string",
+          "enum": [
+            "answered",
+            "partial",
+            "not_found"
+          ]
+        },
+        "conclusionRationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "packetId",
+        "needId",
+        "needRevision",
+        "status",
+        "searches",
+        "hitsConsidered",
+        "contextsRead",
+        "findings",
+        "contradictions",
+        "unanswered",
+        "conclusion",
+        "conclusionRationale"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "messageType",
+    "workflowId",
+    "runId",
+    "taskId",
+    "attemptId",
+    "stageId",
+    "stageContractHash",
+    "stateBinding",
+    "inputHash",
+    "payload"
+  ],
+  "additionalProperties": false
+}

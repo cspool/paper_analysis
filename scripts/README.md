@@ -1,12 +1,12 @@
 # scripts 使用说明
 
-本目录包含论文下载、PDF 转 Markdown、论文分析、笔记拆分、学习调度和 Idea Review 编排脚本。
+本目录包含论文下载、PDF 转 Markdown、论文分析、笔记拆分、学习工作流和 Idea Review 编排脚本。
 
 建议先区分三类操作：
 
 - **纯本地处理**：`paper_mdsplit_batch.py`、`repo_mdsplit_batch.py`、`monitor_progress.sh`。
 - **联网或模型处理**：`paper_download.py`、`pdf_to_md.py`。
-- **会启动付费 Agent**：`run_all_papers*.py`、`learning_scheduler.ts`、`idea_review_orchestrator.ts`。
+- **会启动付费 Agent**：`run_all_papers*.py`、`simple_semantic_loop.ts`、`learning_scheduler.ts`、`idea_review_orchestrator.ts`。
 
 ## 正式目录约定
 
@@ -59,11 +59,36 @@
 | `run_all_papers_multi_launch.py` | 并行运行 effAttn、rtrans_ssm、video_image 等硬编码配置 | 脚本内 `CONFIGS` | 多组 repo 与进度文件 |
 | `run_all_papers_multi_launch_2nd_process.py` | 并行运行 MoE、多模态 kernel 等第二组硬编码配置 | 脚本内 `CONFIGS` | 多组 repo 与进度文件 |
 | `repo_mdsplit_batch.py` | 将汇总 repo 按 `##` 标题拆成独立笔记 | `experiment_repo/idea_repo/knowledge_repo` | experiment/idea/knowledge notes |
+| `simple_semantic_loop.ts` | 当前 Learning Workflow format v7：最小核心字段 gate 的确定性文件型 Controller 编排 Decision、Worker、Reviewer 三类 fresh Turn，并保存不可变 Decision/Worker 快照、轮次授权、流式现场、外循环观察和显式 runtime recovery | topic、objective、acceptance criteria | G01/T01/D01/W01/R01/E01、完整 Agent 结果、core control 投影、Context snapshots、trajectory/memory/checkpoint、合并 delta、授权/recovery 审计和 `final/report.md` |
 | `learning_scheduler.ts` | 四阶段学习调度：问题、回答、横向总结、纵向总结 | 自然语言研究问题 | `learning_outputs` run |
 | `monitor_progress.sh` | 只读显示 learning scheduler 进度 | learning run 目录 | 终端进度面板 |
 | `idea_review_orchestrator.ts` | QA/AA 双会话盲评 Idea | Idea note 路径或论文标题 | review、运行日志与 checkpoint |
 | `idea_review_orchestrator.test.ts` | Idea Review marker/protocol 单元测试 | 无 | 测试结果 |
 | `tmp_titles.md` | 单标题下载测试输入，不是可执行脚本 | 一行或多行论文标题 | 供 `paper_download.py --file` 使用 |
+
+## Learning Workflow 状态
+
+- **当前 Codex 工作流**：`simple_semantic_loop.ts` 与
+  `simple_semantic_loop/`，通信以
+  `workflow_goal.json`、`turn_task.json`、`decision_context.json` 和
+  W01/R01/E01 为边界。完整使用说明见
+  [Simple Semantic Loop README](simple_semantic_loop/README.md)。
+  `maxRounds` 是初始授权窗口；耗尽时会保存已准备好的下一 Round 并返回
+  `PAUSED`。使用 `resume --additional-rounds N` 可一次授权多轮，省略 N 时默认
+  再授权初始 `maxRounds` 轮。
+  修改前的正式 v6 运行与实现快照保存在
+  [official_runs/multimodal_inference_latency_first_v6_20260801_round12](../archive/learning_workflow/official_runs/multimodal_inference_latency_first_v6_20260801_round12/OFFICIAL_SNAPSHOT.md)。
+- **已退役工作流**：旧四角色 SQLite/Stage/Gate Simple Semantic Loop、旧
+  Codex 入口、模块、测试、旧 Skill，以及更早的
+  standalone Layered Exploration Python workflow 和单体 Skill，均已统一
+  迁入 `archive/learning_workflow/`；`scripts/` 和活动 Skill 目录不再保留
+  这些入口。
+- **更早的 legacy/provenance 工作流**：`learning_scheduler.ts` 与配套的
+  `monitor_progress.sh`。它们是 Claude 四阶段实现，仍保留独立命令说明，但不
+  参与当前 Simple Semantic Loop。
+
+旧版 Codex 工作流的设计、Skill 和运行时归档索引见
+[archive/learning_workflow/README.md](../archive/learning_workflow/README.md)。
 
 ## 环境检查
 
@@ -549,7 +574,7 @@ python3 scripts/repo_mdsplit_batch.py \
 - `run_all_papers.py --dry-run`：只选中 1 篇论文，所有注入路径均指向 temp，未启动 Claude，未写 `progress.json`。
 - `repo_mdsplit_batch.py`：处理 3 个 repo 汇总文件，拆出 4 条独立笔记。
 
-## Learning Scheduler
+## Legacy Learning Scheduler（独立保留）
 
 启动新的四阶段学习任务：
 

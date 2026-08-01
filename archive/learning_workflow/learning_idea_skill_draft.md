@@ -1,5 +1,7 @@
 # 三类 Agent 的编写与协作模式
 
+> 归档状态：旧版 Learning Skill/Agent 协作草案，仅供设计追溯。
+
 本文基于以下现有实现整理可复用的脚本与 skill 编写经验：
 
 - `scripts/learning_scheduler.ts` 与 Question、Answer、Horizon Summary、Vertical Summary skills：通过四阶段任务图批量生成、调度和验收一次性子 Agent
