@@ -8,6 +8,9 @@
 - [旧版 Learning Workflow](learning_workflow/README.md)：Simple Semantic
   Loop 之前的设计文档、旧 Skill、standalone Layered Exploration Python
   workflow、旧 `codex_learning_workflow` 运行时和测试，以及正式运行审计快照。
+- [Codex Skills 迁移审计（2026-07-24）](codex_skills_migration_audit_20260724.md)：
+  保留当日 Skill 环境、版本与跨机迁移步骤的历史记录；其中的数量、
+  路径和提交号不代表当前状态。
 
 ## 当前实现
 
