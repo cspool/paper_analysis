@@ -1,6 +1,6 @@
 # Simple Semantic Loop 使用说明
 
-当前实现采用 format version 7，通信契约由以下设计统一定义：
+当前实现采用 format version 8，通信契约由以下设计统一定义：
 
 - [`03_script_agent_message_and_storage_contract_design.md`](../../draft/learning_workflow_scheduler_agent_refactor_plans/03_script_agent_message_and_storage_contract_design.md)
 - [`04_script_agent_json_communication_contract_inventory.md`](../../draft/learning_workflow_scheduler_agent_refactor_plans/04_script_agent_json_communication_contract_inventory.md)
@@ -8,17 +8,20 @@
 - [`06_outer_loop_memory_trajectory_and_atomic_direction_design.md`](../../draft/learning_workflow_scheduler_agent_refactor_plans/06_outer_loop_memory_trajectory_and_atomic_direction_design.md)
 - [`07_frozen_decision_snapshots_semantic_convergence_and_runtime_delta_dedup_design.md`](../../draft/learning_workflow_scheduler_agent_refactor_plans/07_frozen_decision_snapshots_semantic_convergence_and_runtime_delta_dedup_design.md)
 - [`08_official_snapshot_round_lease_convergence_probe_and_delta_batching_design.md`](../../draft/learning_workflow_scheduler_agent_refactor_plans/08_official_snapshot_round_lease_convergence_probe_and_delta_batching_design.md)
+- [`09_concrete_6l_semantics_and_reviewer_value_integration_design.md`](../../draft/learning_workflow_scheduler_agent_refactor_plans/09_concrete_6l_semantics_and_reviewer_value_integration_design.md)
+- [`10_mechanism_family_negative_experiment_convergence_and_worker_feedback_design.md`](../../draft/learning_workflow_scheduler_agent_refactor_plans/10_mechanism_family_negative_experiment_convergence_and_worker_feedback_design.md)
 
 ## 架构
 
 Controller 是没有业务智能的持久状态机。Decision、Worker、Reviewer 都是
-fresh one-turn Agent：
+fresh one-turn Agent；EXP Goal 是仅由 Decision 按需选择的持久 Goal：
 
 | Agent | effort | 唯一职责 |
 |---|---:|---|
 | Decision | `max` | 读取目标、待决结论、压缩记忆、轨迹和分支后果，执行全局外循环并选择一个允许分支 |
 | Worker | `high` | 创建或深化一个 Anchor/Direction，返回最小充分的 W01 |
 | Reviewer | `high` | 独立审阅一个 W01、记录对象局部 query gaps，返回 R01 |
+| EXP Goal | `high` | 围绕冻结 Anchor、可选 Direction 和有界实验目标，迭代环境、代码、测量和诊断；返回自然语言实验结论 |
 
 正常 Loop：
 
@@ -31,14 +34,22 @@ RUN_WORKER
 
 RUN_REVIEWER
   → commit pending
-  → Reviewer → commit current R01
-  → Worker → Reviewer → Decision
+  → ordinary: Reviewer → commit current R01 → Worker → Reviewer → Decision
+  → unreviewed EXP: POST_EXP_REVIEWER → commit EXP review → Decision
+  → converged negative Direction: parent Anchor reassessment → Decision
 
 FINISH_WORKFLOW
   → commit pending
   → mechanical requirement check
   → deterministic report
   → END
+
+RUN_EXP_GOAL
+  → commit pending
+  → persistent EXP Goal
+  → fresh Decision
+  → Script 只允许 RUN_REVIEWER，原子审阅该 EXP
+  → fresh Decision 再决定 Worker、父 Anchor 复审、其他 EXP 或完成
 ```
 
 语义重试：
@@ -63,6 +74,11 @@ Worker 和 Reviewer 可在读取实际 Topic、Task 和对象后独立选择 0�
 领域专家 Skill；没有紧密匹配时使用 0 个。Decision 不加载领域专家 Skill。
 专家 Skill 只增强方法，不是当前结论的证据。
 
+Reviewer 还固定读取 Topic-neutral 的
+`optimization_value_questions_v1.md`，依次检查性能 baseline/headroom、最近方法
+baseline 与 Direction 差异，以及方向有效后的参考实验/环境复用。它不是可选
+领域 Skill，也不是证据或机械评分表。
+
 ## 运行前检查
 
 联网检查 Provider、模型 effort 和 Skill：
@@ -86,7 +102,11 @@ node scripts/simple_semantic_loop.ts doctor --no-provider
 多模态推理加速，优先优化延迟，保证较高吞吐
 ```
 
-为 format version 7 使用一个新的 work directory：
+为 format version 8 使用一个新的 work directory。以下示例授权最多五次按需
+EXP Goal；`--max-exp-goals` 的默认值也是 `5`。EXP 的默认 idle timeout 是
+900000 ms，即连续 15 分钟没有有意义的 Agent/tool/Goal 状态或 usage 活动才暂停，
+不是总运行时长。EXP 不设置 Codex Goal token budget；它由实验次数、无进展超时
+和 hard timeout 约束：
 
 ```bash
 node scripts/simple_semantic_loop.ts init \
@@ -95,12 +115,15 @@ node scripts/simple_semantic_loop.ts init \
   --acceptance 'Topic 的 6L 空间由未被拒绝的 Anchor 集合动态定义。' \
   --acceptance '每个最终 Anchor 和 Direction 都必须获得独立 Reviewer PASS。' \
   --acceptance '每个最终 Anchor 至少有一个 Direction；Direction 必须明确 baseline change、机制、预期影响、权衡、失败条件和测量计划。' \
-  --acceptance '需要新实验的内容只形成测量计划，不执行实验。' \
+  --acceptance '普通 Worker 和 Reviewer 不执行新实验；只有 Decision 选择且 Script 授权的 EXP Goal 可以执行有界实验，结果回到 Decision。' \
   --max-rounds 8 \
+  --max-exp-goals 5 \
   --idle-timeout-ms 300000 \
   --hard-timeout-ms 900000 \
   --interrupt-grace-ms 15000 \
-  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v7
+  --exp-idle-timeout-ms 900000 \
+  --exp-hard-timeout-ms 21600000 \
+  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v8
 ```
 
 `init` 写入：
@@ -118,14 +141,14 @@ node scripts/simple_semantic_loop.ts init \
 
 ```bash
 node scripts/simple_semantic_loop.ts run \
-  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v7
+  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v8
 ```
 
 给予 fresh Agent Turn 完整文件系统权限：
 
 ```bash
 node scripts/simple_semantic_loop.ts run --yolo \
-  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v7
+  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v8
 ```
 
 两种模式都固定：
@@ -167,7 +190,7 @@ Provider 只有在整个 Turn 恰好一个非空 phase-unknown 消息时才兼�
 
 ## Agent 通信
 
-Agent 可见 JSON 只有：
+普通 fresh Turn 可见的通信 JSON 只有：
 
 ```text
 G01  workflow_goal.json
@@ -178,13 +201,20 @@ R01  REVIEW_RESULT
 E01  output_error_report.json
 ```
 
+EXP Goal 另读取 Script 冻结的 `experiment_goal_task.json`，并在自己的
+`workspaceRef` 中保存代码、环境、日志和测量。它输出自然语言结论；实验记录和
+Result JSON 由 Script 生成，不要求 Goal Agent 回显 Controller 字段。
+
 调用者接收 O01。Turn、Object、Round、Event、Runtime、TaskBinding 和
 ValidationAudit 都是 Controller 内部记录。
 
-D01 只包含一个 `observationRef`。format v7 的每个 Context 固定包含
+D01 通过一个 `observationRef` 连接冻结观察，并包含可选
+`experimentContext`（当前 Anchor、可选 Direction、同一 Anchor 的既有实验结果
+Refs）。format v8 的每个 Context 固定包含
 `decision_context.json`、`decision_observation.json`、
-`research_memory_snapshot.json` 和 `progress_trajectory_snapshot.jsonl`；
-observation 的两个 Ref 只指向同目录快照。runtime retry 和 output correction
+`research_memory_snapshot.json`、`progress_trajectory_snapshot.jsonl` 和
+`negative_experiment_history_snapshot.json`；observation 的三个 Ref 只指向
+同目录快照。runtime retry 和 output correction
 复用整个 Context，后续轮次与 `checkpoint` 都不能改写这些历史输入。
 `observations/research_memory.json` 和全局 trajectory 仅供 status、checkpoint
 和人类查看。原始 W01/R01 仍是语义权威，Worker/Reviewer 的 T01 不内联这些
@@ -197,6 +227,17 @@ compact research-memory 快照。Worker 用它比较已接受对象、待修订�
 
 修订对象的 Reviewer T01 可额外包含 `inputs.previousReview`。它只帮助 Reviewer
 确认上一轮 correction boundary；当前 `reviewTarget` 始终是唯一审阅对象。
+
+当存在尚未整合且仍绑定当前对象 revision 的 EXP Goal Result 时，Worker T01 可
+额外包含 `inputs.experimentResults`。Script 只匹配父对象引用；Worker 负责解释
+支持、不支持、收窄或不确定的实验语义，Reviewer 再独立审阅。
+
+Worker 和 Reviewer T01 还包含 Script 生成的
+`inputs.negativeExperimentHistoryRef`。它按当前 Anchor 列出已完成 EXP 数量，
+以及只有在独立 Reviewer `REJECT` 后才进入的负 EXP/Review Ref；`budgetLimited`、
+授权、下载和无有效测量的环境失败不会被 Script 计作负机制证据。该索引没有
+`familyId` 或关闭结论。Decision、Worker、Reviewer 依据 baseline change、causal
+lever 和 preserved boundary 做语义分组；Script 只保存、索引和注入。
 
 Worker/Reviewer Prompt：
 
@@ -227,6 +268,27 @@ guidance = 关注当前结论尚未覆盖的性能机制，不改变 Script 绑�
 Script 只提取唯一且在本次允许集合内的 Decision 字段。guidance 是完全不透明
 的可选文本：Script 原样保存并转发，不要求其中出现 Ref，也不用它选择
 create/deepen、对象类型、目标或审阅角度。
+
+当 `decision = RUN_EXP_GOAL` 时，`guidance` 是唯一例外：必须非空，并原样成为
+有界 experiment objective。Script 仍不检查其专业充分性，也不从 query gap 自动
+生成实验。是否实验由 Decision 判断；机械预算由 `--max-exp-goals` 和
+EXP 的 idle/hard timeout 控制。Controller 向 Codex 明确发送
+`tokenBudget: null`，不会因累计 token 数在环境部署或测量中途终止 Goal。
+
+Reviewer 把论文、笔记和参考实现中的性能数字视为“来源报告的候选 gap”，而不是
+当前环境已经观察到的事实。若主要优化价值依赖该 gap，且一个有界 trace、profile、
+microbenchmark、最小复现或单一 ablation 就能改变 Direction 是否成立，Reviewer
+应返回 `REVISE`，配对一个 `BLOCKING` finding 与一个
+`queryGap.dimension="experiment"`。Decision 看到该语义信号后优先比较
+`RUN_EXP_GOAL` 与继续纸面深挖；Script 不解析这些语义。EXP 结果返回 Decision，
+随后先走 `POST_EXP_REVIEWER → Decision`，不会自动产生替代 Worker。
+
+默认语义收敛策略是：第一次可信负结果关闭当前 Direction；第二次同族负结果
+默认关闭当前边界下的机制族；只有改变已失败因果假设且有独立证据时允许一次重开，
+重开再失败后不再启动相邻变体。这个判断由 Reviewer 和 Decision 完成，不是 Script
+按次数或关键词执行的 Gate。负机制导致 Anchor 无可支持 Direction 时，Decision
+可选择父 Anchor 复审；Reviewer 可以让它退出 active 集合，机械 requirement 不再
+强迫 Worker 无限制造替代 Direction。
 
 ## 不可信输出与重试
 
@@ -306,7 +368,8 @@ RUNTIME_FAILED
 │   ├── decision_context.json
 │   ├── decision_observation.json
 │   ├── research_memory_snapshot.json
-│   └── progress_trajectory_snapshot.jsonl
+│   ├── progress_trajectory_snapshot.jsonl
+│   └── negative_experiment_history_snapshot.json
 ├── turns/<turn-id>/
 │   ├── turn.json
 │   ├── prompt.txt
@@ -324,8 +387,17 @@ RUNTIME_FAILED
 ├── observations/
 │   ├── progress_trajectory.jsonl
 │   ├── research_memory.json
+│   ├── negative_experiment_index.json
 │   └── checkpoints/
 ├── recoveries/
+├── experiments/<experiment-id>/
+│   ├── experiment.json
+│   ├── experiment_goal_task.json
+│   ├── prompt.txt
+│   ├── runtime.jsonl
+│   ├── final_output.md           # Goal 有自然语言终态结论时
+│   ├── result.json               # Script 生成的不可变结果
+│   └── workspace/                # 环境、代码、日志、原始测量和分析
 └── final/
     ├── report.md
     ├── manifest.json
@@ -345,10 +417,71 @@ RUNTIME_FAILED
 最后等待 grace。自动 runtime retry 的 Prompt 只附加旧 Turn、失败类型与 partial
 Ref；它明确要求从头返回完整精简结果，不续写半截 JSON。
 
-format version 7 Controller 不运行、恢复、checkpoint、pause 或 cancel v5/v6
-目录。`status`、`events`、`validate` 和已有最终报告读取仍可用于只读审计；v6
+`--idle-timeout-ms`、`--hard-timeout-ms` 和 `--interrupt-grace-ms` 只覆盖
+Decision、Worker、Reviewer；它们不会再误改 EXP Goal。EXP 使用独立参数
+`--exp-idle-timeout-ms`、`--exp-hard-timeout-ms` 和
+`--exp-interrupt-grace-ms`。默认 EXP idle 为 15 分钟无进展，hard cap 为 6 小时。
+不再提供 `--exp-goal-token-budget`。旧 format version 8 Run 中已有的正整数
+`experimentGoalTokenBudget` 仅作为历史配置保留，当前 Controller 不再将它发送给
+Codex，恢复后的 EXP 同样按无 token budget 运行。
+
+format version 8 Controller 不运行、恢复、checkpoint、pause 或 cancel v5/v6/v7
+目录。`status`、`events`、`validate` 和已有最终报告读取仍可用于只读审计；旧版
 仍按其冻结 Decision 快照规则校验，任何旧目录都不会被原地迁移或重解释。需要
-继续研究时初始化新的 v7 work directory。
+继续旧版本研究时初始化新的 v8 work directory。
+
+### 从已完成的 v8 结果继续
+
+不要修改或恢复已经 `FINISHED` 的正式目录。`continue` 会把完整历史、canonical
+Anchor/Direction、观察与已通过结果复制到一个新目录，把旧 run/state/final 快照
+保存在 `continuation/<source-run-id>/`，然后从一个新的 Decision 节点开始：
+
+```bash
+node scripts/simple_semantic_loop.ts continue \
+  --from-work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v8_20260802 \
+  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v8_exp_continue_20260803 \
+  --max-rounds 6 \
+  --max-exp-goals 5 \
+  --idle-timeout-ms 300000 \
+  --hard-timeout-ms 900000 \
+  --exp-idle-timeout-ms 900000 \
+  --exp-hard-timeout-ms 21600000
+
+node scripts/simple_semantic_loop.ts validate \
+  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v8_exp_continue_20260803
+
+node scripts/simple_semantic_loop.ts run --yolo \
+  --work-dir /data3/paper_analysis/learning_outputs_codex/multimodal_inference_latency_first_v8_exp_continue_20260803
+```
+
+源目录不会被写入。若源运行没有历史 EXP，`--max-exp-goals 5` 提供五次机会；若源
+运行已有 EXP，该值是新分支中包含历史记录后的总上限。默认实验上下文是最新的未被
+拒绝 Direction；Decision 仍依据完整结果和 Reviewer 结论决定是否真正启动 EXP。
+
+### 从稳定的 PAUSED 进展分支并重置授权
+
+当旧分支已经保存有价值进展，但轮次或 EXP 授权窗口耗尽时，不要修改旧目录。
+`continue --reset-budgets` 接受没有 active Turn、active EXP、pending pair 或输出
+纠错的稳定 `PAUSED` source，复制全部历史和 canonical 对象，然后从新的 Decision
+轮次开始。历史 EXP 继续可见，但 `--max-exp-goals` 成为新分支的额外授权，不再被
+复制记录占用：
+
+```bash
+node scripts/simple_semantic_loop.ts continue \
+  --reset-budgets \
+  --from-work-dir <paused-source-run> \
+  --work-dir <new-run> \
+  --max-rounds 8 \
+  --max-exp-goals 5 \
+  --idle-timeout-ms 300000 \
+  --hard-timeout-ms 900000 \
+  --exp-idle-timeout-ms 900000 \
+  --exp-hard-timeout-ms 21600000
+```
+
+来源 `run.json`、`state.json` 和已有 final 文件（若存在）保存在
+`continuation/<source-run-id>/`。新 `run.json` 记录 source lifecycle、复制 EXP
+数量和 `budgetReset=true`；验证时区分历史 EXP 与本分支实际消耗的授权。
 
 `maxRounds` 是初始化时的首批授权轮数，不是永久总上限。授权耗尽时，Controller
 先建立下一 Round 和固定序列，再以
@@ -383,6 +516,7 @@ node scripts/simple_semantic_loop.ts recover-runtime --yolo \
 
 ```bash
 node scripts/simple_semantic_loop.ts status --work-dir <run-dir>
+node scripts/simple_semantic_loop.ts continue --from-work-dir <source-run> --work-dir <new-run> [--reset-budgets]
 node scripts/simple_semantic_loop.ts events --work-dir <run-dir>
 node scripts/simple_semantic_loop.ts events --json --work-dir <run-dir>
 node scripts/simple_semantic_loop.ts validate --work-dir <run-dir>
@@ -411,6 +545,9 @@ node --test scripts/simple_semantic_loop/tests/*.test.ts
 覆盖：
 
 - 两条正常 Decision 分支；
+- Decision → EXP Goal → Decision → POST_EXP_REVIEWER → Decision；
+- Reviewer 确认后的负 EXP 索引、同 Anchor 注入和父 Anchor 复审预览；
+- PAUSED source 的不可变继承与新轮次/EXP 授权重置；
 - Anchor/Direction requirement 闭合；
 - Decision 行协议；
 - W01/R01 最小核心字段 gate；
@@ -428,7 +565,7 @@ node --test scripts/simple_semantic_loop/tests/*.test.ts
 - Context-local memory/trajectory 快照、write-once、revision/tail 对齐与
   checkpoint 后字节不变；
 - Reviewer 修订任务的 `previousReview` correction boundary；
-- v5/v6 只读审计兼容；
+- v5/v6/v7 只读审计兼容；
 - 一次 resume 的多轮授权、不可变授权记录和显式 pause kind；
 - 带冻结 research memory 的有界 Anchor 收敛探测；
 - runtime budget 用尽后的显式、幂等 recovery；

@@ -1,6 +1,7 @@
 import {
   buildContentPrompt,
   buildDecisionPrompt,
+  buildExperimentGoalPrompt,
   type OutputCorrectionPrompt,
   type RuntimeRetryPrompt,
 } from "./prompts.ts";
@@ -25,10 +26,15 @@ import { FileLoopStore } from "./store.ts";
 import type {
   DecisionProtocolResult,
   CoreControlProjection,
+  DecisionContext,
+  ExperimentGoalRecord,
+  ExperimentGoalResult,
+  ExperimentGoalTask,
   LoopRole,
   OutputError,
   OutputErrorReport,
   RawTurnResult,
+  RawGoalResult,
   RoundAuthorizationRecord,
   RuntimePersistenceEvent,
   RuntimeToolEvent,
@@ -48,12 +54,16 @@ import type { TurnRuntime } from "./types.ts";
 import { CURRENT_FORMAT_VERSION } from "./types.ts";
 import {
   allowedDecisions,
+  bindLatestExperimentAnchorReview,
+  bindLatestExperimentReview,
   commitPending,
   commitPreReview,
   computeRemainingRequirements,
   createDecisionContext,
   createReviewerBinding,
   createWorkerBinding,
+  experimentContextProjection,
+  reviewerModeForDecision,
   sequenceAfterDecision,
 } from "./workflow.ts";
 
@@ -141,6 +151,8 @@ export class RefactoredSemanticLoopController {
             state = await this.executeWorker(state, step);
           } else if (step.role === "REVIEWER") {
             state = await this.executeReviewer(state, step);
+          } else if (step.role === "EXP_GOAL") {
+            state = await this.executeExperimentGoal(state, step);
           } else {
             state = await this.executeDecision(state);
           }
@@ -156,6 +168,169 @@ export class RefactoredSemanticLoopController {
       await this.runtime.close?.();
       this.store.releaseLock();
     }
+  }
+
+  private async executeExperimentGoal(
+    state: StateFile,
+    step: SequenceStep,
+  ): Promise<StateFile> {
+    if (!step.bindingRef) {
+      throw new Error("EXP_GOAL sequence step lacks an experiment binding");
+    }
+    const experimentRef = step.bindingRef;
+    let record = this.store.readExperiment(experimentRef);
+    const task = this.store.readJson<ExperimentGoalTask>(record.taskRef);
+    if (record.goalStatus === "complete" && this.store.exists(record.resultRef)) {
+      return this.completeExperimentStep(state, experimentRef, record.resultRef);
+    }
+    record = {
+      ...record,
+      goalStatus: "active",
+      startedAt: record.startedAt ?? new Date().toISOString(),
+      error: null,
+    };
+    this.store.writeJson(experimentRef, record);
+    state = this.saveState(
+      {
+        ...state,
+        activeExperimentRef: experimentRef,
+      },
+      "EXP_GOAL_STARTED",
+    );
+    const run = this.store.readRun();
+    let raw: RawGoalResult;
+    try {
+      if (!this.runtime.runGoal) {
+        throw new Error("configured Runtime does not support persistent EXP Goals");
+      }
+      raw = await this.runtime.runGoal({
+        experimentId: record.experimentId,
+        prompt: this.store.readText(record.promptRef),
+        objective:
+          `执行冻结 EXP Goal 任务 ${this.store.absolute(record.taskRef)}，` +
+          "持续工作直到其中 experimentObjective 得到证据化终态结论。",
+        cwd: run.projectRoot,
+        model: run.model,
+        effort: "high",
+        // EXP Goals are bounded by count, progress-sensitive idle timeout, and
+        // hard timeout. A token budget would terminate useful environment and
+        // measurement work mid-Goal, so explicitly clear it in Codex.
+        tokenBudget: null,
+        timeoutProfile: run.budgets.timeoutProfiles.EXP_GOAL,
+        resumeThreadId: record.providerThreadId,
+        onRuntimeEvent: (event) => {
+          this.store.appendJsonLine(record.runtimeRef, event);
+          if (event.type === "goal_provider_started") {
+            this.store.writeJson(experimentRef, {
+              ...this.store.readExperiment(experimentRef),
+              providerThreadId: event.threadId,
+            });
+          }
+          if (event.type === "goal_turn_started") {
+            const current = this.store.readExperiment(experimentRef);
+            this.store.writeJson(experimentRef, {
+              ...current,
+              providerTurnIds: current.providerTurnIds.includes(
+                  event.providerTurnId,
+                )
+                ? current.providerTurnIds
+                : [...current.providerTurnIds, event.providerTurnId],
+            });
+          }
+        },
+      });
+    } catch (error) {
+      const current = this.store.readExperiment(experimentRef);
+      raw = {
+        goalStatus: "runtimeFailed",
+        finalText: "",
+        providerThreadId: current.providerThreadId,
+        providerTurnIds: current.providerTurnIds,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        failureKind: "PROVIDER_ERROR",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    const finalOutputRef = raw.finalText.trim()
+      ? `experiments/${record.experimentId}/final_output.md`
+      : null;
+    if (finalOutputRef) {
+      this.store.writeImmutableText(finalOutputRef, `${raw.finalText.trim()}\n`);
+    }
+    const result: ExperimentGoalResult = {
+      experimentId: record.experimentId,
+      anchorWork: task.anchorWork,
+      directionWork: task.directionWork,
+      experimentObjective: task.experimentObjective,
+      goalStatus: raw.goalStatus,
+      conclusionRef: finalOutputRef,
+      workspaceRef: task.workspaceRef,
+      providerThreadId: raw.providerThreadId,
+      providerTurnIds: raw.providerTurnIds,
+      tokensUsed: raw.tokensUsed,
+      timeUsedSeconds: raw.timeUsedSeconds,
+      error: raw.error,
+    };
+    this.store.writeImmutableJson(record.resultRef, result);
+    this.store.writeJson(experimentRef, {
+      ...this.store.readExperiment(experimentRef),
+      providerThreadId: raw.providerThreadId,
+      providerTurnIds: raw.providerTurnIds,
+      goalStatus: raw.goalStatus,
+      completedAt: new Date().toISOString(),
+      finalOutputRef,
+      integrationTaskRef: null,
+      error: raw.error,
+    } satisfies ExperimentGoalRecord);
+    this.store.appendEvent("EXP_GOAL_RESULT_RECORDED", [
+      experimentRef,
+      record.resultRef,
+      ...(finalOutputRef ? [finalOutputRef] : []),
+    ]);
+    rebuildResearchMemory(this.store, state);
+
+    const advanced = this.completeExperimentStep(
+      state,
+      experimentRef,
+      record.resultRef,
+    );
+    if (raw.goalStatus === "complete") return advanced;
+    const paused = this.pauseState(
+      advanced,
+      `EXP Goal ${record.experimentId} ended with ${raw.goalStatus}; resume enters Decision with the recorded result`,
+      "EXP_GOAL_PAUSED",
+    );
+    writeCheckpoint(
+      this.store,
+      paused,
+      paused.reason ?? `EXP Goal ${record.experimentId} paused`,
+    );
+    return paused;
+  }
+
+  private completeExperimentStep(
+    state: StateFile,
+    experimentRef: string,
+    resultRef: string,
+  ): StateFile {
+    const [head, ...tail] = state.sequence;
+    if (head?.role !== "EXP_GOAL" || head.bindingRef !== experimentRef) {
+      throw new Error("EXP Goal completion does not match the sequence head");
+    }
+    const next = this.saveState(
+      {
+        ...state,
+        sequence: tail,
+        node: tail[0]?.role ?? null,
+        activeExperimentRef: null,
+        latestExperimentResultRef: resultRef,
+      },
+      "EXP_GOAL_RETURNED_TO_DECISION",
+    );
+    rebuildResearchMemory(this.store, next);
+    return next;
   }
 
   private async executeWorker(
@@ -215,10 +390,17 @@ export class RefactoredSemanticLoopController {
   ): Promise<StateFile> {
     let bindingRef = step.bindingRef;
     if (!bindingRef) {
+      const reviewerMode = step.mode === "POST_EXP_REVIEW"
+        ? "POST_EXP_REVIEW"
+        : step.mode === "ANCHOR_REASSESS"
+        ? "ANCHOR_REASSESS"
+        : step.mode === "PRE_REVIEW"
+        ? "PRE_REVIEW"
+        : "PAIR_REVIEW";
       const created = createReviewerBinding(
         this.store,
         state,
-        step.mode === "PRE_REVIEW" ? "PRE_REVIEW" : "PAIR_REVIEW",
+        reviewerMode,
       );
       bindingRef = created.bindingRef;
       state = this.bindHeadStep(state, bindingRef);
@@ -239,9 +421,13 @@ export class RefactoredSemanticLoopController {
     const task = this.store.readJson<{
       inputs: { reviewTarget?: string };
     }>(success.binding.taskRef);
-    if (step.mode === "PRE_REVIEW") {
+    if (
+      step.mode === "PRE_REVIEW" ||
+      step.mode === "POST_EXP_REVIEW" ||
+      step.mode === "ANCHOR_REASSESS"
+    ) {
       const workRef = task.inputs.reviewTarget;
-      if (!workRef) throw new Error("PRE_REVIEW task lacks reviewTarget");
+      if (!workRef) throw new Error(`${step.mode} task lacks reviewTarget`);
       commitPreReview(
         this.store,
         success.binding,
@@ -249,8 +435,37 @@ export class RefactoredSemanticLoopController {
         success.resultRef,
         success.control.reviewVerdict,
       );
+      if (step.mode === "POST_EXP_REVIEW") {
+        bindLatestExperimentReview(
+          this.store,
+          state,
+          success.binding,
+          success.resultRef,
+        );
+      } else if (step.mode === "ANCHOR_REASSESS") {
+        bindLatestExperimentAnchorReview(
+          this.store,
+          state,
+          success.binding,
+          success.resultRef,
+        );
+      }
       rebuildResearchMemory(this.store, state);
       this.setTurnState(success.turnRef, "COMMITTED");
+      const preReview = step.mode === "PRE_REVIEW"
+        ? {
+          objectKind: success.binding.objectKind,
+          objectId: success.binding.objectId,
+          revision: success.binding.revision,
+          parentAnchorId: success.binding.parentAnchorId,
+          workRef,
+          workOutcome: this.store.readJson<WorkResult>(workRef).workOutcome,
+          reviewTaskBindingRef: success.bindingRef,
+          reviewTurnRef: success.turnRef,
+          reviewRef: success.resultRef,
+          reviewVerdict: success.control.reviewVerdict,
+        }
+        : null;
       state = this.saveState(
         {
           ...state,
@@ -258,20 +473,13 @@ export class RefactoredSemanticLoopController {
           node: state.sequence[1]?.role ?? null,
           activeTaskBindingRef: null,
           activeTurnRef: null,
-          preReview: {
-            objectKind: success.binding.objectKind,
-            objectId: success.binding.objectId,
-            revision: success.binding.revision,
-            parentAnchorId: success.binding.parentAnchorId,
-            workRef,
-            workOutcome: this.store.readJson<WorkResult>(workRef).workOutcome,
-            reviewTaskBindingRef: success.bindingRef,
-            reviewTurnRef: success.turnRef,
-            reviewRef: success.resultRef,
-            reviewVerdict: success.control.reviewVerdict,
-          },
+          preReview,
         },
-        "PRE_REVIEW_READY",
+        step.mode === "POST_EXP_REVIEW"
+          ? "POST_EXP_REVIEW_COMMITTED"
+          : step.mode === "ANCHOR_REASSESS"
+          ? "ANCHOR_REASSESS_COMMITTED"
+          : "PRE_REVIEW_READY",
       );
       return state;
     }
@@ -957,12 +1165,14 @@ export class RefactoredSemanticLoopController {
       );
     }
 
-    if (!state.pending?.reviewTurnRef || !state.pending.reviewRef) {
-      throw new Error(`${decision} requires a complete pending pair`);
+    if (state.pending) {
+      if (!state.pending.reviewTurnRef || !state.pending.reviewRef) {
+        throw new Error(`${decision} requires a complete pending pair`);
+      }
+      commitPending(this.store, state, decisionTurnRef);
+      this.setTurnState(state.pending.workTurnRef, "COMMITTED");
+      this.setTurnState(state.pending.reviewTurnRef, "COMMITTED");
     }
-    commitPending(this.store, state, decisionTurnRef);
-    this.setTurnState(state.pending.workTurnRef, "COMMITTED");
-    this.setTurnState(state.pending.reviewTurnRef, "COMMITTED");
 
     if (decision === "FINISH_WORKFLOW") {
       if (computeRemainingRequirements(this.store, {
@@ -1004,11 +1214,27 @@ export class RefactoredSemanticLoopController {
     }
 
     const nextRound = state.round + 1;
-    const nextSequence = sequenceAfterDecision(decision);
+    const experimentRef = decision === "RUN_EXP_GOAL"
+      ? this.prepareExperimentGoal(
+        state,
+        nextRound,
+        decisionTurnRef,
+        result.guidance,
+      )
+      : null;
+    const reviewerMode = decision === "RUN_REVIEWER"
+      ? reviewerModeForDecision(this.store, { ...state, pending: null })
+      : "PRE_REVIEW";
+    const nextSequence = sequenceAfterDecision(
+      decision,
+      experimentRef,
+      reviewerMode,
+    );
     this.store.writeRound({
       round: nextRound,
       branch: decision,
       turnRefs: [],
+      experimentRefs: experimentRef ? [experimentRef] : [],
       committedAt: null,
     });
     const nextState: StateFile = {
@@ -1019,10 +1245,13 @@ export class RefactoredSemanticLoopController {
       node: nextSequence[0]?.role ?? null,
       activeTaskBindingRef: null,
       activeTurnRef: null,
+      activeExperimentRef: null,
       pending: null,
       preReview: null,
       decisionGuidance: result.guidance,
       latestDecisionTurnRef: decisionTurnRef,
+      experimentGoalsStarted:
+        state.experimentGoalsStarted + (experimentRef ? 1 : 0),
       semanticRetries: { worker: 0, reviewer: 0 },
     };
     const authorizedThroughRound = this.authorizedThroughRound(state);
@@ -1043,6 +1272,8 @@ export class RefactoredSemanticLoopController {
       nextState,
       decision === "RUN_REVIEWER"
         ? "REVIEWER_BRANCH_SCHEDULED"
+        : decision === "RUN_EXP_GOAL"
+        ? "EXP_GOAL_BRANCH_SCHEDULED"
         : "WORKER_BRANCH_SCHEDULED",
     );
     return this.finishDecisionCycle(
@@ -1051,6 +1282,85 @@ export class RefactoredSemanticLoopController {
       decisionTurnRef,
       result,
     );
+  }
+
+  private prepareExperimentGoal(
+    state: StateFile,
+    round: number,
+    decisionTurnRef: string,
+    guidance: string | null,
+  ): string {
+    if (!guidance?.trim()) {
+      throw new Error("RUN_EXP_GOAL requires non-empty guidance");
+    }
+    const decisionTurn = this.store.readTurn(decisionTurnRef);
+    if (!decisionTurn.decisionContextRef) {
+      throw new Error("RUN_EXP_GOAL Decision lacks a frozen DecisionContext");
+    }
+    const context = this.store.readJson<DecisionContext>(
+      decisionTurn.decisionContextRef,
+    );
+    const target = context.experimentContext ??
+      experimentContextProjection(this.store, state);
+    if (!target) {
+      throw new Error("RUN_EXP_GOAL lacks a current Anchor context");
+    }
+    const experimentId = this.store.newId("experiment");
+    const root = `experiments/${experimentId}`;
+    const taskRef = `${root}/experiment_goal_task.json`;
+    const promptRef = `${root}/prompt.txt`;
+    const runtimeRef = `${root}/runtime.jsonl`;
+    const resultRef = `${root}/result.json`;
+    const workspaceRef = `${root}/workspace`;
+    this.store.writeText(
+      `${workspaceRef}/README.md`,
+      "# EXP Goal workspace\n\nAll experiment environment, code, logs, raw measurements, and artifacts for this Goal belong here.\n",
+    );
+    const task: ExperimentGoalTask = {
+      experimentId,
+      goalRef: "workflow_goal.json",
+      sourceDecisionTurnRef: decisionTurnRef,
+      sourceDecisionContextRef: decisionTurn.decisionContextRef,
+      anchorWork: target.anchorWork,
+      directionWork: target.directionWork,
+      experimentObjective: guidance.trim(),
+      workspaceRef,
+    };
+    this.store.writeImmutableJson(taskRef, task);
+    this.store.writeImmutableText(
+      promptRef,
+      buildExperimentGoalPrompt({ taskPath: this.store.absolute(taskRef) }),
+    );
+    this.store.writeText(runtimeRef, "");
+    const record: ExperimentGoalRecord = {
+      formatVersion: CURRENT_FORMAT_VERSION,
+      experimentId,
+      round,
+      taskRef,
+      promptRef,
+      runtimeRef,
+      resultRef,
+      providerThreadId: null,
+      providerTurnIds: [],
+      goalStatus: "pending",
+      startedAt: null,
+      completedAt: null,
+      finalOutputRef: null,
+      integrationTaskRef: null,
+      reviewTaskRef: null,
+      reviewRef: null,
+      anchorReviewTaskRef: null,
+      anchorReviewRef: null,
+      error: null,
+    };
+    const experimentRef = `${root}/experiment.json`;
+    this.store.writeJson(experimentRef, record);
+    this.store.appendEvent("EXP_GOAL_PREPARED", [
+      experimentRef,
+      taskRef,
+      promptRef,
+    ]);
+    return experimentRef;
   }
 
   private reconcileInterruptedTurn(state: StateFile): StateFile {

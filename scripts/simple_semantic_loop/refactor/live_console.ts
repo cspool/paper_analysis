@@ -8,9 +8,14 @@ export class LiveConsoleRenderer {
   private agentOutputActive = false;
   private agentOutputEndsWithNewline = true;
   private readonly stream: ConsoleWritable;
+  private readonly prefix: string;
 
-  constructor(stream: ConsoleWritable = process.stderr) {
+  constructor(
+    stream: ConsoleWritable = process.stderr,
+    prefix = "simple-loop",
+  ) {
     this.stream = stream;
+    this.prefix = prefix;
   }
 
   handle(event: RuntimeLiveEvent): void {
@@ -101,6 +106,6 @@ export class LiveConsoleRenderer {
   }
 
   private line(message: string): void {
-    this.stream.write(`[simple-loop ${new Date().toISOString()}] ${message}\n`);
+    this.stream.write(`[${this.prefix} ${new Date().toISOString()}] ${message}\n`);
   }
 }

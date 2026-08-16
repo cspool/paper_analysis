@@ -10,17 +10,27 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { RefactoredSemanticLoopController } from "../refactor/controller.ts";
 import { ScriptedTurnRuntime } from "../refactor/runtime.ts";
-import { initializeRun } from "../refactor/run_setup.ts";
+import {
+  continueRunFromFinished,
+  initializeRun,
+} from "../refactor/run_setup.ts";
 import { writeCheckpoint } from "../refactor/observations.ts";
+import { buildNegativeExperimentIndex } from "../refactor/experiment_history.ts";
 import { FileLoopStore } from "../refactor/store.ts";
 import type {
+  GoalDispatch,
+  ExperimentGoalResult,
   StateFile,
   TurnDispatch,
   TurnFile,
   TurnTask,
 } from "../refactor/types.ts";
 import { validateRun } from "../refactor/validation.ts";
-import { createWorkerBinding } from "../refactor/workflow.ts";
+import {
+  allowedDecisions,
+  createWorkerBinding,
+  experimentContextProjection,
+} from "../refactor/workflow.ts";
 
 const projectRoot = resolve(import.meta.dirname, "../../..");
 
@@ -78,8 +88,8 @@ test("E2E follows Worker → Reviewer → Decision and closes Anchor plus Direct
     dispatches.every((dispatch) => dispatch.outputSchema === null),
     "no Agent Turn receives a full content outputSchema",
   );
-  assert.equal(store.readRun().formatVersion, 7);
-  assert.equal(store.readState().formatVersion, 7);
+  assert.equal(store.readRun().formatVersion, 8);
+  assert.equal(store.readState().formatVersion, 8);
   assert.ok(
     turns(store)
       .filter((turn) => turn.resultRef)
@@ -95,6 +105,7 @@ test("E2E follows Worker → Reviewer → Decision and closes Anchor plus Direct
   const context = latestDecisionContext(store);
   assert.deepEqual(Object.keys(context).sort(), [
     "committedResults",
+    "experimentContext",
     "goalRef",
     "observationRef",
     "pendingResults",
@@ -160,6 +171,294 @@ test("E2E follows Worker → Reviewer → Decision and closes Anchor plus Direct
   assert.equal(trajectory.length, 2);
   assert.equal(new Set(trajectory.map((item) => item.decisionTurnRef)).size, 2);
   assert.equal(store.exists("observations/checkpoints/round-2.md"), true);
+  assert.equal(validateRun(workDir).valid, true);
+});
+
+test("RUN_EXP_GOAL is atomically reviewed before Decision binds Worker integration", async () => {
+  const workDir = newRun("exp-goal", 7, 1);
+  const turnDispatches: TurnDispatch[] = [];
+  const goalDispatches: GoalDispatch[] = [];
+  let decisionCount = 0;
+  const runtime = new ScriptedTurnRuntime(
+    (dispatch) => {
+      turnDispatches.push(dispatch);
+      if (dispatch.role === "DECISION") {
+        decisionCount += 1;
+        if (decisionCount === 1) {
+          return [
+            "decision = RUN_EXP_GOAL",
+            "guidance = 测量当前 Anchor baseline 在目标负载下是否仍有可区分的尾延迟 headroom。",
+          ].join("\n");
+        }
+        if (decisionCount === 2) return "decision = RUN_REVIEWER";
+        if (decisionCount <= 4) return "decision = RUN_WORKER";
+        return "decision = FINISH_WORKFLOW";
+      }
+      const task = taskFromPrompt(dispatch.prompt);
+      return JSON.stringify(
+        dispatch.role === "WORKER" ? workerResult(task) : passReview(),
+      );
+    },
+    (dispatch) => {
+      goalDispatches.push(dispatch);
+      return {
+        goalStatus: "complete",
+        finalText:
+          "结论：在冻结 workload 下观察到 baseline P99 排队开销，支持存在有界 headroom；原始测量见 workspace。",
+        providerThreadId: "goal-thread-1",
+        providerTurnIds: ["goal-turn-1", "goal-turn-2"],
+        tokensUsed: 1234,
+        timeUsedSeconds: 42,
+      };
+    },
+  );
+  const store = new FileLoopStore(workDir);
+  const legacyRun = store.readRun();
+  store.writeJson("run.json", {
+    ...legacyRun,
+    budgets: {
+      ...legacyRun.budgets,
+      experimentGoalTokenBudget: 100_000,
+    },
+  });
+  const outcome = await new RefactoredSemanticLoopController(store, runtime).run();
+
+  assert.equal(outcome.workflowOutcome, "FINISHED");
+  assert.equal(goalDispatches.length, 1);
+  assert.equal(goalDispatches[0]!.effort, "high");
+  assert.equal(
+    goalDispatches[0]!.tokenBudget,
+    null,
+    "legacy persisted token budgets are not sent to Codex",
+  );
+  assert.match(goalDispatches[0]!.objective, /冻结 EXP Goal 任务/);
+  assert.ok(goalDispatches[0]!.objective.length < 4000);
+  assert.match(goalDispatches[0]!.prompt, /本次 EXP Goal 任务/);
+  assert.deepEqual(
+    turnDispatches.map((dispatch) => dispatch.role),
+    [
+      "WORKER",
+      "REVIEWER",
+      "DECISION",
+      "DECISION",
+      "REVIEWER",
+      "DECISION",
+      "WORKER",
+      "REVIEWER",
+      "DECISION",
+      "WORKER",
+      "REVIEWER",
+      "DECISION",
+    ],
+    "EXP returns to Decision, whose Script-limited branch performs Reviewer → Decision before Worker",
+  );
+
+  const experimentRefs = store.experimentRefs();
+  assert.equal(experimentRefs.length, 1);
+  const experiment = store.readExperiment(experimentRefs[0]!);
+  assert.equal(experiment.goalStatus, "complete");
+  assert.ok(experiment.reviewRef);
+  assert.ok(experiment.integrationTaskRef);
+  assert.match(
+    store.readJson<{ experimentObjective: string }>(experiment.taskRef)
+      .experimentObjective,
+    /尾延迟 headroom/,
+  );
+  const result = store.readJson<ExperimentGoalResult>(experiment.resultRef);
+  assert.equal(result.anchorWork.includes("results/"), true);
+  assert.equal(result.directionWork, null);
+  assert.equal(result.providerTurnIds.length, 2);
+  assert.ok(result.conclusionRef && store.exists(result.conclusionRef));
+
+  const integrationTask = store.readJson<TurnTask>(experiment.integrationTaskRef!);
+  assert.equal(integrationTask.action, "DEEPEN_ANCHOR");
+  assert.ok(integrationTask.inputs.experimentResults);
+  const injected = store.readJson<{ resultRefs: string[] }>(
+    integrationTask.inputs.experimentResults!,
+  );
+  assert.deepEqual(injected.resultRefs, [experiment.resultRef]);
+
+  const postExperimentDecision = turnDispatches.filter(
+    (dispatch) => dispatch.role === "DECISION",
+  )[1]!;
+  const postContext = decisionContextFromPrompt(postExperimentDecision.prompt) as {
+    pendingResults: unknown;
+    experimentContext: { previousResultRefs: string[] };
+  };
+  assert.equal(postContext.pendingResults, null);
+  assert.deepEqual(postContext.experimentContext.previousResultRefs, [
+    experiment.resultRef,
+  ]);
+  const postExperimentReviewTask = taskFromPrompt(
+    turnDispatches.filter((dispatch) => dispatch.role === "REVIEWER")[1]!.prompt,
+  );
+  assert.ok(postExperimentReviewTask.inputs.experimentResults);
+  assert.ok(postExperimentReviewTask.inputs.negativeExperimentHistoryRef);
+  assert.equal(validateRun(workDir).valid, true);
+});
+
+test("paused EXP Goal pauses the parent and resume re-enters fresh Decision", async () => {
+  const workDir = newRun("exp-goal-pause", 7, 1);
+  const store = new FileLoopStore(workDir);
+  const first = new ScriptedTurnRuntime(
+    (dispatch) => {
+      if (dispatch.role === "DECISION") {
+        return "decision = RUN_EXP_GOAL\nguidance = 诊断当前 baseline headroom。";
+      }
+      const task = taskFromPrompt(dispatch.prompt);
+      return JSON.stringify(
+        dispatch.role === "WORKER" ? workerResult(task) : passReview(),
+      );
+    },
+    () => ({
+      goalStatus: "paused",
+      finalText: "环境缺少目标 GPU；现有诊断不足以判断 headroom。",
+      error: "target GPU unavailable",
+    }),
+  );
+  const paused = await new RefactoredSemanticLoopController(store, first).run();
+  assert.equal(paused.workflowOutcome, "PAUSED");
+  assert.equal(store.readState().pauseKind, "EXP_GOAL_PAUSED");
+  assert.equal(store.readState().sequence[0]?.role, "DECISION");
+  assert.equal(
+    store.exists(
+      `observations/checkpoints/round-${store.readState().round}.md`,
+    ),
+    true,
+  );
+  assert.equal(validateRun(workDir).valid, true);
+
+  let decisionCount = 0;
+  const resumedRuntime = new ScriptedTurnRuntime((dispatch) => {
+    if (dispatch.role === "DECISION") {
+      decisionCount += 1;
+      if (decisionCount === 1) return "decision = RUN_REVIEWER";
+      if (decisionCount <= 3) return "decision = RUN_WORKER";
+      return "decision = FINISH_WORKFLOW";
+    }
+    const task = taskFromPrompt(dispatch.prompt);
+    return JSON.stringify(
+      dispatch.role === "WORKER" ? workerResult(task) : passReview(),
+    );
+  });
+  const finished = await new RefactoredSemanticLoopController(
+    store,
+    resumedRuntime,
+  ).run(true);
+  assert.equal(finished.workflowOutcome, "FINISHED");
+  const experiment = store.readExperiment(store.experimentRefs()[0]!);
+  assert.equal(experiment.goalStatus, "paused");
+  assert.ok(experiment.integrationTaskRef);
+  assert.equal(
+    buildNegativeExperimentIndex(store, store.readState()).entries.length,
+    0,
+    "a non-complete Goal lifecycle is not negative mechanism evidence",
+  );
+  assert.equal(validateRun(workDir).valid, true);
+});
+
+test("reviewed negative EXP returns to Decision, indexes the lesson, and constrains the next Worker", async () => {
+  const workDir = newRun("negative-exp-convergence", 5, 1);
+  const dispatches: TurnDispatch[] = [];
+  let decisions = 0;
+  let reviews = 0;
+  const runtime = new ScriptedTurnRuntime(
+    (dispatch) => {
+      dispatches.push(dispatch);
+      if (dispatch.role === "DECISION") {
+        decisions += 1;
+        if (decisions === 1) return "decision = RUN_WORKER";
+        if (decisions === 2) {
+          return "decision = RUN_EXP_GOAL\nguidance = 用冻结判据检验当前机制是否命中失败条件。";
+        }
+        if (decisions === 3) {
+          assert.match(dispatch.prompt, /- RUN_REVIEWER/);
+          assert.doesNotMatch(dispatch.prompt, /- RUN_EXP_GOAL/);
+          assert.doesNotMatch(dispatch.prompt, /- FINISH_WORKFLOW/);
+          return "decision = RUN_REVIEWER";
+        }
+        if (decisions === 4) return "decision = RUN_WORKER";
+        return "decision = RUN_REVIEWER";
+      }
+      const task = taskFromPrompt(dispatch.prompt);
+      if (dispatch.role === "WORKER") {
+        return JSON.stringify(workerResult(task));
+      }
+      reviews += 1;
+      return JSON.stringify(
+        reviews === 3
+          ? {
+            reviewVerdict: "REJECT",
+            summary: "冻结实验命中主要机制的预注册失败条件；负结论限于当前模型、负载和执行边界。",
+            findings: [{
+              severity: "BLOCKING",
+              issue: "主要因果机制被实际观测否证。",
+              basis: "绑定 EXP Result 与预注册失败条件。",
+              expected: "关闭当前 Direction，并把边界化负结论用于后续搜索。",
+            }],
+            queryGaps: [],
+          }
+          : passReview(),
+      );
+    },
+    () => ({
+      goalStatus: "complete",
+      finalText: "冻结测量命中失败条件，当前机制不受支持。",
+      providerThreadId: "negative-goal-thread",
+      providerTurnIds: ["negative-goal-turn"],
+      tokensUsed: 50,
+      timeUsedSeconds: 5,
+    }),
+  );
+  const store = new FileLoopStore(workDir);
+  const outcome = await new RefactoredSemanticLoopController(store, runtime).run();
+  assert.equal(outcome.workflowOutcome, "PAUSED");
+
+  const experiment = store.readExperiment(store.experimentRefs()[0]!);
+  assert.ok(experiment.reviewRef);
+  const negative = buildNegativeExperimentIndex(store, store.readState());
+  assert.equal(negative.entries.length, 1);
+  assert.equal(negative.entries[0]!.experimentResultRef, experiment.resultRef);
+  assert.equal(negative.entries[0]!.reviewRef, experiment.reviewRef);
+
+  const roles = dispatches.map((item) => item.role);
+  const expDecisionIndex = roles
+    .map((role, index) => ({ role, index }))
+    .filter((item) => item.role === "DECISION")[2]!.index;
+  assert.deepEqual(
+    roles.slice(expDecisionIndex, expDecisionIndex + 4),
+    ["DECISION", "REVIEWER", "DECISION", "WORKER"],
+    "post-EXP review returns to Decision before any replacement Worker",
+  );
+  const postNegativeWorker = dispatches.filter(
+    (item) => item.role === "WORKER",
+  ).at(-1)!;
+  const workerTask = taskFromPrompt(postNegativeWorker.prompt);
+  assert.ok(workerTask.inputs.negativeExperimentHistoryRef);
+  const injected = store.readJson<{ entries: unknown[] }>(
+    workerTask.inputs.negativeExperimentHistoryRef!,
+  );
+  assert.equal(injected.entries.length, 1);
+
+  const postReviewDecision = dispatches.filter(
+    (item) => item.role === "DECISION",
+  )[3]!;
+  const context = decisionContextFromPrompt(postReviewDecision.prompt) as {
+    observationRef: string;
+  };
+  const observation = store.readJson<{
+    negativeExperimentHistoryRef: string;
+    branchEffects: Array<{ decision: string; nextAction: string }>;
+  }>(context.observationRef);
+  const snapshot = store.readJson<{ entries: unknown[] }>(
+    observation.negativeExperimentHistoryRef,
+  );
+  assert.equal(snapshot.entries.length, 1);
+  assert.equal(
+    observation.branchEffects.find((item) => item.decision === "RUN_REVIEWER")
+      ?.nextAction,
+    "REVIEW_ANCHOR",
+  );
   assert.equal(validateRun(workDir).valid, true);
 });
 
@@ -1225,7 +1524,190 @@ test("v6 runs remain valid for frozen-snapshot audit but are read-only", async (
   assert.equal(store.exists(".run.lock"), false);
 });
 
-function newRun(prefix: string, maxRounds = 5): string {
+test("v7 runs remain valid for semantic-convergence audit but are read-only", async () => {
+  const workDir = newRun("v7-read-only");
+  const store = new FileLoopStore(workDir);
+  const run = store.readRun();
+  const state = store.readState();
+  store.writeJson("run.json", { ...run, formatVersion: 7 });
+  store.writeJson("state.json", { ...state, formatVersion: 7 });
+  assert.equal(validateRun(workDir).valid, true);
+
+  await assert.rejects(
+    new RefactoredSemanticLoopController(
+      store,
+      new ScriptedTurnRuntime(() => ""),
+    ).run(),
+    /formatVersion 7 is read-only/,
+  );
+  assert.equal(store.exists(".run.lock"), false);
+});
+
+test("generic Turn timeouts do not override the EXP inactivity profile", () => {
+  const workDir = mkdtempSync(resolve(tmpdir(), "simple-loop-timeout-profiles-"));
+  const run = initializeRun({
+    projectRoot,
+    workDir,
+    topic: "任意性能研究 Topic",
+    idleTimeoutMs: 120_000,
+    hardTimeoutMs: 240_000,
+    interruptGraceMs: 5_000,
+    experimentIdleTimeoutMs: 900_000,
+    experimentHardTimeoutMs: 7_200_000,
+    experimentInterruptGraceMs: 20_000,
+  });
+
+  for (const role of ["DECISION", "WORKER", "REVIEWER"] as const) {
+    assert.deepEqual(run.budgets.timeoutProfiles[role], {
+      idleTimeoutMs: 120_000,
+      hardTimeoutMs: 240_000,
+      interruptGraceMs: 5_000,
+    });
+  }
+  assert.deepEqual(run.budgets.timeoutProfiles.EXP_GOAL, {
+    idleTimeoutMs: 900_000,
+    hardTimeoutMs: 7_200_000,
+    interruptGraceMs: 20_000,
+  });
+  assert.equal(run.budgets.maxExperimentGoals, 5);
+  assert.equal(run.budgets.experimentGoalTokenBudget, null);
+});
+
+test("a FINISHED run continues as an auditable Decision-first branch", async () => {
+  const sourceWorkDir = newRun("continue-source", 5, 2);
+  let sourceDecisions = 0;
+  const sourceRuntime = new ScriptedTurnRuntime((dispatch) => {
+    if (dispatch.role === "DECISION") {
+      sourceDecisions += 1;
+      return sourceDecisions === 1
+        ? "decision = RUN_WORKER"
+        : "decision = FINISH_WORKFLOW";
+    }
+    const task = taskFromPrompt(dispatch.prompt);
+    return JSON.stringify(
+      dispatch.role === "WORKER" ? workerResult(task) : passReview(),
+    );
+  });
+  const sourceStore = new FileLoopStore(sourceWorkDir);
+  const sourceOutcome = await new RefactoredSemanticLoopController(
+    sourceStore,
+    sourceRuntime,
+  ).run();
+  assert.equal(sourceOutcome.workflowOutcome, "FINISHED");
+  const sourceStateBytes = sourceStore.readText("state.json");
+  const sourceRun = sourceStore.readRun();
+  const sourceState = sourceStore.readState();
+
+  const workDir = mkdtempSync(resolve(tmpdir(), "simple-loop-continue-dest-"));
+  const run = continueRunFromFinished({
+    projectRoot,
+    sourceWorkDir,
+    workDir,
+    maxRounds: 4,
+    maxExperimentGoals: 2,
+    experimentIdleTimeoutMs: 900_000,
+  });
+  const store = new FileLoopStore(workDir);
+  const state = store.readState();
+
+  assert.equal(sourceStore.readText("state.json"), sourceStateBytes);
+  assert.notEqual(run.runId, sourceRun.runId);
+  assert.equal(run.budgets.experimentGoalTokenBudget, null);
+  assert.equal(run.continuation?.sourceRunId, sourceRun.runId);
+  assert.equal(state.lifecycle, "RUNNING");
+  assert.equal(state.round, sourceState.round + 1);
+  assert.equal(state.node, "DECISION");
+  assert.deepEqual(state.sequence, [
+    { role: "DECISION", mode: "DECISION", bindingRef: null },
+  ]);
+  assert.equal(store.readRound(state.round).branch, "CONTINUATION");
+  assert.equal(store.exists("final/report.md"), false);
+  assert.equal(store.exists(run.continuation!.sourceFinalReportRef), true);
+  assert.equal(store.sha256File(run.continuation!.sourceRunRef), run.continuation!.sourceRunSha256);
+  assert.equal(store.sha256File(run.continuation!.sourceStateRef), run.continuation!.sourceStateSha256);
+  assert.equal(store.sha256File(run.continuation!.sourceManifestRef), run.continuation!.sourceManifestSha256);
+  assert.equal(run.budgets.timeoutProfiles.EXP_GOAL.idleTimeoutMs, 900_000);
+  assert.ok(allowedDecisions(store, state).includes("RUN_EXP_GOAL"));
+  assert.ok(experimentContextProjection(store, state)?.directionWork);
+  assert.equal(validateRun(workDir).valid, true);
+
+  const branchDispatches: TurnDispatch[] = [];
+  const branchOutcome = await new RefactoredSemanticLoopController(
+    store,
+    new ScriptedTurnRuntime((dispatch) => {
+      branchDispatches.push(dispatch);
+      return "decision = FINISH_WORKFLOW";
+    }),
+  ).run();
+  assert.equal(branchOutcome.workflowOutcome, "FINISHED");
+  assert.deepEqual(branchDispatches.map((item) => item.role), ["DECISION"]);
+  assert.equal(validateRun(workDir).valid, true);
+});
+
+test("a PAUSED run can inherit all evidence with fresh round and EXP authorization", async () => {
+  const sourceWorkDir = newRun("reset-budget-source", 2, 1);
+  let decisions = 0;
+  const sourceStore = new FileLoopStore(sourceWorkDir);
+  const sourceOutcome = await new RefactoredSemanticLoopController(
+    sourceStore,
+    new ScriptedTurnRuntime(
+      (dispatch) => {
+        if (dispatch.role === "DECISION") {
+          decisions += 1;
+          return decisions === 1
+            ? "decision = RUN_EXP_GOAL\nguidance = 测量一个冻结的判别问题。"
+            : "decision = RUN_REVIEWER";
+        }
+        const task = taskFromPrompt(dispatch.prompt);
+        return JSON.stringify(
+          dispatch.role === "WORKER" ? workerResult(task) : passReview(),
+        );
+      },
+      () => ({
+        goalStatus: "complete",
+        finalText: "已完成冻结测量，等待独立 Reviewer。",
+        providerThreadId: "reset-source-goal",
+        providerTurnIds: ["reset-source-turn"],
+      }),
+    ),
+  ).run();
+  assert.equal(sourceOutcome.workflowOutcome, "PAUSED");
+  const frozenState = sourceStore.readText("state.json");
+  const sourceState = sourceStore.readState();
+  assert.equal(sourceState.experimentGoalsStarted, 1);
+  assert.equal(sourceStore.experimentRefs().length, 1);
+
+  const workDir = mkdtempSync(resolve(tmpdir(), "simple-loop-reset-budget-dest-"));
+  const run = continueRunFromFinished({
+    projectRoot,
+    sourceWorkDir,
+    workDir,
+    resetBudgets: true,
+    maxRounds: 3,
+    maxExperimentGoals: 2,
+  });
+  const store = new FileLoopStore(workDir);
+  const state = store.readState();
+  assert.equal(sourceStore.readText("state.json"), frozenState);
+  assert.equal(run.continuation?.sourceLifecycle, "PAUSED");
+  assert.equal(run.continuation?.budgetReset, true);
+  assert.equal(run.continuation?.sourceExperimentCount, 1);
+  assert.equal(state.experimentGoalsStarted, 0);
+  assert.equal(store.experimentRefs().length, 1);
+  assert.equal(state.round, sourceState.round + 1);
+  assert.equal(state.roundBudget?.authorizedThroughRound, state.round + 2);
+  assert.deepEqual(state.sequence, [
+    { role: "DECISION", mode: "DECISION", bindingRef: null },
+  ]);
+  assert.deepEqual(allowedDecisions(store, state), ["RUN_REVIEWER"]);
+  assert.equal(
+    store.exists("observations/negative_experiment_index.json"),
+    true,
+  );
+  assert.equal(validateRun(workDir).valid, true);
+});
+
+function newRun(prefix: string, maxRounds = 5, maxExperimentGoals = 0): string {
   const workDir = mkdtempSync(resolve(tmpdir(), `simple-loop-${prefix}-`));
   initializeRun({
     projectRoot,
@@ -1233,6 +1715,7 @@ function newRun(prefix: string, maxRounds = 5): string {
     topic: "任意性能研究 Topic",
     objective: "从本地多维知识库形成可验证的性能优化潜力",
     maxRounds,
+    maxExperimentGoals,
     model: "scripted-model",
   });
   return workDir;

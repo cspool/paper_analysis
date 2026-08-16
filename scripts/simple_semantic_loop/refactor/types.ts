@@ -1,8 +1,19 @@
-export const LOOP_ROLES = ["DECISION", "WORKER", "REVIEWER"] as const;
+export const LOOP_ROLES = [
+  "DECISION",
+  "WORKER",
+  "REVIEWER",
+  "EXP_GOAL",
+] as const;
 export type LoopRole = (typeof LOOP_ROLES)[number];
+/** Provider-facing roles may be extended by sibling deterministic workflows. */
+export type RuntimeRole =
+  | LoopRole
+  | "EXPERIMENT_DECISION"
+  | "EVIDENCE_JUDGE"
+  | "DIRECTION_LAB_GOAL";
 
-export const CURRENT_FORMAT_VERSION = 7 as const;
-export const READABLE_FORMAT_VERSIONS = [5, 6, CURRENT_FORMAT_VERSION] as const;
+export const CURRENT_FORMAT_VERSION = 8 as const;
+export const READABLE_FORMAT_VERSIONS = [5, 6, 7, CURRENT_FORMAT_VERSION] as const;
 export type RunFormatVersion = (typeof READABLE_FORMAT_VERSIONS)[number];
 
 export const TASK_ACTIONS = [
@@ -29,6 +40,7 @@ export type ReviewAction = Extract<
 export const LOOP_DECISIONS = [
   "RUN_WORKER",
   "RUN_REVIEWER",
+  "RUN_EXP_GOAL",
   "FINISH_WORKFLOW",
   "RETRY_WORKER",
   "RETRY_REVIEWER",
@@ -66,6 +78,7 @@ export type WorkflowFailureKind =
 export type Lifecycle = "RUNNING" | "PAUSED" | "FINISHED" | "FAILED";
 export const PAUSE_KINDS = [
   "ROUND_BUDGET_EXHAUSTED",
+  "EXP_GOAL_PAUSED",
   "OPERATOR_REQUESTED",
 ] as const;
 export type PauseKind = (typeof PAUSE_KINDS)[number];
@@ -94,6 +107,9 @@ export interface TurnTaskInputs {
   reviewTarget?: string;
   previousReview?: string;
   researchMemory?: string;
+  experimentResults?: string;
+  /** Script-generated, task-local navigation over reviewed negative EXP results. */
+  negativeExperimentHistoryRef?: string;
 }
 
 export interface TurnTask {
@@ -147,7 +163,14 @@ export interface DecisionContext {
   committedResults: CommittedResult[];
   pendingResults: PendingResults | null;
   remainingRequirementsAfterPendingCommit: string[];
+  experimentContext: ExperimentContext | null;
   observationRef: string;
+}
+
+export interface ExperimentContext {
+  anchorWork: string;
+  directionWork: string | null;
+  previousResultRefs: string[];
 }
 
 export interface EvidenceItem {
@@ -275,6 +298,9 @@ export type RefCatalog = Record<string, RefCatalogEntry>;
 
 export interface RunBudgets {
   maxRounds: number;
+  maxExperimentGoals: number;
+  /** null means the Controller does not set a Codex Goal token budget. */
+  experimentGoalTokenBudget: number | null;
   maxOutputRetries: number;
   maxRuntimeRetries: number;
   maxSemanticRetries: number;
@@ -300,8 +326,26 @@ export interface RunFile {
     decision: SkillPin;
     worker: SkillPin;
     reviewer: SkillPin;
+    experiment: SkillPin;
   };
   budgets: RunBudgets;
+  continuation?: {
+    sourceRunId: string;
+    sourceWorkDir: string;
+    sourceStateRevision: number;
+    sourceRunSha256: string;
+    sourceStateSha256: string;
+    sourceLifecycle?: Lifecycle;
+    sourceManifestSha256: string | null;
+    sourceRunRef: string;
+    sourceStateRef: string;
+    sourceManifestRef: string | null;
+    sourceFinalReportRef: string | null;
+    /** True when this branch receives a fresh round and EXP authorization. */
+    budgetReset?: boolean;
+    sourceExperimentCount?: number;
+    continuedAt: string;
+  };
 }
 
 export interface TaskBinding {
@@ -404,8 +448,9 @@ export interface ObjectsIndex {
 
 export interface RoundFile {
   round: number;
-  branch: "INITIAL" | LoopDecision;
+  branch: "INITIAL" | "CONTINUATION" | LoopDecision;
   turnRefs: string[];
+  experimentRefs: string[];
   committedAt: string | null;
 }
 
@@ -413,7 +458,10 @@ export type SequenceMode =
   | "NORMAL_WORK"
   | "PAIR_REVIEW"
   | "PRE_REVIEW"
+  | "POST_EXP_REVIEW"
+  | "ANCHOR_REASSESS"
   | "DECISION"
+  | "EXP_GOAL"
   | "RETRY_WORK"
   | "RETRY_REVIEW";
 
@@ -477,6 +525,10 @@ export interface StateFile {
   sequence: SequenceStep[];
   activeTaskBindingRef: string | null;
   activeTurnRef: string | null;
+  activeExperimentRef: string | null;
+  latestExperimentResultRef: string | null;
+  /** EXP Goals charged to this run's current authorization window. */
+  experimentGoalsStarted: number;
   pending: PendingPair | null;
   preReview: PreReview | null;
   decisionGuidance: string | null;
@@ -597,7 +649,7 @@ export type RuntimePersistenceEvent =
 
 export interface TurnDispatch {
   turnId: string;
-  role: LoopRole;
+  role: RuntimeRole;
   prompt: string;
   outputSchema: Record<string, unknown> | null;
   cwd: string;
@@ -606,18 +658,142 @@ export interface TurnDispatch {
   timeoutProfile: TurnTimeoutProfile;
   maxInputTokens: number;
   maxOutputTokens: number;
+  /** Sibling controllers may supply role-specific provider instructions. */
+  developerInstructions?: string;
   onRuntimeEvent?: (event: RuntimePersistenceEvent) => void;
 }
 
+export const EXPERIMENT_GOAL_STATUSES = [
+  "active",
+  "paused",
+  "blocked",
+  "usageLimited",
+  "budgetLimited",
+  "complete",
+] as const;
+export type ExperimentGoalStatus =
+  (typeof EXPERIMENT_GOAL_STATUSES)[number];
+
+export interface ExperimentGoalTask {
+  experimentId: string;
+  goalRef: "workflow_goal.json";
+  sourceDecisionTurnRef: string;
+  sourceDecisionContextRef: string;
+  anchorWork: string;
+  directionWork: string | null;
+  experimentObjective: string;
+  workspaceRef: string;
+}
+
+export interface ExperimentGoalRecord {
+  formatVersion: RunFormatVersion;
+  experimentId: string;
+  round: number;
+  taskRef: string;
+  promptRef: string;
+  runtimeRef: string;
+  resultRef: string;
+  providerThreadId: string | null;
+  providerTurnIds: string[];
+  goalStatus: ExperimentGoalStatus | "pending" | "runtimeFailed";
+  startedAt: string | null;
+  completedAt: string | null;
+  finalOutputRef: string | null;
+  integrationTaskRef: string | null;
+  /** Reviewer task/result that semantically integrated this EXP, when known. */
+  reviewTaskRef?: string | null;
+  reviewRef?: string | null;
+  anchorReviewTaskRef?: string | null;
+  anchorReviewRef?: string | null;
+  error: string | null;
+}
+
+export interface ExperimentGoalResult {
+  experimentId: string;
+  anchorWork: string;
+  directionWork: string | null;
+  experimentObjective: string;
+  goalStatus: Exclude<ExperimentGoalStatus, "active"> | "runtimeFailed";
+  conclusionRef: string | null;
+  workspaceRef: string;
+  providerThreadId: string | null;
+  providerTurnIds: string[];
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  error: string | null;
+}
+
+export interface GoalDispatch {
+  experimentId: string;
+  /** Defaults to EXP_GOAL for the Learning Flow. */
+  role?: "EXP_GOAL" | "DIRECTION_LAB_GOAL";
+  prompt: string;
+  objective: string;
+  cwd: string;
+  model: string;
+  effort: "high";
+  /** EXP Goals are deliberately unbounded by tokens; timeout controls remain. */
+  tokenBudget: null;
+  timeoutProfile: TurnTimeoutProfile;
+  resumeThreadId: string | null;
+  /** Sibling controllers may supply role-specific provider instructions. */
+  developerInstructions?: string;
+  onRuntimeEvent?: (event: GoalRuntimePersistenceEvent) => void;
+}
+
+export interface RawGoalResult {
+  goalStatus: Exclude<ExperimentGoalStatus, "active"> | "runtimeFailed";
+  finalText: string;
+  providerThreadId: string | null;
+  providerTurnIds: string[];
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  failureKind:
+    | "IDLE_TIMEOUT"
+    | "HARD_TIMEOUT"
+    | "OPERATOR_INTERRUPT"
+    | "PROVIDER_ERROR"
+    | null;
+  error: string | null;
+}
+
+export type GoalRuntimePersistenceEvent =
+  | { type: "goal_provider_started"; at: string; threadId: string }
+  | { type: "goal_status"; at: string; status: ExperimentGoalStatus }
+  | { type: "goal_raw_event"; at: string; event: unknown }
+  | {
+      type: "goal_turn_started";
+      at: string;
+      threadId: string;
+      providerTurnId: string;
+    }
+  | {
+      type: "goal_message_completed";
+      at: string;
+      providerTurnId: string;
+      itemId: string;
+      phase: "commentary" | "final_answer" | null;
+      text: string;
+    }
+  | {
+      type: "goal_tool";
+      at: string;
+      phase: "started" | "completed";
+      providerTurnId: string;
+      event: RuntimeToolEvent;
+    };
+
 export interface TurnRuntime {
   run(dispatch: TurnDispatch): Promise<RawTurnResult>;
+  runGoal?(dispatch: GoalDispatch): Promise<RawGoalResult>;
+  interruptGoal?(reason?: string): Promise<void>;
   close?(): Promise<void>;
 }
 
 export interface BranchEffect {
   decision: LoopDecision;
   nextRole: LoopRole | null;
-  nextAction: TaskAction | "FINALIZE" | null;
+  nextAction: TaskAction | "RUN_EXPERIMENT" | "FINALIZE" | null;
   targetRef: string | null;
   sequence: LoopRole[];
 }
@@ -677,7 +853,43 @@ export interface ResearchMemory {
     decision: LoopDecision;
     guidance: string | null;
   }>;
+  experimentResults: Array<{
+    resultRef: string;
+    anchorWork: string;
+    directionWork: string | null;
+    goalStatus: ExperimentGoalResult["goalStatus"];
+    experimentObjective: string;
+    conclusionRef: string | null;
+  }>;
   requirements: string[];
+}
+
+export interface NegativeExperimentIndexEntry {
+  anchorWork: string;
+  directionWork: string | null;
+  experimentResultRef: string;
+  reviewRef: string;
+  reviewVerdict: "REJECT";
+}
+
+export interface ExperimentCountEntry {
+  workRef: string;
+  count: number;
+}
+
+/**
+ * Script-derived navigation only. It deliberately contains no family ID or
+ * semantic closure flag; Learning Agents read the referenced evidence.
+ */
+export interface NegativeExperimentIndex {
+  generatedAt: string;
+  sourceStateRevision: number;
+  counts: {
+    run: number;
+    anchors: ExperimentCountEntry[];
+    directions: ExperimentCountEntry[];
+  };
+  entries: NegativeExperimentIndexEntry[];
 }
 
 export interface DecisionObservation {
@@ -686,6 +898,7 @@ export interface DecisionObservation {
   round: number;
   researchMemoryRef: string;
   trajectoryRef: string;
+  negativeExperimentHistoryRef: string;
   trajectoryTail: ProgressTrajectoryRecord[];
   branchEffects: BranchEffect[];
   accepted: { anchors: number; directions: number };

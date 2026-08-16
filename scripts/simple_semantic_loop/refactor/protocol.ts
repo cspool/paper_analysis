@@ -102,6 +102,16 @@ export function parseDecisionProtocol(
     guidanceValues.map((value) => value.trim()).filter(Boolean).join("\n") ||
     null;
 
+  if (decision === "RUN_EXP_GOAL" && guidance === null) {
+    return {
+      result: null,
+      errors: [protocolError(
+        "/guidance",
+        "RUN_EXP_GOAL requires a non-empty experiment objective in guidance",
+      )],
+    };
+  }
+
   return { result: { decision, guidance }, errors: [] };
 }
 

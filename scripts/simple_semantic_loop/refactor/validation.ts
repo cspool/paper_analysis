@@ -11,6 +11,7 @@ import type { CodexAppServerRuntime } from "./runtime.ts";
 import { FileLoopStore } from "./store.ts";
 import {
   CURRENT_FORMAT_VERSION,
+  EXPERIMENT_GOAL_STATUSES,
   PAUSE_KINDS,
   READABLE_FORMAT_VERSIONS,
   TASK_ACTIONS,
@@ -20,6 +21,10 @@ import {
   type CommittedResult,
   type DecisionContext,
   type DecisionObservation,
+  type ExperimentContext,
+  type ExperimentGoalRecord,
+  type ExperimentGoalResult,
+  type ExperimentGoalTask,
   type ObjectsIndex,
   type OutputErrorReport,
   type PendingResults,
@@ -62,27 +67,27 @@ const TASK_INPUT_RULES: Record<
 > = {
   CREATE_ANCHOR: {
     required: [],
-    allowed: ["currentWork", "latestReview", "researchMemory"],
+    allowed: ["currentWork", "latestReview", "researchMemory", "experimentResults", "negativeExperimentHistoryRef"],
   },
   DEEPEN_ANCHOR: {
     required: ["currentWork", "latestReview"],
-    allowed: ["currentWork", "latestReview"],
+    allowed: ["currentWork", "latestReview", "experimentResults", "negativeExperimentHistoryRef"],
   },
   CREATE_DIRECTION: {
     required: ["boundAnchor"],
-    allowed: ["boundAnchor", "currentWork", "latestReview"],
+    allowed: ["boundAnchor", "currentWork", "latestReview", "experimentResults", "negativeExperimentHistoryRef"],
   },
   DEEPEN_DIRECTION: {
     required: ["boundAnchor", "currentWork", "latestReview"],
-    allowed: ["boundAnchor", "currentWork", "latestReview"],
+    allowed: ["boundAnchor", "currentWork", "latestReview", "experimentResults", "negativeExperimentHistoryRef"],
   },
   REVIEW_ANCHOR: {
     required: ["reviewTarget"],
-    allowed: ["reviewTarget", "previousReview"],
+    allowed: ["reviewTarget", "previousReview", "experimentResults", "negativeExperimentHistoryRef"],
   },
   REVIEW_DIRECTION: {
     required: ["boundAnchor", "reviewTarget"],
-    allowed: ["boundAnchor", "reviewTarget", "previousReview"],
+    allowed: ["boundAnchor", "reviewTarget", "previousReview", "experimentResults", "negativeExperimentHistoryRef"],
   },
 };
 
@@ -125,8 +130,11 @@ export function validateRun(workDir: string): ValidationReport {
       ]),
   ]);
   add("workflow-goal", validateWorkflowGoal(goal));
+  add("continuation", validateContinuation(store, run));
   add("event-sequence", validateEventSequence(store));
-  add("pinned-skills-and-refs", validatePins(store, run));
+  const pinValidation = validatePins(store, run, state.lifecycle);
+  add("pinned-skills-and-refs", pinValidation.errors);
+  advise("pinned-source-drift", pinValidation.advisories);
   advise(
     "published-reference-templates",
     validatePublishedReferenceTemplates(run.projectRoot),
@@ -137,6 +145,7 @@ export function validateRun(workDir: string): ValidationReport {
     validateDecisionContexts(store, run.formatVersion),
   );
   add("observations", validateObservations(store));
+  add("experiment-goals", validateExperiments(store, run, state));
   add("recoveries", validateRecoveries(store, run.formatVersion));
   add(
     "round-authorizations",
@@ -154,6 +163,93 @@ export function validateRun(workDir: string): ValidationReport {
     checks,
     advisories,
   };
+}
+
+function validateContinuation(store: FileLoopStore, run: RunFile): string[] {
+  const value = run.continuation;
+  if (!value) return [];
+  const errors: string[] = [];
+  if (!nonEmpty(value.sourceRunId)) errors.push("continuation sourceRunId is empty");
+  if (!nonEmpty(value.sourceWorkDir)) errors.push("continuation sourceWorkDir is empty");
+  if (!Number.isInteger(value.sourceStateRevision) || value.sourceStateRevision < 1) {
+    errors.push("continuation sourceStateRevision is invalid");
+  }
+  if (Number.isNaN(Date.parse(value.continuedAt))) {
+    errors.push("continuation continuedAt is invalid");
+  }
+  const sourceLifecycle = value.sourceLifecycle ?? "FINISHED";
+  if (!["PAUSED", "FINISHED"].includes(sourceLifecycle)) {
+    errors.push(`continuation sourceLifecycle is invalid: ${sourceLifecycle}`);
+  }
+  const refs = [
+    [value.sourceRunRef, value.sourceRunSha256, "source run"],
+    [value.sourceStateRef, value.sourceStateSha256, "source state"],
+  ] as const;
+  for (const [ref, expectedHash, label] of refs) {
+    if (!store.exists(ref)) {
+      errors.push(`continuation missing ${label} ${ref}`);
+      continue;
+    }
+    if (!/^[0-9a-f]{64}$/.test(expectedHash)) {
+      errors.push(`continuation ${label} sha256 is invalid`);
+    } else if (store.sha256File(ref) !== expectedHash) {
+      errors.push(`continuation ${label} sha256 differs from snapshot`);
+    }
+  }
+  if (value.sourceManifestRef || value.sourceManifestSha256) {
+    if (!value.sourceManifestRef || !value.sourceManifestSha256) {
+      errors.push("continuation source manifest ref/hash must both be present");
+    } else if (!store.exists(value.sourceManifestRef)) {
+      errors.push(`continuation missing source manifest ${value.sourceManifestRef}`);
+    } else if (!/^[0-9a-f]{64}$/.test(value.sourceManifestSha256)) {
+      errors.push("continuation source manifest sha256 is invalid");
+    } else if (
+      store.sha256File(value.sourceManifestRef) !== value.sourceManifestSha256
+    ) {
+      errors.push("continuation source manifest sha256 differs from snapshot");
+    }
+  } else if (sourceLifecycle === "FINISHED") {
+    errors.push("FINISHED continuation is missing a source manifest");
+  }
+  if (value.sourceFinalReportRef) {
+    if (!store.exists(value.sourceFinalReportRef)) {
+      errors.push(`continuation missing source report ${value.sourceFinalReportRef}`);
+    }
+  } else if (sourceLifecycle === "FINISHED") {
+    errors.push("FINISHED continuation is missing a source report");
+  }
+  if (value.budgetReset) {
+    if (
+      !Number.isInteger(value.sourceExperimentCount) ||
+      Number(value.sourceExperimentCount) < 0
+    ) {
+      errors.push("budget-reset continuation has invalid sourceExperimentCount");
+    }
+  }
+  if (store.exists(value.sourceRunRef)) {
+    const sourceRun = store.readJson<RunFile>(value.sourceRunRef);
+    if (sourceRun.runId !== value.sourceRunId) {
+      errors.push("continuation source runId differs from snapshot");
+    }
+  }
+  if (store.exists(value.sourceStateRef)) {
+    const sourceState = store.readJson<StateFile>(value.sourceStateRef);
+    if (
+      sourceState.lifecycle !== sourceLifecycle ||
+      sourceState.revision !== value.sourceStateRevision
+    ) {
+      errors.push("continuation source state differs from the frozen lifecycle/revision");
+    }
+  }
+  const sourceRecordRef = value.sourceRunRef.replace(/\/run\.json$/, "/source.json");
+  if (!store.exists(sourceRecordRef)) {
+    errors.push(`continuation missing source record ${sourceRecordRef}`);
+  } else if (
+    JSON.stringify(store.readJson(sourceRecordRef)) !== JSON.stringify(value)
+  ) {
+    errors.push("continuation source record differs from run metadata");
+  }
+  return errors;
 }
 
 export async function runDoctor(
@@ -182,6 +278,7 @@ export async function runDoctor(
     "learning-loop-decision",
     "learning-loop-worker",
     "learning-loop-reviewer",
+    "learning-exp-goal",
   ]) {
     const path = resolve(projectRoot, `.codex/skills/${name}/SKILL.md`);
     if (!existsSync(path)) {
@@ -218,6 +315,7 @@ export async function runDoctor(
         "learning-loop-decision",
         "learning-loop-worker",
         "learning-loop-reviewer",
+        "learning-exp-goal",
       ].filter((name) => !skills.has(name));
       checks.push({
         name: "provider-skills",
@@ -276,32 +374,41 @@ function validateEventSequence(store: FileLoopStore): string[] {
   return errors;
 }
 
-function validatePins(store: FileLoopStore, run: RunFile): string[] {
+function validatePins(
+  store: FileLoopStore,
+  run: RunFile,
+  lifecycle: StateFile["lifecycle"],
+): { errors: string[]; advisories: string[] } {
   const errors: string[] = [];
+  const advisories: string[] = [];
+  const reportExternalDrift = (message: string) => {
+    if (lifecycle === "FINISHED") advisories.push(message);
+    else errors.push(message);
+  };
   let catalog: RefCatalog;
   try {
     catalog = store.readJson<RefCatalog>("ref_catalog.json");
   } catch (error) {
-    return [message(error)];
+    return { errors: [message(error)], advisories };
   }
   for (const [name, entry] of Object.entries(catalog)) {
     const path = resolve(run.projectRoot, entry.path);
     if (!existsSync(path)) {
-      errors.push(`${name}: missing ${path}`);
+      reportExternalDrift(`${name}: missing ${path}`);
       continue;
     }
     if (store.sha256ExternalFile(path) !== entry.sha256) {
-      errors.push(`${name}: sha256 drift`);
+      reportExternalDrift(`${name}: sha256 drift`);
     }
   }
   for (const [role, skill] of Object.entries(run.skills)) {
     const path = resolve(run.projectRoot, skill.path);
-    if (!existsSync(path)) errors.push(`${role}: missing Skill ${path}`);
+    if (!existsSync(path)) reportExternalDrift(`${role}: missing Skill ${path}`);
     else if (store.sha256ExternalFile(path) !== skill.sha256) {
-      errors.push(`${role}: Skill sha256 drift`);
+      reportExternalDrift(`${role}: Skill sha256 drift`);
     }
   }
-  return errors;
+  return { errors, advisories };
 }
 
 function validateBindings(store: FileLoopStore): string[] {
@@ -367,6 +474,8 @@ function validateTurnTask(task: TurnTask): string[] {
         "reviewTarget",
         "previousReview",
         "researchMemory",
+        "experimentResults",
+        "negativeExperimentHistoryRef",
       ],
       "T01.inputs",
       true,
@@ -451,6 +560,7 @@ function validateDecisionContexts(
           "committedResults",
           "pendingResults",
           "remainingRequirementsAfterPendingCommit",
+          ...(formatVersion >= 8 ? ["experimentContext"] : []),
           "observationRef",
         ],
         ref,
@@ -458,6 +568,11 @@ function validateDecisionContexts(
     );
     if (context.goalRef !== "workflow_goal.json") {
       errors.push(`${ref}: invalid goalRef`);
+    }
+    if (formatVersion >= 8) {
+      errors.push(
+        ...validateExperimentContext(store, context.experimentContext, ref),
+      );
     }
     if (!nonEmpty(context.observationRef) || !store.exists(context.observationRef)) {
       errors.push(`${ref}: missing observationRef ${String(context.observationRef)}`);
@@ -480,6 +595,14 @@ function validateDecisionContexts(
           if (!store.exists(sourceRef)) {
             errors.push(`${ref}: observation source missing ${sourceRef}`);
           }
+        }
+        if (
+          observation.negativeExperimentHistoryRef &&
+          !store.exists(observation.negativeExperimentHistoryRef)
+        ) {
+          errors.push(
+            `${ref}: observation negative EXP history missing ${observation.negativeExperimentHistoryRef}`,
+          );
         }
         if (formatVersion >= 6) {
           errors.push(
@@ -565,6 +688,8 @@ function validateFrozenDecisionSources(
   const expectedMemoryRef = `${contextDir}/research_memory_snapshot.json`;
   const expectedTrajectoryRef =
     `${contextDir}/progress_trajectory_snapshot.jsonl`;
+  const expectedNegativeHistoryRef =
+    `${contextDir}/negative_experiment_history_snapshot.json`;
   if (observation.researchMemoryRef !== expectedMemoryRef) {
     errors.push(
       `${contextRef}: researchMemoryRef must be ${expectedMemoryRef}`,
@@ -573,6 +698,14 @@ function validateFrozenDecisionSources(
   if (observation.trajectoryRef !== expectedTrajectoryRef) {
     errors.push(
       `${contextRef}: trajectoryRef must be ${expectedTrajectoryRef}`,
+    );
+  }
+  if (
+    observation.negativeExperimentHistoryRef !== undefined &&
+    observation.negativeExperimentHistoryRef !== expectedNegativeHistoryRef
+  ) {
+    errors.push(
+      `${contextRef}: negativeExperimentHistoryRef must be ${expectedNegativeHistoryRef}`,
     );
   }
 
@@ -627,6 +760,252 @@ function validateFrozenDecisionSources(
       errors.push(
         `${contextRef}: invalid trajectory snapshot: ${message(error)}`,
       );
+    }
+  }
+  return errors;
+}
+
+function validateExperimentContext(
+  store: FileLoopStore,
+  value: ExperimentContext | null | undefined,
+  contextRef: string,
+): string[] {
+  if (value === null) return [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [`${contextRef}.experimentContext must be an object or null`];
+  }
+  const errors = exactKeys(
+    value,
+    ["anchorWork", "directionWork", "previousResultRefs"],
+    `${contextRef}.experimentContext`,
+  );
+  if (!nonEmpty(value.anchorWork) || !store.exists(value.anchorWork)) {
+    errors.push(
+      `${contextRef}.experimentContext missing anchorWork ${String(value.anchorWork)}`,
+    );
+  }
+  if (
+    value.directionWork !== null &&
+    (!nonEmpty(value.directionWork) || !store.exists(value.directionWork))
+  ) {
+    errors.push(
+      `${contextRef}.experimentContext missing directionWork ${String(value.directionWork)}`,
+    );
+  }
+  if (!Array.isArray(value.previousResultRefs)) {
+    errors.push(`${contextRef}.experimentContext.previousResultRefs must be an array`);
+  } else {
+    for (const resultRef of value.previousResultRefs) {
+      if (!nonEmpty(resultRef) || !store.exists(resultRef)) {
+        errors.push(
+          `${contextRef}.experimentContext missing previous result ${String(resultRef)}`,
+        );
+      }
+    }
+  }
+  return errors;
+}
+
+function validateExperiments(
+  store: FileLoopStore,
+  run: RunFile,
+  state: StateFile,
+): string[] {
+  if (run.formatVersion < 8) return [];
+  const errors: string[] = [];
+  const refs = store.experimentRefs();
+  const sourceExperimentCount = run.continuation?.budgetReset
+    ? run.continuation.sourceExperimentCount ?? 0
+    : 0;
+  if (
+    !Number.isInteger(sourceExperimentCount) ||
+    sourceExperimentCount < 0 ||
+    sourceExperimentCount > refs.length
+  ) {
+    errors.push(`invalid continuation sourceExperimentCount ${sourceExperimentCount}`);
+  }
+  const chargedExperimentCount = refs.length - sourceExperimentCount;
+  if (state.experimentGoalsStarted !== chargedExperimentCount) {
+    errors.push(
+      `state experimentGoalsStarted=${state.experimentGoalsStarted} differs from charged records=${chargedExperimentCount}`,
+    );
+  }
+  if (chargedExperimentCount > run.budgets.maxExperimentGoals) {
+    errors.push(
+      `charged experiment records ${chargedExperimentCount} exceed maxExperimentGoals ${run.budgets.maxExperimentGoals}`,
+    );
+  }
+  const legacyTokenBudget = run.budgets.experimentGoalTokenBudget;
+  if (
+    legacyTokenBudget !== null &&
+    (!Number.isInteger(legacyTokenBudget) || legacyTokenBudget < 1)
+  ) {
+    errors.push(
+      "experimentGoalTokenBudget must be null or a legacy positive integer",
+    );
+  }
+  for (const ref of refs) {
+    let record: ExperimentGoalRecord;
+    let task: ExperimentGoalTask;
+    try {
+      record = store.readExperiment(ref);
+      task = store.readJson<ExperimentGoalTask>(record.taskRef);
+    } catch (error) {
+      errors.push(`${ref}: ${message(error)}`);
+      continue;
+    }
+    const requiredRecordKeys = [
+          "formatVersion",
+          "experimentId",
+          "round",
+          "taskRef",
+          "promptRef",
+          "runtimeRef",
+          "resultRef",
+          "providerThreadId",
+          "providerTurnIds",
+          "goalStatus",
+          "startedAt",
+          "completedAt",
+          "finalOutputRef",
+          "integrationTaskRef",
+          "error",
+        ];
+    errors.push(
+      ...exactKeys(
+        record,
+        [
+          ...requiredRecordKeys,
+          "reviewTaskRef",
+          "reviewRef",
+          "anchorReviewTaskRef",
+          "anchorReviewRef",
+        ],
+        ref,
+        true,
+      ),
+    );
+    for (const key of requiredRecordKeys) {
+      if (!Object.hasOwn(record, key)) {
+        errors.push(`${ref}: missing required property ${key}`);
+      }
+    }
+    const expectedRef = `experiments/${record.experimentId}/experiment.json`;
+    if (ref !== expectedRef) {
+      errors.push(`${ref}: experimentId does not identify its record`);
+    }
+    if (record.formatVersion !== run.formatVersion) {
+      errors.push(`${ref}: formatVersion differs from run`);
+    }
+    for (const requiredRef of [record.taskRef, record.promptRef, record.runtimeRef]) {
+      if (!store.exists(requiredRef)) errors.push(`${ref}: missing ${requiredRef}`);
+    }
+    if (record.integrationTaskRef && !store.exists(record.integrationTaskRef)) {
+      errors.push(`${ref}: missing integrationTaskRef ${record.integrationTaskRef}`);
+    }
+    for (const [label, linkedRef] of [
+      ["reviewTaskRef", record.reviewTaskRef],
+      ["reviewRef", record.reviewRef],
+      ["anchorReviewTaskRef", record.anchorReviewTaskRef],
+      ["anchorReviewRef", record.anchorReviewRef],
+    ] as const) {
+      if (linkedRef && !store.exists(linkedRef)) {
+        errors.push(`${ref}: missing ${label} ${linkedRef}`);
+      }
+    }
+    if (Boolean(record.reviewTaskRef) !== Boolean(record.reviewRef)) {
+      errors.push(`${ref}: reviewTaskRef and reviewRef must be paired`);
+    }
+    if (
+      Boolean(record.anchorReviewTaskRef) !== Boolean(record.anchorReviewRef)
+    ) {
+      errors.push(
+        `${ref}: anchorReviewTaskRef and anchorReviewRef must be paired`,
+      );
+    }
+    errors.push(
+      ...exactKeys(
+        task,
+        [
+          "experimentId",
+          "goalRef",
+          "sourceDecisionTurnRef",
+          "sourceDecisionContextRef",
+          "anchorWork",
+          "directionWork",
+          "experimentObjective",
+          "workspaceRef",
+        ],
+        `${ref}.task`,
+      ),
+    );
+    if (task.experimentId !== record.experimentId) {
+      errors.push(`${ref}: task experimentId differs from record`);
+    }
+    if (task.goalRef !== "workflow_goal.json") {
+      errors.push(`${ref}: task goalRef is invalid`);
+    }
+    if (!nonEmpty(task.experimentObjective)) {
+      errors.push(`${ref}: task experimentObjective is empty`);
+    }
+    for (const requiredRef of [
+      task.sourceDecisionTurnRef,
+      task.sourceDecisionContextRef,
+      task.anchorWork,
+      ...(task.directionWork ? [task.directionWork] : []),
+      task.workspaceRef,
+    ]) {
+      if (!store.exists(requiredRef)) errors.push(`${ref}: missing task ref ${requiredRef}`);
+    }
+    const terminal = record.goalStatus === "runtimeFailed" ||
+      EXPERIMENT_GOAL_STATUSES.includes(record.goalStatus as never) &&
+        !["active"].includes(record.goalStatus);
+    if (terminal && !store.exists(record.resultRef)) {
+      errors.push(`${ref}: terminal Goal lacks ${record.resultRef}`);
+      continue;
+    }
+    if (!store.exists(record.resultRef)) continue;
+    let result: ExperimentGoalResult;
+    try {
+      result = store.readJson<ExperimentGoalResult>(record.resultRef);
+    } catch (error) {
+      errors.push(`${ref}: invalid result: ${message(error)}`);
+      continue;
+    }
+    errors.push(
+      ...exactKeys(
+        result,
+        [
+          "experimentId",
+          "anchorWork",
+          "directionWork",
+          "experimentObjective",
+          "goalStatus",
+          "conclusionRef",
+          "workspaceRef",
+          "providerThreadId",
+          "providerTurnIds",
+          "tokensUsed",
+          "timeUsedSeconds",
+          "error",
+        ],
+        record.resultRef,
+      ),
+    );
+    if (
+      result.experimentId !== task.experimentId ||
+      result.anchorWork !== task.anchorWork ||
+      result.directionWork !== task.directionWork ||
+      result.experimentObjective !== task.experimentObjective ||
+      result.workspaceRef !== task.workspaceRef
+    ) {
+      errors.push(`${ref}: result differs from frozen task binding`);
+    }
+    if (result.goalStatus !== record.goalStatus) {
+      errors.push(`${ref}: result Goal status differs from record`);
+    }
+    if (result.conclusionRef && !store.exists(result.conclusionRef)) {
+      errors.push(`${ref}: missing conclusion ${result.conclusionRef}`);
     }
   }
   return errors;
@@ -1117,6 +1496,40 @@ function validateState(store: FileLoopStore, state: StateFile): string[] {
   }
   if (state.activeTurnRef && !store.exists(state.activeTurnRef)) {
     errors.push(`missing activeTurnRef ${state.activeTurnRef}`);
+  }
+  if (state.formatVersion >= 8) {
+    if (
+      !Number.isInteger(state.experimentGoalsStarted) ||
+      state.experimentGoalsStarted < 0
+    ) {
+      errors.push("formatVersion 8 state requires experimentGoalsStarted >= 0");
+    }
+    if (
+      state.activeExperimentRef &&
+      !store.exists(state.activeExperimentRef)
+    ) {
+      errors.push(`missing activeExperimentRef ${state.activeExperimentRef}`);
+    }
+    if (
+      state.latestExperimentResultRef &&
+      !store.exists(state.latestExperimentResultRef)
+    ) {
+      errors.push(
+        `missing latestExperimentResultRef ${state.latestExperimentResultRef}`,
+      );
+    }
+    const expHead = state.sequence[0]?.role === "EXP_GOAL"
+      ? state.sequence[0]
+      : null;
+    if (expHead?.bindingRef && !store.exists(expHead.bindingRef)) {
+      errors.push(`EXP_GOAL sequence missing ${expHead.bindingRef}`);
+    }
+    if (
+      state.activeExperimentRef &&
+      expHead?.bindingRef !== state.activeExperimentRef
+    ) {
+      errors.push("activeExperimentRef differs from EXP_GOAL sequence head");
+    }
   }
   if (state.pending) {
     for (const ref of [

@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type {
+  ExperimentGoalRecord,
   ObjectsIndex,
   RoundFile,
   RunFile,
@@ -46,6 +47,7 @@ export class FileLoopStore {
       "observations/checkpoints",
       "recoveries",
       "authorizations/rounds",
+      "experiments",
       "final",
     ]) {
       mkdirSync(resolve(this.workDir, directory), { recursive: true });
@@ -270,6 +272,19 @@ export class FileLoopStore {
       .filter((ref) => this.exists(ref));
   }
 
+  experimentRefs(): string[] {
+    const root = this.absolute("experiments");
+    if (!existsSync(root)) return [];
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => `experiments/${entry.name}/experiment.json`)
+      .filter((ref) => this.exists(ref));
+  }
+
+  readExperiment(ref: string): ExperimentGoalRecord {
+    return this.readJson<ExperimentGoalRecord>(ref);
+  }
+
   writeTurn(turn: TurnFile): string {
     const ref = `turns/${turn.turnId}/turn.json`;
     this.writeJson(ref, turn);
@@ -296,6 +311,14 @@ export class FileLoopStore {
   appendTurnToRound(round: number, turnRef: string): void {
     const value = this.readRound(round);
     if (!value.turnRefs.includes(turnRef)) value.turnRefs.push(turnRef);
+    this.writeRound(value);
+  }
+
+  appendExperimentToRound(round: number, experimentRef: string): void {
+    const value = this.readRound(round);
+    if (!value.experimentRefs.includes(experimentRef)) {
+      value.experimentRefs.push(experimentRef);
+    }
     this.writeRound(value);
   }
 
@@ -339,7 +362,7 @@ export class FileLoopStore {
 }
 
 function isImmutableDecisionContextPath(path: string): boolean {
-  return /^contexts\/[^/]+\/(?:decision_context\.json|decision_observation\.json|research_memory_snapshot\.json|progress_trajectory_snapshot\.jsonl)$/.test(
+  return /^contexts\/[^/]+\/(?:decision_context\.json|decision_observation\.json|research_memory_snapshot\.json|progress_trajectory_snapshot\.jsonl|negative_experiment_history_snapshot\.json)$/.test(
     path,
   );
 }

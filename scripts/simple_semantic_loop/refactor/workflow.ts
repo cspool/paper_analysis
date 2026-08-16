@@ -1,10 +1,17 @@
 import { FileLoopStore } from "./store.ts";
+import {
+  negativeExperimentHistoryForTask,
+  experimentRecordForResult,
+  experimentReviewRef,
+} from "./experiment_history.ts";
 import type {
   AnchorIndexEntry,
   BranchEffect,
   CommittedResult,
   DecisionContext,
   DirectionIndexEntry,
+  ExperimentContext,
+  ExperimentGoalResult,
   LoopDecision,
   ObjectKind,
   ObjectsIndex,
@@ -30,15 +37,29 @@ export function initialSequence(): SequenceStep[] {
 export function sequenceAfterDecision(
   decision: LoopDecision,
   bindingRef: string | null = null,
+  reviewerMode: "PRE_REVIEW" | "POST_EXP_REVIEW" | "ANCHOR_REASSESS" =
+    "PRE_REVIEW",
 ): SequenceStep[] {
   switch (decision) {
     case "RUN_WORKER":
       return initialSequence();
     case "RUN_REVIEWER":
+      if (reviewerMode !== "PRE_REVIEW") {
+        return [
+          { role: "REVIEWER", mode: reviewerMode, bindingRef: null },
+          { role: "DECISION", mode: "DECISION", bindingRef: null },
+        ];
+      }
       return [
         { role: "REVIEWER", mode: "PRE_REVIEW", bindingRef: null },
         { role: "WORKER", mode: "NORMAL_WORK", bindingRef: null },
         { role: "REVIEWER", mode: "PAIR_REVIEW", bindingRef: null },
+        { role: "DECISION", mode: "DECISION", bindingRef: null },
+      ];
+    case "RUN_EXP_GOAL":
+      if (!bindingRef) throw new Error("RUN_EXP_GOAL requires an experiment binding");
+      return [
+        { role: "EXP_GOAL", mode: "EXP_GOAL", bindingRef },
         { role: "DECISION", mode: "DECISION", bindingRef: null },
       ];
     case "RETRY_WORKER":
@@ -77,6 +98,26 @@ export function createWorkerBinding(
     );
     choice.inputs.researchMemory = memoryRef;
   }
+  const experimentResultRefs = relevantExperimentResultRefs(store, choice);
+  if (experimentResultRefs.length > 0) {
+    const experimentResultsRef =
+      `tasks/${bindingId}/experiment_results.json`;
+    store.writeImmutableJson(experimentResultsRef, {
+      resultRefs: experimentResultRefs,
+    });
+    choice.inputs.experimentResults = experimentResultsRef;
+  }
+  const negativeHistoryRef =
+    `tasks/${bindingId}/negative_experiment_history.json`;
+  store.writeImmutableJson(
+    negativeHistoryRef,
+    negativeExperimentHistoryForTask(
+      store,
+      state,
+      workerChoiceAnchorRef(choice),
+    ),
+  );
+  choice.inputs.negativeExperimentHistoryRef = negativeHistoryRef;
   const binding: TaskBinding = {
     bindingId,
     createdAt: new Date().toISOString(),
@@ -97,6 +138,23 @@ export function createWorkerBinding(
   const bindingRef = `bindings/${bindingId}.json`;
   store.writeJson(taskRef, task);
   store.writeJson(bindingRef, binding);
+  for (const experimentRef of store.experimentRefs()) {
+    const record = store.readExperiment(experimentRef);
+    if (
+      experimentResultRefs.includes(record.resultRef) &&
+      record.integrationTaskRef === null
+    ) {
+      store.writeJson(experimentRef, {
+        ...record,
+        integrationTaskRef: taskRef,
+      });
+      store.appendEvent("EXP_GOAL_INTEGRATION_TASK_BOUND", [
+        experimentRef,
+        record.resultRef,
+        taskRef,
+      ]);
+    }
+  }
   store.appendEvent("TASK_BOUND", [bindingRef, taskRef]);
   return { bindingRef, binding, task };
 }
@@ -104,12 +162,19 @@ export function createWorkerBinding(
 export function createReviewerBinding(
   store: FileLoopStore,
   state: StateFile,
-  mode: "PAIR_REVIEW" | "PRE_REVIEW",
+  mode:
+    | "PAIR_REVIEW"
+    | "PRE_REVIEW"
+    | "POST_EXP_REVIEW"
+    | "ANCHOR_REASSESS",
 ): { bindingRef: string; binding: TaskBinding; task: TurnTask } {
-  const target =
-    mode === "PAIR_REVIEW"
-      ? reviewTargetFromPending(state.pending)
-      : selectPreReviewTarget(store);
+  const target = mode === "PAIR_REVIEW"
+    ? reviewTargetFromPending(state.pending)
+    : mode === "POST_EXP_REVIEW"
+    ? selectPostExperimentReviewTarget(store, state)
+    : mode === "ANCHOR_REASSESS"
+    ? selectAnchorReassessmentTarget(store, state)
+    : selectPreReviewTarget(store);
   const bindingId = store.newId("binding");
   const taskRef = `tasks/${bindingId}/turn_task.json`;
   const action =
@@ -142,19 +207,60 @@ export function createReviewerBinding(
       target.parentAnchorId!,
     );
   }
+  if (mode === "POST_EXP_REVIEW") {
+    const latest = experimentRecordForResult(
+      store,
+      state.latestExperimentResultRef,
+    );
+    if (!latest) throw new Error("POST_EXP_REVIEW lacks the latest EXP result");
+    const experimentResultsRef =
+      `tasks/${bindingId}/experiment_results.json`;
+    store.writeImmutableJson(experimentResultsRef, {
+      resultRefs: [latest.record.resultRef],
+    });
+    inputs.experimentResults = experimentResultsRef;
+    const currentReview = currentReviewForTarget(store, target);
+    if (currentReview) inputs.previousReview = currentReview;
+  }
+  const anchorWork = target.objectKind === "ANCHOR"
+    ? target.workRef
+    : inputs.boundAnchor ?? null;
+  const negativeHistoryRef =
+    `tasks/${bindingId}/negative_experiment_history.json`;
+  store.writeImmutableJson(
+    negativeHistoryRef,
+    negativeExperimentHistoryForTask(store, state, anchorWork),
+  );
+  inputs.negativeExperimentHistoryRef = negativeHistoryRef;
   const task: TurnTask = {
     goalRef: "workflow_goal.json",
     action,
-    objective:
-      mode === "PRE_REVIEW"
-        ? "从独立角度重新审阅当前对象，为随后深化该对象或创建同类替代对象提供结论。"
-        : "独立审阅当前 Work Result 是否满足最终需求和对象合同。",
+    objective: mode === "POST_EXP_REVIEW"
+      ? "独立审阅刚完成的 EXP 是否回答绑定判别问题，并据此更新当前对象结论；本次审阅后直接回到 Decision。"
+      : mode === "ANCHOR_REASSESS"
+      ? "在相关 Direction 的负实验已经收敛后重新审阅父 Anchor 是否仍有可支持的优化机会；本次审阅后直接回到 Decision。"
+      : mode === "PRE_REVIEW"
+      ? "从独立角度重新审阅当前对象，为随后深化该对象或创建同类替代对象提供结论。"
+      : "独立审阅当前 Work Result 是否满足最终需求和对象合同。",
     inputs,
     requirements: [
       "核对目标范围、baseline、证据和字段间语义一致性",
+      "对 Anchor 判断性能 baseline、剩余 headroom 和具体 6L 对象是否足以构成真实优化机会",
+      "对 Direction 先判断最近方法 baseline 与主要变化的实质差异，再判断参考实验和环境 handoff 是否充分",
       "对 Direction 核对最小可检验主要变化、联合包归因边界和最小充分表达",
       "按对象类型应用 Review Rubric 并给出唯一 verdict",
       "由 Reviewer 记录会改变审阅结论的对象局部 query gaps",
+      ...(mode === "POST_EXP_REVIEW"
+        ? [
+          "读取 experimentResults，核对是否命中预注册失败条件、结论边界，以及负结果只影响当前 Direction 还是对同机制族具有累积价值",
+          "结合 negativeExperimentHistoryRef 判断当前结果与历史负结果的关系；不得把 budgetLimited、授权或环境失败误当作科学负证据",
+        ]
+        : []),
+      ...(mode === "ANCHOR_REASSESS"
+        ? [
+          "结合 negativeExperimentHistoryRef 判断该 Anchor 是否仍存在不同因果杠杆，或其性能矛盾与可验证优化空间已不足以保留在最终 active 集合",
+        ]
+        : []),
       ...(inputs.previousReview
         ? [
           "使用 previousReview 确认上一轮 correction boundary，但只对当前 reviewTarget 独立作出 verdict",
@@ -190,6 +296,24 @@ function previousRevisionReviewRef(
   return entry?.revisions[String(target.revision - 1)]?.reviewRef ?? null;
 }
 
+export function reviewerModeForDecision(
+  store: FileLoopStore,
+  state: StateFile,
+  suppliedIndex?: ObjectsIndex,
+): "PRE_REVIEW" | "POST_EXP_REVIEW" | "ANCHOR_REASSESS" {
+  const latest = experimentRecordForResult(
+    store,
+    state.latestExperimentResultRef,
+  );
+  if (latest && experimentReviewRef(store, latest.record) === null) {
+    return "POST_EXP_REVIEW";
+  }
+  if (anchorReassessmentTarget(store, state, suppliedIndex)) {
+    return "ANCHOR_REASSESS";
+  }
+  return "PRE_REVIEW";
+}
+
 export function createDecisionContext(
   store: FileLoopStore,
   state: StateFile,
@@ -204,6 +328,7 @@ export function createDecisionContext(
       state,
       true,
     ),
+    experimentContext: experimentContextProjection(store, state),
     observationRef,
   };
 }
@@ -225,6 +350,17 @@ export function previewBranchEffects(
         nextAction: "FINALIZE",
         targetRef: null,
         sequence: [],
+      };
+    }
+    if (decision === "RUN_EXP_GOAL") {
+      const target = experimentContextProjection(store, state, projected);
+      if (!target) throw new Error("RUN_EXP_GOAL preview lacks an experiment target");
+      return {
+        decision,
+        nextRole: "EXP_GOAL",
+        nextAction: "RUN_EXPERIMENT",
+        targetRef: target.directionWork ?? target.anchorWork,
+        sequence: ["EXP_GOAL", "DECISION"],
       };
     }
     if (decision === "RETRY_WORKER") {
@@ -252,7 +388,12 @@ export function previewBranchEffects(
       };
     }
     if (decision === "RUN_REVIEWER") {
-      const target = selectPreReviewTarget(store, projected);
+      const reviewerMode = reviewerModeForDecision(store, state, projected);
+      const target = reviewerMode === "POST_EXP_REVIEW"
+        ? selectPostExperimentReviewTarget(store, state, projected)
+        : reviewerMode === "ANCHOR_REASSESS"
+        ? selectAnchorReassessmentTarget(store, state, projected)
+        : selectPreReviewTarget(store, projected);
       return {
         decision,
         nextRole: "REVIEWER",
@@ -261,7 +402,9 @@ export function previewBranchEffects(
             ? "REVIEW_ANCHOR"
             : "REVIEW_DIRECTION",
         targetRef: target.workRef,
-        sequence: sequenceAfterDecision(decision).map((step) => step.role),
+        sequence: sequenceAfterDecision(decision, null, reviewerMode).map(
+          (step) => step.role,
+        ),
       };
     }
     const choice = chooseWorkerAction(
@@ -392,6 +535,15 @@ export function allowedDecisions(
   store: FileLoopStore,
   state: StateFile,
 ): LoopDecision[] {
+  if (latestExperimentIsUnreviewed(store, state)) {
+    const atomic: LoopDecision[] = [];
+    if (hasReviewableObjectAfterPending(store, state)) {
+      atomic.push("RUN_REVIEWER");
+    }
+    if (state.pending) atomic.push("RETRY_WORKER");
+    if (state.pending?.reviewTaskBindingRef) atomic.push("RETRY_REVIEWER");
+    return atomic;
+  }
   const allowed: LoopDecision[] = ["RUN_WORKER"];
   if (hasReviewableObjectAfterPending(store, state)) {
     allowed.push("RUN_REVIEWER");
@@ -402,10 +554,97 @@ export function allowedDecisions(
   if (state.pending?.reviewTaskBindingRef) {
     allowed.push("RETRY_REVIEWER");
   }
+  const run = store.readRun();
+  if (
+    state.experimentGoalsStarted < run.budgets.maxExperimentGoals &&
+    !state.activeExperimentRef &&
+    experimentContextProjection(store, state) !== null
+  ) {
+    allowed.push("RUN_EXP_GOAL");
+  }
   if (computeRemainingRequirements(store, state, true).length === 0) {
     allowed.push("FINISH_WORKFLOW");
   }
   return allowed;
+}
+
+export function latestExperimentIsUnreviewed(
+  store: FileLoopStore,
+  state: StateFile,
+): boolean {
+  const latest = experimentRecordForResult(
+    store,
+    state.latestExperimentResultRef,
+  );
+  return Boolean(latest && experimentReviewRef(store, latest.record) === null);
+}
+
+export function experimentContextProjection(
+  store: FileLoopStore,
+  state: StateFile,
+  suppliedIndex?: ObjectsIndex,
+): ExperimentContext | null {
+  const index = suppliedIndex ?? structuredClone(store.readObjects());
+  if (!suppliedIndex && state.pending?.reviewRef) {
+    applyPairToIndex(store, index, state.pending, "PENDING_DECISION");
+  }
+
+  let anchorWork: string | null = null;
+  let directionWork: string | null = null;
+  if (state.pending && state.pending.reviewVerdict !== "REJECT") {
+    if (state.pending.objectKind === "ANCHOR") {
+      anchorWork = state.pending.workRef;
+    } else {
+      directionWork = state.pending.workRef;
+      anchorWork = state.pending.parentAnchorId
+        ? latestAnchorWorkRef(index, state.pending.parentAnchorId)
+        : null;
+    }
+  }
+
+  if (!anchorWork) {
+    for (const anchorId of [...index.activeAnchorIds].reverse()) {
+      const anchor = index.anchors[anchorId];
+      if (!anchor || anchor.rejected) continue;
+      const revision = latestRevision(anchor);
+      anchorWork = revision.workRef;
+      for (const directionId of [...anchor.directionIds].reverse()) {
+        const direction = index.directions[directionId];
+        if (!direction || direction.rejected) continue;
+        const directionRevision = latestRevision(direction);
+        if (boundAnchorForRevision(store, directionRevision) === anchorWork) {
+          directionWork = directionRevision.workRef;
+          break;
+        }
+      }
+      break;
+    }
+  }
+  if (!anchorWork) return null;
+
+  const relatedAnchorWorks = anchorRevisionWorkRefs(index, anchorWork);
+  const previousResultRefs = store.experimentRefs()
+    .map((ref) => store.readExperiment(ref))
+    .filter((record) => record.resultRef && store.exists(record.resultRef))
+    .map((record) => record.resultRef)
+    .filter((ref) => {
+      const result = store.readJson<ExperimentGoalResult>(ref);
+      return relatedAnchorWorks.has(result.anchorWork);
+    });
+  return { anchorWork, directionWork, previousResultRefs };
+}
+
+function anchorRevisionWorkRefs(
+  index: ObjectsIndex,
+  workRef: string,
+): Set<string> {
+  for (const anchor of Object.values(index.anchors)) {
+    const refs = Object.values(anchor.revisions).map((revision) =>
+      revision.workRef
+    );
+    if (refs.includes(workRef)) return new Set(refs);
+  }
+  return new Set([workRef]);
 }
 
 export function commitPending(
@@ -503,6 +742,68 @@ export function commitPreReview(
   store.appendEvent("PRE_REVIEW_COMMITTED", [workRef, reviewRef]);
 }
 
+export function bindLatestExperimentReview(
+  store: FileLoopStore,
+  state: StateFile,
+  binding: TaskBinding,
+  reviewRef: string,
+): string {
+  const latest = experimentRecordForResult(
+    store,
+    state.latestExperimentResultRef,
+  );
+  if (!latest) throw new Error("post-EXP review lacks the latest EXP record");
+  if (latest.record.reviewRef) {
+    throw new Error("latest EXP result is already semantically reviewed");
+  }
+  const task = store.readJson<TurnTask>(binding.taskRef);
+  if (!task.inputs.experimentResults) {
+    throw new Error("post-EXP Reviewer task lacks experimentResults");
+  }
+  const refs = store.readJson<{ resultRefs?: unknown }>(
+    task.inputs.experimentResults,
+  ).resultRefs;
+  if (!Array.isArray(refs) || !refs.includes(latest.record.resultRef)) {
+    throw new Error("post-EXP Reviewer task is not bound to the latest result");
+  }
+  store.writeJson(latest.ref, {
+    ...latest.record,
+    reviewTaskRef: binding.taskRef,
+    reviewRef,
+  });
+  store.appendEvent("EXP_GOAL_REVIEW_BOUND", [
+    latest.ref,
+    latest.record.resultRef,
+    binding.taskRef,
+    reviewRef,
+  ]);
+  return latest.ref;
+}
+
+export function bindLatestExperimentAnchorReview(
+  store: FileLoopStore,
+  state: StateFile,
+  binding: TaskBinding,
+  reviewRef: string,
+): string {
+  const latest = experimentRecordForResult(
+    store,
+    state.latestExperimentResultRef,
+  );
+  if (!latest) throw new Error("Anchor reassessment lacks the latest EXP record");
+  store.writeJson(latest.ref, {
+    ...latest.record,
+    anchorReviewTaskRef: binding.taskRef,
+    anchorReviewRef: reviewRef,
+  });
+  store.appendEvent("EXP_GOAL_ANCHOR_REVIEW_BOUND", [
+    latest.ref,
+    binding.taskRef,
+    reviewRef,
+  ]);
+  return latest.ref;
+}
+
 interface WorkerChoice {
   action: WorkAction;
   objectKind: ObjectKind;
@@ -511,6 +812,37 @@ interface WorkerChoice {
   parentAnchorId: string | null;
   inputs: TurnTask["inputs"];
   intent: "STANDARD" | "CONVERGENCE_PROBE";
+}
+
+function workerChoiceAnchorRef(choice: WorkerChoice): string | null {
+  if (choice.objectKind === "DIRECTION") {
+    return choice.inputs.boundAnchor ?? null;
+  }
+  return choice.inputs.currentWork ?? null;
+}
+
+function relevantExperimentResultRefs(
+  store: FileLoopStore,
+  choice: WorkerChoice,
+): string[] {
+  const anchorRef = choice.objectKind === "ANCHOR"
+    ? choice.inputs.currentWork ?? null
+    : choice.inputs.boundAnchor ?? null;
+  const directionRef = choice.objectKind === "DIRECTION"
+    ? choice.inputs.currentWork ?? null
+    : null;
+  if (!anchorRef) return [];
+  return store.experimentRefs()
+    .map((ref) => store.readExperiment(ref))
+    .filter((record) =>
+      store.exists(record.resultRef) && record.integrationTaskRef === null
+    )
+    .map((record) => record.resultRef)
+    .filter((ref) => {
+      const result = store.readJson<ExperimentGoalResult>(ref);
+      if (result.anchorWork !== anchorRef) return false;
+      return directionRef === null || result.directionWork === directionRef;
+    });
 }
 
 function chooseWorkerAction(
@@ -522,6 +854,9 @@ function chooseWorkerAction(
   if (state.preReview) {
     return choiceFromPreReview(store, index, state.preReview);
   }
+
+  const experimentChoice = choiceFromUnintegratedExperiment(store, index);
+  if (experimentChoice) return experimentChoice;
 
   for (const anchorId of index.activeAnchorIds) {
     const anchor = index.anchors[anchorId];
@@ -630,6 +965,46 @@ function chooseWorkerAction(
     undefined,
     "CONVERGENCE_PROBE",
   );
+}
+
+function choiceFromUnintegratedExperiment(
+  store: FileLoopStore,
+  index: ObjectsIndex,
+): WorkerChoice | null {
+  for (const experimentRef of [...store.experimentRefs()].reverse()) {
+    const record = store.readExperiment(experimentRef);
+    if (record.integrationTaskRef !== null || !store.exists(record.resultRef)) {
+      continue;
+    }
+    const result = store.readJson<ExperimentGoalResult>(record.resultRef);
+    if (result.directionWork) {
+      let matchedActiveDirection = false;
+      for (const direction of Object.values(index.directions)) {
+        if (direction.rejected) continue;
+        const revision = latestRevision(direction);
+        if (revision.workRef !== result.directionWork) continue;
+        matchedActiveDirection = true;
+        return deepenDirectionChoice(
+          index,
+          direction,
+          revision.workRef,
+          revision.reviewRef,
+        );
+      }
+      // A reviewed negative Direction is no longer deepened through its
+      // parent Anchor. Normal mechanical requirements select a replacement
+      // Direction, while the negative-history snapshot constrains its
+      // semantics. The local flag documents the intentional branch shape.
+      if (!matchedActiveDirection) continue;
+    }
+    for (const anchor of Object.values(index.anchors)) {
+      if (anchor.rejected) continue;
+      const revision = latestRevision(anchor);
+      if (revision.workRef !== result.anchorWork) continue;
+      return deepenAnchorChoice(anchor, revision.workRef, revision.reviewRef);
+    }
+  }
+  return null;
 }
 
 function choiceFromPreReview(
@@ -760,6 +1135,10 @@ function workerTaskForChoice(choice: WorkerChoice): TurnTask {
     choice.action === "DEEPEN_ANCHOR" ||
     choice.action === "DEEPEN_DIRECTION";
   const hasLatestReview = Boolean(choice.inputs.latestReview);
+  const hasExperimentResults = Boolean(choice.inputs.experimentResults);
+  const hasNegativeHistory = Boolean(
+    choice.inputs.negativeExperimentHistoryRef,
+  );
   const isConvergenceProbe = choice.intent === "CONVERGENCE_PROBE";
   return {
     goalRef: "workflow_goal.json",
@@ -792,13 +1171,27 @@ function workerTaskForChoice(choice: WorkerChoice): TurnTask {
         ...(hasLatestReview
           ? ["处理 latestReview 中所有 BLOCKING findings 和相关 query gaps"]
           : []),
+        ...(hasExperimentResults
+          ? ["读取 experimentResults 中与当前对象绑定的 EXP Goal 结果，并据此修订或收窄性能 baseline、headroom 和 6L 性能对象；不得把不确定或环境失败解释为支持"]
+          : []),
+        ...(hasNegativeHistory
+          ? ["读取 negativeExperimentHistoryRef；避免把已审阅负结果所约束的同一因果杠杆包装成新 Anchor，并在无可信新区域时如实返回 BLOCKED_NO_RESULT"]
+          : []),
       ]
       : [
         "保持 boundAnchor 绑定并明确唯一主要 baseline change",
+        "区分 Anchor 的性能/执行 baseline 与当前 Direction 的最近方法 baseline，并说明真实差异",
         "给出机制、条件化预期影响、权衡、失败条件和可证伪测量计划",
+        "方向有效后补足可复用 baseline、相近实验、代码/框架/模拟器/benchmark/trace 及其适配边界，避免展开成执行手册",
         "使用最小充分表达；可拆分变化不得捆绑归因，不可分联合包只声明 package-level effect",
         ...(hasLatestReview
           ? ["处理 latestReview 中所有 BLOCKING findings 和相关 query gaps"]
+          : []),
+        ...(hasExperimentResults
+          ? ["读取 experimentResults 中与当前对象绑定的 EXP Goal 结果，并据此支持、不支持或收窄机制主张；保留环境和数据限制"]
+          : []),
+        ...(hasNegativeHistory
+          ? ["读取 negativeExperimentHistoryRef，比较 baseline change、causal lever 与 preserved boundary；已收敛机制不得只换阈值、特征或小型 head，找不到不同杠杆时如实返回 BLOCKED_NO_RESULT"]
           : []),
       ],
     constraints: [
@@ -862,6 +1255,131 @@ function selectPreReviewTarget(
     };
   }
   throw new Error("RUN_REVIEWER requires at least one committed object");
+}
+
+function selectPostExperimentReviewTarget(
+  store: FileLoopStore,
+  state: StateFile,
+  suppliedIndex?: ObjectsIndex,
+): ReturnType<typeof reviewTargetFromPending> {
+  const latest = experimentRecordForResult(
+    store,
+    state.latestExperimentResultRef,
+  );
+  if (!latest) throw new Error("POST_EXP_REVIEW requires the latest EXP result");
+  if (experimentReviewRef(store, latest.record)) {
+    throw new Error("latest EXP result already has a semantic review");
+  }
+  const result = store.readJson<ExperimentGoalResult>(latest.record.resultRef);
+  const target = targetForWorkRef(
+    suppliedIndex ?? store.readObjects(),
+    result.directionWork ?? result.anchorWork,
+  );
+  if (!target) {
+    throw new Error("latest EXP result does not resolve to a canonical object");
+  }
+  return target;
+}
+
+function selectAnchorReassessmentTarget(
+  store: FileLoopStore,
+  state: StateFile,
+  suppliedIndex?: ObjectsIndex,
+): ReturnType<typeof reviewTargetFromPending> {
+  const target = anchorReassessmentTarget(store, state, suppliedIndex);
+  if (!target) {
+    throw new Error("ANCHOR_REASSESS requires a reviewed negative Direction EXP");
+  }
+  return target;
+}
+
+function anchorReassessmentTarget(
+  store: FileLoopStore,
+  state: StateFile,
+  suppliedIndex?: ObjectsIndex,
+): ReturnType<typeof reviewTargetFromPending> | null {
+  const latest = experimentRecordForResult(
+    store,
+    state.latestExperimentResultRef,
+  );
+  if (!latest) return null;
+  if (latest.record.anchorReviewRef) return null;
+  const reviewRef = experimentReviewRef(store, latest.record);
+  if (!reviewRef || !store.exists(reviewRef)) return null;
+  const review = store.readJson<{ reviewVerdict?: unknown }>(reviewRef);
+  if (review.reviewVerdict !== "REJECT") return null;
+  const result = store.readJson<ExperimentGoalResult>(latest.record.resultRef);
+  if (!result.directionWork) return null;
+  const index = suppliedIndex ?? store.readObjects();
+  const directionTarget = targetForWorkRef(index, result.directionWork);
+  if (!directionTarget || directionTarget.objectKind !== "DIRECTION") {
+    return null;
+  }
+  const direction = index.directions[directionTarget.objectId];
+  const anchor = direction
+    ? index.anchors[direction.parentAnchorId]
+    : null;
+  if (!anchor || anchor.rejected) return null;
+  const anchorRevision = latestRevision(anchor);
+  const hasViableDirection = anchor.directionIds.some((directionId) => {
+    const candidate = index.directions[directionId];
+    return Boolean(
+      candidate &&
+        !candidate.rejected &&
+        boundAnchorForRevision(store, latestRevision(candidate)) ===
+          anchorRevision.workRef,
+    );
+  });
+  if (hasViableDirection) return null;
+  return {
+    objectKind: "ANCHOR",
+    objectId: anchor.objectId,
+    revision: anchor.latestRevision,
+    parentAnchorId: null,
+    workRef: anchorRevision.workRef,
+  };
+}
+
+function targetForWorkRef(
+  index: ObjectsIndex,
+  workRef: string,
+): ReturnType<typeof reviewTargetFromPending> | null {
+  for (const anchor of Object.values(index.anchors)) {
+    for (const revision of Object.values(anchor.revisions)) {
+      if (revision.workRef !== workRef) continue;
+      return {
+        objectKind: "ANCHOR",
+        objectId: anchor.objectId,
+        revision: revision.revision,
+        parentAnchorId: null,
+        workRef,
+      };
+    }
+  }
+  for (const direction of Object.values(index.directions)) {
+    for (const revision of Object.values(direction.revisions)) {
+      if (revision.workRef !== workRef) continue;
+      return {
+        objectKind: "DIRECTION",
+        objectId: direction.objectId,
+        revision: revision.revision,
+        parentAnchorId: direction.parentAnchorId,
+        workRef,
+      };
+    }
+  }
+  return null;
+}
+
+function currentReviewForTarget(
+  store: FileLoopStore,
+  target: ReturnType<typeof reviewTargetFromPending>,
+): string | null {
+  const index = store.readObjects();
+  const entry = target.objectKind === "ANCHOR"
+    ? index.anchors[target.objectId]
+    : index.directions[target.objectId];
+  return entry?.revisions[String(target.revision)]?.reviewRef ?? null;
 }
 
 function applyPairToIndex(

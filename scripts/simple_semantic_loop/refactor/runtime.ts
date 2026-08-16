@@ -1,8 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import type {
-  LoopRole,
+  ExperimentGoalStatus,
+  GoalDispatch,
+  GoalRuntimePersistenceEvent,
+  RuntimeRole,
   OutputCaptureState,
+  RawGoalResult,
   RawTurnResult,
   RuntimeFailureKind,
   RuntimePersistenceEvent,
@@ -67,7 +71,7 @@ export type RuntimeLiveEvent =
   | {
       type: "turn_starting";
       turnId: string;
-      role: LoopRole;
+      role: RuntimeRole;
       model: string;
       effort: "high" | "max";
       approvalPolicy: "never";
@@ -76,28 +80,28 @@ export type RuntimeLiveEvent =
   | {
       type: "turn_started";
       turnId: string;
-      role: LoopRole;
+      role: RuntimeRole;
       threadId: string;
       providerTurnId: string;
     }
   | {
       type: "agent_output_delta";
       turnId: string;
-      role: LoopRole;
+      role: RuntimeRole;
       itemId: string;
       delta: string;
     }
   | {
       type: "agent_message_complete";
       turnId: string;
-      role: LoopRole;
+      role: RuntimeRole;
       itemId: string;
       phase: MessagePhase;
     }
   | {
       type: "tool_status";
       turnId: string;
-      role: LoopRole;
+      role: RuntimeRole;
       phase: "started" | "completed";
       toolName: string;
       status: string;
@@ -105,7 +109,7 @@ export type RuntimeLiveEvent =
   | {
       type: "turn_completed";
       turnId: string;
-      role: LoopRole;
+      role: RuntimeRole;
       status: RawTurnResult["status"];
       elapsedMs: number;
       usage: TokenUsage;
@@ -114,7 +118,7 @@ export type RuntimeLiveEvent =
   | {
       type: "turn_timeout";
       turnId: string;
-      role: LoopRole;
+      role: RuntimeRole;
       timeoutMs: number;
       kind: Extract<RuntimeFailureKind, "IDLE_TIMEOUT" | "HARD_TIMEOUT">;
       capture: OutputCaptureState;
@@ -141,6 +145,7 @@ export class CodexAppServerRuntime implements TurnRuntime {
   private requests = new Map<number, PendingRequest>();
   private turns = new Map<string, PendingTurn>();
   private earlyMessages = new Map<string, Record<string, unknown>[]>();
+  private activeGoalRuntime: CodexGoalAppServerRuntime | null = null;
 
   constructor(config: CodexRuntimeConfig = {}) {
     this.config = config;
@@ -169,7 +174,8 @@ export class CodexAppServerRuntime implements TurnRuntime {
           approvalPolicy: "never",
           sandbox: this.sandbox,
           cwd: dispatch.cwd,
-          developerInstructions: developerInstructions(dispatch.role),
+          developerInstructions:
+            dispatch.developerInstructions ?? developerInstructions(dispatch.role),
         },
         this.config.requestTimeoutMs,
       ),
@@ -257,6 +263,24 @@ export class CodexAppServerRuntime implements TurnRuntime {
       this.turns.set(providerTurnId, pending);
       this.replayEarlyMessages(providerTurnId);
     });
+  }
+
+  async runGoal(dispatch: GoalDispatch): Promise<RawGoalResult> {
+    const runtime = new CodexGoalAppServerRuntime(this.config, this.sandbox);
+    if (this.activeGoalRuntime) {
+      throw new Error("only one persistent Goal invocation may run at a time");
+    }
+    this.activeGoalRuntime = runtime;
+    try {
+      return await runtime.run(dispatch);
+    } finally {
+      await runtime.close();
+      if (this.activeGoalRuntime === runtime) this.activeGoalRuntime = null;
+    }
+  }
+
+  async interruptGoal(reason = "operator requested pause"): Promise<void> {
+    await this.activeGoalRuntime?.interrupt(reason);
   }
 
   async probeModel(modelId: string): Promise<string[]> {
@@ -908,20 +932,676 @@ export class CodexAppServerRuntime implements TurnRuntime {
   }
 }
 
+interface PendingGoal {
+  dispatch: GoalDispatch;
+  threadId: string;
+  startedAt: number;
+  resolve: (value: RawGoalResult) => void;
+  idleTimer: NodeJS.Timeout;
+  hardTimer: NodeJS.Timeout;
+  activeTurnIds: Set<string>;
+  providerTurnIds: string[];
+  messageOrder: string[];
+  messageText: Map<string, string>;
+  messagePhase: Map<string, MessagePhase>;
+  liveMessageIds: Set<string>;
+  goalStatus: ExperimentGoalStatus;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  lastActivityAt: number;
+  timingOut: boolean;
+  resolved: boolean;
+  error: string | null;
+  failureKind: RawGoalResult["failureKind"];
+}
+
+class CodexGoalAppServerRuntime {
+  private readonly config: CodexRuntimeConfig;
+  private readonly sandbox: SandboxMode;
+  private process: ChildProcessWithoutNullStreams | null = null;
+  private reader: Interface | null = null;
+  private nextRequestId = 1;
+  private requests = new Map<number, PendingRequest>();
+  private pending: PendingGoal | null = null;
+  private closing = false;
+
+  constructor(config: CodexRuntimeConfig, sandbox: SandboxMode) {
+    this.config = config;
+    this.sandbox = sandbox;
+  }
+
+  async run(dispatch: GoalDispatch): Promise<RawGoalResult> {
+    await this.start();
+    const role = goalRuntimeRole(dispatch);
+    this.emit({
+      type: "turn_starting",
+      turnId: dispatch.experimentId,
+      role,
+      model: dispatch.model,
+      effort: dispatch.effort,
+      approvalPolicy: "never",
+      sandbox: this.sandbox,
+    });
+
+    const response = asObject(await this.request(
+      dispatch.resumeThreadId ? "thread/resume" : "thread/start",
+      dispatch.resumeThreadId
+        ? {
+          threadId: dispatch.resumeThreadId,
+          model: dispatch.model,
+          approvalPolicy: "never",
+          sandbox: this.sandbox,
+          cwd: dispatch.cwd,
+          developerInstructions:
+            dispatch.developerInstructions ?? goalDeveloperInstructions(),
+        }
+        : {
+          model: dispatch.model,
+          allowProviderModelFallback: false,
+          ephemeral: false,
+          approvalPolicy: "never",
+          sandbox: this.sandbox,
+          cwd: dispatch.cwd,
+          developerInstructions:
+            dispatch.developerInstructions ?? goalDeveloperInstructions(),
+        },
+      this.config.requestTimeoutMs,
+    ));
+    const resumedThread = asObject(response?.thread);
+    const threadId = getString(resumedThread, "id");
+    if (!threadId) throw new Error("Goal thread start/resume returned no thread ID");
+
+    const resultPromise = new Promise<RawGoalResult>((resolve) => {
+      const now = Date.now();
+      this.pending = {
+        dispatch,
+        threadId,
+        startedAt: now,
+        resolve,
+        idleTimer: setTimeout(() => {}, 0),
+        hardTimer: setTimeout(() => {}, 0),
+        activeTurnIds: new Set(),
+        providerTurnIds: [],
+        messageOrder: [],
+        messageText: new Map(),
+        messagePhase: new Map(),
+        liveMessageIds: new Set(),
+        goalStatus: "active",
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        lastActivityAt: now,
+        timingOut: false,
+        resolved: false,
+        error: null,
+        failureKind: null,
+      };
+      clearTimeout(this.pending.idleTimer);
+      clearTimeout(this.pending.hardTimer);
+      this.pending.idleTimer = setTimeout(
+        () => void this.timeout("IDLE_TIMEOUT"),
+        dispatch.timeoutProfile.idleTimeoutMs,
+      );
+      this.pending.hardTimer = setTimeout(
+        () => void this.timeout("HARD_TIMEOUT"),
+        dispatch.timeoutProfile.hardTimeoutMs,
+      );
+    });
+    this.persist({ type: "goal_provider_started", at: nowIso(), threadId });
+    this.captureExistingGoalTurns(resumedThread);
+
+    if (dispatch.resumeThreadId) {
+      const goalResponse = asObject(await this.request(
+        "thread/goal/get",
+        { threadId },
+        this.config.requestTimeoutMs,
+      ));
+      const existingGoal = asObject(goalResponse?.goal);
+      const status = goalStatus(existingGoal);
+      if (status && status !== "active" && status !== "paused") {
+        this.updateGoal(existingGoal);
+        this.maybeFinish();
+        return resultPromise;
+      }
+      if (status === "active") {
+        const clearedResponse = asObject(await this.request(
+          "thread/goal/set",
+          {
+            threadId,
+            tokenBudget: null,
+          },
+          this.config.requestTimeoutMs,
+        ));
+        this.updateGoal(asObject(clearedResponse?.goal) ?? existingGoal);
+        return resultPromise;
+      }
+      if (status === "paused") {
+        const resumedGoal = asObject(await this.request(
+          "thread/goal/set",
+          {
+            threadId,
+            status: "active",
+            tokenBudget: null,
+          },
+          this.config.requestTimeoutMs,
+        ));
+        this.updateGoal(asObject(resumedGoal?.goal));
+      }
+    }
+
+    await this.request(
+      "thread/goal/set",
+      {
+        threadId,
+        objective: dispatch.objective,
+        status: "active",
+        tokenBudget: dispatch.tokenBudget,
+      },
+      this.config.requestTimeoutMs,
+    );
+    const turnResponse = asObject(await this.request(
+      "turn/start",
+      {
+        threadId,
+        model: dispatch.model,
+        effort: dispatch.effort,
+        input: [{
+          type: "text",
+          text: dispatch.resumeThreadId
+            ? `${dispatch.prompt}\n继续同一个持久 Goal。先检查已有 workspace、日志和 Goal 状态，避免从头重复。`
+            : dispatch.prompt,
+        }],
+      },
+      this.config.requestTimeoutMs,
+    ));
+    const providerTurnId = getString(asObject(turnResponse?.turn), "id");
+    if (!providerTurnId) {
+      throw new Error("Goal initial/continuation turn returned no Turn ID");
+    }
+    this.rememberTurn(providerTurnId);
+    return resultPromise;
+  }
+
+  async close(): Promise<void> {
+    this.closing = true;
+    if (this.pending && !this.pending.resolved) {
+      this.pending.failureKind = "PROVIDER_ERROR";
+      this.finish("runtimeFailed", "Goal runtime closed before terminal status");
+    }
+    for (const request of this.requests.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error("Goal runtime closed"));
+    }
+    this.requests.clear();
+    this.reader?.close();
+    this.process?.kill("SIGTERM");
+    this.process = null;
+  }
+
+  async interrupt(reason = "operator requested pause"): Promise<void> {
+    const pending = this.pending;
+    if (!pending || pending.resolved || pending.timingOut) return;
+    pending.timingOut = true;
+    for (const turnId of pending.activeTurnIds) {
+      try {
+        await this.request(
+          "turn/interrupt",
+          { threadId: pending.threadId, turnId },
+          Math.min(10_000, pending.dispatch.timeoutProfile.interruptGraceMs),
+        );
+      } catch {
+        // The Goal is paused below even when interruption races with completion.
+      }
+    }
+    try {
+      await this.request(
+        "thread/goal/set",
+        { threadId: pending.threadId, status: "paused" },
+        this.config.requestTimeoutMs,
+      );
+    } catch {
+      // The controller still records the local interruption request.
+    }
+    pending.activeTurnIds.clear();
+    pending.error = reason;
+    pending.failureKind = "OPERATOR_INTERRUPT";
+    this.finish("paused", reason);
+  }
+
+  private async start(): Promise<void> {
+    const command = this.config.command ?? "codex";
+    const args = [
+      ...(this.config.argsPrefix ?? []),
+      "app-server",
+      "--listen",
+      "stdio://",
+    ];
+    this.process = spawn(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env },
+    });
+    this.emit({
+      type: "runtime_started",
+      command: `${command} ${args.join(" ")} (persistent Goal)`,
+    });
+    this.process.stderr.setEncoding("utf8");
+    this.process.stderr.on("data", (text: string) =>
+      this.emit({ type: "app_server_stderr", text })
+    );
+    this.process.on("error", (error) => this.fail(error));
+    this.process.on("exit", (code, signal) => {
+      if (!this.closing) {
+        this.fail(new Error(
+          `persistent Goal app-server exited unexpectedly (code=${code}, signal=${signal})`,
+        ));
+      }
+    });
+    this.reader = createInterface({ input: this.process.stdout });
+    this.reader.on("line", (line) => this.onLine(line));
+    const initialized = asObject(await this.request(
+      "initialize",
+      {
+        clientInfo: {
+          name: "deterministic_workflow_persistent_goal",
+          title: "Deterministic Workflow Persistent Goal",
+          version: "1.0.0",
+        },
+        capabilities: { experimentalApi: false },
+      },
+      this.config.startupTimeoutMs ?? 30_000,
+    ));
+    if (!initialized?.codexHome) {
+      throw new Error("persistent Goal app-server initialize response is missing codexHome");
+    }
+    this.notify("initialized", {});
+  }
+
+  private request(method: string, params: unknown, timeoutMs = 30_000): Promise<unknown> {
+    if (!this.process?.stdin.writable) {
+      return Promise.reject(new Error("persistent Goal app-server is not running"));
+    }
+    const id = this.nextRequestId++;
+    const response = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.requests.delete(id);
+        reject(new Error(`${method} timed out after ${timeoutMs} ms`));
+      }, timeoutMs);
+      this.requests.set(id, { resolve, reject, timer });
+    });
+    this.process.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+    return response;
+  }
+
+  private notify(method: string, params: unknown): void {
+    if (!this.process?.stdin.writable) return;
+    this.process.stdin.write(`${JSON.stringify({ method, params })}\n`);
+  }
+
+  private onLine(line: string): void {
+    let message: Record<string, unknown>;
+    try {
+      message = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      this.fail(new Error("persistent Goal app-server emitted malformed JSONL"));
+      return;
+    }
+    if (typeof message.id === "number" && !message.method) {
+      const request = this.requests.get(message.id);
+      if (!request) return;
+      clearTimeout(request.timer);
+      this.requests.delete(message.id);
+      if (message.error) request.reject(new Error(JSON.stringify(message.error)));
+      else request.resolve(message.result);
+      return;
+    }
+    if (typeof message.id === "number" && typeof message.method === "string") {
+      this.process?.stdin.write(`${JSON.stringify({
+        id: message.id,
+        error: { code: -32001, message: "interactive requests are disabled" },
+      })}\n`);
+      return;
+    }
+
+    const pending = this.pending;
+    if (!pending) return;
+    const method = typeof message.method === "string" ? message.method : "";
+    const params = asObject(message.params);
+    if (getString(params, "threadId") !== pending.threadId) return;
+    const turn = asObject(params?.turn);
+    const item = asObject(params?.item);
+    const providerTurnId = getString(params, "turnId") ?? getString(turn, "id");
+    this.persist({ type: "goal_raw_event", at: nowIso(), event: message });
+    if (isMeaningfulActivity(method, item) || method.startsWith("turn/")) {
+      this.touch();
+    }
+
+    if (method === "thread/goal/updated") {
+      this.updateGoal(asObject(params?.goal));
+    }
+    if (method === "turn/started" && providerTurnId) {
+      this.rememberTurn(providerTurnId);
+      pending.activeTurnIds.add(providerTurnId);
+      this.persist({
+        type: "goal_turn_started",
+        at: nowIso(),
+        threadId: pending.threadId,
+        providerTurnId,
+      });
+      this.emit({
+        type: "turn_started",
+        turnId: pending.dispatch.experimentId,
+        role: goalRuntimeRole(pending.dispatch),
+        threadId: pending.threadId,
+        providerTurnId,
+      });
+    }
+    if (method === "item/agentMessage/delta" && providerTurnId) {
+      const itemId = getString(params, "itemId");
+      const delta = getString(params, "delta");
+      if (itemId && delta !== null) {
+        const key = `${providerTurnId}:${itemId}`;
+        this.rememberGoalMessage(key, delta, false, null);
+        pending.liveMessageIds.add(key);
+        this.emit({
+          type: "agent_output_delta",
+          turnId: pending.dispatch.experimentId,
+          role: goalRuntimeRole(pending.dispatch),
+          itemId: key,
+          delta,
+        });
+      }
+    }
+    if ((method === "item/started" || method === "item/completed") && providerTurnId) {
+      const itemType = getString(item, "type");
+      if (method === "item/completed" && itemType === "agentMessage") {
+        const itemId = getString(item, "id");
+        const text = getString(item, "text");
+        if (itemId && text !== null) {
+          const key = `${providerTurnId}:${itemId}`;
+          const phase = getMessagePhase(item);
+          this.rememberGoalMessage(key, text, true, phase);
+          this.persist({
+            type: "goal_message_completed",
+            at: nowIso(),
+            providerTurnId,
+            itemId,
+            phase,
+            text,
+          });
+          if (!pending.liveMessageIds.has(key)) {
+            pending.liveMessageIds.add(key);
+            this.emit({
+              type: "agent_output_delta",
+              turnId: pending.dispatch.experimentId,
+              role: goalRuntimeRole(pending.dispatch),
+              itemId: key,
+              delta: text,
+            });
+          }
+          this.emit({
+            type: "agent_message_complete",
+            turnId: pending.dispatch.experimentId,
+            role: goalRuntimeRole(pending.dispatch),
+            itemId: key,
+            phase,
+          });
+        }
+      }
+      if (isToolItem(itemType)) {
+        const phase = method === "item/started" ? "started" : "completed";
+        const toolName = normalizeToolName(itemType, item);
+        const toolEvent: RuntimeToolEvent = {
+          toolName,
+          status: getString(item, "status") ?? "unknown",
+          arguments: normalizeToolArguments(itemType, item),
+          resultSummary: method === "item/completed"
+            ? normalizeToolResult(item)
+            : null,
+          error: method === "item/completed" ? item?.error ?? null : null,
+        };
+        this.persist({
+          type: "goal_tool",
+          at: nowIso(),
+          phase,
+          providerTurnId,
+          event: toolEvent,
+        });
+        this.emit({
+          type: "tool_status",
+          turnId: pending.dispatch.experimentId,
+          role: goalRuntimeRole(pending.dispatch),
+          phase,
+          toolName,
+          status: toolEvent.status,
+        });
+      }
+    }
+    if (method === "turn/completed" && providerTurnId) {
+      this.captureTurnMessages(providerTurnId, turn);
+      pending.activeTurnIds.delete(providerTurnId);
+      this.emit({
+        type: "turn_completed",
+        turnId: pending.dispatch.experimentId,
+        role: goalRuntimeRole(pending.dispatch),
+        status: normalizeTurnStatus(getString(turn, "status")),
+        elapsedMs: Date.now() - pending.startedAt,
+        usage: zeroUsage(),
+        toolCalls: 0,
+      });
+      this.maybeFinish();
+    }
+    if (method === "thread/status/changed") this.maybeFinish();
+  }
+
+  private captureTurnMessages(
+    providerTurnId: string,
+    turn: Record<string, unknown> | null,
+  ): void {
+    for (const rawItem of Array.isArray(turn?.items) ? turn.items : []) {
+      const item = asObject(rawItem);
+      if (getString(item, "type") !== "agentMessage") continue;
+      const itemId = getString(item, "id");
+      const text = getString(item, "text");
+      if (!itemId || text === null) continue;
+      this.rememberGoalMessage(
+        `${providerTurnId}:${itemId}`,
+        text,
+        true,
+        getMessagePhase(item),
+      );
+    }
+  }
+
+  private captureExistingGoalTurns(
+    thread: Record<string, unknown> | null,
+  ): void {
+    const pending = this.pending;
+    if (!pending) return;
+    for (const rawTurn of Array.isArray(thread?.turns) ? thread.turns : []) {
+      const turn = asObject(rawTurn);
+      const providerTurnId = getString(turn, "id");
+      if (!providerTurnId) continue;
+      this.rememberTurn(providerTurnId);
+      this.captureTurnMessages(providerTurnId, turn);
+      const status = getString(turn, "status");
+      if (status === "inProgress") pending.activeTurnIds.add(providerTurnId);
+    }
+  }
+
+  private rememberGoalMessage(
+    key: string,
+    text: string,
+    replace: boolean,
+    phase: MessagePhase,
+  ): void {
+    const pending = this.pending;
+    if (!pending) return;
+    if (!pending.messageText.has(key)) pending.messageOrder.push(key);
+    pending.messageText.set(
+      key,
+      replace ? text : `${pending.messageText.get(key) ?? ""}${text}`,
+    );
+    if (replace || phase !== null) pending.messagePhase.set(key, phase);
+  }
+
+  private rememberTurn(providerTurnId: string): void {
+    const pending = this.pending;
+    if (!pending) return;
+    if (!pending.providerTurnIds.includes(providerTurnId)) {
+      pending.providerTurnIds.push(providerTurnId);
+    }
+  }
+
+  private updateGoal(goal: Record<string, unknown> | null): void {
+    const pending = this.pending;
+    const status = goalStatus(goal);
+    if (!pending || !status) return;
+    pending.goalStatus = status;
+    pending.tokensUsed = Number(goal?.tokensUsed ?? pending.tokensUsed);
+    pending.timeUsedSeconds = Number(
+      goal?.timeUsedSeconds ?? pending.timeUsedSeconds,
+    );
+    this.persist({ type: "goal_status", at: nowIso(), status });
+    this.maybeFinish();
+  }
+
+  private maybeFinish(): void {
+    const pending = this.pending;
+    if (!pending || pending.resolved || pending.activeTurnIds.size > 0) return;
+    if (pending.goalStatus === "active") return;
+    this.finish(pending.goalStatus, pending.error);
+  }
+
+  private touch(): void {
+    const pending = this.pending;
+    if (!pending || pending.timingOut || pending.resolved) return;
+    pending.lastActivityAt = Date.now();
+    clearTimeout(pending.idleTimer);
+    pending.idleTimer = setTimeout(
+      () => void this.timeout("IDLE_TIMEOUT"),
+      pending.dispatch.timeoutProfile.idleTimeoutMs,
+    );
+  }
+
+  private async timeout(
+    kind: Extract<RuntimeFailureKind, "IDLE_TIMEOUT" | "HARD_TIMEOUT">,
+  ): Promise<void> {
+    const pending = this.pending;
+    if (!pending || pending.resolved || pending.timingOut) return;
+    pending.timingOut = true;
+    const timeoutMs = kind === "IDLE_TIMEOUT"
+      ? pending.dispatch.timeoutProfile.idleTimeoutMs
+      : pending.dispatch.timeoutProfile.hardTimeoutMs;
+    this.emit({
+      type: "turn_timeout",
+      turnId: pending.dispatch.experimentId,
+      role: goalRuntimeRole(pending.dispatch),
+      timeoutMs,
+      kind,
+      capture: pending.messageText.size > 0 ? "PARTIAL" : "NONE",
+    });
+    for (const turnId of pending.activeTurnIds) {
+      try {
+        await this.request(
+          "turn/interrupt",
+          { threadId: pending.threadId, turnId },
+          Math.min(10_000, pending.dispatch.timeoutProfile.interruptGraceMs),
+        );
+      } catch {
+        // The Goal is paused below even when one interrupt races with completion.
+      }
+    }
+    try {
+      await this.request(
+        "thread/goal/set",
+        { threadId: pending.threadId, status: "paused" },
+        this.config.requestTimeoutMs,
+      );
+    } catch {
+      // Preserve the timeout as the authoritative parent pause reason.
+    }
+    pending.activeTurnIds.clear();
+    pending.error = `${kind} after ${timeoutMs} ms`;
+    pending.failureKind = kind;
+    this.finish("paused", pending.error);
+  }
+
+  private finish(
+    status: RawGoalResult["goalStatus"],
+    error: string | null,
+  ): void {
+    const pending = this.pending;
+    if (!pending || pending.resolved) return;
+    pending.resolved = true;
+    clearTimeout(pending.idleTimer);
+    clearTimeout(pending.hardTimer);
+    const preferred = [...pending.messageOrder].reverse().find(
+      (key) => pending.messagePhase.get(key) === "final_answer",
+    ) ?? [...pending.messageOrder].reverse().find(
+      (key) => pending.messagePhase.get(key) !== "commentary",
+    );
+    pending.resolve({
+      goalStatus: status,
+      finalText: preferred ? pending.messageText.get(preferred) ?? "" : "",
+      providerThreadId: pending.threadId,
+      providerTurnIds: [...pending.providerTurnIds],
+      tokensUsed: pending.tokensUsed,
+      timeUsedSeconds: pending.timeUsedSeconds,
+      failureKind: pending.failureKind,
+      error,
+    });
+  }
+
+  private persist(event: GoalRuntimePersistenceEvent): void {
+    try {
+      this.pending?.dispatch.onRuntimeEvent?.(event);
+    } catch (error) {
+      this.fail(new Error(`persistent Goal persistence failed: ${errorMessage(error)}`));
+    }
+  }
+
+  private fail(error: Error): void {
+    this.emit({ type: "runtime_error", message: error.message });
+    for (const request of this.requests.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    this.requests.clear();
+    if (this.pending) this.pending.failureKind = "PROVIDER_ERROR";
+    this.finish("runtimeFailed", error.message);
+  }
+
+  private emit(event: RuntimeLiveEvent): void {
+    try {
+      this.config.onLiveEvent?.(event);
+    } catch {
+      // Console reporting is never workflow authority.
+    }
+  }
+}
+
 export class ScriptedTurnRuntime implements TurnRuntime {
   private invocation = 0;
   private readonly handler: (
     dispatch: TurnDispatch,
     invocation: number,
   ) => Promise<string | Partial<RawTurnResult>> | string | Partial<RawTurnResult>;
+  private readonly goalHandler?: (
+    dispatch: GoalDispatch,
+    invocation: number,
+  ) => Promise<Partial<RawGoalResult>> | Partial<RawGoalResult>;
 
   constructor(
     handler: (
       dispatch: TurnDispatch,
       invocation: number,
     ) => Promise<string | Partial<RawTurnResult>> | string | Partial<RawTurnResult>,
+    goalHandler?: (
+      dispatch: GoalDispatch,
+      invocation: number,
+    ) => Promise<Partial<RawGoalResult>> | Partial<RawGoalResult>,
   ) {
     this.handler = handler;
+    this.goalHandler = goalHandler;
   }
 
   async run(dispatch: TurnDispatch): Promise<RawTurnResult> {
@@ -944,9 +1624,28 @@ export class ScriptedTurnRuntime implements TurnRuntime {
         value.providerTurnId ?? `scripted-turn-${this.invocation}`,
     };
   }
+
+  async runGoal(dispatch: GoalDispatch): Promise<RawGoalResult> {
+    this.invocation += 1;
+    const value = this.goalHandler
+      ? await this.goalHandler(dispatch, this.invocation)
+      : {};
+    return {
+      goalStatus: value.goalStatus ?? "complete",
+      finalText: value.finalText ?? "实验 Goal 已完成。",
+      providerThreadId:
+        value.providerThreadId ?? `scripted-goal-thread-${this.invocation}`,
+      providerTurnIds:
+        value.providerTurnIds ?? [`scripted-goal-turn-${this.invocation}`],
+      tokensUsed: value.tokensUsed ?? 0,
+      timeUsedSeconds: value.timeUsedSeconds ?? 0,
+      failureKind: value.failureKind ?? null,
+      error: value.error ?? null,
+    };
+  }
 }
 
-function developerInstructions(role: LoopRole): string {
+function developerInstructions(role: RuntimeRole): string {
   const output =
     role === "DECISION"
       ? "In the final_answer phase, return only the requested decision line protocol."
@@ -967,6 +1666,48 @@ function developerInstructions(role: LoopRole): string {
     output,
     "Exit after the requested result.",
   ].join("\n");
+}
+
+function goalDeveloperInstructions(): string {
+  return [
+    "You are one persistent EXP Goal controlled by the Learning Script.",
+    "Use the learning-exp-goal Skill explicitly named in the first prompt.",
+    "The frozen ExperimentGoalTask and its referenced Anchor/Direction are workflow authority.",
+    "You may iteratively prepare an environment, implement code, run measurements, inspect results, and revise the experiment inside the task workspace.",
+    "Do not modify Learning Controller state, object indexes, tasks, bindings, turns, contexts, or prior results.",
+    "Do not create a second workflow controller or choose the next Learning branch.",
+    "Preserve failed attempts, commands, configurations, raw measurements, and artifacts in the task workspace.",
+    "Use the built-in Goal status faithfully: complete only when the experiment objective has a supported terminal result; blocked only at a genuine impasse; otherwise keep working.",
+    "The final answer is a concise evidence report for a later fresh Learning Decision Turn, not a scheduling command.",
+  ].join("\n");
+}
+
+function goalRuntimeRole(
+  dispatch: GoalDispatch,
+): "EXP_GOAL" | "DIRECTION_LAB_GOAL" {
+  return dispatch.role ?? "EXP_GOAL";
+}
+
+function goalStatus(
+  value: Record<string, unknown> | null,
+): ExperimentGoalStatus | null {
+  const status = getString(value, "status");
+  return [
+    "active",
+    "paused",
+    "blocked",
+    "usageLimited",
+    "budgetLimited",
+    "complete",
+  ].includes(status ?? "")
+    ? status as ExperimentGoalStatus
+    : null;
+}
+
+function normalizeTurnStatus(value: string | null): RawTurnResult["status"] {
+  if (value === "completed") return "completed";
+  if (value === "interrupted") return "interrupted";
+  return "failed";
 }
 
 function baseScriptedResult(

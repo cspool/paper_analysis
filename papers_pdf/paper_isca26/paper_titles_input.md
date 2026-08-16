@@ -15,7 +15,7 @@
 13. Rearchitecting the Datacenter Lifecycle for AI
 14. CAPA: Manufacturing Carbon Estimation for Advanced-Packaged Architectures
 15. Five-Minute Rule 40 Years Later: A First-Principles Revisit for Modern Memory Hierarchy
-16. LOONG: Utilizing Long-Stride Reprogram to Enhance the Performance of SSDs
+16. LOONG: Utilizing Long-Stride Reprogramming to Enhance the Performance of SSDs
 17. Don't Surrender to Low QPS/$: Fast and Cost-Efficient ANNS with TridentANN
 18. Shining Light on Silicon Photonic DNN Accelerators
 19. TensorPrism: Rethinking Sparse High-order Tensor Acceleration via Co-occurrence Graph
@@ -50,7 +50,7 @@
 48. Graph.hls: A Compiler Framework for Composable Graph Accelerator Design
 49. Accelerator Polymorphism: Transcending Domain-Specific Architectures with Robotics
 50. GRAINS: Enabling High-Performance and Low-Cost Graph-Based Genome Analysis via Storage-Aware Algorithm-Architecture Co-Design
-51. Lembas: An Appliance for Scalable Genome Alignment
+51. Lembas: Cost-Efficient Genome Alignment with External Memory and FPGA Acceleration
 52. LoRA: Towards Improved Applicability of Reconfigurable Architecture for Versatile Nonlinear Functions
 53. Triage: An Adaptive Parallel Window Decoding Scheduler for Real-time Fault-Tolerant Quantum Computation
 54. Coset Ensemble Decoder for Quantum Error Correction with Algorithm-Hardware Co-Design
@@ -66,13 +66,13 @@
 64. Optimized Memory Tagging on AmpereOne® Processors
 65. BoostX™-NTI: Fast, Scalable and Flexible Storage Architecture with NVMe/TCP Initiator Acceleration
 66. M100: An Orchestrated Dataflow Architecture Powering General AI Computing
-67. Prometheus: Toward Resilient Datacenters through Optimized Cooling Infrastructure
+67. Prometheus: Toward Resilient Data Centers through Optimized Cooling Infrastructure
 68. Understanding Inference Scaling for LLMs: Bottlenecks, Trade-offs, and Performance Principles
 69. MTIA 300: Meta’s First Training Chip Featuring Built-in NICs and Collective Offloading Engines
 70. μRNG: A Framework for Assessing Randomness in Intermittent Computing Devices
 71. IroKnight: Ownership-Preserving Neural Acceleration for Inference Serving
 72. Intermittence-aware Speculative Page Coloring for Secure NVM
-73. AutoFHE: An Automatic Hardware Generation Framework for Domain-Specific FHE Accelerator
+73. AutoFHE: An Automatic Hardware Generation Framework for Domain-Specific FHE Accelerators
 74. LIPPEN : A Lightweight In-Place Pointer Encryption Architecture for Pointer Integrity
 75. DarkStream: Exploiting Internal Throughput Contention in Data Streaming Accelerator for Timing Attacks
 76. L-PCN: A Point Cloud Accelerator Exploiting Spatial Locality through Octree-based Islandization
@@ -112,7 +112,7 @@
 110. PIPEWEAVE : Synergizing Analytical and Learning Models for Unified GPU Performance Prediction
 111. SSBench: Automated Characterization of Memory Dependence Predictors on Modern CPUs
 112. R2D2: Robotized Reconfigurable Network for Disaggregated Datacenters
-113. Lotus: A Task Dataflow Architecture for Cycle-Level Simulation
+113. Lotus: A Multi-FPGA Task Dataflow Architecture to Accelerate Cycle-Level Simulation
 114. SegFold: Accelerating Sparse GEMM with a Fine-Grained Dynamic Dataflow
 115. ParetoES: Hardware-Accelerated Sparse Embedding Similarity via Pareto-Optimal Pruning
 116. ECHO: Efficient Head-Orientation-Guided Real-Time Sound Spatialization for Virtual Reality
@@ -127,10 +127,10 @@
 125. MNEMOS: A GPU-based TFHE Acceleration Framework with Memory Access Optimization
 126. GauTracer: Extending Ray Tracing Accelerator for Gaussian-based Scene Representation
 127. TTP: A Hardware-Efficient Design for Precise Prefetching in Ray Tracing
-128. Optimizing 3D Gaussian Splatting with Axis-Shared Rasterization and Order-independent Transmittance
+128. Efficient 3D Gaussian Splatting with Axis-Shared Rasterization and Order-independent Transmittance
 129. Bumper: Hinting Instruction Usefulness for Robust Unified Caches
 130. ICP: Exploiting Instruction Correlation for Prefetching Irregular Memory Accesses
-131. Revelator: Rapid Data Fetching via OS-Guided Hash-based Speculative Address Translation
+131. Revelator: Rapid Data Fetching via System-Software-Guided Hash-based Speculative Address Translation
 132. Distilling Magic States in the Bicycle Architecture
 133. O3LS: Optimizing Lattice Surgery via Automatic Layout Searching and Loose Scheduling
 134. Leveraging Phase Polynomials for Quantum Circuit Optimization
@@ -172,4 +172,3 @@
 170. GenZA: A General and Efficient Accelerator for Diverse Zero-Knowledge Proof Protocols
 171. HiT: A Unified Sparsity-Adaptive Architecture for High-Throughput Matrix Multiplication
 172. DiTPA: A DiT-based Action Planner Accelerator Exploiting Action–Denoising–Multimodality Redundancy for Embodied Artificial Intelligence
-

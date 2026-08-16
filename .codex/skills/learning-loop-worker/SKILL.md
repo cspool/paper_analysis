@@ -34,6 +34,19 @@ of accepted objects, objects needing revision, rejected lessons, and dynamic
 angles. It is a conclusion index, not source evidence, and it does not require
 you to reread every indexed Result.
 
+When `inputs.experimentResults` is present, read every listed EXP Goal Result
+and its conclusion. Treat it as evidence bound to the referenced parent object,
+not as an automatic confirmation. Revise, narrow, or reject the current
+baseline, headroom, mechanism, or applicable regime according to what was
+actually observed; preserve inconclusive results and environment failures as
+such.
+
+When `inputs.negativeExperimentHistoryRef` is present, read the indexed EXP
+Results and Reviewer Results before choosing or revising content. The file is a
+Script-generated navigation layer: it does not name mechanism families or
+declare them closed. Compare the referenced conclusions semantically and keep
+their model, workload, execution, and hardware boundaries.
+
 Use this fixed action-to-result mapping:
 
 - `CREATE_ANCHOR` or `DEEPEN_ANCHOR`: read
@@ -97,7 +110,15 @@ For Anchor work:
 
 - define one concrete scenario, baseline, and observable performance tension
   inside the user Topic;
-- identify the non-empty 6L region centered by that tension;
+- describe the actual performance/execution baseline and bounded reason to
+  believe Goal-relevant headroom remains; distinguish a sourced measurement
+  from a hypothesis that still needs an EXP Goal;
+- identify the non-empty 6L region centered by that tension using concrete
+  tensors, queues, IR/pass, kernel, data-path, topology, or equivalent
+  performance objects. A layer name or broad technique keyword is not
+  coverage;
+- for every cross-layer claim, name the minimum data, control, resource, or
+  synchronization interface through which the tension propagates;
 - preserve the objective and acceptance criteria without silently narrowing the
   Topic;
 - for `CREATE_ANCHOR`, conduct a bounded Goal-relative search for a materially
@@ -111,12 +132,31 @@ For Anchor work:
   Do not manufacture an Anchor merely to keep the Loop moving, and do not turn
   the probe into an exhaustive survey;
 - when deepening, return the entire revised Anchor rather than a patch.
+- use reviewed negative experiments as constraints on the claimed performance
+  tension and remaining headroom. Do not create another Anchor that merely
+  relocates or renames a failed causal lever; if the bounded search cannot
+  support a materially different region, return `BLOCKED_NO_RESULT`.
 
 For Direction work:
 
 - stay inside `inputs.boundAnchor`;
-- define a modifiable object, causal mechanism, and one minimal testable
-  primary change from the bound baseline;
+- reconstruct the Anchor's execution baseline, then
+  identify the closest existing method baseline by objective, modified object,
+  mechanism, granularity, and operating regime—not only by name;
+- identify the strongest simple baseline that can explain the proposed gain
+  without the Direction's added information or complexity. Give it its own
+  complete legal parameter domain and a fair bounded calibration opportunity;
+  do not choose an artificially weak default or restrict it to an unrelated
+  intersection of variant subdomains;
+- define one modifiable object, causal mechanism, and minimal testable primary
+  change. In `baselineChange`, state the competitive baseline, how it is
+  selected, the unique added information/state/path, and the event class in
+  which baseline and variant should make observably different decisions;
+- if the closest or strongest simple method already resolves the same tension,
+  or can produce the same relevant action/state/execution trace throughout the
+  claimed regime, do not relabel the complex form as a new Direction. State a
+  real mechanism, interface, regime, or failure-boundary difference, or return
+  an honest unresolved/replacement result;
 - treat setup, instrumentation, and required implementation support as frozen
   enablers rather than additional claimed changes;
 - use an indivisible joint package only when its components cannot realize the
@@ -128,7 +168,24 @@ For Direction work:
   metric or guardrail relevant to the claim;
 - state tradeoffs, the strongest supported counterexample or degradation case,
   failure conditions, and a controlled falsification plan;
-- reproduce and validate the baseline before testing the primary change;
+- make behavioral equivalence or dominance by the strongest simple baseline a
+  failure condition whenever the claim depends on added decision information
+  or policy complexity;
+- order the measurement plan from cheap to expensive: reproduce and validate
+  the baseline, fairly calibrate the strongest simple baseline on calibration
+  data, verify trigger coverage and relevant action/state/path divergence, run
+  one same-carrier paired ablation, and only then request broader sensitivity,
+  native-performance, simulation-envelope, or external-validity work;
+- keep calibration and confirmatory/holdout evidence separate. Give baseline
+  and variant comparable selection opportunity, and do not retune either from
+  confirmatory outcomes without rebinding the experiment;
+- after the Direction is technically distinct, identify the closest reusable
+  reference experiment or baseline implementation and the useful code,
+  framework, simulator, profiler, benchmark, workload, trace, or hardware
+  environment. State its coverage, incompatible assumptions, and the minimum
+  port, extension, instrumentation, or recalibration needed by a later EXP
+  Goal. If a bounded search finds no direct environment, say so explicitly and
+  preserve the closest build-from-baseline handoff;
 - express only the controls, generation rules, statistics, and boundary cases
   needed to reproduce or falsify the claim. Prefer a compact deterministic rule
   over enumerating a future manifest, every sample, or every contingency;
@@ -138,13 +195,27 @@ For Direction work:
   unless a specific detail changes the scientific claim, baseline
   reproducibility, causal attribution, guardrail, or pass/fail meaning;
 - when deepening, return the entire revised Direction rather than a patch.
+- compare the proposed `baselineChange`, causal lever, and preserved boundary
+  with every related reviewed negative EXP. Merely changing a threshold,
+  score, frozen feature, or small classifier while controlling the same
+  interface is ordinarily the same mechanism family;
+- after reviewed same-family negatives indicate convergence, search a
+  different causal lever or concrete 6L object rather than another adjacent
+  implementation. Reconsider a closed family only when the candidate changes
+  an actually failed assumption and independent evidence supports that
+  difference; explain both in the existing mechanism, baselineChange, and
+  evidence fields;
+- if no credible different lever exists inside the bound Anchor, return
+  `BLOCKED_NO_RESULT` with `content: null` and summarize the failed family and
+  bounded alternatives in `unresolved`. Do not manufacture a replacement to
+  satisfy the Anchor/Direction requirement.
 
 For both:
 
 - address supplied Reviewer findings and relevant query gaps when present;
 - search and deep-read actual sources before citing them;
 - distinguish sourced facts from hypotheses;
-- do not execute a new experiment; express needed measurements in
+- do not execute a new experiment in an ordinary Worker Turn; express needed measurements in
   `measurementPlan` or `unresolved`;
 - auxiliary agents may help inside this Turn, but this Worker remains
   responsible for one final result.

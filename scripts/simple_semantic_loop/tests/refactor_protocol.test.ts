@@ -67,6 +67,26 @@ test("Decision guidance is optional opaque text", () => {
     decision: "RETRY_REVIEWER",
     guidance: "verdict 与正文矛盾，请重新审阅。\n不改变同一 review target。",
   });
+
+  const missingExperimentObjective = parseDecisionProtocol(
+    "decision = RUN_EXP_GOAL",
+    ["RUN_EXP_GOAL"],
+  );
+  assert.equal(missingExperimentObjective.result, null);
+  assert.match(
+    missingExperimentObjective.errors[0]!.message,
+    /requires a non-empty experiment objective/,
+  );
+  assert.deepEqual(
+    parseDecisionProtocol(
+      "decision = RUN_EXP_GOAL\nguidance = 测量目标 baseline 的实际尾延迟 headroom。",
+      ["RUN_EXP_GOAL"],
+    ).result,
+    {
+      decision: "RUN_EXP_GOAL",
+      guidance: "测量目标 baseline 的实际尾延迟 headroom。",
+    },
+  );
 });
 
 test("WORK_RESULT parser fails only JSON transport and core-control errors", () => {

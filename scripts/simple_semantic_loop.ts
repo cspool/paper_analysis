@@ -8,7 +8,10 @@ import { LiveConsoleRenderer } from "./simple_semantic_loop/refactor/live_consol
 import {
   CodexAppServerRuntime,
 } from "./simple_semantic_loop/refactor/runtime.ts";
-import { initializeRun } from "./simple_semantic_loop/refactor/run_setup.ts";
+import {
+  continueRunFromFinished,
+  initializeRun,
+} from "./simple_semantic_loop/refactor/run_setup.ts";
 import { authorizeRuntimeRecovery } from "./simple_semantic_loop/refactor/recovery.ts";
 import {
   readObservationSummary,
@@ -35,14 +38,20 @@ const { positionals, values } = parseArgs({
     topic: { type: "string" },
     objective: { type: "string" },
     acceptance: { type: "string", multiple: true },
+    "from-work-dir": { type: "string" },
     "work-dir": { type: "string" },
     model: { type: "string" },
     "max-rounds": { type: "string" },
+    "max-exp-goals": { type: "string" },
     "additional-rounds": { type: "string" },
     "idle-timeout-ms": { type: "string" },
     "hard-timeout-ms": { type: "string" },
     "interrupt-grace-ms": { type: "string" },
+    "exp-idle-timeout-ms": { type: "string" },
+    "exp-hard-timeout-ms": { type: "string" },
+    "exp-interrupt-grace-ms": { type: "string" },
     "recovery-token": { type: "string" },
+    "reset-budgets": { type: "boolean", default: false },
     "no-provider": { type: "boolean", default: false },
     yolo: { type: "boolean", default: false },
     quiet: { type: "boolean", default: false },
@@ -59,6 +68,9 @@ try {
       break;
     case "init":
       initCommand();
+      break;
+    case "continue":
+      continueCommand();
       break;
     case "run":
       await runCommand(false);
@@ -135,9 +147,15 @@ function initCommand(): void {
     acceptanceCriteria: values.acceptance,
     model: values.model,
     maxRounds,
+    maxExperimentGoals: optionalNonNegativeInteger("max-exp-goals"),
     idleTimeoutMs: optionalPositiveInteger("idle-timeout-ms"),
     hardTimeoutMs: optionalPositiveInteger("hard-timeout-ms"),
     interruptGraceMs: optionalPositiveInteger("interrupt-grace-ms"),
+    experimentIdleTimeoutMs: optionalPositiveInteger("exp-idle-timeout-ms"),
+    experimentHardTimeoutMs: optionalPositiveInteger("exp-hard-timeout-ms"),
+    experimentInterruptGraceMs: optionalPositiveInteger(
+      "exp-interrupt-grace-ms",
+    ),
   });
   const goal = new FileLoopStore(resolve(values["work-dir"]))
     .readJson<{ topic: string }>("workflow_goal.json");
@@ -148,6 +166,45 @@ function initCommand(): void {
     topic: goal.topic,
     model: run.model,
     maxRounds: run.budgets.maxRounds,
+    maxExperimentGoals: run.budgets.maxExperimentGoals,
+    experimentGoalTokenBudget: null,
+    timeoutProfiles: run.budgets.timeoutProfiles,
+  });
+}
+
+function continueCommand(): void {
+  if (!values["from-work-dir"] || !values["work-dir"]) {
+    throw new Error("continue requires --from-work-dir and --work-dir");
+  }
+  const run = continueRunFromFinished({
+    projectRoot,
+    sourceWorkDir: resolve(values["from-work-dir"]),
+    workDir: resolve(values["work-dir"]),
+    model: values.model,
+    maxRounds: optionalPositiveInteger("max-rounds"),
+    maxExperimentGoals: optionalNonNegativeInteger("max-exp-goals"),
+    idleTimeoutMs: optionalPositiveInteger("idle-timeout-ms"),
+    hardTimeoutMs: optionalPositiveInteger("hard-timeout-ms"),
+    interruptGraceMs: optionalPositiveInteger("interrupt-grace-ms"),
+    experimentIdleTimeoutMs: optionalPositiveInteger("exp-idle-timeout-ms"),
+    experimentHardTimeoutMs: optionalPositiveInteger("exp-hard-timeout-ms"),
+    experimentInterruptGraceMs: optionalPositiveInteger(
+      "exp-interrupt-grace-ms",
+    ),
+    resetBudgets: values["reset-budgets"],
+  });
+  const store = new FileLoopStore(resolve(values["work-dir"]));
+  print({
+    status: "continued",
+    runId: run.runId,
+    sourceRunId: run.continuation?.sourceRunId,
+    sourceWorkDir: run.continuation?.sourceWorkDir,
+    sourceLifecycle: run.continuation?.sourceLifecycle ?? "FINISHED",
+    budgetReset: run.continuation?.budgetReset ?? false,
+    workDir: resolve(values["work-dir"]),
+    nextRole: store.readState().sequence[0]?.role ?? null,
+    maxRounds: run.budgets.maxRounds,
+    maxExperimentGoals: run.budgets.maxExperimentGoals,
     timeoutProfiles: run.budgets.timeoutProfiles,
   });
 }
@@ -235,6 +292,10 @@ function statusCommand(): void {
     remainingRequirements,
     objects: store.readObjects(),
     observations: readObservationSummary(store),
+    experiments: store.experimentRefs().map((ref) => ({
+      experimentRef: ref,
+      ...store.readExperiment(ref),
+    })),
     latestRuntimeFailure: latestRuntimeFailure(store),
     runtimeRecoveryEligible:
       state.lifecycle === "FAILED" &&
@@ -386,13 +447,29 @@ function optionalPositiveInteger(
     | "idle-timeout-ms"
     | "hard-timeout-ms"
     | "interrupt-grace-ms"
-    | "additional-rounds",
+    | "exp-idle-timeout-ms"
+    | "exp-hard-timeout-ms"
+    | "exp-interrupt-grace-ms"
+    | "additional-rounds"
+    | "max-rounds",
 ): number | undefined {
   const raw = values[name];
   if (raw === undefined) return undefined;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) {
     throw new Error(`--${name} must be a positive integer`);
+  }
+  return value;
+}
+
+function optionalNonNegativeInteger(
+  name: "max-exp-goals",
+): number | undefined {
+  const raw = values[name];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`--${name} must be a non-negative integer`);
   }
   return value;
 }
@@ -435,11 +512,22 @@ function inferNextAction(
 ): string | null {
   const step = state.sequence[0];
   if (!step) return null;
+  if (step.role === "EXP_GOAL") return "RUN_EXPERIMENT";
   if (step.bindingRef && store.exists(step.bindingRef)) {
     return store.readJson<{ action?: string }>(step.bindingRef).action ?? null;
   }
   if (step.role === "DECISION") return "DECIDE_NEXT_BRANCH";
   if (step.role === "REVIEWER") {
+    if (step.mode === "ANCHOR_REASSESS") return "REVIEW_ANCHOR";
+    if (step.mode === "POST_EXP_REVIEW") {
+      const latest = state.latestExperimentResultRef &&
+          store.exists(state.latestExperimentResultRef)
+        ? store.readJson<{ directionWork?: string | null }>(
+          state.latestExperimentResultRef,
+        )
+        : null;
+      return latest?.directionWork ? "REVIEW_DIRECTION" : "REVIEW_ANCHOR";
+    }
     const kind = state.pending?.objectKind ?? state.preReview?.objectKind;
     return kind ? `REVIEW_${kind}` : "SELECT_REVIEW_TARGET";
   }
@@ -464,7 +552,8 @@ function print(value: unknown): void {
 function usage(): void {
   process.stderr.write(`Usage:
   node scripts/simple_semantic_loop.ts doctor [--model MODEL] [--no-provider] [--quiet]
-  node scripts/simple_semantic_loop.ts init --topic TOPIC --work-dir DIR [--objective TEXT] [--acceptance TEXT ...] [--model MODEL] [--max-rounds N] [--idle-timeout-ms N] [--hard-timeout-ms N] [--interrupt-grace-ms N]
+  node scripts/simple_semantic_loop.ts init --topic TOPIC --work-dir DIR [--objective TEXT] [--acceptance TEXT ...] [--model MODEL] [--max-rounds N] [--max-exp-goals N] [--idle-timeout-ms N] [--hard-timeout-ms N] [--interrupt-grace-ms N] [--exp-idle-timeout-ms N] [--exp-hard-timeout-ms N] [--exp-interrupt-grace-ms N]
+  node scripts/simple_semantic_loop.ts continue --from-work-dir SOURCE_DIR --work-dir NEW_DIR [--reset-budgets] [--model MODEL] [--max-rounds N] [--max-exp-goals N] [--idle-timeout-ms N] [--hard-timeout-ms N] [--interrupt-grace-ms N] [--exp-idle-timeout-ms N] [--exp-hard-timeout-ms N] [--exp-interrupt-grace-ms N]
   node scripts/simple_semantic_loop.ts run --work-dir DIR [--yolo] [--quiet]
   node scripts/simple_semantic_loop.ts resume --work-dir DIR [--additional-rounds N] [--yolo] [--quiet]
   node scripts/simple_semantic_loop.ts recover-runtime --work-dir DIR --recovery-token TOKEN [--idle-timeout-ms N] [--hard-timeout-ms N] [--interrupt-grace-ms N] [--yolo] [--quiet]

@@ -28,11 +28,21 @@ or decide whether the workflow is complete.
    correction boundary. The current `reviewTarget` remains the sole object
    under review. Do not copy the old verdict or keep an old finding after the
    current revision has actually resolved it.
-9. Read [review_result_v2.md](references/review_result_v2.md) and
-   [review_rubric_v1.md](references/review_rubric_v1.md). Read
-   [learning_6l_v1.md](../learning-loop-worker/references/learning_6l_v1.md)
+9. If `inputs.experimentResults` exists, read every listed EXP Result and its
+   conclusion as evidence for this exact review target. If
+   `inputs.negativeExperimentHistoryRef` exists, read the indexed EXP and
+   Review Refs relevant to the bound Anchor. The index is navigation only: it
+   contains no Script-authored mechanism family or closure judgment.
+10. Read [review_result_v2.md](references/review_result_v2.md),
+   [review_rubric_v1.md](references/review_rubric_v1.md), and the mandatory
+   Topic-neutral expert lens
+   [optimization_value_questions_v1.md](references/optimization_value_questions_v1.md).
+   Read [learning_6l_v1.md](../learning-loop-worker/references/learning_6l_v1.md)
    when reviewing an Anchor or a cross-layer Direction.
-10. Treat the Work Result Ref as the expected semantic contract even when the
+11. Select only the few value questions relevant to this object. Use them to
+   discover verdict-changing issues; do not reproduce the old question loop,
+   score the object, or treat the Ref as evidence.
+12. Treat the Work Result Ref as the expected semantic contract even when the
    target has omitted, renamed, or added non-core fields. Review any
    understandable content and record material deviations as findings; do not
    assume the Script rejected them first.
@@ -131,6 +141,105 @@ Apply all shared checks in `review_rubric_v1`, then exactly one object branch:
 - For `REVIEW_DIRECTION`, apply the Direction checks to
   `reviewTarget.content` against `boundAnchor.content`.
 
+Apply the value chain in object order:
+
+- For `REVIEW_ANCHOR`, determine whether the execution/performance baseline
+  demonstrates credible Goal-relevant headroom, whether the tension is
+  observable in a bounded regime, and whether `scope6L` names the concrete
+  objects carrying that tension rather than layer keywords.
+- For `REVIEW_DIRECTION`, reconstruct the Anchor execution baseline, closest
+  method baseline, and strongest simple baseline capable of explaining the
+  proposed gain without the Direction's added information or complexity.
+  Check that the simple baseline retains its complete legal parameter domain
+  and a fair bounded calibration opportunity. Then test whether the primary
+  change predicts a substantive, falsifiable action, state, or execution-path
+  difference. Reject or revise an artificially weak comparison, a behaviorally
+  equivalent complex policy, or another duplicate/invalid Direction before
+  considering implementation convenience.
+- Only after the Direction remains valid, assess whether its evidence and
+  measurement plan identify sufficient reference experiments, reusable code,
+  simulator or hardware environment, benchmark, workload, trace, and required
+  adaptations for an EXP Goal. A bounded search that finds no directly reusable
+  environment may be an explicit handoff; it is not an infinite revision loop.
+
+Treat Worker evidence as a paper-grounded hypothesis unless an integrated EXP
+Goal Result supplies an observation from an actually executed environment. A
+source-reported latency, throughput, utilization, or resource gap can establish
+that an optimization opportunity is plausible and valuable to test; it does
+not establish that the same gap exists in the available implementation,
+workload, hardware, or operating regime.
+
+When the object's principal value depends on such an unobserved performance
+gap, explicitly ask whether one smallest discriminating experiment could
+confirm, reject, or materially narrow the Worker hypothesis. Prefer a trace,
+profile, counter check, microbenchmark, minimal reproduction, or single
+ablation over implementing the complete Direction. If that bounded observation
+is feasible and its answer can change admission, the principal claim, or the
+recommended next investment:
+
+- add one `BLOCKING` finding that states the paper-only inference and the
+  empirical observation needed;
+- add one matching query gap with `dimension` exactly `experiment`;
+- use `REVISE`, because the same object can be deepened after the Script-bound
+  EXP result is integrated by Worker.
+
+This is a semantic request for evidence, not a scheduling command: Reviewer
+does not choose `RUN_EXP_GOAL`. Do not ask Worker to fabricate measurements or
+repeat literature search as a substitute. Do not automatically block every
+untested Direction. If the experiment is not presently bounded or feasible, or
+can only refine a secondary ranking without changing admission or the primary
+claim, retain an explicit paper-only caveat as `NON_BLOCKING` or in the summary
+and judge the object on the evidence it actually has.
+
+Summarize which point in this chain is established or missing. Translate a
+material unanswered expert question into one bounded finding and, when another
+resolution channel is needed, one corresponding query gap. Do not add new
+value fields to R01.
+
+### 2a. Integrate EXP results and negative mechanism history
+
+When `experimentResults` is present, first decide whether the EXP actually
+answered its frozen objective with a valid discriminating observation:
+
+- `complete` is only a lifecycle status. Credential, download, setup,
+  budget-limit, runtime, implementation-bug, or invalid-comparison outcomes
+  without the required measurement are inconclusive, not mechanism negatives.
+- Compare the recorded baseline, controls, metric, and failure criterion with
+  the reviewed Direction. State the exact applicability boundary in the
+  finding, basis, expected disposition, or summary.
+- If a valid observation hits a preregistered failure condition and invalidates
+  the Direction's primary mechanism, use `REJECT`; do not ask Worker to repair
+  the same causal claim with more prose.
+- If the observation narrows but does not invalidate the same object, use
+  `REVISE` with one bounded correction. If it supports the claim and no other
+  blocker remains, `PASS` is possible.
+
+Compare the result with `negativeExperimentHistoryRef` using the substantive
+baseline change, causal lever, and preserved model/workload/execution boundary.
+Do not classify by method name alone. A new threshold, score, frozen feature,
+or small head controlling the same interface is ordinarily the same family.
+
+- After one credible negative, another candidate may remain reviewable if it
+  materially changes the failed assumption.
+- After two credible same-family negatives, reject a mere renamed or
+  reparameterized variant and do not create a new blocking `experiment` query
+  gap that would perpetuate it.
+- A closed family may be reopened once only when independent evidence supports
+  a changed causal assumption. Record that difference and boundary explicitly.
+- If the evidence-backed reopening is also negative, treat the broader family
+  as converged for this Run boundary; do not request another adjacent EXP.
+
+Do not add a `negativeLesson`, family ID, score, scheduling field, or other JSON
+field. Compress the durable lesson into existing `summary`, `findings`, and
+when truly unresolved `queryGaps`; the Script indexes the authoritative Refs.
+
+For an Anchor reassessment after negative Directions, ask whether the original
+performance tension and a genuinely different optimization lever remain
+supportable. `REJECT` the Anchor when no final Direction can honestly be
+supported under its current boundary; use `PASS` or `REVISE` only when the
+Anchor itself remains valuable independently of the failed family. Never keep
+an Anchor merely to force creation of another Direction.
+
 ### 3. Check evidence without changing the task
 
 Start from `reviewTarget.evidence`. When a material claim needs verification,
@@ -141,15 +250,24 @@ Do not execute experiments. Do not treat an expert Skill, its examples, or
 unsupported general knowledge as evidence. Do not repair missing Work Result
 content inside the Review Result.
 
-For a Direction, explicitly determine whether the primary change is the
-smallest interpretable intervention. Separate independently toggleable changes
-from enablers. Accept a joint package only when its components are technically
-inseparable and the result limits its claim to package-level effects. Check
-that baseline reproduction precedes the comparison and that the result is
-minimally sufficient rather than an unbounded future experiment manual. Treat
-avoidable over-expansion that hides the primary claim or prevents bounded
-falsification as a semantic finding; never ask the Script to enforce a length
-or array-count gate.
+For a Direction, first audit the decisive comparison. Require the strongest
+simple baseline to be identifiable, runnable in principle, and selectable over
+its own complete legal domain with a calibration opportunity comparable to the
+variant. Check that the Direction names the event class where its added
+information or complexity should change the relevant action, state transition,
+or execution path. A comparison against an untuned default, an artificially
+restricted baseline, or a simpler policy that can produce the same relevant
+trace cannot establish the claimed increment.
+
+Then determine whether the primary change is the smallest interpretable
+intervention. Separate independently toggleable changes from enablers. Accept
+a joint package only when its components are technically inseparable and the
+result limits its claim to package-level effects. Require the measurement plan
+to proceed from baseline correctness and fair calibration through trigger and
+behavioral-divergence checks to one same-carrier paired ablation before costly
+robustness or external-validity work. Treat avoidable over-expansion that hides
+the primary claim or prevents bounded falsification as a semantic finding;
+never ask the Script to enforce a length or array-count gate.
 
 Mark a measurement or specification issue `BLOCKING` only when it can change
 the principal comparison, pass/fail result, baseline reproducibility,
@@ -185,6 +303,9 @@ handoff details.
   non-blocking caveat does not require one.
 - Treat each query-gap dimension as one resolution channel, never as a
   scheduling command.
+- Do not repeat an `experiment` query gap already answered by a reviewed
+  negative result unless a changed causal assumption and independent evidence
+  make the new observation verdict-changing.
 
 ## Choose one verdict
 

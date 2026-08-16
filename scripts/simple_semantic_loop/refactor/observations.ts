@@ -1,6 +1,7 @@
 import type {
   DecisionObservation,
   DecisionProtocolResult,
+  ExperimentGoalResult,
   LoopDecision,
   ProgressTrajectoryRecord,
   ResearchMemory,
@@ -16,6 +17,10 @@ import type {
 } from "./types.ts";
 import { FileLoopStore } from "./store.ts";
 import {
+  buildNegativeExperimentIndex,
+  rebuildNegativeExperimentIndex,
+} from "./experiment_history.ts";
+import {
   computeRemainingRequirements,
   previewBranchEffects,
 } from "./workflow.ts";
@@ -29,6 +34,7 @@ export function rebuildResearchMemory(
 ): ResearchMemory {
   const memory = buildResearchMemory(store, state);
   store.writeJson(MEMORY_REF, memory);
+  rebuildNegativeExperimentIndex(store, state);
   return memory;
 }
 
@@ -45,6 +51,7 @@ export function buildResearchMemory(
     openQueryGaps: [],
     coverage: { L1: [], L2: [], L3: [], L4: [], L5: [], L6: [] },
     decisionTrail: [],
+    experimentResults: [],
     requirements: computeRemainingRequirements(store, state, false),
   };
   const index = store.readObjects();
@@ -86,6 +93,19 @@ export function buildResearchMemory(
         typeof control.guidance === "string" ? control.guidance : null,
     });
   }
+  for (const experimentRef of store.experimentRefs().sort()) {
+    const record = store.readExperiment(experimentRef);
+    if (!store.exists(record.resultRef)) continue;
+    const result = store.readJson<ExperimentGoalResult>(record.resultRef);
+    memory.experimentResults.push({
+      resultRef: record.resultRef,
+      anchorWork: result.anchorWork,
+      directionWork: result.directionWork,
+      goalStatus: result.goalStatus,
+      experimentObjective: result.experimentObjective,
+      conclusionRef: result.conclusionRef,
+    });
+  }
   return memory;
 }
 
@@ -106,12 +126,18 @@ export function writeDecisionObservation(
   const contextDir = contextMatch[1]!;
   const researchMemoryRef = `${contextDir}/research_memory_snapshot.json`;
   const trajectoryRef = `${contextDir}/progress_trajectory_snapshot.jsonl`;
+  const negativeExperimentHistoryRef =
+    `${contextDir}/negative_experiment_history_snapshot.json`;
 
   const memory = buildResearchMemory(store, state);
   if (!store.exists(TRAJECTORY_REF)) store.writeText(TRAJECTORY_REF, "");
   const trajectoryText = store.readText(TRAJECTORY_REF);
   store.writeImmutableJson(researchMemoryRef, memory);
   store.writeImmutableText(trajectoryRef, trajectoryText);
+  store.writeImmutableJson(
+    negativeExperimentHistoryRef,
+    buildNegativeExperimentIndex(store, state),
+  );
   const trajectory = store.readJsonLines<ProgressTrajectoryRecord>(trajectoryRef);
   const observation: DecisionObservation = {
     generatedAt: new Date().toISOString(),
@@ -119,6 +145,7 @@ export function writeDecisionObservation(
     round: state.round,
     researchMemoryRef,
     trajectoryRef,
+    negativeExperimentHistoryRef,
     trajectoryTail: trajectory.slice(-5),
     branchEffects: previewBranchEffects(store, state, allowed),
     accepted: acceptedCounts(store),
@@ -266,6 +293,21 @@ export function writeCheckpoint(
       )
       : ["- None"]),
     "",
+    "## EXP Goal results",
+    "",
+    ...(memory.experimentResults.length > 0
+      ? memory.experimentResults.map((entry) =>
+        `- ${entry.goalStatus}: ${entry.experimentObjective} ` +
+        `(result: \`${entry.resultRef}\`${
+          entry.conclusionRef ? `; conclusion: \`${entry.conclusionRef}\`` : ""
+        })`
+      )
+      : ["- None"]),
+    "",
+    "## Reviewed negative EXP evidence",
+    "",
+    ...negativeExperimentLines(store, state),
+    "",
     "## Runtime transport failures",
     "",
     ...runtimeFailureLines(store),
@@ -299,6 +341,11 @@ export function readObservationSummary(store: FileLoopStore): unknown {
     trajectoryTail: store
       .readJsonLines<ProgressTrajectoryRecord>(TRAJECTORY_REF)
       .slice(-5),
+    negativeExperimentIndex: store.exists(
+        "observations/negative_experiment_index.json"
+      )
+      ? store.readJson("observations/negative_experiment_index.json")
+      : null,
   };
 }
 
@@ -477,6 +524,21 @@ function runtimeFailureLines(store: FileLoopStore): string[] {
     )
     : ["- None"];
 }
+
+function negativeExperimentLines(
+  store: FileLoopStore,
+  state: StateFile,
+): string[] {
+  const index = buildNegativeExperimentIndex(store, state);
+  return index.entries.length > 0
+    ? index.entries.map((entry) =>
+      `- Anchor \`${entry.anchorWork}\`; Direction ${
+        entry.directionWork ? `\`${entry.directionWork}\`` : "None"
+      }; EXP \`${entry.experimentResultRef}\`; review \`${entry.reviewRef}\``
+    )
+    : ["- None"];
+}
+
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)

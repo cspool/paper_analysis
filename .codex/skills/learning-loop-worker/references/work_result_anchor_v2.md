@@ -8,11 +8,11 @@ Return one JSON object and no surrounding text:
   "content": {
     "name": "short distinctive Anchor name",
     "scenario": "concrete workload, execution phase, and operating regime",
-    "baseline": "current execution path or controlled comparison",
-    "performanceTension": "observable optimization tension",
+    "baseline": "current execution path or controlled comparison and bounded headroom basis",
+    "performanceTension": "observable optimization tension under stated conditions",
     "scope6L": {
-      "L1": "algorithm or pipeline region involved in this Anchor",
-      "L2": "serving or runtime region involved in this Anchor",
+      "L1": "concrete algorithm/pipeline object carrying the tension",
+      "L2": "concrete queue, batch, timeline, cache, placement, or runtime object carrying the tension",
       "L3": null,
       "L4": null,
       "L5": null,
@@ -46,8 +46,12 @@ Rules:
 - `READY_FOR_REVIEW` has `unresolved=[]`; the other two outcomes have at least
   one unresolved item.
 - `scope6L` always contains the six named keys `L1` through `L6`. Use one
-  concise region/object description for each involved layer and `null` for
-  each uninvolved layer. At least one layer is non-null.
+  concise concrete performance-object description for each involved layer and
+  `null` for each uninvolved layer. A layer name or broad phrase such as
+  "kernel optimization" is not coverage. At least one layer is non-null.
+- `baseline` and `performanceTension` distinguish observed performance facts
+  from hypotheses and explain why Goal-relevant headroom may remain in the
+  stated workload/model/hardware/runtime regime.
 - The complete shape and cross-field rules are the Worker content contract.
   Reviewer checks them and Decision decides whether a material violation
   requires semantic retry.

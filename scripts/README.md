@@ -6,7 +6,7 @@
 
 - **纯本地处理**：`paper_mdsplit_batch.py`、`repo_mdsplit_batch.py`、`monitor_progress.sh`。
 - **联网或模型处理**：`paper_download.py`、`pdf_to_md.py`。
-- **会启动付费 Agent**：`run_all_papers*.py`、`simple_semantic_loop.ts`、`learning_scheduler.ts`、`idea_review_orchestrator.ts`。
+- **会启动付费 Agent**：`run_all_papers*.py`、`simple_semantic_loop.ts`、`direction_experiment_loop.ts`、`learning_scheduler.ts`、`idea_review_orchestrator.ts`。
 
 ## 正式目录约定
 
@@ -59,7 +59,8 @@
 | `run_all_papers_multi_launch.py` | 并行运行 effAttn、rtrans_ssm、video_image 等硬编码配置 | 脚本内 `CONFIGS` | 多组 repo 与进度文件 |
 | `run_all_papers_multi_launch_2nd_process.py` | 并行运行 MoE、多模态 kernel 等第二组硬编码配置 | 脚本内 `CONFIGS` | 多组 repo 与进度文件 |
 | `repo_mdsplit_batch.py` | 将汇总 repo 按 `##` 标题拆成独立笔记 | `experiment_repo/idea_repo/knowledge_repo` | experiment/idea/knowledge notes |
-| `simple_semantic_loop.ts` | 当前 Learning Workflow format v7：最小核心字段 gate 的确定性文件型 Controller 编排 Decision、Worker、Reviewer 三类 fresh Turn，并保存不可变 Decision/Worker 快照、轮次授权、流式现场、外循环观察和显式 runtime recovery | topic、objective、acceptance criteria | G01/T01/D01/W01/R01/E01、完整 Agent 结果、core control 投影、Context snapshots、trajectory/memory/checkpoint、合并 delta、授权/recovery 审计和 `final/report.md` |
+| `simple_semantic_loop.ts` | 当前 Learning Workflow format v8：最小核心字段 gate 的确定性文件型 Controller 编排 Decision、Worker、Reviewer fresh Turn，并可由 Decision 按需启动持久 EXP Goal；EXP 后先走原子 Reviewer→Decision，按 Anchor 索引经审阅负结果并反馈后续搜索；支持从 FINISHED 继续，或从稳定 PAUSED 进展不可变分支并重置授权 | topic、objective、acceptance criteria，可选 EXP Goal 数量和 timeout，或 FINISHED/PAUSED source run；EXP 不设置 token budget | G01/T01/D01/W01/R01/E01、实验 Goal task/result/workspace、负 EXP Ref 索引、continuation provenance、core control 投影、Context snapshots、trajectory/memory/checkpoint、授权/recovery 审计和 `final/report.md` |
+| `direction_experiment_loop.ts` | 当前 format v7：对一个已审阅 Direction 做实验深化；fresh Decision 每轮冻结一个可执行原子合同，持久 Lab 以 Stop Gate、分片和 checkpoint/result 原子提交执行，fresh Judge 独立审查早停和证据范围；支持 timeout/blocked 后结果接管、同线程 invocation 恢复与锁外实时暂停 | Learning run 中一个明确的 Direction WORK_RESULT 路径 | run-local Skill 快照、合同/Cycle 绑定、invocation/checkpoint/result、Decision/Experiment/Judgment 轨迹、带 scope 的最终报告与 Learning handoff |
 | `learning_scheduler.ts` | 四阶段学习调度：问题、回答、横向总结、纵向总结 | 自然语言研究问题 | `learning_outputs` run |
 | `monitor_progress.sh` | 只读显示 learning scheduler 进度 | learning run 目录 | 终端进度面板 |
 | `idea_review_orchestrator.ts` | QA/AA 双会话盲评 Idea | Idea note 路径或论文标题 | review、运行日志与 checkpoint |
@@ -89,6 +90,17 @@
 
 旧版 Codex 工作流的设计、Skill 和运行时归档索引见
 [archive/learning_workflow/README.md](../archive/learning_workflow/README.md)。
+
+## Direction Experiment Loop
+
+当 Learning Flow 已经给出一个具体 Direction，需要围绕其 baseline 做环境部署、
+实现、A/B 和消融时，使用独立的
+[Direction Experiment Loop README](direction_experiment_loop/README.md)。该 Flow
+不接收 Topic，也不创建新的 Anchor。它从一个不可变来源 Direction 开始，按
+`Experiment Decision → Direction Lab Goal → Evidence Judge → Experiment Decision`
+闭环：Decision 冻结同一因果主张的实验合同及允许弱化，Lab 只执行，Judge 只评判；
+若核心研究主张必须改变则回交 Learning Flow。弱化代理、真实单卡、模拟器和原论文
+环境的证据边界由 `evidenceScope` 写入最终 handoff。
 
 ## 环境检查
 

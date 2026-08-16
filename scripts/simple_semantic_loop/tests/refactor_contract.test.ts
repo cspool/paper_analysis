@@ -32,6 +32,7 @@ test("04-contract literals are the only exported control vocabulary", () => {
   assert.deepEqual([...LOOP_DECISIONS], [
     "RUN_WORKER",
     "RUN_REVIEWER",
+    "RUN_EXP_GOAL",
     "FINISH_WORKFLOW",
     "RETRY_WORKER",
     "RETRY_REVIEWER",
@@ -182,7 +183,7 @@ test("Codex Turn transport selects the explicit final_answer phase", () => {
   );
 });
 
-test("v7 Skills keep convergence semantic without adding control fields", () => {
+test("v8 Skills keep semantic review and EXP handoff outside core content fields", () => {
   const projectRoot = resolve(import.meta.dirname, "../../..");
   const decision = readFileSync(
     resolve(projectRoot, ".codex/skills/learning-loop-decision/SKILL.md"),
@@ -196,6 +197,13 @@ test("v7 Skills keep convergence semantic without adding control fields", () => 
     resolve(projectRoot, ".codex/skills/learning-loop-reviewer/SKILL.md"),
     "utf8",
   );
+  const valueQuestions = readFileSync(
+    resolve(
+      projectRoot,
+      ".codex/skills/learning-loop-reviewer/references/optimization_value_questions_v1.md",
+    ),
+    "utf8",
+  );
   assert.match(decision, /openQueryGaps=\[\].*insufficient/s);
   assert.match(decision, /BLOCKED_NO_RESULT/);
   assert.match(decision, /One recent credible negative probe/);
@@ -203,10 +211,23 @@ test("v7 Skills keep convergence semantic without adding control fields", () => 
   assert.match(worker, /inputs\.researchMemory/);
   assert.match(worker, /bounded Topic convergence probe/);
   assert.match(worker, /future experiment handoff/);
+  assert.match(worker, /closest existing method baseline/);
+  assert.match(worker, /inputs\.experimentResults/);
+  assert.match(worker, /inputs\.negativeExperimentHistoryRef/);
+  assert.match(worker, /baselineChange.*causal lever.*preserved boundary/s);
   assert.match(reviewer, /inputs\.previousReview/);
   assert.match(reviewer, /pass\/fail result, baseline reproducibility/);
+  assert.match(reviewer, /optimization_value_questions_v1\.md/);
+  assert.match(reviewer, /negativeExperimentHistoryRef/);
+  assert.match(reviewer, /After two credible same-family negatives/);
+  assert.match(valueQuestions, /Optimization opportunity and performance baseline/);
+  assert.match(valueQuestions, /Closest method baseline and Direction difference/);
+  assert.match(valueQuestions, /Reference experiment and environment reuse/);
+  assert.match(decision, /RUN_EXP_GOAL/);
+  assert.match(decision, /second credible negative/);
+  assert.match(decision, /POST_EXP_REVIEWER/);
   assert.doesNotMatch(
     JSON.stringify(REFERENCE_TEMPLATE_SCHEMAS),
-    /quietExpansion|globalGap|saturation|memoryUpdate|trajectoryUpdate/,
+    /quietExpansion|globalGap|saturation|memoryUpdate|trajectoryUpdate|negativeLesson|familyId/,
   );
 });

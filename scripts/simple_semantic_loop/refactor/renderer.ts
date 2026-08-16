@@ -1,5 +1,7 @@
 import { FileLoopStore } from "./store.ts";
+import { buildNegativeExperimentIndex } from "./experiment_history.ts";
 import type {
+  ExperimentGoalResult,
   ObjectRevision,
   ReviewResult,
   RunOutcome,
@@ -35,6 +37,7 @@ export function renderFinalReport(store: FileLoopStore): void {
     "",
   ];
   const sourceResultRefs = new Set<string>();
+  const experimentResultRefs: string[] = [];
   const rawAppendices: RawAppendix[] = [];
   let anchorNumber = 0;
 
@@ -99,6 +102,50 @@ export function renderFinalReport(store: FileLoopStore): void {
   if (anchorNumber === 0) {
     lines.push("_No current non-rejected Anchor was available for rendering._", "");
   }
+  for (const experimentRef of store.experimentRefs()) {
+    const record = store.readExperiment(experimentRef);
+    if (!store.exists(record.resultRef)) continue;
+    const result = store.readJson<ExperimentGoalResult>(record.resultRef);
+    experimentResultRefs.push(record.resultRef);
+    if (experimentResultRefs.length === 1) {
+      lines.push("", "## EXP Goal evidence", "");
+    }
+    lines.push(
+      `### ${result.experimentId}`,
+      "",
+      `- Status: ${result.goalStatus}`,
+      `- Objective: ${result.experimentObjective}`,
+      `- Anchor: \`${result.anchorWork}\``,
+      `- Direction: ${result.directionWork ? `\`${result.directionWork}\`` : "None"}`,
+      `- Result: \`${record.resultRef}\``,
+      `- Workspace: \`${result.workspaceRef}\``,
+    );
+    if (result.conclusionRef && store.exists(result.conclusionRef)) {
+      lines.push(
+        `- Conclusion: \`${result.conclusionRef}\``,
+        "",
+        store.readText(result.conclusionRef).trim(),
+        "",
+      );
+    } else if (result.error) {
+      lines.push(`- Runtime limitation: ${result.error}`, "");
+    }
+  }
+  const negativeIndex = buildNegativeExperimentIndex(store, store.readState());
+  if (negativeIndex.entries.length > 0) {
+    lines.push("", "## Reviewed negative EXP evidence", "");
+    for (const entry of negativeIndex.entries) {
+      const review = store.readJson<ReviewResult>(entry.reviewRef);
+      lines.push(
+        `- EXP \`${entry.experimentResultRef}\` → ${entry.reviewVerdict}; ` +
+          `Anchor \`${entry.anchorWork}\`; Direction ${
+            entry.directionWork ? `\`${entry.directionWork}\`` : "None"
+          }; review \`${entry.reviewRef}\`${
+            review.summary ? `: ${review.summary}` : ""
+          }`,
+      );
+    }
+  }
   appendRawAppendices(lines, rawAppendices);
 
   store.writeText("final/report.md", `${lines.join("\n").trim()}\n`);
@@ -106,6 +153,8 @@ export function renderFinalReport(store: FileLoopStore): void {
     generatedAt: new Date().toISOString(),
     goalRef: "workflow_goal.json",
     sourceResultRefs: [...sourceResultRefs],
+    experimentResultRefs,
+    negativeExperimentEntries: negativeIndex.entries,
   });
   store.writeJson("final/outcome.json", {
     workflowOutcome: "FINISHED",

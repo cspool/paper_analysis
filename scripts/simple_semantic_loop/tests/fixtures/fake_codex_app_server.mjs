@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 
 const reader = createInterface({ input: process.stdin });
 let activity = null;
+let goal = null;
 
 function send(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -18,10 +19,140 @@ reader.on("line", (line) => {
     send({ id: message.id, result: { thread: { id: "fake-thread" } } });
     return;
   }
+  if (message.method === "thread/resume") {
+    goal = {
+      threadId: message.params.threadId,
+      objective: "paused fixture goal",
+      status: "paused",
+      tokenBudget: null,
+      tokensUsed: 10,
+      timeUsedSeconds: 2,
+    };
+    send({
+      id: message.id,
+      result: { thread: { id: message.params.threadId, turns: [] } },
+    });
+    return;
+  }
+  if (message.method === "thread/goal/get") {
+    send({ id: message.id, result: { goal } });
+    return;
+  }
+  if (message.method === "thread/goal/set") {
+    goal = {
+      threadId: message.params.threadId,
+      objective: message.params.objective ?? goal?.objective ?? "",
+      status: message.params.status ?? goal?.status ?? "active",
+      tokenBudget: Object.hasOwn(message.params, "tokenBudget")
+        ? message.params.tokenBudget
+        : goal?.tokenBudget ?? null,
+      tokensUsed: goal?.tokensUsed ?? 0,
+      timeUsedSeconds: goal?.timeUsedSeconds ?? 0,
+    };
+    send({ id: message.id, result: { goal } });
+    send({
+      method: "thread/goal/updated",
+      params: { threadId: goal.threadId, turnId: null, goal },
+    });
+    return;
+  }
   if (message.method === "turn/start") {
     const prompt = message.params?.input?.[0]?.text ?? "";
     send({ id: message.id, result: { turn: { id: "fake-turn" } } });
-    if (prompt.includes("HARD_ACTIVITY")) {
+    if (prompt.includes("EXP_GOAL_TRANSPORT")) {
+      setTimeout(() => {
+        const firstText = "第一次测量完成，Goal 保持 active 并自动续转。";
+        send({
+          method: "turn/started",
+          params: {
+            threadId: goal?.threadId ?? "fake-thread",
+            turn: { id: "fake-turn", status: "inProgress" },
+          },
+        });
+        send({
+          method: "item/completed",
+          params: {
+            threadId: goal?.threadId ?? "fake-thread",
+            turnId: "fake-turn",
+            item: {
+              id: "fake-goal-message",
+              type: "agentMessage",
+              phase: "final_answer",
+              text: firstText,
+            },
+          },
+        });
+        send({
+          method: "turn/completed",
+          params: {
+            threadId: goal?.threadId ?? "fake-thread",
+            turn: {
+              id: "fake-turn",
+              status: "completed",
+              items: [{
+                id: "fake-goal-message",
+                type: "agentMessage",
+                phase: "final_answer",
+                text: firstText,
+              }],
+            },
+          },
+        });
+        setTimeout(() => {
+          const text = "实验结论：受控微基准支持存在有界 headroom。";
+          send({
+            method: "turn/started",
+            params: {
+              threadId: goal?.threadId ?? "fake-thread",
+              turn: { id: "fake-turn-auto", status: "inProgress" },
+            },
+          });
+          send({
+            method: "item/completed",
+            params: {
+              threadId: goal?.threadId ?? "fake-thread",
+              turnId: "fake-turn-auto",
+              item: {
+                id: "fake-goal-message-auto",
+                type: "agentMessage",
+                phase: "final_answer",
+                text,
+              },
+            },
+          });
+          send({
+            method: "turn/completed",
+            params: {
+              threadId: goal?.threadId ?? "fake-thread",
+              turn: {
+                id: "fake-turn-auto",
+                status: "completed",
+                items: [{
+                  id: "fake-goal-message-auto",
+                  type: "agentMessage",
+                  phase: "final_answer",
+                  text,
+                }],
+              },
+            },
+          });
+          goal = {
+            ...goal,
+            status: "complete",
+            tokensUsed: 321,
+            timeUsedSeconds: 7,
+          };
+          send({
+            method: "thread/goal/updated",
+            params: {
+              threadId: goal?.threadId ?? "fake-thread",
+              turnId: "fake-turn-auto",
+              goal,
+            },
+          });
+        }, 10);
+      }, 10);
+    } else if (prompt.includes("HARD_ACTIVITY")) {
       let n = 0;
       activity = setInterval(() => {
         n += 1;

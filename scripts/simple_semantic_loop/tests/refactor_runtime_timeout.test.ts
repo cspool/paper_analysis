@@ -5,6 +5,7 @@ import { CodexAppServerRuntime } from "../refactor/runtime.ts";
 import type { RuntimeLiveEvent } from "../refactor/runtime.ts";
 import { LiveConsoleRenderer } from "../refactor/live_console.ts";
 import type {
+  GoalRuntimePersistenceEvent,
   RuntimePersistenceEvent,
   TurnDispatch,
 } from "../refactor/types.ts";
@@ -149,6 +150,77 @@ test("live output stays per-delta while persisted output deltas are coalesced", 
     );
     assert.ok(persisted.length < 64);
     assert.equal(persisted.map((event) => event.delta).join(""), result.text);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("persistent EXP Goal transport follows official Goal status to completion", async () => {
+  const events: GoalRuntimePersistenceEvent[] = [];
+  const runtime = fakeRuntime();
+  try {
+    const result = await runtime.runGoal({
+      experimentId: "experiment-transport",
+      prompt: "EXP_GOAL_TRANSPORT",
+      objective: "运行一个最小实验并报告 headroom。",
+      cwd: resolve(import.meta.dirname, "../../.."),
+      model: "fake-model",
+      effort: "high",
+      tokenBudget: null,
+      timeoutProfile: {
+        idleTimeoutMs: 200,
+        hardTimeoutMs: 500,
+        interruptGraceMs: 10,
+      },
+      resumeThreadId: null,
+      onRuntimeEvent: (event) => events.push(event),
+    });
+    assert.equal(result.goalStatus, "complete");
+    assert.equal(result.providerThreadId, "fake-thread");
+    assert.deepEqual(result.providerTurnIds, ["fake-turn", "fake-turn-auto"]);
+    assert.match(result.finalText, /支持存在有界 headroom/);
+    assert.equal(result.tokensUsed, 321);
+    assert.equal(result.timeUsedSeconds, 7);
+    assert.ok(events.some((event) => event.type === "goal_provider_started"));
+    assert.ok(events.some((event) =>
+      event.type === "goal_status" && event.status === "complete"
+    ));
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("paused persistent Goal is reactivated and continued with its sibling workflow role", async () => {
+  const live: RuntimeLiveEvent[] = [];
+  const runtime = fakeRuntime((event) => live.push(event));
+  try {
+    const result = await runtime.runGoal({
+      experimentId: "direction-goal-resume",
+      role: "DIRECTION_LAB_GOAL",
+      prompt: "EXP_GOAL_TRANSPORT",
+      objective: "继续冻结的 Direction Lab 目标。",
+      cwd: resolve(import.meta.dirname, "../../.."),
+      model: "fake-model",
+      effort: "high",
+      tokenBudget: null,
+      timeoutProfile: {
+        idleTimeoutMs: 200,
+        hardTimeoutMs: 500,
+        interruptGraceMs: 10,
+      },
+      resumeThreadId: "fake-paused-direction-thread",
+      developerInstructions: "fixture direction lab instructions",
+    });
+    assert.equal(result.goalStatus, "complete");
+    assert.equal(result.providerThreadId, "fake-paused-direction-thread");
+    assert.ok(live.some((event) =>
+      event.type === "turn_starting" &&
+      event.role === "DIRECTION_LAB_GOAL"
+    ));
+    assert.ok(live.some((event) =>
+      event.type === "turn_completed" &&
+      event.role === "DIRECTION_LAB_GOAL"
+    ));
   } finally {
     await runtime.close();
   }

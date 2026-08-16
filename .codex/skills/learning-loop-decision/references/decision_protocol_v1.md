@@ -12,7 +12,11 @@ Role rules:
 - `decision` is exactly one literal injected under `[ALLOWED_DECISIONS]`.
 - Decision should provide `guidance` for retry branches so the retried Agent
   receives the semantic error and bounded correction. The Script treats
-  guidance as optional opaque text and does not inspect its meaning.
+  guidance as opaque text and does not inspect its meaning.
+- `RUN_EXP_GOAL` requires one non-empty guidance line. It is copied verbatim
+  as the bounded experiment objective and should state the empirical
+  uncertainty and its decision consequence, not a complete implementation.
+- For non-retry, non-experiment branches, `guidance` remains optional.
 - `guidance` is non-authoritative and cannot select the Task action, object
   kind, target, schema, or state transition.
 - Do not return JSON, Markdown fences, prose outside these fields, multiple
