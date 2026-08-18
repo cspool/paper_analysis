@@ -1,0 +1,44 @@
+# REFERENCES
+
+- [1] S. Palacharla, N. P. Jouppi, and J. E. Smith, "Complexity-effective superscalar processors," in *Proceedings of the 24th Annual International Symposium on Computer Architecture*, June 1997, pp. 206–218.
+- [2] ——, "Quantifying the complexity of superscalar processors," University of Wisconsin-Madison, Tech. Rep. CS-TR-1996-1328, November 1996.
+- [3] M. Goshima, K. Nishino, T. Kitamura, Y. Nakashima, S. Tomita, and S. Mori, "A high-speed dynamic instruction scheduling scheme for superscalar processors," in *Proceedings of the 34th Annual IEEE/ACM International Symposium on Microarchitecture*, December 2001, pp. 225–236.
+- [4] M. Golden, S. Arekapudi, and J. Vinh, "40-entry unified out-of-order scheduler and integer execution unit for the AMD Bulldozer x86- 64 core," in *2011 IEEE International Solid-State Circuits Conference, Digest of Technical Papers*, February 2011, pp. 80–82.
+- [5] B. Sinharoy, J. A. V. Norstrand, R. J. Eickemeyer, H. Q. Le, J. Leenstra, D. Q. Nguyen, B. Konigsburg, K. Ward, M. D. Brown, J. E. Moreira, D. Levitan, S. Tung, D. Hrusecky, J. W. Bishop, M. Gschwind, M. Boersma, M. Kroener, M. Kaltenbacha, T. Karkhanis, and K. M. Fernsler, "IBM POWER8 processor core microarchitecture," *IBM Journal of Research and Development*, vol. 59, issue 1, pp. 2:1 – 2:21, January - February 2015.
+- [6] H. Ando, "SWQUE: A mode switching issue queue with prioritycorrecting circular queue," in *Proceedings of the 52nd Annual IEEE/ACM International Symposium on Microarchitecture*, October 2019, pp. 506–518.
+- [7] J. A. Farrell and T. C. Fischer, "Issue logic for a 600-MHz out-of-order execution microprocessor," *Journal of Solid-State Circuits*, vol. 33, no. 5, pp. 707–712, May 1998.
+
+- [8] R. P. Preston, R. W. Badeau, D. W. Bailey, S. L. Bell, L. L. Biro, W. J. Bowhill, D. E. Dever, S. Felix, R. Gammack, V. Germini, M. K. Gowan, P. Gronowski, D. B. Jackson, S. Mehta, S. V. Morton, J. D. Pickholtz, M. H. Reilly, and M. J. Smith, "Design of an 8-wide superscalar RISC microprocessor with simultaneous multithreading," in *2002 IEEE International Solid-State Circuits Conference, Digest of Technical Papers*, February 2002, pp. 334–472.
+- [9] P. G. Sassone, J. Rupley II, E. Brekelbaum, G. H. Loh, and B. Black, "Matrix scheduler reloaded," in *Proceedings of the 34th Annual International Symposium on Computer Architecture*, June 2007, pp. 335–346.
+- [10] J. Abella, R. Canal, and A. Gonzalez, "Power- and complexity-aware issue queue designs," *IEEE Micro*, vol. 23, Issue 5, no. 5, pp. 50–58, September-October 2003.
+- [11] E. Brekelbaum, J. Rupley, C. Wilkerson, and B. Black, "Hierarchical scheduling windows," in *Proceedings of the 35th Annual IEEE/ACM International Symposium on Microarchitecture*, November 2002, pp. 27– 36.
+- [12] C.-H. Chen and K.-S. Hsiao, "Scalable dynamic instruction scheduler through wake-up spatial locality," *IEEE Transactions on Computers*, vol. 56, no. 11, pp. 1534–1548, November 2007.
+- [13] A. R. Lebeck, J. Koppanalil, T. Li, J. Patwardhan, and E. Rotenberg, "A large, fast instruction window for tolerating cache misses," in *Proceedings of the 29th Annual International Symposium on Computer Architecture*, May 2002, pp. 59–70.
+- [14] J. Stark, M. D. Brown, and Y. N. Patt, "On pipelining dynamic instruction scheduling logic," in *Proceedings of the 33rd Annual IEEE/ACM International Symposium on Microarchitecture*, December 2000, pp. 57– 66.
+- [15] M. D. Brown, J. Stark, and Y. N. Patt, "Select-free instruction scheduling logic," in *Proceedings of the 34th Annual IEEE/ACM International Symposium on Microarchitecture*, December 2001, pp. 204–213.
+- [16] Y. Kora, K. Yamaguchi, and H. Ando, "MLP-aware dynamic instruction window resizing for adaptively exploiting both ILP and MLP," in *Proceedings of the 46th Annual IEEE/ACM International Symposium on Microarchitecture*, December 2013, pp. 37–48.
+- [17] P. Michaud and A. Seznec, "Data-flow prescheduling for large instruction windows in out-of-order processors," in *Proceedings of the Seventh International Symposium on High-Performance Computer Architecture*, January 2001, pp. 27–36.
+- [18] R. Canal and A. Gonzalez, "A low-complexity issue logic," in ´ *Proceedings of the 14th International Conference on Supercomputing*, May 2000, pp. 327–335.
+- [19] D. Ernst, A. Hamel, and T. Austin, "Cyclone: A broadcast-free dynamic instruction scheduler with selective replay," in *Proceedings of the 30th Annual International Symposium on Computer Architecture*, June 2003, pp. 253–262.
+- [20] I. Jeong, J. Lee, M. K. Yoon, and W. W. Ro, "Reconstructing out-oforder issue queue," in *Proceedins of the 55th IEEE/ACM International Symposium on Microarchitecture*, October 2022, pp. 144–161.
+- [21] I. Kim and M. Lipasti, "Half-price architecture," in *Proceedings of the 30th Annual International Symposium on Computer Architecture*, June 2003, p. 28–38.
+- [22] D. Ernst and T. Austin, "Efficient dynamic scheduling through tag ellimination," in *Proceedings of the 29th Annual International Symposium on Computer Architecture*, May 2002, pp. 37–46.
+- [23] R. Shioya, M. Goshima, and H. Ando, "A front-end execution architecture for high energy efficiency," in *Proceedings of the 47th Annual IEEE/ACM International Symposium on Microarchitecture*, December 2014, pp. 419–431.
+- [24] A. Sembrant, T. Carlson, E. Hagersten, D. Black-Shaffer, A. Perais, A. Seznec, and P. Michaud, "Long term parking (LTP): criticalityaware resource allocation in OOO processors," in *Proceedings of the 48th Annual IEEE/ACM International Symposium on Microarchitecture*, December 2015, pp. 334–346.
+- [25] M. Alipour, S. Kaxiras, D. Black-Schaffer, and R. Kumar, "Delay and bypass: Ready and criticality aware instruction scheduling in outof-order processors," in *Proceedings of the 2020 IEEE International Symposium on High Performance Computer Architecture*, February 2020, pp. 424–434.
+- [26] S. McFarling, "Combining branch predictors," DEC Western Research Laboratory, Tech. Rep. TN-36, June 1993.
+- [27] G. Hinton, D. Sager, M. Upton, D. Boggs, D. Carmean, A. Kyker, and P. Roussel, "The microarchitecture of the Pentium 4 processor," *Intel Technology Journal*, vol. Q1, 2001.
+
+- [28] S. K. Mathew, M. A. Anders, B. Bloechel, T. Nguyen, R. K. Krishnamurthy, and S. Borkar, "A 4-GHz 300-mW 64-bit integer execution ALU with dual supply voltages in 90-nm CMOS," *IEEE Journal of Solid-State Circuits*, vol. 40, no. 1, pp. 44–51, January 2005.
+- [29] S. Li, J. H. Ahn, R. D. Strong, J. B. Brockman, D. M. Tullsen, and N. P. Jouppi, "McPAT: An integrated power, area, and timing modeling framework for multicore and manycore architectures," in *Proceedings of the 42nd Annual IEEE/ACM International Symposium on Microarchitecture*, December 2009, pp. 469–480.
+- [30] A. Jani, "Apple ships its first PC processor," *Microprocessor Report*, January 2021.
+- [31] L. Gwennap, "Golden Cove adds matrix units," *Microprocessor Report*, September 2021.
+- [32] E. Rotem, A. Yoaz, L. Rappoport, S. J. Robinson, J. Y. Mandelblat, A. Gihon, E. Weissmann, R. Chabukswar, V. Basin, R. Fenger, M. Gupta, and A. Yasin, "Intel Alder Lake CPU architectures," *IEEE Micro*, vol. 42, no. 3, pp. 13–19, May-June 2022.
+- [33] https://github.com/toddmaustin/simplesim-3.0.
+- [34] G. Sohi, "Instruction issue logic for high-performance, interruptible, multiple functional unit, pipelined computers," *IEEE Transactions on Computers*, vol. 39, no. 3, pp. 349–359, March 1990.
+- [35] A. Seznec and P. Michaud, "A case for (partially) tagged geometric history length branch prediction," *Journal of Instruction Level Parallelism*, vol. 8, pp. 1–23, February 2006.
+- [36] https://github.com/ChampSim/ChampSim.
+- [37] T. Sherwood, E. Perelman, G. Hamerly, and B. Calder, "Automatically characterizing large scale program behavior," in *Proceedings of the 10th International Conference on Architectural Support for Programming Languages and Operating Systems*, October 2002, pp. 45–57.
+- [38] W. Zhao and Y. Cao, "New generation of predictive technology model for sub-45nm design exploration," in *Proceedings of the 7th International Symposium on Quality Electronic Design*, March 2006, pp. 585– 590.
+- [39] International Technology Roadmap for Semiconductors, https://semicon.jeita.or.jp/STRJ/ITRS/.
+- [40] https://www.mosis.com/.

@@ -1,0 +1,12 @@
+## CHIME: A Case for Efficient Long-Context Attention-FC Disaggregated Inference with DIMM-PIM（近似层次匹配：调度优化多请求并行，但未修改开源 Serving 框架，运行于自研模拟器）
+
+- 属于Serving调度的实现是什么？实验比较什么？
+  - 近似匹配（论文是软硬件协同 AFD 系统，未修改任何开源 Serving 框架、无真实部署，调度实现在模拟环境中；最接近"Serving 调度"中"优化多请求调度提高吞吐量"的定义）。实现 = CHIME-sys 的 alignment-predicting scheduling：对 GPU 与 CHIME-PIM 两侧运算延迟建模预测，按"预测延迟对齐"原则选择请求组成两个 sub-batch，使两设备的并行执行延迟对齐、空闲气泡最小。调度策略：1) 每个 sub-batch 先加 1 个 prefilling 请求（无 prefill 则跳过）；2) 每加入一个 prefill 请求（T_GPU 增大）后，向每个 sub-batch 追加 N 个 decoding 请求并按负载均衡分配到各 rank，随即预测 T_PIM 与 T_GPU，若 T_PIM < T_GPU 继续加 N 个 decoding 请求直到 T_PIM > T_GPU；3) 若仍有 prefill 请求则重复直到 PIM 显存耗尽；显存饱和且气泡在 PIM 侧时，把每个 sub-batch 的最后一个 prefill 请求 chunk 化，动态调整 T_GPU 逼近另一 sub-batch 的 T_PIM。N 越大批时间调节粒度越粗、rank 间负载均衡越好：MHA N=1、GQA N=16。延迟建模：T_GPU 用 Random Forest Regression（RFR，增量学习/低延迟/高精度），T_PIM 用线性模型（PIM 执行时间与计算/传输 token 数线性相关，t_d 由最慢 rank 决定）；运行时 profiling 增量更新数据集，预测相对误差 <~1%（中位数 <0.5%）。sub-batch 调度技术本身继承自 NeuPIMs [28]、NEO [30]。
+  - 实验比较：调度消融 baseline = 优先填满 CHIME-PIM 容量的调度策略 vs CHIME 的 alignment-predicting scheduling；指标 = 平均吞吐与 Time-between-Tokens (TBT)。结果（OpenR1 trace）：TBT 最高降 70.93% 且吞吐不降略升；MHA 模型下 baseline 随容量增大选更大 batch 导致 TBT 升高而无吞吐收益，CHIME 可避免气泡并抑制 TBT 增长。
+- 硬件平台是什么，配置是什么。
+  - DGX-A100：GPU 侧 8× NVIDIA A100（每卡 80GB HBM2e，FP16 合计 156 TFLOPs，NVLink 互连）；加速器侧 16 通道 × 2 DIMM（DDR4-3200，2TB）装备本文 DIMM-PIM（CHIME 等效带宽 13.0TB/s；rank-level R-PIM 1.6TB/s），PCIe 连接 GPU 与 CHIME-PIM（DGX-A100 上 4 ranksets）。评估环境为模拟器：AttAcc（GPU roofline 模拟）+ CHIME-PIM-sim（修改版 DRAMSim3，trace-driven cycle 级）。
+- 开源Serving框架是什么。修改了什么。
+  - 论文未修改开源 Serving 框架（论文未明确说明）。CHIME-sys 继承 NeuPIMs/NEO 的 sub-batch 调度思路，在其自研模拟环境中实现 alignment-predicting 调度（RFR+线性模型+运行时 profiling+chunked prefill 对齐），对 GPU 上的 QKV Gen/投影/FFN 与 PIM 上的 decoding attention 做跨设备并行编排。
+- 开源情况。基于开源文档和论文，使用例子解释Serving框架如何使用？作用是什么？至少具体到框架输入到硬件执行的全过程。
+  - 开源情况：论文未给出 CHIME 源码链接；联网搜索未发现官方仓库（SJTU IPADS 暂未公开），开源状态无法确认。基座组件开源：DRAMSim3（https://github.com/umd-memsys/DRAMSim3）、AttAcc 模拟器（https://github.com/scale-snu/attacc_simulator）。
+  - 全过程（一次迭代）：调度器从请求队列按策略选请求组成 sub-batch 0/1 → 每个 sub-batch 的 QKV Generation 在 GPU 批处理 → decoding attention 在 CHIME-PIM 以 rank 粒度执行（t_d 取最慢 rank，跨设备传输 t_comm 与另一 sub-batch 重叠隐藏）、prefill attention 在 GPU 执行 → CHIME 聚合所有请求的 attention 输出经 PCIe 返回 GPU → GPU 批处理投影/FFN 等 FC 操作。对齐原理：RFR 预测 t_p(chunk 数, 已完成 token) 与 t_batch，线性模型预测各 rank t_d 与 t_comm，选择使 sub-batch 0/1 的 T_GPU≈T_PIM 的请求组合，chunked prefill 微调 T_GPU。端到端效果：吞吐较 HBM-PIM 最高 5.15×、HBM-PIM-EXT 3.45×、GPU-only 3.94×、R-PIM 7.21×。

@@ -1,0 +1,8 @@
+# IX. RELATED WORK
+
+Accelerators for Sparse Matrix Multiplication. Sparse accelerators have been explored on FPGA and ASIC platforms, often targeting specific kernels with fixed compute patterns [8]–[13], [40]–[44]. Some designs support multiple intra-tile dataflows [14], [15] or tile-shape adjustments, but these configurations are largely static and cannot adapt at runtime. Processing-in-memory solutions reduce off-chip bandwidth pressure, yet their compute patterns remain fixed once mapped [45]–[47].
+
+Reconfigurable or Adaptive Dataflow Architectures. Several spatial accelerators enable reconfigurable or adaptive dataflows [14], [48], [49]. MAERI [50] allows dynamic remapping of reduction and routing networks to emulate different dataflows. Analytical mapping models like Vesper [17] optimize performance via operation intensity estimates. Global tiling schedulers [20], [24], [27] reorder execution without modifying compute patterns, while methods such as Misam [19] select among fixed dataflows, leaving tile shapes and traversal sequences unchanged.
+
+Sparse Compilers and Runtime Scheduling. Prior works, such as TACO [23] and subsequent frameworks [29], [51]– [59], introduce algebraic abstractions and cost models for tiling and parallelization. However, these software-centric approaches treat the hardware as a "black box," failing to exploit accelerator-specific microarchitectural features. While autotuning frameworks (e.g., TVM [60], FlexTensor [61]) offer automated optimization, they primarily target dense workloads. Consequently, they often overlook sparse-specific bottlenecks, including metadata overhead and load imbalance, which are essential for specialized accelerators.
+

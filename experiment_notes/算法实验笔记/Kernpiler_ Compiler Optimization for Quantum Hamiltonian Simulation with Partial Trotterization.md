@@ -1,0 +1,12 @@
+## Kernpiler: Compiler Optimization for Quantum Hamiltonian Simulation with Partial Trotterization
+
+- 属于算法pipeline的实现是什么？实验比较什么？
+  - 实现为新的哈密顿量模拟算法范式 Partial Trotterization 及其配套算法优化：传统 Trotterization 对每个哈密顿量项分别指数化（e^{iΣH_i t} → Π e^{iH_i t}），误差与逐项 commutator 有关；Partial Trotterization 把非对易项分组成 partition（每个 partition ≤3 个 qubit，如 {H_i, H_j}），直接编译成组的指数 e^{it(H_i+H_j)}。理论分析（BCH/commutator scaling，Eq.7-9）表明分组消除了组内 commutator 贡献，误差从全 Trotter 的 sum_{i<j}[H_i,H_j] 降为仅跨组 commutator，一阶/高阶 Trotter 下电路深度随 group 大小呈二次缩减，因此达到相同精度所需 Trotter 步数大幅下降（实测一阶 Trotter 下 10 steps 误差随 group 增大急剧下降，图 8）；再叠加两项算法优化：跨 Trotter step 的可交换 group 合并（e^{iH_it}e^{iH_it}→e^{i2H_it}）与组内随机 shuffle 把 coherent 误差转 stochastic。
+  - 实验比较什么：与状态最优哈密顿量编译方法对比——Qiskit Rustiq（Pauli network synthesis，arXiv:2404.03280）与 Qiskit PauliEvolutionGate（Paulihedral，arXiv:2109.03371 的重排/同时对角化思路），以及 Qiskit/BQSkit 通用 unitary synthesis（消融 MCTS 重写）。指标：达到 <1% 近似误差（L2 范数）时的 depth/CNOT/U3 门数与所需 Trotter 步数（图 6），及不含误差缩减的绝对门数对比（图 5）。结果：depth 与 CNOT 最多减 86%（平均 40%）、单比特门最多减 85%（平均 11%），一阶最优场景最高 10× 深度缩减。
+- 硬件平台是什么，配置是什么。
+  - 数值仿真/编译在 AMD EPYC 9654P 96 核 CPU + NVIDIA A100 GPU（80GB，运行 MCTS 搜索）；软件 PyTorch 2.5.1 + CUDA 12.1、Qiskit 1.3.2、BQSkit 1.2.0。精度验证用 8-10 qubit 哈密顿量的 L2 范数（目标 >99.5% 精度）；可扩展性评估用 28-220 qubit 哈密顿量的门数与编译时间。
+- 模型是什么。数据集和bench分别是什么。
+  - 无传统 ML 模型；"模型"即被模拟的物理哈密顿量集合（bench，Table 2）：Fermi-Hubbard（FH，三角/方格/1D 拓扑，8-128 qubits，qubit#=2×site）、Heisenberg（HB，10-144 qubits）、Ising（IS，10-144 qubits）、LiH 分子（10 qubits）、HF 分子（10 qubits）、PD-1 蛋白片段（28-222 qubits）。费米子模型用 Bravyi-Kitaev 映射到 qubit。拓扑覆盖 1D/2D（方格、矩形、三角）与分子/电子结构（非局域长程关联），term 权重多样。
+- 开源情况。基于开源文档和论文，使用例子解释算法pipeline，至少具体到伪代码或张量计算。
+  - Kernpiler 未发现公开仓库（arXiv:2504.07214 无代码链接）；baseline Qiskit（Rustiq/Paulihedral）与 BQSkit 开源。
+  - 算法 pipeline 伪代码：Algorithm 1（partitioning）：sort terms by highest qubit index then weight；对每个 term 贪心加入第一个"并集 qubit 数 ≤3"的 partition，否则新建 partition。Algorithm 2（reorder/randomize）：BuildConflictGraph（节点=unitary，[t_i,t_j]≠0 加边）→ GreedyCommutingGroups（贪心最大独立集迭代）→ 每 step 组内随机化顺序 → 相邻 step 重排使相同 group 相邻 → 跨 step 合并对易项。张量计算例子：H = H_i+H_j+H_k+H_l（4 个互不对易项，H_i=X_1Y_2Z_3 等，3-qubit），全 Trotter 误差 ∝ 6 个 commutator [H_i,H_j]+...；Partial Trotterization 把 (H_i,H_j) 与 (H_k,H_l) 分别合为 8×8 unitary e^{it(H_i+H_j)}、e^{it(H_k+H_l)}，误差只剩 4 个跨组 commutator [H_i,H_k]+[H_i,H_l]+[H_j,H_k]+[H_j,H_l]，消除 2 个组内 commutator（Eq.3 vs 4）。误差缩放：Error_partitioned = Σ_{A≤B}|[H_A,H_B]|Δt²/2，组大小 n_A 时组内 commutator 以 ~n_A² 组合增长地被消除，使误差随 partition 增大显著下降；非对易对占比不随 lattice 增大（图 9，n=3/5），保证可扩展性。

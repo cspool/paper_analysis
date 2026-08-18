@@ -1,0 +1,222 @@
+# References
+
+- <span id="page-13-0"></span>[1] Arkaprava Basu, Jayneel Gandhi, Jichuan Chang, Mark D. Hill, and Michael M. Swift. Efficient Virtual Memory for Big Memory Servers. In ISCA, 2013.
+- <span id="page-13-2"></span>[2] Vasileios Karakostas, Osman S. Unsal, Mario Nemirovsky, Adrian Cristal, and Michael Swift. Performance Analysis of the Memory Management Unit Under Scale-Out Workloads. In IISWC, 2014.
+- <span id="page-13-14"></span>[3] Thomas W. Barr, Alan L. Cox, and Scott Rixner. Translation Caching: Skip, Don't Walk (the Page Table). In ISCA, 2010.
+- [4] Linux. 5 Level Paging. [https://docs.kernel.org/](https://docs.kernel.org/x86/x8664/5level-paging.html) [x86/x8664/5level-paging.html](https://docs.kernel.org/x86/x8664/5level-paging.html), 2021.
+- <span id="page-13-3"></span>[5] Kaiyang Zhao, Kaiwen Xue, Ziqi Wang, Dan Schatzberg, Leon Yang, Antonis Manousis, Johannes Weiner, Rik Van Riel, Bikash Sharma, Chunqiang Tang, and Dimitrios Skarlatos. Contiguitas: the Pursuit of Physical Memory Contiguity in Datacenters. In ISCA, 2023.
+- <span id="page-13-4"></span>[6] Sandeep Kumar, Aravinda Prasad, Smruti R. Sarangi, and Sreenivas Subramoney. Radiant: Efficient Page Table Management for Tiered Memory Systems. In ISMM, 2021.
+- [7] Abhishek Bhattacharjee and Margaret Martonosi. Characterizing the TLB Behavior of Emerging Parallel Workloads On Chip Multiprocessors. In PACT, 2009.
+- [8] Swapnil Haria, Mark D. Hill, and Michael M. Swift. Devirtualizing Memory in Heterogeneous Systems. In AS-PLOS, 2018.
+- <span id="page-13-12"></span>[9] Idan Yaniv and Dan Tsafrir. Hash, Don't Cache (the Page Table). In SIGMETRICS, 2016.
+- [10] Timothy Merrifield and H. Reza Taheri. Performance ImplicatiOns of Extended Page Tables On Virtualized X86 Processors. In VEE, 2016.
+- [11] Peter Hornyack, Luis Ceze, Steve Gribble, Dan Ports, and Hank Levy. A Study of Virtual Memory Usage and Implications for Large Memory. Technical report, University of Washington, 2013.
+- [12] Nick Lindsay and Abhishek Bhattacharjee. Understanding Address Translation Scaling Behaviours Using Hardware Performance Counters. In IISWC, 2024.
+- <span id="page-13-8"></span>[13] Konstantinos Kanellopoulos, Konstantinos Sgouras, F. Nisa Bostanci, Andreas Kosmas Kakolyris, Berkin Kerim Konar, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Nandita Vijaykumar, and Onur Mutlu. Virtuoso: Enabling Fast and Accurate Virtual Memory Research via an Imitation-based Operating System Simulation Methodology. In ASPLOS, 2025.
+- <span id="page-13-1"></span>[14] Konstantinos Kanellopoulos. Cutting Through the Virtual Memory Wall: From Rigid Abstractions to High-Performance, Flexible, Efficient Cooperation Between Hardware and System Software. PhD thesis, ETH Zurich, 2026.
+- [15] Svilen Kanev, Juan Pablo Darago, Kim Hazelwood, Parthasarathy Ranganathan, Tipp Moseley, Gu-Yeon Wei, and David Brooks. Profiling a Warehouse-scale Computer. In ISCA, 2015.
+- <span id="page-13-9"></span>[16] Jiyuan Zhang, Weiwei Jia, Siyuan Chai, Peizhe Liu, Jongyul Kim, and Tianyin Xu. Direct Memory Transla-
+
+- tion for Virtualized Clouds. In ASPLOS, 2024.
+- <span id="page-13-11"></span>[17] Konstantinos Kanellopoulos, Rahul Bera, Kosta Stojiljkovic, Nisa Bostanci, Can Firtina, Rachata Ausavarungnirun, Rakesh Kumar, Nastaran Hajinazar, Jisung Park, Mohammad Sadrosadati, Nandita Vijaykumar, and Onur Mutlu. Utopia: Efficient Address Translation using Hybrid Virtual-to-Physical Address Mapping. In MICRO, 2023.
+- <span id="page-13-15"></span>[18] Konstantinos Kanellopoulos, Hong Chul Nam, F. Nisa Bostanci, Rahul Bera, Mohammad Sadrosadati, Rakesh Kumar, Davide Basilio Bartolini, and Onur Mutlu. Victima: Drastically Increasing Address Translation Reach by Leveraging Underutilized Cache Resources. In MI-CRO, 2023.
+- <span id="page-13-10"></span>[19] Dimitrios Skarlatos, Apostolos Kokolis, Tianyin Xu, and Josep Torrellas. Elastic Cuckoo Page Tables: Rethinking Virtual Memory Translation for Parallelism. In ASPLOS, 2020.
+- <span id="page-13-13"></span>[20] Vasileios Karakostas, Jayneel Gandhi, Furkan Ayar, Adrián Cristal, Mark D. Hill, Kathryn S. McKinley, Mario Nemirovsky, Michael M. Swift, and Osman Ünsal. Redundant Memory Mappings for Fast Access to Large Memories. In ISCA, 2015.
+- <span id="page-13-7"></span>[21] Chloe Alverti, Stratos Psomadakis, Vasileios Karakostas, Jayneel Gandhi, Konstantinos Nikas, Georgios Goumas, and Nectarios Koziris. Enhancing and Exploiting Contiguity for Fast Memory Virtualization. In ISCA, 2020.
+- [22] Nastaran Hajinazar, Pratyush Patel, Minesh Patel, Konstantinos Kanellopoulos, Saugata Ghose, Rachata Ausavarungnirun, Geraldo F. Oliveira, Jonathan Appavoo, Vivek Seshadri, and Onur Mutlu. The Virtual Block Interface: A Flexible Alternative to the Conventional Virtual Memory Framework. In ISCA, 2020.
+- <span id="page-13-5"></span>[23] Siddharth Gupta, Atri Bhattacharyya, Yunho Oh, Abhishek Bhattacharjee, Babak Falsafi, and Mathias Payer. Rebooting Virtual Memory with Midgard. In ISCA, 2021.
+- <span id="page-13-6"></span>[24] Irina Calciu, Ivan Puddu, Aasheesh Kolli, Andreas Nowatzyk, Jayneel Gandhi, Onur Mutlu, and Pratap Subrahmanyam. Project pberry: Fpga acceleration for remote memory. In HotOS, 2019.
+- [25] Peter X. Gao, Akshay Narayan, Sagar Karandikar, Joao Carreira, Sangjin Han, Rachit Agarwal, Sylvia Ratnasamy, and Scott Shenker. Network Requirements for Resource Disaggregation. In OSDI, 2016.
+- [26] Yizhou Shan, Yutong Huang, Yilun Chen, and Yiying Zhang. LegoOS: A Disseminated, Distributed OS for Hardware Resource Disaggregation. In OSDI, 2018.
+- [27] Dario Korolija, Dimitrios Koutsoukos, Kimberly Keeton, Konstantin Taranov, Dejan S. Milojicic, and Gustavo Alonso. Farview: Disaggregated Memory with Operator Off-loading for Database Engines. In CIDR, 2022.
+- [28] Chenxi Wang, Haoran Ma, Shi Liu, Yuanqi Li, Zhenyuan Ruan, Khanh Nguyen, Michael D. Bond, Ravi Netravali, Miryung Kim, and Guoqing Harry Xu. Semeru: A Memory-Disaggregated Managed Runtime. In OSDI, 2020.
+- [29] Pengfei Zuo, Jiazhao Sun, Liu Yang, Shuangwu Zhang, and Yu Hua. One-sided RDMA-Conscious Extendible Hashing for Disaggregated Memory. In ATC, 2021.
+
+- [30] Hasan Al Maruf and Mosharaf Chowdhury. Effectively Prefetching Remote Memory with Leap. In ATC, 2020.
+- [31] Kevin Lim, Jichuan Chang, Trevor Mudge, Parthasarathy Ranganathan, Steven K. Reinhardt, and Thomas F. Wenisch. Disaggregated Memory for Expansion and Sharing in Blade Servers. In ISCA, 2009.
+- [32] Qizhen Zhang, Yifan Cai, Sebastian Angel, Vincent Liu, Ang Chen, and Boon Thau Loo. Rethinking Data Management Systems for Disaggregated Data Centers. In CIDR, 2020.
+- [33] Zi Yan, Daniel Lustig, David Nellans, and Abhishek Bhattacharjee. Nimble Page Management for Tiered Memory Systems. In ASPLOS, 2019.
+- [34] Sebastian Angel, Mihir Nanavati, and Siddhartha Sen. Disaggregation and the Application. In HotCloud, 2020.
+- [35] Kevin Lim, Yoshio Turner, Jose Renato Santos, Alvin AuYoung, Jichuan Chang, Parthasarathy Ranganathan, and Thomas F. Wenisch. System-Level Implications of Disaggregated Memory. In HPCA, 2012.
+- [36] Ivy Peng, Roger Pearce, and Maya Gokhale. On the Memory Underutilization: Exploring Disaggregated Memory on HPC Systems. In SBAC-PAD, 2020.
+- [37] Laurent Bindschaedler, Ashvin Goel, and Willy Zwaenepoel. Hailstorm: Disaggregated Compute and Storage for Distributed LSM-Based Databases. In ASP-LOS, 2020.
+- [38] K. Katrinis, D. Syrivelis, D. Pnevmatikatos, G. Zervas, D. Theodoropoulos, I. Koutsopoulos, K. Hasharoni, D. Raho, C. Pinto, F. Espina, S. Lopez-Buedo, Q. Chen, M. Nemirovsky, D. Roca, H. Klos, and T. Berends. Rack-Scale Disaggregated Cloud Data Centers: The dReDBox Project Vision. In DATE, 2016.
+- [39] Marcos K. Aguilera, Nadav Amit, Irina Calciu, Xavier Deguillard, Jayneel Gandhi, Pratap Subrahmanyam, Lalith Suresh, Kiran Tati, Rajesh Venkatasubramanian, and Michael Wei. Remote Memory in the Age of Fast Networks. In SoCC, 2017.
+- [40] Marcos K. Aguilera, Nadav Amit, Irina Calciu, Xavier Deguillard, Jayneel Gandhi, Stanko Novakovic, Arun Ramanathan, Pratap Subrahmanyam, Lalith Suresh, Kiran Tati, Rajesh Venkatasubramanian, and Michael Wei. Remote Regions: A Simple Abstraction for Remote Memory. In ATC, 2018.
+- [41] Pramod Subba Rao and George Porter. Is Memory Disaggregation Feasible? A Case Study with Spark SQL. In ANCS, 2016.
+- [42] Irina Calciu, M. Talha Imran, Ivan Puddu, Sanidhya Kashyap, Hasan Al Maruf, Onur Mutlu, and Aasheesh Kolli. Rethinking Software Runtimes for Disaggregated Memory. In ASPLOS, 2021.
+- [43] Atul Adya, Robert Grandl, Daniel Myers, and Henry Qin. Fast Key-Value Stores: An Idea Whose Time Has Come and Gone. In HotOS, 2019.
+- [44] Andres Lagar-Cavilla, Junwhan Ahn, Suleiman Souhlal, Neha Agarwal, Radoslaw Burny, Shakeel Butt, Jichuan Chang, Ashwin Chaugule, Nan Deng, Junaid Shahid, Greg Thelen, Kamil Adam Yurtsever, Yu Zhao, and Parthasarathy Ranganathan. Software-Defined Far Memory in Warehouse-Scale Computers. In ASPLOS,
+
+- 2019.
+- [45] Christian Pinto, Dimitris Syrivelis, Michele Gazzetti, Panos Koutsovasilis, Andrea Reale, Kostas Katrinis, and H. Peter Hofstee. ThymesisFlow: A Software-Defined, HW/SW co-Designed Interconnect Stack for Rack-Scale Memory Disaggregation. In MICRO, 2020.
+- [46] Juncheng Gu, Youngmoon Lee, Yiwen Zhang, Mosharaf Chowdhury, and Kang G. Shin. Efficient Memory Disaggregation with Infiniswap. In NSDI, 2017.
+- [47] Dhantu Buragohain, Abhishek Ghogare, Trishal Patel, Mythili Vutukuru, and Purushottam Kulkarni. DiME: A Performance Emulator for Disaggregated Memory Architectures. In APSys, 2017.
+- <span id="page-14-0"></span>[48] Georgios Zervas, Hui Yuan, Arsalan Saljoghei, Qianqiao Chen, and Vaibhawa Mishra. Optically Disaggregated Data Centers with Minimal Remote Memory Latency: Technologies, Architectures, and Resource Allocation. In JOCN, 2018.
+- <span id="page-14-1"></span>[49] HanBin Yoon, Justin Meza, Rachata Ausavarungnirun, Rachael A Harding, and Onur Mutlu. Row Buffer Locality Aware Caching Policies for Hybrid Memories. In ICCD, 2012.
+- [50] Xiangyao Yu, Christopher J. Hughes, Nadathur Satish, Onur Mutlu, and Srinivas Devadas. Banshee: Bandwidth-Efficient DRAM Caching Via Software/Hardware Cooperation. In MICRO, 2017.
+- [51] Yang Li, Saugata Ghose, Jongmoo Choi, Jin Sun, Hui Wang, and Onur Mutlu. Utility-Based Hybrid Memory Management. In CLUSTER, 2017.
+- [52] Jishen Zhao, Onur Mutlu, and Yuan Xie. FIRM: Fair and High-Performance Memory Control for Persistent Memory Systems. In MICRO, 2014.
+- [53] Reza Salkhordeh, Onur Mutlu, and Hossein Asadi. An Analytical Model for Performance and Lifetime Estimation of Hybrid DRAM-NVM Main Memories. In TC, 2019.
+- [54] Justin Meza, Jichuan Chang, HanBin Yoon, Onur Mutlu, and Parthasarathy Ranganathan. Enabling Efficient and Scalable Hybrid Memories using Fine-granularity DRAM Cache Management. In CAL, 2012.
+- [55] Luiz Ramos, Eugene Gorbatov, and Ricardo Bianchini. Page Placement in Hybrid Memory Systems. In ICS, 2011.
+- [56] Chenxi Wang, Huimin Cui, Ting Cao, John N. Zigman, Haris Volos, Onur Mutlu, Fang Lv, Xiaobing Feng, and Guoqing Harry Xu. Panthera: Holistic Memory Management for Big Data Processing over Hybrid Memories. In PLDI.
+- [57] Lei Chen, Jiacheng Zhao, Chenxi Wang, Ting Cao, John N. Zigman, Haris Volos, Onur Mutlu, Fang Lv, Xiaobing Feng, Guoqing Harry Xu, and Huimin Cui. Unified Holistic Memory Management Supporting Multiple Big Data Processing Frameworks over Hybrid Memories. ACM Trans. Comput. Syst., 2021.
+- [58] Geraldo F. Oliveira, Saugata Ghose, Juan Gómez-Luna, Amirali Boroumand, Alexis Savery, Sonny Rao, Salman Qazi, Gwendal Grignou, Rahul Thakur, Eric Shiu, and Onur Mutlu. Extending Memory Capacity in Modern Consumer Systems With Emerging Non-Volatile Mem-
+
+- ory: Experimental Analysis and Characterization Using the Intel Optane SSD. IEEE Access, 2023.
+- [59] Rakesh Nadig, Vamanan Arulchelvan, Rahul Bera, Taha Shahroodi, Gagandeep Singh, Mohammad Sadrosadati, Jisung Park, and Onur Mutlu. Harmonia: A Multi-Agent Reinforcement Learning Approach to Data Placement and Migration in Hybrid Storage Systems. CoRR, abs/2503.20507, 2025.
+- [60] Shihao Song, Anup Das, Onur Mutlu, and Nagarajan Kandasamy. Improving Phase Change Memory Performance with Data Content Aware Access. In ISMM, 2020.
+- [61] Apostolos Kokolis, Dimitrios Skarlatos, and Josep Torrellas. PageSeer: Using Page Walks to Trigger Page Swaps in Hybrid Memory Systems. In HPCA, pages 596–608, 2019.
+- [62] Matthew Benjamin Olson, Brandon Kammerdiener, Michael R. Jantz, Kshitij A. Doshi, and Terry R. Jones. Online Application Guidance for Heterogeneous Memory Systems. ACM Trans. Archit. Code Optim., 19(3):45:1– 45:27, 2022.
+- [63] Fei Wen, Mian Qin, Paul V. Gratz, and A. L. Narasimha Reddy. Hardware Memory Management for Future Mobile Hybrid Memory Systems. IEEE Trans. Comput. Aided Des. Integr. Circuits Syst., 39(11):3627–3637, 2020.
+- [64] Sihang Liu, Korakit Seemakhupt, Gennady Pekhimenko, Aasheesh Kolli, and Samira Khan. Janus: Optimizing Memory and Storage Support for Non-Volatile Memory Systems. In ISCA, 2019.
+- <span id="page-15-0"></span>[65] Chloe Alverti, Vasileios Karakostas, Nikhita Kunati, Georgios Goumas, and Michael Swift. DaxVM: Stressing the Limits of Memory as a File Interface. In MICRO, 2022.
+- <span id="page-15-1"></span>[66] Pirmin Vogel, Andrea Marongiu, and Luca Benini. Lightweight Virtual Memory Support for Zero-Copy Sharing of Pointer-Rich Data Structures in Heterogeneous Embedded SoCs. IEEE Trans. Parallel Distributed Syst., 28(7):1947–1959, 2017.
+- [67] Pirmin Vogel, Andrea Marongiu, and Luca Benini. Exploring Shared Virtual Memory for FPGA Accelerators with a Configurable IOMMU. IEEE Trans. Computers, 68(4):510–525, 2019.
+- [68] Pirmin Vogel. Shared Virtual Memory for Heterogeneous Embedded Systems on Chips. PhD thesis, ETH Zurich, 2018.
+- [69] Andreas Kurth, Pirmin Vogel, Andrea Marongiu, and Luca Benini. Scalable and Efficient Virtual Memory Sharing in Heterogeneous SoCs with TLB Prefetching and MMU-Aware DMA Engine. In ICCD, 2018.
+- [70] Canberk Sönmez, Mohamed Shahawy, Cemalettin Cem Belentepe, and Paolo Ienne. FlexiMem: Flexible Shared Virtual Memory for PCIe-attached FPGAs. In FPL, 2024.
+- [71] Edward Richter and Deming Chen. Qilin: Enabling Performance Analysis and Optimization of Shared-Virtual Memory Systems with FPGA Accelerators. In ICCAD, 2022.
+- [72] Bennett Cooper, Thomas R. W. Scogland, and Rong Ge. Shared Virtual Memory: Its Design and Performance Implications for Diverse Applications. In ICS, 2024.
+- [73] Torben Kalkhof and Andreas Koch. Efficient Physical
+
+- Page Migrations in Shared Virtual Memory Reconfigurable Computing Systems. In FPT, 2021.
+- [74] Jihun Park, Donghun Jeong, and Jungrae Kim. UVMMU: Hardware-Offloaded Page Migration for Heterogeneous Computing. In DATE, 2023.
+- [75] Duheon Choi, Taeyang Jeong, Joonhyeok Yeom, and Eui-Young Chung. Operand-Oriented Virtual Memory Support for Near-Memory Processing. IEEE Trans. Computers, 72(8):2250–2263, 2023.
+- [76] Yueqi Wang, Bingyao Li, Mohamed Tarek Ibn Ziad, Lieven Eeckhout, Jun Yang, Aamer Jaleel, and Xulong Tang. OASIS: Object-Aware Page Management for Multi-GPU Systems. In HPCA, 2025.
+- [77] Yueqi Wang, Bingyao Li, Aamer Jaleel, Jun Yang, and Xulong Tang. GRIT: Enhancing Multi-GPU Performance with Fine-Grained Dynamic Page Placement. In HPCA, 2024.
+- [78] Pratheek B, Guilherme Cox, Jan Vesely, and Arkaprava Basu. SUV: Static Analysis Guided Unified Virtual Memory . In MICRO, 2024.
+- [79] Hyunkyun Shin, Seongtae Bang, Hyungwon Park, and Daehoon Kim. ARIADNE: Adaptive UVM Management for Efficient GPU Memory Oversubscription. In HPCA, 2026.
+- [80] Junhyeok Park, Sungbin Jang, Osang Kwon, Yongho Lee, and Seokin Hong. Leveraging Chiplet-Locality for Efficient Memory Mapping in Multi-Chip Module GPUs. In MICRO, 2025.
+- [81] Yeonan Ha, Jiho Park, Hanna Cha, Jiwon Lee, Joonsung Kim, Won Woo Ro, and Youngsok Kim. LATPC: Accelerating GPU Address Translation Using Locality-Aware TLB Prefetching and MSHR Compression. In MICRO, 2025.
+- [82] Yuan Feng, Yuke Li, Jiwon Lee, Won Woo Ro, and Hyeran Jeon. Heliostat: Harnessing Ray Tracing Accelerators for Page Table Walks. In ISCA, 2025.
+- [83] Sungbin Jang, Junhyeok Park, Yongho Lee, Osang Kwon, Donghyun Kim, Juyoung Seok, and Seokin Hong. Soft-Walker: Supporting Software Page Table Walk for Irregular GPU Applications. In MICRO, 2025.
+- [84] Sungbin Jang, Junhyeok Park, Osang Kwon, Yongho Lee, and Seokin Hong. Rethinking Page Table Structure for Fast Address Translation in GPUs: A Fixed-Size Hashed Page Table. In PACT, 2024.
+- [85] Yuan Feng, Seonjin Na, Hyesoon Kim, and Hyeran Jeon. Barre Chord: Efficient Virtual Memory Translation for Multi-Chip-Module GPUs. In ISCA, 2024.
+- [86] Bingyao Li, Yueqi Wang, Tianyu Wang, Lieven Eeckhout, Jun Yang, Aamer Jaleel, and Xulong Tang. STAR: Sub-Entry Sharing-Aware TLB for Multi-Instance GPU. In MICRO, pages 309–323, 2024.
+- <span id="page-15-2"></span>[87] Junsu Kim, Jaebeom Jeon, Jaeyong Park, Sangun Choi, Minseong Gil, Seokin Hong, Gunjae Koo, Myung Kuk Yoon, and Yunho Oh. MOST: Memory Oversubscription-Aware Scheduling for Tensor Migration on GPU Unified Storage. CAL, 2025.
+- <span id="page-15-3"></span>[88] Thomas W. Barr, Alan L. Cox, and Scott Rixner. SpecTLB: A Mechanism for Speculative Address Translation. In ISCA, 2011.
+
+- [89] Junhyeok Park, Osang Kwon, Yongho Lee, Seongwook Kim, Gwangeun Byeon, Jihun Yoon, Prashant J. Nair, and Seokin Hong. A case for speculative address translation with rapid validation for gpus. In MICRO, 2024.
+- <span id="page-16-0"></span>[90] Binh Pham, Ján Veselý, Gabriel H. Loh, and Abhishek Bhattacharjee. Large Pages and Lightweight Memory Management in Virtualized Environments: Can You Have It Both Ways? In MICRO, 2015.
+- <span id="page-16-1"></span>[91] Mark Mansi, Bijan Tabatabai, and Michael M. Swift. CBMM: Financial Advice for Kernel Memory Managers. In ATC, 2022.
+- <span id="page-16-2"></span>[92] Mark Mansi and Michael M. Swift. Characterizing Physical Memory Fragmentation. In arXiv, 2024.
+- <span id="page-16-3"></span>[93] Jonathan Corbet. Transparent Huge Pages in 2.6.38. <https://lwn.net/Articles/423584/>, 2011.
+- <span id="page-16-4"></span>[94] Jonathan Corbet. The Current State of Kernel Page-Table Isolation. <https://lwn.net/Articles/741878/>, 2017.
+- <span id="page-16-5"></span>[95] The linux kernel 6.10.8. [https://lwn.net/Articles/](https://lwn.net/Articles/988748/) [988748/](https://lwn.net/Articles/988748/).
+- <span id="page-16-6"></span>[96] SAFARI Research Group. Virtuoso. [https://github.](https://github.com/CMU-SAFARI/Virtuoso) [com/CMU-SAFARI/Virtuoso](https://github.com/CMU-SAFARI/Virtuoso).
+- <span id="page-16-7"></span>[97] Trevor E. Carlson, Wim Heirman, and Lieven Eeckhout. Sniper: Exploring the Level of Abstraction for Scalable and Accurate Parallel Multi-Core Simulations. In SC, 2011.
+- <span id="page-16-8"></span>[98] Sniper. <https://github.com/snipersim/snipersim>.
+- <span id="page-16-9"></span>[99] Lifeng Nai, Yinglong Xia, Ilie G. Tanase, Hyesoon Kim, and Ching-Yung Lin. GraphBIG: Understanding Graph Computing in the Context of Industrial Solutions. In SC, 2015.
+- <span id="page-16-10"></span>[100] Steven J. Plimpton, Ron Brightwell, Courtenay Vaughan, Keith Underwood, and Mike Davis. A Simple Synchronous Distributed-Memory Algorithm for the HPCC RandomAccess Benchmark. In Cluster, 2006.
+- <span id="page-16-11"></span>[101] Maxim Naumov, Dheevatsa Mudigere, Hao-Jun Michael Shi, Jianyu Huang, Narayanan Sundaraman, Jongsoo Park, Xiaodong Wang, Udit Gupta, Carole-Jean Wu, Alisson G. Azzolini, Dmytro Dzhulgakov, Andrey Mallevich, Ilia Cherniavskii, Yinghai Lu, Raghuraman Krishnamoorthi, Ansha Yu, Volodymyr Kondratenko, Stephanie Pereira, Xianjie Chen, Wenlin Chen, Vijay Rao, Bill Jia, Liang Xiong, and Misha Smelyanskiy. Deep Learning Recommendation Model for Personalization and Recommendation Systems, 2019.
+- <span id="page-16-12"></span>[102] Arun Subramaniyan, Yufeng Gu, Timothy Dunn, Somnath Paul, Md. Vasimuddin, Sanchit Misra, David Blaauw, Satish Narayanasamy, and Reetuparna Das. GenomicsBench: A Benchmark Suite for Genomics. In ISPASS, 2021.
+- <span id="page-16-13"></span>[103] John R. Tramm, Andrew R. Siegel, Tanzima Islam, and Martin Schulz. XSBench - The Development and Verification of a Performance Abstraction for Monte Carlo Reactor Analysis. In PHYSOR, 2014.
+- <span id="page-16-14"></span>[104] Google workload traces version 2. [https://console.](https://console.cloud.google.com/storage/browser/external-traces-v2) [cloud.google.com/storage/browser/external](https://console.cloud.google.com/storage/browser/external-traces-v2)[traces-v2](https://console.cloud.google.com/storage/browser/external-traces-v2). Accessed: 2026-03-06.
+- <span id="page-16-15"></span>[105] Juan Navarro, Sitaram Iyer, Peter Druschel, and Alan Cox. Practical, Transparent Operating System Support
+
+- for Superpages. In OSDI, 2002.
+- <span id="page-16-18"></span>[106] Krishnan Gosakan, Jaehyun Han, William Kuszmaul, Ibrahim Nael Mubarek, Nirjhar Mukherjee, Guido Tagliavini, Evan West, Michael Bender, Abhishek Bhattacharjee, Alex Conway, Martin Farach-Colton, Jayneel Gandhi, Rob Johnson, Sudarsun Kannan, and Donald Porter. Mosaic Pages: Big TLB Reach with Small Pages. In ASPLOS, 2023.
+- <span id="page-16-29"></span>[107] Jee Ho Ryoo, Nagendra Gulur, Shuang Song, and Lizy K. John. Rethinking TLB Designs in Virtualized Environments: A Very Large Part-of-Memory TLB. In ISCA, 2017.
+- <span id="page-16-16"></span>[108] Artemiy Margaritov, Dmitrii Ustiugov, Edouard Bugnion, and Boris Grot. Prefetched Address Translation. In MICRO, 2019.
+- <span id="page-16-17"></span>[109] Advanced Micro Devices. AMD-V Nested Paging, White Paper. [http://developer.amd.com/wordpress/](http://developer.amd.com/wordpress/media/2012/10/NPT-WP-1%201-final-TM.pdf) [media/2012/10/NPT-WP-1%201-final-TM.pdf](http://developer.amd.com/wordpress/media/2012/10/NPT-WP-1%201-final-TM.pdf).
+- <span id="page-16-19"></span>[110] WikiChip. Intel Cascade Lake. [https://en.wikichip.](https://en.wikichip.org/wiki/intel/cores/cascade_lake_sp) [org/wiki/intel/cores/cascade\\_lake\\_sp](https://en.wikichip.org/wiki/intel/cores/cascade_lake_sp).
+- <span id="page-16-20"></span>[111] Hyungjin Kim, Seongwook Kim, Junhyeok Park, Gwangeun Byeon, and Seokin Hong. Don't cache, speculate!: Speculative address translation for flash-based storage systems. IEEE Access, 2025.
+- <span id="page-16-21"></span>[112] OSDev Wiki. Page frame allocation. [https://wiki.](https://wiki.osdev.org/Page_Frame_Allocation) [osdev.org/Page\\_Frame\\_Allocation](https://wiki.osdev.org/Page_Frame_Allocation). Accessed: 2025- 08-18.
+- <span id="page-16-22"></span>[113] Anonymous Memory. [https://docs.kernel.org/](https://docs.kernel.org/admin-guide/mm/concepts.html) [admin-guide/mm/concepts.html](https://docs.kernel.org/admin-guide/mm/concepts.html).
+- <span id="page-16-23"></span>[114] Konstantinos Kanellopoulos, Konstantinos Sgouras, Harsh Songara, Andreas Kosmas Kakolyris, Vlad-Petru Nitu, Spiros Galanopoulos, Rahul Bera, Konstantina Koliogeorgi, Rakesh Kumar, and Onur Mutlu. Revelator: Rapid Data Fetching via System-Software-Guided Hashbased Speculative Address Translation (Extended Version). 2026. arXiv.
+- <span id="page-16-24"></span>[115] Google. CITY Hash. [https://github.com/google/](https://github.com/google/cityhash) [cityhash](https://github.com/google/cityhash).
+- <span id="page-16-25"></span>[116] Jovan Stojkovic, Dimitrios Skarlatos, Apostolos Kokolis, Tianyin Xu, and Josep Torrellas. Parallel Virtualized Memory Translation with Nested Elastic Cuckoo Page Tables. In ASPLOS, 2022.
+- <span id="page-16-26"></span>[117] Jovan Stojkovic, Namrata Mantri, Dimitrios Skarlatos, Tianyin Xu, and Josep Torrellas. Memory-Efficient Hashed Page Tables. In HPCA, 2023.
+- <span id="page-16-27"></span>[118] Faruk Guvenilir and Yale N Patt. Tailored Page Sizes. In ISCA, 2020.
+- <span id="page-16-30"></span>[119] Stratos Psomadakis, Chloe Alverti, Vasileios Karakostas, Christos Katsakioris, Dimitrios Siakavaras, Konstantinos Nikas, Georgios Goumas, and Nectarios Koziris. Elastic Translations: Fast Virtual Memory with Multiple Translation Sizes. In MICRO, 2024.
+- <span id="page-16-31"></span>[120] Chang Hyun Park, Taekyung Heo, Jungi Jeong, and Jaehyuk Huh. Hybrid TLB Coalescing: Improving TLB Translation Coverage Under Diverse Fragmented Memory Allocations. In ISCA, 2017.
+- <span id="page-16-28"></span>[121] Rachata Ausavarungnirun, Joshua Landgraf, Vance Miller, Saugata Ghose, Jayneel Gandhi, Christopher J. Rossbach, and Onur Mutlu. Mosaic: A GPU Memory
+
+- Manager with Application-Transparent Support for Multiple Page Sizes. In MICRO, 2017.
+- <span id="page-17-0"></span>[122] The Linux Kernel Documentation. NUMA Memory Policy. [https://www.kernel.org/doc/html/latest/](https://www.kernel.org/doc/html/latest/admin-guide/mm/numa_memory_policy.html) [admin-guide/mm/numa\\_memory\\_policy.html](https://www.kernel.org/doc/html/latest/admin-guide/mm/numa_memory_policy.html). Accessed: 2026-05-16.
+- [123] Michael Kerrisk. set\_mempolicy(2): Linux Manual Page. [https://man7.org/linux/man-pages/man2/](https://man7.org/linux/man-pages/man2/set_mempolicy.2.html) [set\\_mempolicy.2.html](https://man7.org/linux/man-pages/man2/set_mempolicy.2.html). Linux man-pages 6.16, accessed: 2026-05-16.
+- <span id="page-17-1"></span>[124] Michael Kerrisk. mbind(2): Linux Manual Page. [https:](https://man7.org/linux/man-pages/man2/mbind.2.html) [//man7.org/linux/man-pages/man2/mbind.2.html](https://man7.org/linux/man-pages/man2/mbind.2.html). Linux man-pages 6.16, accessed: 2026-05-16.
+- <span id="page-17-2"></span>[125] Xiangyao Yu, Christopher J Hughes, Nadathur Satish, and Srinivas Devadas. IMP: Indirect memory prefetcher. In MICRO, 2015.
+- [126] Sam Ainsworth and Timothy M Jones. An eventtriggered programmable prefetcher for irregular workloads. 2018.
+- [127] Nishil Talati, Kyle May, Armand Behroozi, Y. Yang, Kuba Kaszyk, Christos Vasiladiotis, Tarunesh Verma, L. Li, Brandon Nguyen, Jiawen Sun, J. Morton, Agreen Ahmadi, T. Austin, M. O'Boyle, S. Mahlke, T. Mudge, and Ronald Drelinski. Prodigy: Improving the Memory Latency of Data-Indirect Irregular Workloads Using Hardware-Software Co-Design. In HPCA 2021.
+- [128] Manjunath Shevgoor, Sahil Koladiya, Rajeev Balasubramonian, Chris Wilkerson, Seth H. Pugsley, and Zeshan Chishti. Efficiently Prefetching Complex Address Patterns. In MICRO, 2015.
+- [129] Robert Cooksey, Stephan Jourdan, and Dirk Grunwald. A Stateless, Content-Directed Data Prefetching Mechanism. 2002.
+- [130] Eiman Ebrahimi, Onur Mutlu, and Yale N Patt. Techniques for bandwidth-efficient prefetching of linked data structures in hybrid prefetching systems. In HPCA, 2009.
+- <span id="page-17-3"></span>[131] Amir Roth, Andreas Moshovos, and Gurindar S. Sohi. Dependence based prefetching for linked data structures. In ASPLOS, 1998.
+- <span id="page-17-4"></span>[132] Moritz Lipp, Michael Schwarz, Daniel Gruss, Thomas Prescher, Werner Haas, Anders Fogh, Jann Horn, Stefan Mangard, Paul Kocher, Daniel Genkin, Yuval Yarom, and Mike Hamburg. Meltdown: Reading Kernel Memory From User Space. In USENIX Security, 2018.
+- <span id="page-17-5"></span>[133] Michael Schwarz, Martin Schwarzl, Moritz Lipp, Jon Masters, and Daniel Gruss. Netspectre: Read arbitrary memory over network. In Computer Security–ESORICS 2019: 24th European Symposium on Research in Computer Security, Luxembourg, September 23–27, 2019, Proceedings, Part I 24, pages 279–299. Springer, 2019.
+- <span id="page-17-6"></span>[134] Fangfei Liu, Yuval Yarom, Qian Ge, Gernot Heiser, and Ruby B Lee. Last-level cache side-channel attacks are practical. In 2015 IEEE symposium on security and privacy, pages 605–622. IEEE, 2015.
+- <span id="page-17-7"></span>[135] David Kroft. Lockup-free instruction fetch/prefetch cache organization. In ISCA, 1981.
+- <span id="page-17-8"></span>[136] Apache Cassandra. [https://cassandra.apache.](https://cassandra.apache.org/) [org/](https://cassandra.apache.org/).
+- <span id="page-17-9"></span>[137] MongoDB Recommends Disabling Huge Pages.
+
+- [https://docs.mongodb.org/manual/tutorial/](https://docs.mongodb.org/manual/tutorial/transparent-huge-pages/) [transparent-huge-pages/](https://docs.mongodb.org/manual/tutorial/transparent-huge-pages/), 2016.
+- <span id="page-17-10"></span>[138] SQLite. <https://www.sqlite.org/>.
+- <span id="page-17-11"></span>[139] Apache Spark. <https://spark.apache.org/>.
+- <span id="page-17-12"></span>[140] Jonathan Bachrach, Huy Vo, Brian Richards, Yunsup Lee, Andrew Waterman, Rimas Avižienis, John Wawrzynek, and Krste Asanović. Chisel: Constructing Hardware in a Scala Embedded Language. In DAC, 2012.
+- <span id="page-17-13"></span>[141] Yosys open synthesis suite. [https://github.com/](https://github.com/YosysHQ/) [YosysHQ/](https://github.com/YosysHQ/).
+- <span id="page-17-14"></span>[142] Nangate freepdk45 open cell library. [https:](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts.git) [//github.com/The-OpenROAD-Project/OpenROAD](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts.git)[flow-scripts.git](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts.git).
+- <span id="page-17-15"></span>[143] Aamer Jaleel, Kevin B. Theobald, Simon C. Steely, and Joel Emer. High Performance Cache Replacement Using Re-Reference Interval Prediction (RRIP). In ISCA, 2010.
+- <span id="page-17-16"></span>[144] Sam Ainsworth and Timothy M. Jones. Compendia: Reducing Virtual-Memory Costs Via Selective Densification. In ISMM, 2021.
+- <span id="page-17-27"></span>[145] Chang Hyun Park, Ilias Vougioukas, Andreas Sandberg, and David Black-Schaffer. Every Walk's a Hit: Making Page Walks Single-Access Cache Hits. In ASPLOS, 2022.
+- <span id="page-17-17"></span>[146] Osang Kwon, Yongho Lee, Junhyeok Park, Sungbin Jang, Byungchul Tak, and Seokin Hong. Distributed Page Table: Harnessing Physical Memory as an Unbounded Hashed Page Table. In MICRO, 2024.
+- <span id="page-17-18"></span>[147] Svilen Kanev, Juan Pablo Darago, Kim Hazelwood, Parthasarathy Ranganathan, David Brooks, and Gu-Yeon Wei. Workload Traces for Google Warehouse-Scale Computers. IEEE Computer Architecture Letters, 19(2):142– 145, 2020.
+- <span id="page-17-19"></span>[148] Michael A. Bender, Alex Conway, Martín Farach-Colton, William Kuszmaul, and Guido Tagliavini. Iceberg Hashing: Optimizing Many Hash-Table Criteria at Once. In J. ACM, 2023.
+- <span id="page-17-20"></span>[149] Intel Xeon Gold 6226R. [https://en.wikichip.org/](https://en.wikichip.org/wiki/intel/xeon_gold/6226r) [wiki/intel/xeon\\_gold/6226r](https://en.wikichip.org/wiki/intel/xeon_gold/6226r).
+- <span id="page-17-21"></span>[150] Hewlett Packard. McPAT. [https://github.com/](https://github.com/HewlettPackard/mcpat) [HewlettPackard/mcpat](https://github.com/HewlettPackard/mcpat).
+- <span id="page-17-22"></span>[151] Javier Picorel, Djordje Jevdjic, and Babak Falsafi. Near-Memory Address Translation. In PACT, 2017.
+- <span id="page-17-23"></span>[152] A. J. Smith. A Comparative Study of Set Associative Memory Mapping Algorithms and Their Use for Cache and Main Memory. In IEEE TSE, 1978.
+- <span id="page-17-24"></span>[153] Siyuan Chai, J Zhang, J Kim, A Wang, F Chung, et al. EMT: An OS framework for new memory translation architectures. In OSDI, 2025.
+- <span id="page-17-25"></span>[154] Chang Hyun Park, Sanghoon Cha, Bokyeong Kim, Youngjin Kwon, David Black-Schaffer, and Jaehyuk Huh. Perforated Page: Supporting Fragmented Memory Allocation for Large Pages. In ISCA, 2020.
+- <span id="page-17-26"></span>[155] Youngjin Kwon, Hangchen Yu, Simon Peter, Christopher J. Rossbach, and Emmett Witchel. Coordinated and Efficient Huge Page Management with Ingens. In OSDI, 2016.
+- [156] Madhusudhan Talluri, Shing Kong, Mark D. Hill, and David A. Patterson. Tradeoffs in Supporting Two Page Sizes. In ISCA, 1992.
+- [157] Ashish Panwar, Aravinda Prasad, and K Gopinath. Mak-
+
+- ing Huge Pages Actually Useful. In ASPLOS, 2018.
+- <span id="page-18-1"></span>[158] Ashish Panwar, Sorav Bansal, and K Gopinath. Hawkeye: Efficient Fine-grained OS Support for Huge Pages. In ASPLOS, 2019.
+- <span id="page-18-2"></span>[159] Venkat Sri Sai Ram, Ashish Panwar, and Arkaprava Basu. Trident: Harnessing Architectural Resources for All Page Sizes in X86 Processors. In MICRO, 2021.
+- [160] Zhen Fang, Lixin Zhang, J.B. Carter, W.C. Hsieh, and S.A. McKee. Reevaluating Online Superpage Promotion with Hardware Support. In HPCA, 2001.
+- [161] Mark Swanson, Leigh Stoller, and John Carter. Increasing TLB Reach Using Superpages Backed By Shadow Memory. In ISCA, 1998.
+- [162] Yu Du, Miao Zhou, Bruce R Childers, Daniel Mossé, and Rami Melhem. Supporting Superpages in Non-Contiguous Physical Memory. In HPCA, 2015.
+- [163] Madhusudhan Talluri and Mark D. Hill. Surpassing the TLB Performance of Superpages with Less Operating System Support. In ASPLOS, 1994.
+- [164] Mel Gorman and Patrick Healy. Supporting Superpage Allocation Without Additional Hardware Support. In ISMM, 2008.
+- [165] Mohammad Agbarya, Idan Yaniv, Jayneel Gandhi, and Dan Tsafrir. Predicting Execution Times with Partial Simulations in Virtual Memory Research: Why and How. In MICRO, 2020.
+- <span id="page-18-0"></span>[166] Narayanan Ganapathy and Curt Schimmel. General Purpose Operating System Support for Multiple Page Sizes. In ATC, 1998.
+- <span id="page-18-3"></span>[167] Zi Yan, Daniel Lustig, David Nellans, and Abhishek Bhattacharjee. Translation Ranger: Operating System Support for Contiguity-Aware TLBs. In ISCA, 2019.
+- [168] Dongwei Chen, Dong Tong, Chun Yang, Jiangfang Yi, and Xu Cheng. FlexPointer: Fast Address TranslatiOn Based On Range TLB and Tagged Pointers. In TACO, 2023.
+- <span id="page-18-4"></span>[169] Binh Pham, Viswanathan Vaidyanathan, Aamer Jaleel, and Abhishek Bhattacharjee. CoLT: Coalesced Large-Reach TLBs. In MICRO, 2012.
+- <span id="page-18-5"></span>[170] Binh Pham, Abhishek Bhattacharjee, Yasuko Eckert, and Gabriel H Loh. Increasing TLB Reach By Exploiting Clustering in Page Translations. In HPCA, 2014.
+- <span id="page-18-6"></span>[171] Samira Mirbagher-Ajorpaz, Elba Garza, Gilles Pokam, and Daniel A. Jiménez. CHiRP: Control-Flow History Reuse Prediction. In MICRO, 2020.
+- <span id="page-18-8"></span>[172] Misel-Myrto Papadopoulou, Xin Tong, André Seznec, and Andreas Moshovos. Prediction-Based Superpage-Friendly TLB Designs. In HPCA, 2015.
+- [173] Mohan Kumar Kumar, Steffen Maass, Sanidhya Kashyap, Ján Vesely, Zi Yan, Taesoo Kim, Abhishek Bhattacharjee, ` and Tushar Krishna. Latr: Lazy Translation Coherence. In ASPLOS, 2018.
+- [174] Toni Juan, Tomas Lang, and Juan J. Navarro. Reducing TLB Power Requirements. In ISLPED, 1997.
+- [175] T.H. Romer, W.H. Ohlrich, A.R. Karlin, and B.N. Bershad. Reducing TLB and Memory Overhead Using Online Superpage Promotion. In ISCA, 1995.
+- [176] I. Kadayif, P. Nath, M. Kandemir, and A. Sivasubramaniam. Compiler-directed Physical Address Generation
+
+- for Reducing dTLB Power. In ISPASS, 2004.
+- [177] Tianhao Zheng, Haishan Zhu, and Mattan Erez. SIPT: Speculatively Indexed, Physically Tagged Caches. In HPCA, 2018.
+- [178] D. A. Wood, S. J. Eggers, G. Gibson, M. D. Hill, and J. M. Pendleton. An In-Cache Address Translation Mechanism. In ISCA, 1986.
+- <span id="page-18-9"></span>[179] A. Seznec. Concurrent Support of Multiple Page Sizes on a Skewed Associative TLB. In TC, 2004.
+- <span id="page-18-16"></span>[180] Georgios Vavouliotis, Lluc Alvarez, Vasileios Karakostas, Konstantinos Nikas, Nectarios Koziris, Daniel A. Jiménez, and Marc Casas. Exploiting Page Table Locality for Agile TLB Prefetching. In ISCA, 2021.
+- [181] Georgios Vavouliotis, Lluc Alvarez, Boris Grot, Daniel Jiménez, and Marc Casas. Morrigan: A Composite Instruction TLB Prefetcher. In MICRO, 2021.
+- [182] Gokul B Kandiraju and Anand Sivasubramaniam. Going the Distance for TLB Prefetching: An Applicationdriven Study. In ISCA, 2002.
+- [183] Ashley Saulsbury, Fredrik Dahlgren, and Per Stenström. Recency-based TLB Preloading. In ISCA, 2000.
+- <span id="page-18-13"></span>[184] Kavita Bala, M. Frans Kaashoek, and William E. Weihl. Software Prefetching and Caching for Translation Lookaside Buffers. In OSDI, 1994.
+- [185] Abhishek Bhattacharjee. Large-Reach Memory Management Unit Caches. In MICRO, 2013.
+- <span id="page-18-11"></span>[186] Abhishek Bhattacharjee, Daniel Lustig, and Margaret Martonosi. Shared Last-Level TLBs for Chip Multiprocessors. In ISCA, 2011.
+- <span id="page-18-7"></span>[187] Srikant Bharadwaj, Guilherme Cox, Tushar Krishna, and Abhishek Bhattacharjee. Scalable Distributed Last-Level TLBs Using Low-Latency Interconnects. In MICRO, 2018.
+- <span id="page-18-10"></span>[188] Dongrui Fan, Zhimin Tang, Hailin Huang, and G.R. Gao. An Energy Efficient TLB Design Methodology. In ISLPED, 2005.
+- <span id="page-18-12"></span>[189] B. Pratheek, Neha Jawalkar, and Arkaprava Basu. Improving GPU Multi-tenancy with Page Walk Stealing. In HPCA, 2021.
+- <span id="page-18-14"></span>[190] Yashwant Marathe, Nagendra Gulur, Jee Ho Ryoo, Shuang Song, and Lizy K. John. CSALT: Context Switch Aware Large TLB. In MICRO, 2017.
+- [191] Yunfang Tai, Wanwei Cai, Qi Liu, Ge Zhang, and Wenzhi Wang. Comparisons of Memory Virtualization Solutions for Architectures with Software-Managed TLBs. In NAS, 2013.
+- [192] Xiaotao Chang, Hubertus Franke, Yi Ge, Tao Liu, Kun Wang, Jimi Xenidis, Fei Chen, and Yu Zhang. Improving Virtualization in the Presence of Software Managed Translation Lookaside Buffers. In ISCA, 2013.
+- [193] Bruce L. Jacob and Trevor N. Mudge. A Look at Several Memory Management Units, TLB-Refill Mechanisms, and Page Table Organizations. In ASPLOS, 1998.
+- [194] D. R. Cheriton, G. A. Slavenburg, and P. D. Boyle. Software-Controlled Caches in the VMP Multiprocessor. In ISCA, 1986.
+- <span id="page-18-15"></span>[195] David Nagle, Richard Uhlig, Tim Stanley, Stuart Sechrest, Trevor N. Mudge, and Richard B. Brown. Design Tradeoffs for Software-managed TLBs. In ISCA, 1993.
+- <span id="page-18-17"></span>[196] Chandrashis Mazumdar, Prachatos Mitra, and
+
+- Arkaprava Basu. Dead Page and Dead Block Predictors: Cleaning TLBs and Caches Together. In HPCA, 2021.
+- <span id="page-19-0"></span>[197] Jagadish B. Kotra, Michael LeBeane, Mahmut T. Kandemir, and Gabriel H. Loh. Increasing GPU Translation Reach by Leveraging Under-Utilized On-Chip Resources. In MICRO, 2021.
+- <span id="page-19-1"></span>[198] Aamer Jaleel, Eiman Ebrahimi, and Sam Duncan. DUCATI: High-Performance Address Translation by Extending TLB Reach of GPU-Accelerated Systems. In TACO, 2019.

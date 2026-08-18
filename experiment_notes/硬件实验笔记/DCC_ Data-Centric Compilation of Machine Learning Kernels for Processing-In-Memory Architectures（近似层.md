@@ -1,0 +1,10 @@
+## DCC: Data-Centric Compilation of Machine Learning Kernels for Processing-In-Memory Architectures（近似层次匹配：论文为编译器论文，本层取其模拟器修改与硬件/能耗建模部分；论文无新 RTL/IP 贡献）
+
+- 属于硬件架构的实现是什么？实验比较什么？
+  - 论文本身不提出新 PIM 硬件/RTL IP，属近似匹配。硬件相关的实现为：(1) 修改开源 AttAcc 模拟器 [28]（基于 Ramulator 2.0 [81]），使其支持两个 PIM 后端——AttAcc（每 bank 一个 GEMV 单元、每 channel softmax+accumulator）与 Samsung HBM-PIM [25]（每两 bank 共享 16-way FP16 FPU 与两个 16×256-bit GRF），并加入两种后端各自的 DRAM 计算命令建模；(2) 用该模拟器仿真 Host A100 + 5 HBM 设备的异构平台，数据搬移成本通过 Ramulator 2.0 的 DRAM LD/ST 命令仿真；(3) 能耗建模沿用 AttAcc 方法：Synopsys Design Compiler + ASAP7 7nm 预测 PDK 综合算术单元、FinCACTI 建 SRAM buffer、HBM 芯片显微照片估算 DRAM die 数据路径能耗，组件缩放到 DRAM 工艺节点。实验比较：GPU-only、AttAcc 默认、AttAcc+DCC、HBM-PIM 默认、HBM-PIM+DCC（详见编译框架/kernel调度层条目）。
+- 模拟器名，模拟器链接（web search），或论文修改的模拟器。
+  - 修改的模拟器：AttAcc 开源模拟器 [28]（"AttAcc! Unleashing the Power of PIM for Batched Transformer-based Generative Model Inference"，ASPLOS 2024，SNU；论文未给直链，其官方仓库未在搜索中确认，修改版随 DCC 仓库发布 https://github.com/SPIN-Research-Group/DCC 与 Zenodo https://doi.org/10.5281/zenodo.19442321）；基座为开源 Ramulator 2.0（https://github.com/CMU-SAFARI/ramulator2）。
+- 模拟器模拟什么的性能，修改了什么。
+  - 模拟 GPU-PIM 异构平台中 memory-intensive ML kernel 的执行时间：以 DRAM 命令级时序（LD/ST 数据搬移 + PIM 计算命令）仿真计算与数据重排开销，平台配置为 A100 + 5 个 HBM3 PIM 设备（5.2Gbps/pin、333MHz、16 pCH、每 pCH 64 bank；tCK=0.79、tRCD=19、tRP=19、tCL=19、tCCD=4、BL=2）。修改：在原 AttAcc 后端之外加入 HBM-PIM 后端的核心/DRAM 计算命令模型（如 16-way FP16 FPU 计算命令），使同一模拟器可评测两种后端；DCC 编译器生成的指令 trace 作为其输入。
+- 开源情况。基于开源文档和论文，使用例子解释模拟器如何使用？作用是什么？至少具体到模拟器模拟性能的原理和模拟器输入到性能输出的全过程。
+  - 开源：DCC 及修改后模拟器 MIT license（GitHub https://github.com/SPIN-Research-Group/DCC；Zenodo https://doi.org/10.5281/zenodo.19442321）；Ramulator 2.0 https://github.com/CMU-SAFARI/ramulator2（MIT）。使用：`bash setup.sh` 构建模拟器（需 CMake 3.16.3、gcc/g++ 11.4、CUDA 12.3）→ `bash run_experiments.sh` 启动 trace-driven 仿真。模拟原理：输入 = DCC 为每个 draft 生成的 PIM 指令 trace（重排 LD/ST 序列 + group/bank 级 DRAM 计算命令）；模拟器按 HBM3 DRAM 状态机与上述时序参数逐命令推进时钟，统计数据搬移与计算周期，输出 = 各 kernel/LLM 层的执行时间 CSV（计算时间与数据重排时间可拆分），脚本再归一化为相对 GPU 的 speedup 并绘图（Fig.8/9/11）；LLM 场景按查询 token 尺寸在线生成指令。全流程约 7–10 天、trace 约 90GB 磁盘。

@@ -1,0 +1,12 @@
+# H. Scaling from 22nm to 2nm Nanosheets
+
+To ensure the architectural relevance of our insights beyond the baseline 22nm FD-SOI results, we extend our assessment to the IMEC N2 pathfinding PDK [18], [30] (Fig. 24), which incorporates advanced Gate-All-Around (GAA) Nanosheet transistors. For the 2nm implementation, the design targets a 1.2 GHz frequency to verify that timing closure can be achieved under high-performance constraints. The total power attributed to switching wire loads increases by 17% across all designs, compared to the 22nm node, reflecting the inability of high-density metal stacks' interconnect resistance and capacitance to scale as aggressively as transistor dimensions [68]. Nevertheless, since the OoO schemes do not introduce wide,
+
+wire-dominated data-paths or NoC interconnects, the relative increase in total power consumption compared to the baseline is slightly lower in the 2nm node than in the 22nm technology.
+
+#### VIII. CONCLUSIONS
+
+This paper presents sCROOGe, the first synthesizable RTL implementation and optimization of both frontend and backend instruction reordering schemes for GPUs, realized within the Vortex GPGPU framework. By moving beyond simulator-based studies, developing the OoO schemes at circuit-level and specifying critical design choices from an RTL standpoint, we provide a precise and robust platform for evaluating power, area, and frequency trade-offs verifiable through ASIC synthesis. Our implementations capture micro-architectural subtleties that are often neglected in high-level simulators, enabling a deeper understanding of ILP-aware GPU design.
+
+Through extensive DSE, we quantify the impact of key structures such as the RRS, CUs, and IsB, and analyze how critical GPU parameters influence performance scalability and efficiency. We demonstrate that light-weight OoO execution can be practically integrated into GPU pipelines, offering significant throughput gains with limited area and power overheads, decreasing EDP up to 27.9%. Our iso-area comparisons further confirm that such micro-architectural enhancements can rival conventional scaling approaches based on increased concurrent warp capacity, outperforming them by more than 14%. These findings validate the applicability of instruction reordering for ILP-boosting in GPU architectures and provide a solid foundation for future research and development in high-performance, RTL-accurate GPU design.
+

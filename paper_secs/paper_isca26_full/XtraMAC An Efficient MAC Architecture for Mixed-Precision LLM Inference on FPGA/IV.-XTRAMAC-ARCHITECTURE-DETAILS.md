@@ -1,0 +1,24 @@
+# IV. XTRAMAC ARCHITECTURE DETAILS
+
+Guided by the processing-pattern formulation in Section III, XtraMAC separates numeric interpretation from numeric execution: lightweight peripheral logic performs format decoding, bit-mapping, packing, and post-computation, while the arithmetic core comprises a datatype-invariant DSP multiplier and decoupled INT/FP accumulation paths. The architecture
+
+is parameterized by (i) the number of supported datatypes N, chosen at synthesis time, and (ii) the maximum parallelism P across these N datatypes, which defines the uniform per-lane structure shared by all stages and is chosen no larger than the bound in Eq. 12. This section details how XtraMAC realizes a fully pipelined mixed-precision MAC datapath with runtime datatype switching.
+
+#### A. Overall Architecture
+
+Figure 5 illustrates the four-stage pipeline of XtraMAC. A dedicated datatype-select signal is registered at pipeline entry and propagated through all four stages via matched delay slices, selecting one of the N supported datatypes each cycle. All datatype-specific mapping and reconstruction submodules are instantiated statically, and runtime switching is achieved entirely through input datatype controlled multiplexing without any form of reconfiguration. The pipeline processes up to P logical lanes per operation, where P corresponds to the maximum parallelism among the N supported datatypes, ensuring that all formats share a common parallel substrate. The four stages perform operand interpretation and DSP packing (Stage 1), datatype-invariant multiplication and per-lane postcomputation (Stage 2), datatype-specific accumulation via decoupled INT/FP adder paths (Stage 3), and final output selection and assembly (Stage 4). The following subsections describe each stage in detail.
+
+## B. Stage 1: Operand Interpretation and Bit-Mapping
+
+Stage 1 receives input operands A and B, which may encode multiple concatenated low-precision values, and translates them into datatype-specific bit-packed DSP-port operands for Stage 2. The datatype input identifies the active format among the N supported datatypes and determines how each data value is interpreted. To support N datatypes without reconfiguration, Stage 1 instantiates N parallel mapping submodules. Each submodule decodes A and B according to its datatype definition. Floating-point submodules extract the sign, exponent, and mantissa fields, restore the implicit leading 1, and pack the mantissa bits into the designated DSP input positions, while forwarding the exponent and sign fields as metadata. Integer submodules perform two's-complement decoding, pack the magnitude bits into the DSP inputs, and forward the sign bit. For pure integer datatypes, the exponent metadata is set to
+
+zero, effectively treating the value as a fixed-point mantissa with exponent 0. After all submodules compute in parallel, the datatype signal selects a single pair of bit-packed DSP-port operands and the corresponding per-lane sign and exponent metadata, providing a uniform interface to the multiplication module in Stage 2 and enabling cycle-level switching across heterogeneous datatypes.
+
+## *C. Stage 2: Multiplier and Post-Compute*
+
+Stage 2 receives the bit-packed DSP-port operands and the associated per-lane metadata produced by Stage 1. The DSP-based multiply module is fully datatype-invariant: the DSP slice performs a pure integer multiplication, consistent with the decomposition in Eq. [1](#page-3-0) and Eq. [4,](#page-3-1) which shows that all supported INT/FP formats reduce to a mantissalevel product with separate exponent and sign handling. The resulting product from the DSP slice aggregates all packed lanes into a single wide bitfield. The post-compute module reconstructs the P logical lanes by applying deterministic perlane shift-and-mask extraction based on the packing layout generated in Stage 1. Floating-point lanes perform leadingzero counting, normalization shifts, and exponent updates, while integer lanes require only magnitude extraction and sign XOR without normalization. The post-compute module instantiates P identical per-lane pipelines so that all lanes are reconstructed in parallel, and Stage 2 outputs P integer or floating-point values for accumulation in Stage 3.
+
+## *D. Stage 3: Datatype-specific Accumulation*
+
+Stage 3 receives the per-lane products from Stage 2 together with the corresponding per-lane accumulator operands C and performs accumulation using decoupled adder modules. The integer module implements a bank of two's-complement adders, while the floating-point module performs exponent alignment, mantissa add/subtract, and renormalization. This structural separation, following the principles in Section [III,](#page-3-3) avoids the area and latency overheads of a unified INT–FP adder. Both modules operate every cycle and compute P lane results in parallel; the datatype signal then selects the output.
+

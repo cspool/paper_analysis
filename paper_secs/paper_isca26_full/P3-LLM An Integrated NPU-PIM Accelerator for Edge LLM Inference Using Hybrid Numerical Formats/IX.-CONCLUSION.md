@@ -1,0 +1,4 @@
+# IX. CONCLUSION
+
+In this paper, we present P<sup>3</sup> -LLM, an algorithm-hardware co-design solution for efficient edge LLM inference on heterogeneous NPU-PIM accelerators. On the algorithm side, P 3 -LLM develops a novel quantization scheme using hybrid numerical formats to quantize all major LLM operands, while maintaining superior model accuracy. On the hardware side, P 3 -LLM is equipped with optimized low-precision dataflow and an area-efficient PCU architecture to support the proposed quantization scheme. Our evaluation demonstrates that the P<sup>3</sup> -LLM algorithm outperforms SoTA KV-cache-only and weight-activation quantization methods: Oaken, QuaRot, and QoQ. Compared to SoTA LLM accelerators: HBM-PIM, Ecco, and Pimba, the P<sup>3</sup> -LLM accelerator yields 4.9×, 2.0×, and 3.4× speedups, respectively.
+

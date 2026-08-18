@@ -1,0 +1,23 @@
+# <span id="page-6-0"></span>4.4. Synergy with Large Pages
+
+Large pages reduce the overhead of address translation when the OS can find sufficiently large contiguous physical regions, but their benefits degrade in the presence of fragmentation. Revelator addresses this limitation by making the physical location of 4KB pages predictable through hash-based placement, while still opportunistically exploiting larger regions when they are available. This lets Revelator preserve fast translation under fragmentation without giving up the benefits of large pages in low-fragmentation settings.
+
+**Per-Page vs. Multi-Page Hash-based Placement.** A natural design question for Revelator is whether hash-based allocation should remain strictly per-page, or instead try to preserve predictable placement for larger multi-page regions, similar in spirit to mechanisms that support multiple page sizes [118–121]. Such a design would map k consecutive virtual pages to a hash-derived k-page physical region, allowing hardware to speculate at a coarser granularity. The drawback is that predictability now requires contiguity: allocation succeeds only if physical memory contains a sufficiently large contiguous region of free pages, so success depends on fragmentation, not just total free capacity.
+
+Figure 7 shows the probability of successfully allocating k consecutive pages using a hash-based allocator with 1-4 allocation tiers (i.e., independent hash attempts). This experiment was conducted using the simulation infrastructure discussed in §6, by running a custom allocation-heavy microbenchmark. We use CityHash [115] as the underlying hash function and during allocation we derive each candidate physical range by hashing the virtual page number at k-page granularity (i.e., computing  $CityHash(VPN) \gg \log_2 k$ ), where k ranges from 1 to 10. All experiments use identical memory utilization levels (40% of memory is allocated) but different fragmentation levels.
+
+We make two key observations. First, increasing the number of tiers increases the allocation success probability, because each additional tier provides another independent chance to find a free region. Second, successful allocations reduce fast as k increases when memory fragmentation is medium/low, even when multiple independent hash attempts are available. In contrast, when k=1, allocation success depends only on the fraction of free pages and is independent of fragmentation structure. This observation motivates Revelator's core design
+
+<span id="page-7-1"></span>![](_page_7_Figure_0.jpeg)
+
+Figure 7: Ratio of successful hash-based allocations for k consecutive pages under different fragmentation patterns and numbers of hash attempts (i.e., tiers) in a 40% utilized memory.
+
+choice to enforce a per-page placement (k=1) and to exploit 2MB regions only opportunistically, when sufficiently large contiguous regions are available.
+
+Revelator+THP. Based on this observation, we build Revelator+THP, a variant of Revelator that combines opportunistic 2MB placement with the base 4KB tiered hash-based allocation. Revelator+THP does not rely on large contiguous regions being available. It first attempts to exploit 2MB large-page benefits when possible, and then falls back to Revelator's 4KB hash-based placement when large pages are unavailable, ensuring robust performance across different fragmentation levels. On each data allocation, the OS proceeds as follows:
+
+- (1) Hash-based 2MB allocation. For a 2MB-aligned virtual region, the allocator first tries a hash-based 2MB page allocation. It hashes the 2MB-aligned virtual address to select a candidate 2MB-aligned physical region and checks whether the entire region is available. If so, the OS allocates that physical region, enabling the hardware to predict data placement at the 2MB granularity.
+- (2) Conventional THP fallback. If hash-based 2MB allocation fails, the OS falls back to the conventional Linux THP allocation scheme [93]. THP attempts to find and directly allocate any available free 2MB region. If successful, the page is allocated as a 2MB page, and the hardware can predict its placement at the 2MB granularity.
+- (3) Hash-based 4KB allocation. If no 2MB physical region is free, the allocator falls back to Revelator's tiered hash-based 4KB allocation. To prevent interfering with future THP opportunities, 4KB hash-based allocation is strictly restricted to physical memory regions not already marked or reserved for 2MB pages.
+- **(4) Buddy allocator fallback.** As a last resort, the system falls back to the conventional buddy allocator to place the page in any arbitrary 4KB frame.
+

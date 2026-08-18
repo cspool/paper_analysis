@@ -1,0 +1,10 @@
+# *A. CXL Integration with Operating System*
+
+NUMA-based Memory Tiering. CXL-attached memory is exposed to the OS as a distinct, *CPU-less NUMA node*, separate from the local DRAM nodes directly attached to the processor. This allows the system to maintain clear boundaries between memory tiers, enabling the kernel memory management subsystem to recognize and manage CXL memory independently. As a result, memory allocation, placement, and access policies can be tailored to the unique latency and bandwidth characteristics of each tier, while preserving compatibility with standard OS and virtualization frameworks. Linux CXL Driver. The Linux CXL driver is critical for this process. Rather than relying on the BIOS to configure CXL memory as regular system RAM, we deferred management to the kernel driver. Our driver configuration onlines CXL memory as ZONE\_MOVABLE on a discrete NUMA node, ensuring kernel allocations (such as page tables) and other non-migratable allocations do not inadvertently land on CXL memory. Ensuring migratability is important for robust tiering,
+
+and isolating kernel data from CXL mitigates reliability and performance risks. All Linux Kernel CXL driver code in use for Vistara is either present in the upstream kernel, or is on
+
+its way to being included in the upstream kernel.
+
+ACPI Tables. Operating System-directed configuration and Power Management (OSPM) generated ACPI tables provide configuration and performance data about CXL hardware. For example, the *CXL Early Discovery Table (CEDT)* describes CXL memory configurations for use by Linux drivers. The *Heterogeneous Memory Attribute Table (HMAT)* exposes the relative latencies and bandwidths of each memory NUMA node, which are used by the kernel to make informed memory allocation and tiering decisions. Correct ACPI table configuration is fundamental: bugs or inconsistencies in these tables can block proper device driver management and memory-tier subsystem behavior. We worked closely with platform vendors to validate ACPI system topology and performance data.
+

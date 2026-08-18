@@ -1,0 +1,22 @@
+# PowerWeave: Unlocking Energy-Efficient ML on GPUs with OS-Level Spatial Power Management
+
+Vasilis Kypriotis *Carnegie Mellon University* Pittsburgh, PA, USA vkypriot@cs.cmu.edu
+
+Eric Dubberstein *Carnegie Mellon University* Pittsburgh, PA, USA edubbers@andrew.cmu.edu
+
+Patrick H. Coppock *Carnegie Mellon University* Pittsburgh, PA, USA coppock@cmu.edu
+
+Eliot H. Solomon *Carnegie Mellon University* Pittsburgh, PA, USA ehsolomo@cs.cmu.edu
+
+*Carnegie Mellon University Carnegie Mellon University Carnegie Mellon University*
+
+Rayyan Zamir Tathagata Srimani Dimitrios Skarlatos Pittsburgh, PA, USA Pittsburgh, PA, USA Pittsburgh, PA, USA rzamir@andrew.cmu.edu tsrimani@andrew.cmu.edu dskarlat@cs.cmu.edu
+
+*Abstract*—GPU power consumption has become a central systems challenge as modern AI datacenters increasingly rely on accelerators whose power footprints reach unprecedented scales. A single NVIDIA B200 already draws around 1000 W, making large multi-GPU nodes among the most power-hungry computing platforms ever deployed. Despite this, GPUs still expose only a single, device-wide DVFS domain. This coarse control is increasingly mismatched to modern AI inference, where power demand is highly non-uniform across models, phases, and workloads. LLMs alternate between compute-bound prefill and memory-bound decode phases, models exhibit widely varying kernel behavior, and emerging agentic pipelines chain together models with sharply different computational profiles. As GPUs shift toward multi-die designs and multi-model stacking becomes essential for utilization, a single global frequency increasingly leads to unnecessary and wasteful high-power operation.
+
+We introduce PowerWeave, the first spatial DVFS mechanism for GPUs, built around an OS-level power-management control plane. PowerWeave dynamically learns per-stream frequencyscaling behavior from kernel latencies and uses a global governor to react to request-rate changes, tail-latency behavior, and SLO slack. This design enables adaptive, fine-grained, kernel-aware power management that preserves SLOs while improving energy efficiency across diverse ML workloads.
+
+We build PowerWeave in Rust as a fully transparent powergovernor layer atop the GPU driver and evaluate it across diverse LLM scenarios and agentic workloads on B200 GPUs. PowerWeave reduces energy consumption by 28% on average in both disaggregated-prefill and multitenant settings, achieving up to an 8× improvement over device-wide DVFS in disaggregated prefill. For agentic workflows, PowerWeave reduces energy consumption by 19% on average without compromising throughput. PowerWeave eliminates thermal throttling across all evaluated workloads while maintaining zero SLO violations. Finally, our hardware analysis shows that spatial DVFS is practical: even per-SM clock domains add less than 0.5% GPU die area overhead.
+
+*Index Terms*—GPU Power Management, LLM Inference, GPU DVFS, GPU Multi-tenancy, Disaggregated Prefill
+

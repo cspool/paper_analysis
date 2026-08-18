@@ -1,0 +1,13 @@
+## Switchless Dragonfly（无交换机 Dragonfly 互连，晶圆级 scale-out 拓扑）
+
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
+Switchless Dragonfly 是 WaferBRAIN（ISCA 2026）提出的晶圆间互连拓扑，承袭前作 "Switch-Less Dragonfly on Wafers"（SC24，Feng & Ma）：把经典 Dragonfly（Kim 等 ISCA'08，层次化高带宽 group + 低带宽全局链路、直径 ≤3 跳、被 Frontier 等超算采用）的交换机全部去掉，用晶圆边界 die 直连充当通信通道，实现低直径 + 高吞吐的多晶圆神经形态 scale-out。WaferBRAIN 定义三级通道：die 级 node channel（NC，每 die 4×4=16 节点的片上通道）、wafer channel（WC，晶圆周边相邻边界 die 对聚合 8 个 NC 形成，每 wafer 共 14 个双向 WC 索引 0-13）、POD channel（PC，WaferPOD 之间使用）。拓扑层次：一个 WaferPOD 用 13 个 WC 把 14 个 wafer 全互连（WC_j(i)↔WC_i(j)，任意两 wafer 1 hop），每 wafer 对角 WC_i(i) 留作外向接口 → 7 个 WaferPOD 用成对外向 WC 键合形成 PC（PC_i(k) 由 WC_i(i)+WC_{i+7}(i+7) 组成，PC_j(i)↔PC_i(j)）→ 14×7=98-wafer cluster，端到端距离 POD 内 1 hop、跨 cluster 3 hops（对比 10×10 mesh 的 18 hops）。经典 Dragonfly 依赖高基数交换机做 group 内聚合与 group 间转发，而 switchless 变体把交换功能分摊到晶圆边界 die 的直连通道上。
+
+从芯片设计角度拆解术语，比如术语如何在芯片设计中发挥作用，给出术语在芯片设计中运转流程的具体例子。通过联网搜索让回答具体和精准。
+在 WaferBRAIN 芯片设计中，switchless dragonfly 决定单播数据包跨晶圆/跨 POD 的物理路径（5 阶段确定性转发）：① 源节点沿预规划 on-wafer 确定性路由上升到所选 egress WC（路由器索引 router-local SRAM 中的 WC 确定性路由表）；② 跨 POD 选路——目标在 POD M 则走本 POD 的 PC_M(A)（由 bonded WC 对 (WC_M(M), WC_{M+7}(M+7)) 实现，wafer 本地索引 0-6 用 WC_M(M)、7-13 用 WC_{M+7}(M+7) 以平衡负载）；③ 跨 POD hop——PC_M(A) → PC_A(M) 进入 POD M；④ POD 内跨 wafer hop——经目标 wafer 的 K-th WC 走 intra-POD all-to-all 链路到 wafer K；⑤ 目标 wafer 内 mesh-XY 递送到目标节点。芯片级实现要点：WC 选定后按 WC-to-NC sharding 把全部注入节点划分为 8 个 disjoint shard、每 shard 绑定一个 NC（映射 (Chiplet, Node) → NC 索引 q∈{0..7}），预规划路径离线生成并写入 k-indexed WC 路由表项，路由器按 WC 索引取 next-hop 端口掩码沿确定性路径转发——无交换机、无在线路由决策、无死锁风险。设计动机与 mesh 对比：mesh 的 18 hops 与中央热点随规模恶化，dragonfly 低直径（3 hops）+ 通道 sharding 均衡把峰值 inter-wafer 流量降 3.4-3.7×、峰值节点负载降 1.3-2.8×、100B 规模可持续 firing rate 从 mesh 的 1.3% 提到 3.8%（2.9×）。与经典 Dragonfly 的差异：经典版每节点经交换机连 group、group 间交换机再互连（路由器负责路由决策与缓冲）；switchless 版用晶圆边界 die 的聚合通道（8 NC→1 WC）直接当链路，交换功能被边界 die 承担，适合"每 wafer 即一个巨型 chiplet、通道即 die 间 D2D 链路"的 3D-WSI 物理形态。
+
+术语一般如何实现？如何使用？通过联网搜索让回答具体和精准。
+实现：通道即物理链路聚合——相邻边界 die 对（各含 NoC）共享一个 WC，8 个 NC（每 NC 对应 die 内一组注入节点）在 WC 处聚合；PC 由两个外向 WC 键合实现；WC-to-NC sharding 函数离线计算，确定性路由表（k-indexed WC 项、next-hop 端口掩码）在系统配置时加载到 router-local SRAM。评估：论文用自研 topology-aware analytical simulator（Fig.11，未开源）建模 wafer/WaferPOD/cluster 三级图，按式 T=R_Local×W_L+R_Global×W_G 累加各 NC/路由器（含 transit）流量，按式 δ_max=L_n·H_n+L_d·H_d+L_w·H_w+t_r·(H_n+H_d+H_w) 用 Lyra X 原型实测跳时延（1ns/8ns/493ns、router 5ns、1Tb/s）算每步时延；配置覆盖 14×7 dragonfly 与 10×10 mesh、14×1 dragonfly 与 4×4 mesh、单 wafer。使用场景：多晶圆/多 POD 的脑规模（16B 皮层、100B 全脑）神经形态仿真——比 mesh 更均衡的互wafer流量与更低直径，配合 NAHP 的边界触发单播与 WC 确定性路由实现实时（<1ms step）spike 传播。相关通用知识：经典 Dragonfly 拓扑（Kim ISCA'08）与 Frontier 的 Slingshot-11 实现见本库"硬件知识笔记/Dragonfly Network Topology"。
+
+涉及论文标题：
+- WaferBRAIN: Whole-Brain Scale Neuromorphic Architecture Based on Wafer-Scale Integration

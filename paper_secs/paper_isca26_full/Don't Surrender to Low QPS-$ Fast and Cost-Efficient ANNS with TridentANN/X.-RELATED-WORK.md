@@ -1,0 +1,16 @@
+# X. RELATED WORK
+
+In-memory ANNS with CPUs and GPUs. HNSW, and NSG [36, 52] are the in-memory graph-based ANNS on CPUs. ELPIS [29] and ParlayANN [53] develop them with short building time and high search parallelism. With GPUs, Faiss[4] introduces GPU-accelerated clustering ANNS. GGNN and SONG [39, 78] propose GPU-oriented graph search with GPUs, while CAGRA [55] proposes GPU-friendly graph-based ANNS with highly parallel graph construction. RUMMY [77] pushes ANNS beyond GPU memory using pipelined execution across GPUs and host memory.
+
+ANNS with external storage. To overcome the limitations of capacity and cost, external storage devices are used in ANNS. Graph-based DiskANN [66] and clustering-based SPANN [32] pioneered billion-scale ANNS with SSDs. Based on DiskANN, PipeANN [40] enables intra-query parallelism to overlap I/O and computation for the low-latency on-SSD graph-based ANNS. Starling [71] optimizes this under limited memory and disk space, for the data-segment level. There are also many other works on ANNS with emerging storage hardware (e.g., PMEM and CXL) [45, 62, 68].
+
+ANNS with accelerators and hierarchical storage. To achieve both high performance and low cost, some works jointly leverage accelerators and external storage. NDsearch, ANSMET, and REIS present the exploration of NDP and instorage processing for ANNS [31, 50, 73], while these devices are not commercially mature. FusionANNS [69] explores commercial GPUs and SSDs, but still relies on expensive GPU memory. To achieve the high cost-effectiveness with real commodity devices, our TRIDENTANN adopts a combination of low-end GPUs, CPUs and multiple SSDs for ANNS.
+
+# X. RELATED WORK
+
+In-memory ANNS with CPUs and GPUs. HNSW, and NSG [36, 52] are the in-memory graph-based ANNS on CPUs. ELPIS [29] and ParlayANN [53] develop them with short building time and high search parallelism. With GPUs, Faiss[4] introduces GPU-accelerated clustering ANNS. GGNN and SONG [39, 78] propose GPU-oriented graph search with GPUs, while CAGRA [55] proposes GPU-friendly graph-based ANNS with highly parallel graph construction. RUMMY [77] pushes ANNS beyond GPU memory using pipelined execution across GPUs and host memory.
+
+ANNS with external storage. To overcome the limitations of capacity and cost, external storage devices are used in ANNS. Graph-based DiskANN [66] and clustering-based SPANN [32] pioneered billion-scale ANNS with SSDs. Based on DiskANN, PipeANN [40] enables intra-query parallelism to overlap I/O and computation for the low-latency on-SSD graph-based ANNS. Starling [71] optimizes this under limited memory and disk space, for the data-segment level. There are also many other works on ANNS with emerging storage hardware (e.g., PMEM and CXL) [45, 62, 68].
+
+ANNS with accelerators and hierarchical storage. To achieve both high performance and low cost, some works jointly leverage accelerators and external storage. NDsearch, ANSMET, and REIS present the exploration of NDP and instorage processing for ANNS [31, 50, 73], while these devices are not commercially mature. FusionANNS [69] explores commercial GPUs and SSDs, but still relies on expensive GPU memory. To achieve the high cost-effectiveness with real commodity devices, our TRIDENTANN adopts a combination of low-end GPUs, CPUs and multiple SSDs for ANNS.
+

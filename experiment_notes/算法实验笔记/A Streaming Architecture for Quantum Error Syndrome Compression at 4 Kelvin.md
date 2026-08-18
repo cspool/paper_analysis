@@ -1,0 +1,13 @@
+## A Streaming Architecture for Quantum Error Syndrome Compression at 4 Kelvin
+
+- 属于算法pipeline的实现是什么？实验比较什么？
+  - 实现为 IcePack 的三级无损 syndrome 压缩算法 pipeline：(1) 空间聚类（spatial clustering）——把表面码格点上由单个 X/Z 数据错误触发的水平对、垂直对（2 个非零 syndrome → 1 个 index）与 Y 错误触发的 cross（4 个非零 syndrome → 1 个 index）编码为"首个非零 syndrome 的索引 + 2-bit opcode"（cross=3、vertical=2、horizontal=1、isolated=0，按 Table I 优先级覆盖）；(2) 时间聚类（temporal clustering）——对 opcode 0 孤立 syndrome 做静态预测（测量错误比错误链常见得多，下一轮同位置大概率复现），预测命中则丢弃该 index，预测失败则以 opcode 0 显式补发一个 index 实现无损纠错；(3) Rice-Golomb 编码（RGE，m=2^k）——对压缩后保留 index 之间的 gap（近似几何分布）做变长编码：unary quotient + truncated-binary remainder。
+  - 实验比较对象：AFS [11] 的 sparse representation（只传非零 syndrome 索引，不做任何非零 syndrome 压缩，index reduction=0.0）、无 4 K 压缩的数字读出 baseline。指标：syndrome index 减少率、总传输 bit 数（data-volume reduction factor）、数据量→串行化延迟与热负载。
+- 硬件平台是什么，配置是什么。
+  - 软件评估无特殊硬件：标准 x86 Linux 机器 + Docker（ARM/Apple Silicon 亦可），论文建议 64+ 核 CPU，约 1 GB 磁盘（Docker 镜像），完整跑完约 3–9 小时。无需 GPU 或量子硬件。
+- 模型是什么。数据集和bench分别是什么。
+  - 无 ML 模型（纯 QEC 稳定子电路采样 + 无损压缩）。数据集由 Stim（量子稳定子电路模拟器）运行时生成：表面码 code distance d=11–31（主分析 d=11–21、1000 个逻辑 qubit，每个 d–p 组合 20000 次独立运行、跨多测量轮）；物理错误率 p ∈ {10^-4, 10^-3, 10^-2}（0.01%–1%）；噪声模型以 phenomenological 为主，扩展 circuit-level（5p 测量噪声+2p reset、2p/1p 两配置）、非 IID qubit（Google Willow 实测检测概率分布，10 组 × 10 万 ancilla）、错误率 10× 漂移、multi-bit burst errors（宇宙射线）、leakage。规模对标 RSA factoring 所需 1000 逻辑 qubit。
+- 开源情况。基于开源文档和论文，使用例子解释，解释算法pipeline，至少具体到伪代码或张量计算。
+  - 开源：是。artifact 公开于 Zenodo https://doi.org/10.5281/zenodo.19446086（CC BY 4.0），Docker 一键运行：`docker run --rm -v $(pwd)/results:/output icepack-artifact`，产出对应论文图 5/7/8/15 的 4 个 CSV + 4 个 PNG；冒烟测试加 `-e SMOKE_TEST=1`；参数（d、p、Monte Carlo 样本数、噪声模型）可在 artifact 内 icepack.py / artifact.ipynb 修改。依赖 stim、numpy、pandas、matplotlib、mpire（容器内置）。
+  - 算法 pipeline 执行例子（单轮 syndrome 流）：Stim 采样 d=21 表面码 syndrome 位图，ancilla 按行主序编号 → 空间聚类：非零 syndrome 位于 index 42、45、51，42 与 51 构成垂直对 → 记 (index=42, opcode=2)，45 孤立 → (45, opcode=0)；cross 优先级最高，其次 vertical、horizontal（Table I）→ 时间聚类：round t 的 opcode 0 条目生成下一轮同位置预测；round t+1 命中则丢弃（V_o=0），未命中则补发 (index, opcode=0) 以标识"该位置无 syndrome"（300 K 端未收到 index 即默认该位置有 syndrome）→ RGE：对已发送 index 流计算相邻 gap n，q = ⌊n/2^k⌋ = n >> k（unary：q 个 1 + 1 个 0）、r = n mod 2^k = n[k:0]（k bit truncated binary）拼接；例：m=4、gap=11（ID1=632→ID2=643）：q=2→3'b110、r=3→2'b11，得 5-bit 码 5'b11011，比 10-bit 绝对索引省一半 → 300 K 端在线无损解压（unary 计数→gap 累加→opcode 常量偏移展开，解压延迟 2.5 ns，Synopsys DC + Nangate 45nm 综合）。
+  - 效果：总 bit 数比 AFS 稀疏表示少 2.4–4×（d=21：p=10^-4/10^-3/10^-2 时 clustering 贡献 1.99×/1.94×/1.61×、RGE 贡献 1.40×/1.78×/2.50×，Table II）；比无压缩数字读出最高 300×；circuit-level 噪声下仍达 1.9–3.1×（vs AFS）；非 IID qubit 下压缩率与理想配置偏差 <1%。

@@ -1,0 +1,10 @@
+# <span id="page-5-1"></span>*D. Activation Quantization*
+
+Similar to the key cache, activations are also known to exhibit outlier channels [\[12\]](#page-13-21), which makes standard integer quantization error-prone. To reduce the quantization error of integer activations, prior works mainly leverage two techniques to suppress outliers. The first is Hadamard transformation, which applies a Hadamard rotation matrix to activations before performing quantization [\[2\]](#page-13-9), [\[59\]](#page-14-26). However, the online Hadamard transformation can bring considerable runtime overhead [\[8\]](#page-13-10). The second is smoothing, which migrates the quantization difficulty of outlier activation channels to the corresponding weight channels [\[88\]](#page-15-7). Unfortunately, the migration of quantization difficulty can significantly increase the error of low-precision weights.
+
+<span id="page-6-2"></span>![](_page_6_Figure_0.jpeg)
+
+Fig. 6: (a) The architecture of P<sup>3</sup>-LLM. (b) Operator mapping on P<sup>3</sup>-LLM during decoding. (c) The quantized dataflow of three GEMV operations: weights @ activations, query @ key, attention-score @ value. For clarity, we use "@" and "×" to denote GEMV and element-wise multiplication, respectively.
+
+To address these issues, we propose leveraging an 8-bit format that remains well-suited for activations even in the presence of outliers. Inspired by prior studies [85], [86], we explore FP8 as an alternative format for activation quantization without Hadamard transformation and smoothing. We find that the standard FP8-E4M3 format can achieve nearlossless accuracy for quantizing activations, owing to its wide numerical range. Table III shows the perplexity of per-token activation quantization using FP8-E4M3 and SmoothQuantbased [88] INT8. SmoothQuant causes large perplexity loss under 4-bit weights. This is expected, because weights are already difficult to quantize at 4 bits, yet SmoothQuant migrates additional difficulty to weights. On the other hand, FP8-E4M3 significantly outperforms SmoothQuant as its large numerical range can accommodate outliers without affecting weight quantization.
+

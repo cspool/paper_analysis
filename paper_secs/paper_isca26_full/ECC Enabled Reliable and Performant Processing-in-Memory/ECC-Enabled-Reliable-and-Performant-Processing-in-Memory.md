@@ -1,0 +1,10 @@
+# ECC Enabled Reliable and Performant Processing-in-Memory
+
+Jeageun Jung\*, Margaret Lee\*, and Mattan Erez
+Department of Electrical and Computer Engineering
+The University of Texas at Austin
+Austin, TX, USA
+{jeageunjung, margaretlee, mattan.erez}@utexas.edu
+
+Abstract—We introduce a Processing-in-Memory (PIM) architecture with tailored error checking and correcting (ECC) mechanisms to address reliability challenges from scaling errors and physical faults. PIMs can significantly improve computing efficiency by integrating computing devices directly within memory chips, but their reliability has not been explored in detail. It is important to ensure reliability against variable retention time (VRT) scaling errors and multi-bit errors in modern DRAM. Our proposed reliable bank-PIM architecture not only accurately detects multi-bit errors and corrects at the rank-level but also avoids the high performance impact of repetitive rank-level corrections. We develop a Codeword Flip method that is specifically designed to mask errors caused by VRT weak cells. This strategy effectively reduces the risk of silent data corruption (SDC) and has a negligible performance impact. With an odd-even bank pipelining approach, which achieves PIM unit utilization of 90%, our ECC mechanism could decrease the likelihood of SDC to  $400\times$  lower than traditional bank-PIM configuration over a five-year operational period. Moreover, it shows the potential 4× performance enhancement over rank-PIM in certain micro-benchmarks and end-to-end performance improvements in LLM applications.
+

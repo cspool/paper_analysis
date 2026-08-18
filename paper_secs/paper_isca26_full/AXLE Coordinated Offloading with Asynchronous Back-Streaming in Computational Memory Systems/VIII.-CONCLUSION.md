@@ -1,0 +1,8 @@
+# VIII. CONCLUSION
+
+Existing mechanisms to offload partial operations to CCM cannot leverage the underlying CXL protocols, as each treats CCM as either a device or memory alone. In this work, we identify those tradeoffs and demonstrate the importance of considering the host-CCM interactions from an end-toend perspective, in order to maximize operation overlap and eliminate stalls and inefficiencies. To support efficient generalpurpose CCM systems, this work proposes a new offloading mechanism called Asynchronous Back-Streaming, which uniquely coordinates CXL.io DMA and CXL.mem to enable efficient data streaming and asynchronous pipelining. AXLE realizes this protocol with lightweight host-CCM interaction, reducing end-to-end runtime by up to 50.14%, applicationlevel CCM and host idle times by an average of 14.53× and 3.93×, and host core stall time by up to 6×.
+
+# VIII. CONCLUSION
+
+Existing mechanisms to offload partial operations to CCM cannot leverage the underlying CXL protocols, as each treats CCM as either a device or memory alone. In this work, we identify those tradeoffs and demonstrate the importance of considering the host-CCM interactions from an end-toend perspective, in order to maximize operation overlap and eliminate stalls and inefficiencies. To support efficient generalpurpose CCM systems, this work proposes a new offloading mechanism called Asynchronous Back-Streaming, which uniquely coordinates CXL.io DMA and CXL.mem to enable efficient data streaming and asynchronous pipelining. AXLE realizes this protocol with lightweight host-CCM interaction, reducing end-to-end runtime by up to 50.14%, applicationlevel CCM and host idle times by an average of 14.53× and 3.93×, and host core stall time by up to 6×.
+

@@ -1,0 +1,6 @@
+# *C. Overall Example*
+
+Figure 6(a) presents a complete example using both categories of primitives to describe a hierarchical construction strategy on a 2D mesh. In Line 6, the buffer is partitioned into three segments: tiled[0-2]. Line 7 enables pipelining with an II of 1, while Lines 8–10 construct two reduce patterns and one broadcast pattern. Notably, the bubble in the broadcast step signifies a data dependency—specifically, the first broadcast iteration must wait until the corresponding buffer segments from the reduce operations are ready.
+
+For pattern construction, Line 5 initializes the base configuration, and Lines 11–17 incrementally expand the communication schedule by adding rows and columns. This hierarchical composition decomposes the synthesis task into smaller, tractable sub-problems, thereby significantly reducing complexity. Line 18 uses the interleave primitive, as illustrated in Figure 4(d), to overlap distinct communication patterns and improve throughput. Since the topology in this example is bidirectional, applying reverse is sufficient to generate the valid pattern. In contrast, for topologies without bidirectional links, new partial patterns must be synthesized and interleaved to ensure efficient communication.
+

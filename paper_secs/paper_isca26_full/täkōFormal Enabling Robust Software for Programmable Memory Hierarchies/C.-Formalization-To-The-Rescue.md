@@ -1,0 +1,4 @@
+# *C. Formalization To The Rescue*
+
+To enable programmers to rigorously reason about tak¨ o¯ programs, we develop an ISA-level MCM for tak¨ o (§IV). ¯ This ISA MCM captures the semantics of cache events and callbacks, but does not require programmers to fully understand tak¨ o's microarchitectural details, thus enhancing ¯ tak¨ o's programmability, which we demonstrate with illustrative ¯ litmus tests (§V). We ensure that our ISA MCM accurately reflects tak¨ o by first constructing a detailed implementation ¯ model of tak¨ o (§VI), and then proving that all executions ¯ of the implementation model are allowed by our ISA MCM (§VII). Along the way, we discover insights about how to construct microarchitectural models that are useful for both architects and formal methods experts. We also discover a best practice for ISA-level MCM design to enable effective proofs of hardware implementations against such MCMs.
+

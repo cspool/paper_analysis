@@ -1,0 +1,9 @@
+## Observability-aided GPU Memory Oversubscription
+
+- baseline方法是什么？
+  默认 NVIDIA UVM：CPU 上运行的 UVM 驱动在 GPU 页错误时把 64KB 页从 DRAM 迁移到 HBM（单个错误 10-50us，处于关键路径），换出策略为 Least Recently Migrated（LRM）——维护 HBM-resident 2MB 区域链表，内存压力下换出链表头部（最早迁移）区域；预取用 Tree-Based Prefetching（TBP）——仅当 2MB 二叉子树内 HBM 驻留占比超过 51% 阈值才预取子树页；可选 ACBM（access counter 迁移，默认关闭）。驱动对 HBM 内页的 GPU 访问完全无感知（GPU 无 access bits），因此 LRM 常换出 GPU 正在活跃计算的区域，TBP 无"预取是否有用"反馈只能保守预取。策略硬编码在驱动内，改策略需重编译重载驱动（易崩溃、有安全风险）。
+  全栈执行例子（GMM 矩阵乘 12GB，3090 24GB，50% 超订）：GPU 线程访问矩阵 A/B/C 的 64KB 页 → 页错误 → 驱动从 DRAM 迁移到 HBM → 2MB 区域插入 LRM 链表尾 → 持续访问使矩阵 B 的区域滑向链表头 → 内存压力下驱动盲目换出 B 的活跃区域 → GPU 再访问时再次页错误、再迁移，反复抖动。预取侧：TBP 等 2MB 内子树驻留>51% 才逐子树预取，高空间局部性应用错过整 2MB 预取机会。换出/预取策略硬编码在驱动内，改策略需重编译重载驱动（易崩溃/安全风险）。
+
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  ObservUVM：复用 NVIDIA 已有的 PCIe access counters（原始用途 ACBM 因仅 ~256 个计数器、需调 ~25 万种粒度×阈值组合而不实用，且默认关闭）提供采样可观测性：从濒临换出的 2MB key 区域（最多 100 个）各抽 1 个 64KB 页迁到 DRAM 并 pin、映射 GPU 页表，GPU 对该页的 PCIe 访问产生 access counter 通知（阈值=1，即当作 access bits 用），驱动把"区域被活跃访问"信号上抛给 userspace 策略。机制留在驱动，策略移到 userspace（C++11 引擎 + eBPF 通信层），安全快速探索策略。三种 eviction 策略（近似 LRU/LFU/Cyclic Protection）+ Tournament meta-policy（round-robin 选策略换出、被换出区域再次页错误则向对应策略记 blame、超过阈值淘汰快于平均 20% 的策略）+ 两种反馈式预取（FDP 在 TBP 阈值 51 与激进阈值 1 间切换，RGP 检测流式访问后跨 2MB 预取下一区域）。另按空间局部性动态调整每区域采样页数（换出后快速再页错误则加倍采样页，反之减半）。
+  全栈执行例子（GMM 50% 超订）：GPU 线程访问矩阵 B 的 64KB 页 → 页错误经 eBPF tracepoint 上行 userspace → LRU 策略 onPageFault 把 2MB 区域 move_to_tail → 驱动按 setObservabilityCandidate 把链表头附近濒临换出的区域各抽 1 个 64KB 采样页迁 DRAM 并映射 GPU 页表 → GPU 活跃访问采样页（PCIe）→ access counter 通知 → onAccessCounter 把该区域 move_to_tail 保护，避免换出 B 的活跃区域 → 换出真正冷区域（setEvictionRegion 返回链表头）→ Tournament 按被换出区域是否再触发页错误分配 blame、淘汰差策略 → 预取侧 FDP 观测预取区域，>80% 被访问则阈值降为 1 启用整 2MB 激进预取（AP），RGP 检测流式访问后跨区域预取下一 2MB。结果：eviction 减少（MM/GMM/HEL 降 62%）、页错误平均降 78%（TM+ 较 UVM）、执行时间平均提速 34%（几何均值），远超 ACBM/EA（约 20%）。

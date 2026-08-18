@@ -1,0 +1,10 @@
+# *C. Datacenter Infrastructure for AI Hardware*
+
+The high performance of modern AI accelerators comes with high demands on supporting infrastructure. Power, cooling, and networking requirements for large-scale AI deployments far exceed those of traditional datacenters.
+
+Power. High-end accelerators consume hundreds of watts. For example, a NVIDIA DGX H100 server with eight GPUs has a thermal design power (TDP) of 10.2kW [\[81\]](#page-14-2), which means that rack densities can range from several kilowatts to over 100 kW per rack [\[17\]](#page-13-22). Sustaining these loads requires robust *power delivery* systems, including high-capacity UPS units and PDU topologies, often oversubscribed to balance utilization and cost [\[120\]](#page-15-10). In addition, rapid workload fluctuations can induce large transient currents [\[14\]](#page-13-23), [\[65\]](#page-14-17), which require careful electrical design and monitoring to maintain stability.
+
+Cooling. The heat output of dense AI clusters quickly exceeds the limits of traditional air cooling [\[104\]](#page-15-8). To maintain performance and reliability, operators increasingly adopt advanced *cooling* solutions such as rear-door heat exchangers, directto-chip liquid cooling, and full liquid cooling [\[84\]](#page-14-18). These technologies sustain performance and reliability but require specialized facility layouts, coolant distribution infrastructure, and increased maintenance complexity.
+
+Networking. Large-scale AI inference also stresses *networking* infrastructure. Models using tensor, pipeline, or expert parallelism rely on low-latency, high-bandwidth communication between thousands of accelerators [\[56\]](#page-14-12). This drives adoption of specialized topologies (*e.g.*, fat-tree, dragonfly) and highperformance interconnects such as InfiniBand and RoCE [\[91\]](#page-15-20), with careful bandwidth provisioning to keep collective communication from becoming a bottleneck. The cost of switches, optical modules, and cabling in these networks can constitute a substantial fraction of overall system expenditure.
+

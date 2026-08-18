@@ -1,0 +1,52 @@
+# REFERENCES
+
+- [1] L. Bergerat, A. Boudi, Q. Bourgerie, I. Chillotti, D. Ligier, J.-B. Orfila, and S. Tap, "Parameter optimization and larger precision for (t) fhe: L. bergerat et al." *Journal of Cryptology*, vol. 36, no. 3, p. 28, 2023.
+- [2] D. J. Bernstein, "The tangent fft," in *International Symposium on Applied Algebra, Algebraic Algorithms, and Error-Correcting Codes*. Springer, 2007, pp. 291–300.
+- [3] D. J. Bernstein, "Fast multiplication and its applications," *Algorithmic number theory*, vol. 44, pp. 325–384, 2008.
+- [4] I. Chillotti, N. Gama, M. Georgieva, and M. Izabachene, ` "Tfhe: fast fully homomorphic encryption over the torus," *Journal of Cryptology*, vol. 33, no. 1, pp. 34–91, 2020.
+- [5] I. Chillotti, N. Gama, M. Georgieva, and M. Izabachene, ` "Tfhe: Fast fully homomorphic encryption over the torus: I. chillotti et al." *Journal of Cryptology*, vol. 33, no. 1, pp. 34–91, 2020.
+- [6] X. Deng, S. Fan, Z. Hu, Z. Tian, Z. Yang, J. Yu, D. Cao, D. Meng, R. Hou, M. Li *et al.*, "Trinity: A general purpose fhe accelerator," in *2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2024, pp. 338–351.
+- [7] S. Durrani, M. S. Chughtai, M. Hidayetoglu, R. Tahir, A. Dakkak, L. Rauchwerger, F. Zaffar, and W.-m. Hwu, "Accelerating fourier and number theoretic transforms using tensor cores and warp shuffles," in *2021 30th International conference on parallel architectures and compilation techniques (PACT)*. IEEE, 2021, pp. 345– 355.
+- [8] G. Fan, M. Zhang, F. Zheng, S. Fan, T. Zhou, X. Deng, W. Tang, L. Kong, Y. Song, and S. Yan, "Warpdrive: Gpu-based fully homomorphic encryption acceleration leveraging tensor and cuda cores," in *2025 IEEE International Symposium on High Performance Computer Architecture (HPCA)*, 2025, pp. 1187–1200.
+- [9] S. Fan, X. Deng, L. Kong, G. Shi, G. Fan, D. Meng, R. Hou, and M. Zhang, "Fast: An fhe accelerator for scalable-parallelism with tunable-bit," in *Proceedings of the 52nd Annual International Symposium on Computer Architecture*, 2025, pp. 92–106.
+- [10] S. Fan, Z. Wang, W. Xu, R. Hou, D. Meng, and M. Zhang, "Tensorfhe: Achieving practical computation on encrypted data using gpgpu," in *2023 IEEE International Symposium on High-Performance Computer Architecture (HPCA)*. IEEE, 2023, pp. 922–934.
+- [11] L. Jiang, Q. Lou, and N. Joshi, "Matcha: A fast and energy-efficient accelerator for fully homomorphic en-
+
+- cryption over the torus," in *Proceedings of the 59th ACM/IEEE Design Automation Conference*, 2022, pp. 235–240.
+- [12] D. Jiao, X. Deng, Z. Wang, S. Fan, Y. Chen, D. Meng, R. Hou, and M. Zhang, "Neo: Towards efficient fully homomorphic encryption acceleration using tensor core," in *Proceedings of the 52nd Annual International Symposium on Computer Architecture*, 2025, pp. 107–121.
+- [13] J. Kim, W. Choi, and J. H. Ahn, "Cheddar: A swift fully homomorphic encryption library for cuda gpus," *arXiv preprint arXiv:2407.13055*, 2024.
+- [14] J. Kim, G. Lee, S. Kim, G. Sohn, M. Rhu, J. Kim, and J. H. Ahn, "Ark: Fully homomorphic encryption accelerator with runtime data generation and inter-operation key reuse," in *2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2022, pp. 1237– 1254.
+- [15] B. Li, S. Cheng, and J. Lin, "tcfft: A fast half-precision fft library for nvidia tensor cores," in *2021 IEEE International Conference on Cluster Computing (CLUSTER)*. IEEE, 2021, pp. 1–11.
+- [16] C. Liu, M. Yu, Y. Sun, and T. E. Carlson, "The sparsityaware lazygpu architecture," in *Proceedings of the 52nd Annual International Symposium on Computer Architecture*, 2025, pp. 1020–1034.
+- [17] L. Montero, J. Frery, C. Kherfallah, R. Bredehoft, and A. Stoian, "Neural network training on encrypted data with tfhe," *arXiv preprint arXiv:2401.16136*, 2024.
+- [18] C. Mouchet, J.-P. Bossuat, J. Troncoso-Pastoriza, and J. Hubaux, "Lattigo: A multiparty homomorphic encryption library in go," in *WAHC 2020–8th Workshop on Encrypted Computing & Applied Homomorphic Cryptography*, 2020.
+- [19] K. Nam, H. Oh, H. Moon, and Y. Paek, "Accelerating n-bit operations over tfhe on commodity cpu-fpga," in *Proceedings of the 41st IEEE/ACM International Conference on Computer-Aided Design*, 2022, pp. 1–9.
+- [20] nucypher, "Nufhe, a GPU-powered Torus-FHE implementation," https://github.com/nucypher/nufhe, 2020.
+- [21] NuCypher, "NuFHE: Implementation details," https://nufhe.readthedocs.io/en/latest/implementation details.html, 2020.
+- [22] NVIDIA Corporation, "NVIDIA A100 Tensor Core GPU Architecture," NVIDIA White Paper, May 2020. [Online]. Available: https://images.nvidia.cn/aem-dam/en-zz/Solutions/ data-center/nvidia-ampere-architecture-whitepaper.pdf
+- [23] NVIDIA Corporation, "NVIDIA A100 Tensor Core GPU Datasheet," https://www.nvidia.com/content/dam/enzz/Solutions/Data-Center/a100/pdf/nvidia-a100 datasheet-nvidia-us-2188504-web.pdf, 2020.
+- [24] NVIDIA Corporation, "NVIDIA H100 Tensor Core GPU," https://www.nvidia.com/en-us/data-center/h100/, 2022.
+- [25] NVIDIA Corporation, "CUDA C++ Programming Guide," Online Documentation, May 2024. [On-
+
+- line]. Available: https://docs.nvidia.com/cuda/cuda-cprogramming-guide/
+- [26] NVIDIA Corporation, "NVIDIA Blackwell Architecture Datasheet," https://nvdam.widen.net/s/wwnsxrhm2w/ blackwell-datasheet-3384703, 2024.
+- [27] A. Putra, Y. Chen, J. Kim, J.-Y. Kim *et al.*, "Strix: An end-to-end streaming architecture with two-level ciphertext batching for fully homomorphic encryption with programmable bootstrapping," *arXiv e-prints*, pp. arXiv– 2305, 2023.
+- [28] A. Putra, J.-Y. Kim *et al.*, "Morphling: A throughputmaximized tfhe-based accelerator using transformdomain reuse," in *2024 IEEE International Symposium on High-Performance Computer Architecture (HPCA)*. IEEE, 2024, pp. 249–262.
+- [29] S. S. Roy, K. Jarvinen, J. Vliegen, F. Vercauteren, and ¨ I. Verbauwhede, "Hepcloud: An fpga-based multicore processor for fv somewhat homomorphic function evaluation," *IEEE Transactions on Computers*, vol. 67, no. 11, pp. 1637–1650, 2018.
+- [30] S. S. Roy, F. Turan, K. Jarvinen, F. Vercauteren, and I. Verbauwhede, "Fpga-based high-performance parallel architecture for homomorphic computing on encrypted data," in *2019 IEEE International symposium on high performance computer architecture (HPCA)*. IEEE, 2019, pp. 387–398.
+- [31] N. Samardzic, A. Feldmann, A. Krastev, S. Devadas, R. Dreslinski, C. Peikert, and D. Sanchez, "F1: A fast and programmable accelerator for fully homomorphic encryption," in *MICRO-54: 54th Annual IEEE/ACM International Symposium on Microarchitecture*, 2021, pp. 238–252.
+- [32] N. Samardzic, A. Feldmann, A. Krastev, N. Manohar, N. Genise, S. Devadas, K. Eldefrawy, C. Peikert, and D. Sanchez, "Craterlake: a hardware accelerator for efficient unbounded computation on encrypted data," in *Proceedings of the 49th Annual International Symposium on Computer Architecture*, 2022, pp. 173–187.
+- [33] sharkbot1, "tfhe-aes-128: An implementation of AES-128 in TFHE," https://github.com/sharkbot1/tfhe-aes-128, 2025.
+- [34] S. Shen, H. Yang, Z. Liu, Y. Liu, X. Lu, W. Dai, L. Zhou, Y. Zhao, and R. C. Cheung, "Velofhe: Gpu acceleration for fhew and tfhe bootstrapping," *IACR Transactions on Cryptographic Hardware and Embedded Systems*, vol. 2025, no. 3, pp. 81–114, 2025.
+- [35] A. Stoian, J. Frery, R. Bredehoft, L. Montero, C. Kherfallah, and B. Chevallier-Mames, "Deep neural networks for encrypted inference with tfhe," in *International Symposium on Cyber Security, Cryptology, and Machine Learning*. Springer, 2023, pp. 493–500.
+- [36] M. Van Beirendonck, J.-P. D'Anvers, and I. Verbauwhede, "Fpt: a fixed-point accelerator for torus fully homomorphic encryption," *arXiv preprint arXiv:2211.13696*, 2022.
+- [37] vernamlab, "cuFHE: CUDA-Accelerated Fully Ho-
+
+- momorphic Encryption Library," https://github.com/ vernamlab/cuFHE, October 2024.
+- [38] H. Yang, S. Shen, W. Dai, L. Zhou, Z. Liu, and Y. Zhao, "Phantom: A cuda-accelerated word-wise homomorphic encryption library," *IEEE Transactions on Dependable and Secure Computing*, vol. 21, no. 5, pp. 4895–4906, 2024.
+- [39] Y. Yang, H. Zhang, S. Fan, H. Lu, M. Zhang, and X. Li, "Poseidon: Practical homomorphic encryption accelerator," in *2023 IEEE International Symposium on High-Performance Computer Architecture (HPCA)*. IEEE, 2023, pp. 870–881.
+- [40] Zama, "Concrete ML: a privacy-preserving machine learning library using fully homomorphic encryption for data scientists," 2022, https://github.com/zama-ai/ concrete-ml.
+- [41] Zama, "Concrete: TFHE Compiler that converts python programs into FHE equivalent," 2022, https://github.com/ zama-ai/concrete.
+- [42] Zama, "TFHE-rs: A Pure Rust Implementation of the TFHE Scheme for Boolean and Integer Arithmetics Over Encrypted Data," 2022, https://github.com/zama-ai/tfhers.
+- [43] Zama, "Rounded activations and quantizers," https://docs.zama.org/concrete-ml/explanations/ advanced features#rounded-activations-and-quantizers, 2026.
+- [44] M. Zhu, T. Zhang, Z. Gu, and Y. Xie, "Sparse tensor core: Algorithm and hardware co-design for vector-wise sparse neural networks on modern gpus," in *Proceedings of the 52nd Annual IEEE/ACM International Symposium on Microarchitecture*, 2019, pp. 359–371.

@@ -1,0 +1,4 @@
+# X. CONCLUSIONS
+
+This work shows that the performance cost of UVM-based GPU CC is not only the cryptographic computation itself, but also the synchronization and serialization that current designs impose around it. By using secure 3D-stacked HBM as an in-memory IV Bank, our proposed LÆGIS shows that IV management can be decoupled from CPU–GPU synchronization. This decoupling allows LÆGIS to opportunistically preencrypt data during otherwise idle driver time, while avoiding the metadata cost of integrity trees. More broadly, our results suggest that secure on-package memory is a useful primitive for rethinking the confidential computing stack, and that revisiting long-standing design assumptions (such as the necessity of strict IV ordering) can unlock substantial performance under CC. We hope these findings inform future work on confidential computing for GPU-based and other accelerator-rich systems.
+

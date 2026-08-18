@@ -1,0 +1,11 @@
+## ELSA: An ELastic SNN Inference Architecture for Efficient Neuromorphic Computing
+
+- 属于算法pipeline的实现是什么？实验比较什么？
+  - 近似匹配（论文本体为硬件架构，此处仅覆盖其 SNN 推理算法侧——稀疏/弹性推理算法）：实现为三部分算法 pipeline：(1) ST-BIF（双极积分-激发-脉冲追踪）神经元——数学上与量化 ReLU 在特定条件下等价，三元脉冲 {-1,0,1}，三步：积分（膜电位加权重积）、激发（决策函数 Θ 含 spike tracer 记忆）、膜更新（soft reset + tracer 累积）；(2) 弹性推理（elastic inference）+ 置信度早停——输出逐步涌现，分类用最大类概率、检测用 objectness score 作置信度，超过阈值提前终止剩余时间步；(3) mini-batch spiking Gustavson-product 数据流——利用 spike 稀疏性，BAER 行对齐成 mini-batch，row-wise 累加把稀疏 spike 计算转成低访存行累加。实验比较：ANN vs QANN vs SNN vs SNN+早停 的准确率与延迟（ResNet18/34/50、ViT-S on ImageNet，表 VII），早停平均 21.9% 延迟缩减且 <0.2% 精度损失（激进阈值 30.6% / <3.3%）；COCO2017 YOLOv2 mismatch rate vs 置信度阈值（sweet point 0.2：match 率 94.9%、45.4% geomean 延迟缩减）；显著性分析（目标面积比 vs 延迟，图 19）；消融（图 22：Gustavson -A 节能 3.1×/1.6×，spine/token 流水 -B 提速 6.7×/15.2×，BAER -C 延迟增益小）。
+- 硬件平台是什么，配置是什么。
+  - 算法评估：8× NVIDIA 4090 GPU 服务器（Ubuntu 22.04.3 LTS、CUDA 12.2、PyTorch 2.4.1、Anaconda 24.5.0、GCC 11.4.0）；模拟器评估：AMD EPYC 9334 32 核服务器。磁盘约 20GB，环境准备约 30 分钟。
+- 模型是什么。数据集和bench分别是什么。
+  - 模型：VGG16、ResNet18/34/50/101、ViT Small（分类）、YOLOv2（ResNet34 backbone，检测）。全部 4-bit 量化权重、时间步 T.S.=32，SNN 按 SpikeZIP-TF 生成（ST-BIF 与 QANN 精度一致）。数据集/bench（表 II）：W1 VGG16-CIFAR10、W2 VGG16-CIFAR100、W3 VGG16-CIFAR10-DVS、W4 ResNet18-ImageNet、W5 ResNet34-ImageNet、W6 ResNet50-ImageNet、W7 ViT-S-ImageNet、W8 YOLOv2-COCO2017/VOC2007、W9 ResNet101-ImageNet。指标：top-1 准确率、SOP（synaptic operation）、FCR（首正确响应）延迟、早停缩减、mismatch rate。
+- 开源情况。基于开源文档和论文，使用例子解释，解释算法pipeline，至少具体到伪代码或张量计算。
+  - 开源：是。GitHub https://github.com/Intelligent-Computing-Research-Group/ELSA（ELSA_Algorithm 目录），Zenodo 归档 https://zenodo.org/records/19449728。
+  - 算法 pipeline 执行例子（ResNet50 一次推理、单 spine，权重 W 4-bit）：① 逐时间步 t=1..32：输入 spike x∈{-1,0,1} 经 im2col 展开，MM-sc 用 mini-batch Gustavson——同一膜行的 spike 捆绑成 mini-batch → 读出对应权重行 → 加法树并行累加进膜电位 V_t = V_{t-1} + Σ_{i} x_{i,t}·w_i（负 spike 权重取二补码）；② 激发 y_t = Θ(V_t, V_thr, S_t)：V_t≥V_thr 且 S_t<S_max → +1；V_t<0 且 S_t>S_min → −1；否则 0；③ 更新 V_t = V_t − y_t·V_thr（soft reset）、S_t = S_{t-1} + y_t（spike tracer 累积）；④ 每时间步末分类头取最大类概率 p_max，若 p_max ≥ 阈值（如 0.55）提前终止全部剩余时间步；⑤ 检测（YOLOv2）以 objectness score 为置信度，目标面积比大的更早终止（VOC2007 延迟 2.38→1.88 ms，COCO2017 1.73→1.64 ms）。效果：SNN 精度 = QANN（ResNet50 ImageNet 75.60%、ViT-S 79.07%），早停平均延迟减 21.9%（<0.2% 精度损失），FCR 可比稳定态输出早 82%（COCO 检测）。

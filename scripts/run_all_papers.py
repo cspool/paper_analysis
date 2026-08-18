@@ -35,10 +35,9 @@ IDEA_DIR = ROOT_REPO / "repo_model_quant" / "idea_repo"
 KNOWLEDGE_DIR = ROOT_REPO / "repo_model_quant" / "knowledge_repo"
 OUTPUT_REPO_DIR = ROOT_REPO / "repo_model_quant"
 
-MODEL_NAME = None
-# 如果你的 deepseekv4pro 已经在 Claude Code 环境中配置好，这里保持 None。
-# 如果你需要显式指定模型，可以改成：
-# MODEL_NAME = "deepseekv4pro"
+MODEL_NAME = "deepseek-v4-flash[1m]"
+# 默认使用 Flash，避免继承 Claude Code 环境中的 Pro 模型。
+# 命令行 --model 仍可显式覆盖该默认值。
 
 
 # =========================

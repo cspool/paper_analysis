@@ -1,0 +1,10 @@
+## PipeIMC a Pipelined In-SRAM Computing Architecture
+
+- 属于芯片设计的实现是什么？实验比较什么？
+  - 实现是 256×256 dual-port 计算 SRAM 阵列的全定制电路设计：用 Cadence Virtuoso 实现计算 SRAM 阵列的 full custom 部分（额外一组 bitline/wordline 形成真双端口，两个端口各带独立计算外围电路与微码 sequencer，新增端口只能执行计算 phase），TSMC 40nm、1.1V 标称电压生成 netlist，集成到 Cadence Spectre 仿真环境（TT corner、25°C）测能量与延迟；功能验证：注入多组随机输入、打印关键节点信号波形（覆盖 SRAM 阵列与外围电路）；稳定性验证：对 dual-port 计算 SRAM cell 做静态噪声容限（SNM）定量分析（受控噪声源 V1/V2 注入互补存储节点 Q/QB，测单端口读、双端口同时读、写三种工作模式的 N 曲线）。评估比较指标：面积开销（vs vanilla SRAM +55.7%、vs dual-port vanilla SRAM +18.2%）、静态功耗（vs 单端口计算 SRAM +48.1%）、多行访问能耗（vs 读/写操作 +54.7%）、频率（多行访问比 vanilla SRAM 读/写慢 2%，但仍低于分两次读单行的能量/延迟）；tri-port 阵列 vs dual-port：面积 +19.6%、静态功耗 +23%——据此选择 dual-port 而非 tri-port。
+- 模拟器名，模拟器链接（web search），或论文修改的模拟器。
+  - 电路级：Cadence Virtuoso（全定制版图/电路实现，生成 netlist）+ Cadence Spectre（电路仿真，TT corner 25°C、1.1V）——商业 EDA 工具，无公开链接；架构级能耗/面积：GPUWattch（https://github.com/darchr/gpuwattch，运行时能耗）+ McPAT（https://github.com/HewlettPackard/mcpat）+ 原论文数据 [2][11] + 综合。论文援引商业 dual-port 计算 SRAM 的成功流片案例 [16] 说明布线拥塞可由成熟设计套件/EDA 流程管理，并提及 bitline 多路复用可缓解布线压力、采用 1:1 bitline-to-SA 比例。
+- 模拟器模拟什么的性能，修改了什么。
+  - Spectre 模拟 dual-port 计算 SRAM 阵列的操作延迟/能量：单端口读、双端口同时读、写，以及多行访问（两 wordline 同时激活、SA 读出 AND/NOR）配合计算外围电路（每 1-bit 外围电路四层：logic/add/shift/writeback，8 组跨 8 bitline 组成 8-bit 外围电路）的功耗与延迟；SNM 测量注入 V1/V2 噪声得单端口读 192.9mV、双端口同时读 134.6mV、写 409.3mV。修改/新增：dual-port 计算 SRAM cell、新增端口的独立计算外围电路与微码 sequencer、sense amplifier 的 latch（支持计算 phase 冻结/恢复，配合细粒度 issue）。架构级 GPUWattch 用模拟器产出的运行时 trace 测量 benchmark 执行期间能耗（Fig. 10）。
+- 开源情况。基于开源文档和论文，使用例子解释模拟器如何使用？作用是什么？
+  - PipeIMC 电路未开源（论文无链接，联网检索无公开仓库）；Cadence Virtuoso/Spectre 为商业 EDA 工具。使用例子（电路配置→性能输出的芯片级数据路径）：在 Virtuoso 中设计 256×256 dual-port 计算 SRAM cell 与外围电路版图 → 1.1V TSMC 40nm 下生成 netlist → Spectre（TT、25°C）仿真：激活两条 wordline 测 AND/NOR 读出与多行访问能量/延迟（多行访问较读/写 +54.7% 能耗、+2% 延迟）、注入 V1/V2 噪声画 SNM 蝴蝶曲线得 192.9mV/134.6mV/409.3mV、统计面积（+55.7%/+18.2%）与静态功耗（+48.1%）→ 为架构级 cycle-approximate 模拟器提供计算 phase 周期表（Table III：add 9、mul 105–634、div 145–1174 cycles）与 GPUWattch/McPAT 的能耗面积参数。作用：在流片前验证 dual-port 计算 SRAM 的功能正确性、稳定性（SNM）与开销，支撑"双端口优于三端口"的架构权衡决策（Pipe-3r 相对 Pipe-2r 提速有限但面积 +19.6%、功耗 +23%）。

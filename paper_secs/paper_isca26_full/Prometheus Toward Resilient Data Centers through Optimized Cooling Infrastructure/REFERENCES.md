@@ -1,0 +1,45 @@
+# REFERENCES
+
+- [1] Google Cloud, "Incident report: fmEL9i2fArADKawkZAa2," https:// status.cloud.google.com/incidents/fmEL9i2fArADKawkZAa2, 2024, accessed: 2024-11-15.
+- [2] Oracle, "Oracle cloud infrastructure status," 2024, accessed: 2024-11-22. [Online]. Available: https://ocistatus. oraclecloud.com/#/incidents/ocid1.oraclecloudincident.oc1.phx. amaaaaaavwew44aa7zoskanlspjh4ll6wxhwxrbkbed4d4cnupxexzqzvlyq
+- [3] L. A. Barroso, U. Holzle, and P. Ranganathan, ¨ *The Datacenter as a Computer: Designing Warehouse-Scale Machines*, 4th ed. Springer, 2025.
+- [4] *Climatic Data for BuildingDesign Standard 169-2021*, ASHRAE, 2021.
+- [5] D. J. Thevenard and R. G. Humphries, "The calculation of climatic design conditions in the 2005 ashrae handbook-fundamentals," *ASHRAE Transactions*, vol. 111, p. 457, 2005.
+- [6] IPCC, "IPCC, 2021: Summary for policymakers," *Climate Change 2021: The Physical Science Basis*, 2021.
+- [7] B. Thrasher, W. Wang, A. Michaelis, F. Melton, T. Lee, and R. Nemani, "Nasa global daily downscaled projections, cmip6," *Scientific data*, vol. 9, no. 1, p. 262, 2022.
+- [8] E. Williams, C. Funk, P. Peterson, and C. Tuholske, "High resolution climate change observations and projections for the evaluation of heatrelated extremes," *Scientific Data*, vol. 11, no. 1, p. 261, 2024.
+- [9] Google, "Data commons," https://datacommons.org, 2024.
+- [10] V. Eyring, S. Bony, G. A. Meehl, C. A. Senior, B. Stevens, R. J. Stouffer, and K. E. Taylor, "Overview of the coupled model intercomparison project phase 6 (cmip6) experimental design and organization," *Geoscientific Model Development*, vol. 9, no. 5, pp. 1937–1958, 2016.
+- [11] L. Bock and A. Lauer, "Cloud properties and their projected changes in cmip models with low to high climate sensitivity," *Atmospheric Chemistry and Physics*, vol. 24, no. 3, pp. 1587–1605, 2024.
+- [12] S. Fan, S. Zahedi, and B. Lee, "The computational sprinting game," in *Proceedings of the 21st International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)*, Atlanta, GA, April 2016.
+- [13] T. Heath, A. P. Centeno, P. George, L. Ramos, Y. Jaluria, and R. Bianchini, "Mercury and freon: Temperature emulation and management for server systems," in *Proceedings of the 12th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS XII)*. New York, NY, USA: ACM, 2006, pp. 106– 116.
+- [14] L. Ramos and R. Bianchini, "C-oracle: Predictive thermal management for data centers," in *Proceedings of the 2008 IEEE 14th International Symposium on High Performance Computer Architecture*, 2008, pp. 111– 122.
+
+- [15] I. Goiri, T. D. Nguyen, and R. Bianchini, "Coolair: Temperature- and variation-aware management for free-cooled datacenters," in *Proceedings of the Twentieth International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS '15)*. New York, NY, USA: ACM, 2015, pp. 253–265.
+- [16] Iceotope Technologies, "Immersive liquid-cooled vs air-cooled large data centers," https://go.iceotope.com/Immersive-liquid-cooled-vs-aircooled-large-data-centers, 2023, accessed: 2025-10-17.
+- [17] BlueCap Economic Advisors, "The cost of datacenter construction," https://www.bluecapeconomicadvisors.com/post/cost-of-datacenter, 2023, accessed: 2025-10-17.
+- [18] Google Cloud, "Google cloud compute engine pricing," https://cloud. google.com/compute/pricing, 2025, n2-standard-4 instance pricing.
+- [19] Amazon Web Services, "Amazon ec2 pricing," https://aws.amazon.com/ ec2/pricing/, 2025, m6i.xlarge instance pricing.
+- [20] Microsoft Azure, "Azure virtual machines pricing," https://azure. microsoft.com/en-us/pricing/details/virtual-machines/, 2025, d4s v5 instance pricing.
+- [21] Google Cloud, "Incident report: Google cloud cooling issue in london," https://status.cloud.google.com/incidents/fmEL9i2fArADKawkZAa2, Jul. 2022, incident #fmEL9i2fArADKawkZAa2, July 19-20, 2022.
+- [22] Amazon Web Services, "Amazon compute service level agreement," https://aws.amazon.com/compute/sla/, 2025, accessed: 2025-10-17.
+- [23] C. Clark, K. Fraser, S. Hand, J. G. Hansen, E. Jul, C. Limpach, I. Pratt, and A. Warfield, "Live migration of virtual machines," in *Proceedings of the 2nd USENIX Symposium on Networked Systems Design and Implementation (NSDI)*. USENIX Association, 2005, pp. 273–286.
+- [24] A. Raghavan, Y. Luo, A. Chandawalla, M. Papaefthymiou, K. P. Pipe, T. F. Wenisch, and M. M. K. Martin, "Computational sprinting," in *Proceedings of the 18th Symposium on High Performance Computer Architecture (HPCA)*, February 2012.
+- [25] A. Raghavan, L. Emurian, L. Shao, M. Papaefthymiou, K. P. Pipe, T. F. Wenisch, and M. M. K. Martin, "Computational sprinting on a hardware/software testbed," in *Proceedings of the 18th International Conference on Architectural Support for Programming Languages and Operating Systems (ASPLOS)*, March 2013.
+- [26] Z. Huang, J. Joao, A. Rico, A. Hilton, and B. Lee, "Dynasprint: Microarchitectural sprints with dynamic utility and thermal management," in *Proceedings of the 52nd International Symposium on Microarchitecture (MICRO)*, Columbus, OH, 2019.
+- [27] T. J. Chainer, M. D. Schultz, P. R. Parida, and M. A. Gaynes, "Improving data center energy efficiency with advanced thermal management," *IEEE Transactions on Components, Packaging and Manufacturing Technology*, vol. 7, no. 5, pp. 787–795, 2017.
+- [28] M. Iyengar, M. David, P. Parida, V. Kamath, B. Kochuparambil, D. Graybill, M. Schultz, M. Gaynes, R. Simons, R. Schmidt, and T. Chainer, "Server liquid cooling with chiller-less data center design to enable significant energy savings," in *IEEE SEMI-Therm Conference*, 2012.
+- [29] M. Schultz, M. Gaynes, P. Parida, and T. Chainer, "Experimental investigation of direct attach microprocessors in a liquid-cooled chillerless data center," in *Proceedings of ITHERM*, Orlando, FL, May 27-30 2014.
+- [30] S. G. Kandlikar, "History, advances, and challenges in liquid flow and flow boiling heat transfer in microchannels: A critical review," *Journal of Heat Transfer-Transactions of the ASME*, vol. 134, no. 3, 2012.
+- [31] J. R. Thome, "Boiling in microchannels: a review of experiment and theory," *International Journal of Heat and Fluid Flow*, vol. 25, no. 2, pp. 128–139, 2004.
+- [32] M. Jalili, I. Manousakis, I. Goiri, P. A. Misra, A. Raniwala, H. Alissa, B. Ramakrishnan, P. Tuma, C. Belady, M. Fontoura, and R. Bianchini, "Cost-efficient overclocking in immersion-cooled datacenters," in *Proceedings of the 48th Annual International Symposium on Computer Architecture (ISCA)*. IEEE, 2021.
+- [33] M. Skach, M. Arora, C.-H. Hsu, Q. Li, D. Tullsen, L. Tang, and J. Mars, "Thermal time shifting: Leveraging phase change materials to reduce cooling costs in warehouse-scale computers," in *Proceedings of the 42nd Annual International Symposium on Computer Architecture (ISCA '15)*. New York, NY, USA: ACM, 2015, pp. 439–449.
+- [34] M. Skach, M. Arora, D. Tullsen, L. Tang, and J. Mars, "Virtual melting temperature: Managing server load to minimize cooling overhead with phase change materials," in *2018 ACM/IEEE 45th Annual International Symposium on Computer Architecture (ISCA)*, 2018.
+- [35] O. Watt-Meyer, G. Dresdner, J. McGibbon, S. K. Clark, J. Duncan, B. Henn, M. Peters, N. D. Brenowitz, K. Kashinath, M. Pritchard,
+
+- B. Bonev, and C. Bretherton, "Ace: A fast, skillful learned global atmospheric model for climate prediction," in *NeurIPS 2023 Workshop on Tackling Climate Change with Machine Learning*, 2023.
+- [36] L. Zhou, S.-J. Lin, J.-H. Chen, L. M. Harris, X. Chen, and S. L. Rees, "Toward convective-scale prediction within the next generation global prediction system," *Bulletin of the American Meteorological Society*, vol. 100, no. 7, pp. 1225–1243, 2019.
+- [37] I. Price, A. Sanchez-Gonzalez, F. Alet, T. Ewalds, A. El-Kadi, J. Stott, S. Mohamed, P. Battaglia, R. Lam, and M. Willson, "Gencast: Diffusion-
+- based ensemble forecasting for medium-range weather," *arXiv*, 2023.
+- [38] B. Bonev, T. Kurth, C. Hundt, J. Pathak, M. Baust, K. Kashinath, and A. Anandkumar, "Spherical fourier neural operators: Learning stable dynamics on the sphere," in *International Conference on Machine Learning*, 2023.
+- [39] S. R. Cachay, B. Henn, O. Watt-Meyer, C. S. Bretherton, and R. Yu, "Probabilistic emulation of a global climate model with spherical dyffusion," 2024. [Online]. Available: https://arxiv.org/abs/2406.14798

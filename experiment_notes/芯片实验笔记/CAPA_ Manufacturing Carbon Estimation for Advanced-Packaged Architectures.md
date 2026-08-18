@@ -1,0 +1,14 @@
+## CAPA: Manufacturing Carbon Estimation for Advanced-Packaged Architectures
+
+- 属于芯片设计的实现是什么？实验比较什么？
+  - 近似匹配（芯片结构级分析建模工具，非芯片物理实现/性能模拟器，最接近"芯片设计"层的 chiplet/DRAM/wafer-scale 结构建模）：实现为 CAPA 开源制造碳（embodied carbon）估算工具——将先进封装处理器拓扑表示为 N-ary 树（节点=芯片：逻辑 die、interposer、EMIB、HBM 等；边=bonding：HB 或 μbump），做深度优先后序遍历，逐节点套用对应碳模型后自底向上聚合。核心模型：逻辑 die 碳（Eqn. 1 负二项良率；Eqn. 4-5 每晶圆碳 CPW=S1PW+S2PW+S3PW，数据取自 imec.netzero N65-N2；Eqn. 6 gross die per wafer 含边缘排除与 kerf；Eqn. 7-9 单区域功能 binning 良率（Stow et al. 公式，Stirling 数）；Eqn. 10-11 多区域 binning；Eqn. 12 C_die=CPW/(N_die×Y_die)）；HBM（Eqn. 13 C_HBM=C_per_GB×Capacity，TechInsights 的 HBM2e/3/3e/4 数据）；D2D 面积（Eqn. 14 A_D2D=D2D带宽/(带宽/面积)）；interposer/bridge（Eqn. 15，5/4 层金属、高低两档估计）；bonding（Eqn. 16，TCB/HB 默认良率 96%/95%）；3D 堆叠（Eqn. 17）；2.5D/3.5D 集成（Eqn. 18，3.5D 用 C_3D 替换 C_i）；逐组件测试的替代 bonding 策略（Eqn. 19）。
+  - 实验比较：(1) 逻辑 die 碳 vs imec.netzero：CAPA 最大误差 3.23%（ACT 低估大 die 达 55%、3D-Carbon 高估最高 118%、ECO-Chip 差 76%-338%）；(2) 整包验证 Google TPUv4：CAPA 91.9 vs Google 报告 91.5 kgCO2eq（0.4% 误差；ACT/ECO-Chip/3D-Carbon 分别差 54%/20%/12%）；(3) 五款商用处理器碳 breakdown：Intel Sapphire Rapids（4×419mm² Intel7 CPU die + 10 EMIB）、NVIDIA A100（826mm² N7 GA100 + 6 HBM2e + ~1575mm² interposer）、H100（814mm² N5 GH100 + 6 HBM3 + ~1623mm² interposer）、AMD MI300X（4×SoIC=2×~125mm² N5 XCD + 377mm² N6 IOD，8 HBM3，3.5D）、Google TPUv4（598mm² N7 ASIC + 4 HBM2）；(4) binning 收益（SPR 14/15 使 CPU die 良率 66%→79%、CPU 碳 -16%、整包 -15%；A100 5/6 良率 45%→72.6%、die 碳 -38%、整包 -9.5%；XCD 38/40 良率 87%→98%）；(5) bonding 良率开销与逐组件测试/最优 bonding 顺序（MI300X 浪费碳 -46%、整包 -18%；无架构改动省 16%-27%）；(6) 替代架构（MI300X 2IODs/8IODs 变体、EMIB 替代 interposer 整包 -14%）；(7) 敏感性分析（α、D0、HBM 碳/GB 扫描：α 影响 <0.075%，D0 对逻辑 die 主导的 SPR 最大 7.12%）。
+
+- 模拟器名，模拟器链接（web search），或论文修改的模拟器。
+  - 无性能模拟器：CAPA 自身即分析工具（Python 3.9+，numpy/scipy-1.12+/matplotlib），开源于 Zenodo https://doi.org/10.5281/zenodo.19744640（CAPA-AE_424.zip，MIT License，ISCA'26 AE，DOI 已联网确认可访问）。对照工具 imec.netzero（https://netzero.imec-int.com/，论文引用的逻辑 die 碳数据来源）；ACT [31]、ECO-Chip [82]、3D-Carbon [93] 论文未给出源码链接（无法确认）。
+
+- 模拟器模拟什么的性能，修改了什么。
+  - CAPA 不模拟性能/功耗，而是解析式估算制造碳（kgCO2eq）：对每个节点按类型（逻辑 die/HBM/interposer/EMIB/bonding）套用碳模型，按封装树结构经良率（含 binning 良率）把晶圆级碳分摊到功能 die，并沿 bonding 自底向上聚合，输出总量与逐组件 breakdown。非对既有模拟器的修改；公式建立在 imec.netzero 数据、Stow et al. binning 良率公式与 3D-Carbon 的 bonding 模型之上。
+
+- 开源情况。
+  - 开源：Zenodo https://doi.org/10.5281/zenodo.19744640（CAPA-AE_424.zip，MIT License）；程序 Python 3.9+，requirements 为 numpy/scipy-1.12+/matplotlib，UNIX-like OS + BASH。基于开源文档与论文的使用例子：用户在 arch_description 下写 arch.json（N-ary 树拓扑，如 MI300X：SoIC{xCD stack=1 number=2 bonding=hb pitch=9；IOD=0}，MI300X{soIC stack=1 number=4 bonding=ubump pitch=35 bandwidth=10.8；hbm3 stack=1 number=8 bonding=ubump pitch=45；interposer=0}）与 chiplets.json（组件参数：节点、面积、D0、α、CI_fab、binning g/c 与可 bin 面积比例、HBM 类型与容量等），执行 experiments/scripts/run_all.sh 复现 Fig. 12/14/15/17/20（fig19_TI.sh、fig19_low.sh 复现 Fig. 19），输出 .csv 与 .pdf（总量 + 逐组件碳 breakdown）；单次估算在 Apple Macbook Air M2 上约 2 秒，全流程 <1 分钟。

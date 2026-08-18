@@ -1,0 +1,11 @@
+## Bringing Near Data Processing into the Low-Bit Floating-Point Era
+
+- 属于kernel调度/运行时计算的实现是什么？实验比较什么？
+  - 实现为 NDP（PIM）后端的低比特 FP GEMM 指令级调度优化（编译期决定、运行期执行，近似层次匹配——是编译期指令调度而非运行时 kernel 调度器）：(1) 去量化隐藏（dequantization hiding）——把与 QGroup 绑定的高精度 dequant 指令（部分和 × 激活 scale × 权重 scale）重排到 DRAM 行切换/缓冲 refill 造成的 PU 空闲窗口（free slot）内执行；一次 dequant 仅 8 cycle（2·t_CCDL）而行切换空闲 48 cycle（t_RP+t_RCD）；约束为只能前移、不能越过后续 dequant 与 scale refill 读、受 partial-sum 缓冲容量与 slot 空闲容量限制（Alg.1 逆序贪心）。(2) 面向 scale 的 dataflow 调度——loop tiling 与循环置换（Order1/Order2）、value/scale/partial-sum 缓冲分配、DRAM 行列映射按 QConfig 与交织布局联合决定，目标是最小化 row-buffer miss 与 dequant 造成的 DRAM 空闲。(3) 代价模型驱动的编译空间搜索——统计缓冲 miss/dequant/行切换事件并用解析式估算延迟，替代逐策略 cycle 仿真。
+  - 实验比较：baseline 编译策略（scale/value 分离连续存储、按比例分配缓冲、Order1）在 6 种 QGroup Q1–Q6 × W-A/W-Only × W4A4S8/W8A8S16/W4A16S8/W8A16S16 组合下对比；图 8 算子级最高 3.29×；消融 Tab. IX 各 pass 累计 ×1.36/×1.18/×1.17；DRAM 行切换开销平均降 ~2×；W-A 去量化占总延迟最高 40%、隐藏后显著降低；GPU 对照（RTX5090 + CUTLASS）显示 M<16 的小 GEMM NDP 延迟更低、M≥16 与 prefill MM GPU 更优。
+- 后端平台是什么，配置是什么。
+  - GDDR6 基 NDP（Hynix AiM [33] 扩展）：1024 PU（32 芯片×2 通道×16 bank）、32 GB、1.5 TB/s 聚合带宽，PU 0.4 GHz（FP4 51.2/FP8 25.6/FP16 12.8/FP32 6.4 GFLOPs），每 bank 5Kb（20×32B）SRAM；时序 tCK=0.66ns、tRCD/tRP=24、tCCDL=4、BL=16、tCL=24（DRAMSim3）。
+- 评估性能的软件/脚本是什么。修改了什么。
+  - 修改后的 UniNDP [63] cycle-accurate 仿真器（https://github.com/thu-nics/UniNDP）：扩展指令格式支持携带量化元数据的高层 IR，并把指令转换为 DRAM bank/PU/缓冲命令逐 cycle 模拟。脚本（flexq_ndp 根目录运行）：scripts/final/3_single_op_with_predictor/part_1.sh（策略搜索）、part2_m{1,2,4,8,16,32,64,4096}.sh（分别 94/20/86/20/94/20/86/46 个 config 的 baseline/FlexQ-NDP 仿真；MM 仿真日志另有 Zenodo 备份 log_rebuttal_mm_new）、mm_speedup_optimal.sh（理论延迟下界）；能耗由仿真 trace + DRAMSim3 功率模型计算（Tab. VI：平均降约 1.31×、最高 1.78×）。
+- 开源情况。基于开源文档和论文，使用例子解释评估软件/脚本如何使用？至少具体到评估软件的评估原理和kernel输入到性能输出的全过程。
+  - 开源：https://github.com/ISCA26-FlexQ-NDP-ae/flexq_ndp（MIT License），Zenodo DOI https://doi.org/10.5281/zenodo.19452117；完整实验工作流见论文 Appendix XIII-E（每步须等前一步完成，Fig.8 先行）。评估原理：输入 NDP 指令序列（宏指令：读 value/读 scale/GEMM/dequant/写回）→ 扩展 UniNDP 展开为 DRAM 命令（ACT/PRE/RD/WR，含行列地址与 tRCD/tRP/tCCDL 时序约束）与 PU 命令（MAC/MUL，按 256b 操作数宽度）→ 逐 cycle 推进 DRAM bank 状态机与 PU 流水线，统计行命中/行切换、PU 忙闲与缓冲占用 → 输出总 cycle 延迟与活动 trace → 能量按 DRAMSim3 功率公式由 trace 折算。kernel 输入到性能输出：一个 W(M,K)×A(K,N) MVM kernel（如 LLaMA2-7B MVM1：1×4096×4096，batched B1–B64）经 FlexQ-NDP 编译得指令流 → 仿真得 baseline 与 FlexQ-NDP 延迟，与 PU 满负荷理论下界归一比较（Fig. 8）。

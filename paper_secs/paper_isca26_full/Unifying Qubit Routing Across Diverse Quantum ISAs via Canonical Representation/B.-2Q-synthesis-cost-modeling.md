@@ -1,0 +1,4 @@
+# B. 2Q synthesis cost modeling
+
+As introduced in Section II-C, given any basis gate set, the synthesis cost of a target 2Q gate can be exactly computed through monodromy polytope [56]. This cost (which basis gates are sufficient for synthesis) only depends on the canonical coefficients of the target gate. For example, Fig. 5 illustrates various polytopes for the gate set  $\{\sqrt{iSWAP}, ECP\}$ . In practice, the costs of each basis gate are pre-defined, thus the whole set of polytopes helps decide the optimal synthesis scheme with the minimal circuit cost we should prioritize. For example, if  $\sqrt{iSWAP}$  and ECP have the same unit cost, the  $SWAP \sim Can(\frac{1}{2}, \frac{1}{2}, \frac{1}{2})$  gate realization will prioritize the "1  $\sqrt{iSWAP}$  + 1 ECP" combination; if ECP cost is set to be more than twice that of  $\sqrt{iSWAP}$ , the SWAP realization prioritizes the "3  $\sqrt{iSWAP}$ " pattern.
+

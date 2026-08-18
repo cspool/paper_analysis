@@ -1,0 +1,12 @@
+## Accelerator Polymorphism: Transcending Domain-Specific Architectures with Robotics（近似层次匹配：多态 ISA + 队列语义编译映射，论文无独立编译器评估）
+
+- 属于编译框架的实现是什么？实验比较什么？
+  - 实现为面向多态执行的 32-bit ISA 与配套编译流程（论文是硬件架构论文，本层次取其 ISA 设计与编译映射部分，属近似匹配；论文明确声明"Compilation for accelerators remains an open problem"，无编译器性能实验）。(1) ISA 以三组机制实现指令级多态：① morpha 选择/重配指令——MORPHA_STATIC_CONFIG（指定 morpha 类型、目标核 XY 坐标、按 N/S/W/E/Local 顺序编码 crossbar 方向位）与 MORPHA_DYN_CONFIG（配置输出端口及路由地址范围上下界，供 graph/tree 地址比较器用）；② queue 指令组——INIT_Q/FREE_Q（分配/释放，256 个架构队列）、POP_Q/PEEK_Q/PUSH_Q/IS_EMPTY_Q/SIZE_Q、Q_CONDITIONAL_PUSH、Q_LOOP_UNTIL_EMPTY（带 INSTRUCTION_COUNT 字段告知硬件循环体大小），以及共享队列 + REMOTE_STORE/READ 跨核通信；③ Namespace-ID 统一操作数模型——计算指令以 (Namespace, ID) 对寻址操作数，由 Queue Manager/迭代表解析，同一 ADD 等指令可跨 queue/vector/graph/tree morpha 使用而不暴露底层存储布局；另有 SET_ITER/SET_STRIDE/SET_BASE_ADDR 迭代表配置、DMA 配置（LD_CONFIG_BASE/STRIDE/ITER）、collective 配置（BROADCAST/COLUMN_REDUCE）、SYNC 屏障（code_block_end 隔离 morpha 间同步）。
+  - 编译流程：regular 访存负载复用 in-house tensor compiler [60,72]（标准张量优化：prefetching、memory tiling、operator fusion）；queue-centric 负载先在软件层按 Morpha Core 的 queue 语义重写并做功能正确性验证（RoWild），再开发编译器把软件 queue 函数直接映射为 Morphatron queue 指令；编译器负责静态编程 DMA（vector/systolic 的 prefetch/double-buffering）与插入 barrier。实验比较：无独立编译实验，编译产物的效果体现在端到端与消融实验（见硬件架构/kernel调度层条目）。
+- 硬件平台是什么，配置是什么。
+  - 目标硬件 Morphatron：7 nm ASAP7、625 MHz、10 W；32×4 Morpha Core 网格（每核 8 执行 stage、8 KB sub-bank/stage）、16 MB 片上、32 B circuit-switched 互连。baseline 软件栈对比：CPU 侧 OpenMP + gcc AVX512/NEON，GPU 侧 CUDA 12.1 + TensorRT（NN 推理对比）。
+- 开源编译框架是什么。修改了什么。
+  - 复用 in-house tensor compiler [60,72]（论文参考文献，未开源、未给链接）；queue 映射编译器为作者自研。论文未说明对既有开源编译框架（如 TVM/MLIR）的修改。
+- 开源情况。基于开源文档和论文，使用例子解释编译框架如何使用？作用是什么？至少具体到编译框架输入到输出的全过程。
+  - 编译器与 Morphatron 工具链是否开源论文未明确说明，联网搜索未找到公开仓库；论文提出未来方向是与 queue-based 编程抽象结合（如 STeP [73]，将队列提升为一等程序级构造），Morphatron 的 queue-as-operand ISA 可作为其硬件衬底。
+  - 编译框架输入到输出全过程：输入 = RoWild 应用源码。regular 访存部分经 tensor compiler 做 tiling/融合/预取优化，生成 vector/systolic morpha 指令序列（SET_ITER/SET_STRIDE/SET_BASE_ADDR 配置迭代表 → Loop Control 启动硬件循环 → Namespace-ID 计算指令直接引用 tensor ID）；queue-centric 部分先软件层以 queue 语义重写并功能验证，再由编译器把 queue 函数映射为 INIT_Q/POP_Q/PUSH_Q/Q_LOOP_UNTIL_EMPTY/Q_CONDITIONAL_PUSH 指令（例：processEdges 的 INIT_Q q0/q1/q2 → LD_Q 装载 → Q_LOOP_UNTIL_EMPTY 循环体 POP_Q/ADD/PUSH_Q → REMOTE_STORE 写共享队列）；随后插入 MORPHA_STATIC/DYN_CONFIG 配置目标核与互连路由、DMA/collective 配置与 SYNC 屏障分割 code block；输出 = 32-bit 指令流，驱动 Morphatron 在五种 morpha 间切换执行（切 switch 仅 2 配置位、Systolic/Queue 重配 165 cycle、Graph/Tree 288 cycle）。

@@ -1,0 +1,4 @@
+# *F. Telemetry and Observability*
+
+Robust telemetry enables at-scale observability and rapid debugging of CXL memory deployments. The Vistara stack exposes a comprehensive set of kernel- and device-level metrics, including CXL memory bandwidth, page hint faults, successful promotions and demotions, CXL utilization, error rates, and device health status. These metrics are continuously collected and fed into centralized monitoring systems, allowing operators to track memory tier usage, identify bottlenecks, and proactively detect hardware or software anomalies. For example, TPP reports real-time statistics on page migration and access patterns, while the CXL subsystem exports device-level bandwidth and error counters. This telemetry supports fleetwide health monitoring, enables efficient root-cause analysis, and guides ongoing policy tuning.
+

@@ -1,0 +1,17 @@
+## Lembas: Cost-Efficient Genome Alignment with External Memory and FPGA Acceleration（近似层次匹配：论文本体为 FPGA 硬件架构，本层取其两个算法级贡献——外部内存 columnsort 播种算法与 tiled bit-parallel traceback 算法）
+
+- 属于算法pipeline的实现是什么？实验比较什么？
+  - 两个保持 Minimap2 算法语义（无精度/近似折衷）的算法级贡献：
+    1. **外部内存 columnsort 播种算法**（替代 Minimap2 的 minimizer 哈希表随机查找）：把 reference/query 的 minimizer 元组流（16 B = minimizer + index）经 PCIe 溢出到 NVMe，按 minimizer 字典序做外部内存 columnsort 全局排序（每个 256 MB 列由 16 个 16-to-1 单发射 merge-sort kernel 排序，4 轮列排序 + 3 次转置回传）；排序后两有序流做流式 zip 匹配得 anchor（〈idxQ,idxR〉），再按 idxR 二次 columnsort 排序作为 seed 输出。算法目标是消除"内存容量随基因组增长"的瓶颈（内存恒定 ~8 GB、7× 降低），而非提升 seed 性能。刻意不做 Minimap2 的启发式 anchor 过滤（避免随机访存），代价是下游工作量放大（人类基因组 7.06× 更多 chains）。
+    2. **tiled bit-parallel traceback 算法**（SWG 扩展阶段）：把 banded Smith-Waterman-Gotoh（affine gap）的逐单元串行 traceback 改为 8×8 tile 粒度并行回溯——每个 tile 边缘单元完整编码跨 tile 路径（2-bit x/y 偏移，最长 16 步、15 个边缘单元 → 480 bit/tile，对齐 512-bit HBM 接口），traceback 每 cycle 前进一整 tile（对编码 popcount x/y 位定位下一 tile），把"每 cycle 1 单元"变成"每 cycle 1 tile"。
+  - 实验比较：seed 性能 vs mm64（快 70%）与 G³SA（慢 15%），内存峰值 vs Minimap2（7× 降低，恒定 ~8 GB，且避免 Minimap2 memory chunking 的跨 chunk 质量损失）；extend 性能 48 GCUPS/FPGA（96 GCUPS 双 FPGA，mm64 为 27.21，≈4×），traceback 延迟 vs Cheng24/Li21/Liao18/Turakhia18/Teng23（W=1024 固定带宽，W=512–25K 扫描；W=2048 时 traceback 开销比次优设计低 1.77×）。
+- 硬件平台是什么，配置是什么。
+  - 算法实现在 FPGA 上运行（非软件算法）：Lembas 原型 = 桌面级 i7-8700（16 线程/3.2 GHz/2017）+ 32 GB DDR4 + 4×1 TB M.2 NVMe + 2× Xilinx Alveo U50 FPGA（8 GB HBM2、32 pseudo-channel、PCIe Gen3x16 ~8 GB/s 双工、~250 MHz）。seeding 用 16 个 columnsort kernel（饱和全部 32 个 HBM pseudo-channel 与 ~8 GB/s 双工 PCIe，有效端到端排序吞吐 ~2 GB/s）；extend 用 16 kernel × 16 PE 脉动阵列。
+- 模型是什么。数据集和bench分别是什么。
+  - 无 ML 模型。"模型"即被比对的基因组/read 数据集：PBSIM3（https://github.com/yukiteruono/pbsim3）从真实参考基因组生成的 PacBio CLR 风格合成长读。三个基因组：Arabidopsis thaliana（TAIR10，119–135 Mbp，30×/50×/100×，6.4/12/24 GB）、Homo sapiens（HG16/HG002，3.1 Gbp，30×/50×/100×，176/357/719 GB）、Allium cepa（DHCU066619，14.9–16 Gbp，15×/30×，419/846 GB）。banded SWG 带宽配置：默认 20 kbp band（Minimap2 默认），扩展对比用 W=512/1024/2048/13K/25K。
+- 开源情况。基于开源文档和论文，使用例子解释，解释算法pipeline，至少具体到伪代码或张量计算。
+  - 开源情况：论文声明"正在将 Lembas 所有方面开源"，但未给仓库链接；截至 2026-08 联网搜索（含 SATA Lab satalab.github.io 的 ISCA 接收公告）未找到公开 GitHub 仓库，无法确认。依赖的开源组件：Minimap2（https://github.com/lh3/minimap2，baseline 与算法语义定义）、PBSIM3（https://github.com/yukiteruono/pbsim3）、NextDenovo（https://github.com/Nextomics/NextDenovo，all-to-all 工作流参数）。
+  - 算法 pipeline 执行例子（一次 reference-based 人类基因组比对，覆盖 seed 算法与 extend 算法）：
+    ① **seed（外部 columnsort）**：reference/query 经 minimizer parse kernel 产出流式 〈minimizer, index〉 16 B 元组（滑动窗口内字典序最小 k-mer）→ 溢出存 NVMe（数据量超过 FPGA HBM）→ columnsort：把数据组织成 r×c 网格（约束 r≥2c²，256 MB HBM bank 上限下可排序 ≤512 GB），4 轮"每列 16-to-1 单发射 merge-sort 排序 + 网格转置/移位"（每轮 NVMe→HBM→排序→转置→写回 NVMe；每个 250 MHz kernel 处理 4 GB/s，6 次 sweep 排序 256 MB，PCIe 8 GB/s → 有效 ~2 GB/s）→ 排序后 reference/query 两个有序 minimizer 流经 anchor matching kernel 流式 zip 匹配 → 〈idxQ,idxR〉 anchor 流存 NVMe → 按 idxR 再 columnsort 一次（此排序为按参考位置排序，供后续 chaining 用）→ 输出 anchors。
+    ② **extend（tiled traceback）**：对每条 chain，16×16 PE 1D 脉动阵列按行交错计算 banded SWG 分数矩阵（affine gap：每单元三值 S/E/F，用 S[i−1][j−1]、E[i−1][j]、F[i][j−1]、b^j 四个输入；F 缓存在 PE 内、E/b 走 E,b 寄存器链、S 走 2 元素 FIFO）→ 前向路径每 8×8 tile 边界把"从相邻 tile 外起始到本 tile 各边缘单元的最优路径"以 2-bit 编码写入历史寄存器（480 bit/tile，覆盖 15 个边缘单元 × 最长 16 步）→ 反向 traceback 时读边缘单元编码，popcount x/y 位直接算出下一 tile 的入口单元，每 cycle 前进一整 tile（每次预取 4 个 tile 缓解 HBM 延迟）→ 输出 SAM 格式对齐结果。
+    效果：seed 内存恒定 ~8 GB（Minimap2 需 384 GB 级且 chunking 有质量损失）；extend 48 GCUPS/FPGA；全系统成本效率 3× vs G³SA、5× vs Parabricks、2× vs Cheng24。

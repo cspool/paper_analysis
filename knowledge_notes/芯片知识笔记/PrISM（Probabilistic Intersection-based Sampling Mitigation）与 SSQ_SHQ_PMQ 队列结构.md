@@ -1,0 +1,14 @@
+## PrISM（Probabilistic Intersection-based Sampling Mitigation）与 SSQ/SHQ/PMQ 队列结构
+
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
+- PrISM（ISCA 2026，UBC/NVIDIA，开源 https://github.com/STAR-Laboratory/prism，MIT）是解决概率性缓解 non-selection problem 的 in-DRAM 方案，核心洞察：持续被激活的行更可能跨窗口重复出现，良性行几乎不重复——利用这种时间相关性，只在观察到重复采样活动时按需增加缓解，而不全局提高固定缓解速率。每个 mitigation window 内采样 R 个激活槽（而非 MINT 的 1 个），用三个 per-bank 结构协同：(i) Sampled Slot Queue (SSQ)——缓冲采样到的激活槽行地址（大小需 ≥ (2R−1)−⌊(2R−1)/4⌋，覆盖窗口边界突发交集，R=9 时 13 项）；(ii) Sampled History Queue (SHQ)——FIFO 保留前 L 个窗口"已采样但未选中"的行（lookback window），是交集检测的历史；(iii) Pending Mitigation Queue (PMQ)——缓冲选中待缓解的行（每项行地址 + 3-bit 饱和激活计数）。新采样行与 SHQ 匹配（交集）→ 入 PMQ 申请额外缓解；窗口末再随机选 1 个非交集采样行作默认缓解候选；其余采样未选行 FIFO 入 SHQ。PMQ 满或某项计数超 tardiness threshold（TPMQ=4）→ 经现有 JEDEC Alert Back-Off (ABO) 协议请求额外缓解（1 个 RFMab/Alert）。设计参数 (W,R,L)：TRH-D=1000（72,4,12，SHQ 36 项）、750（72,7,11，66 项）、500（72,7,41，246 项）、250（48,9,79，632 项）。结果：TRH-D=500 时平均 slowdown 0.2%（PRAC 14%、MINT 7.1%），仅 625B SRAM/bank（比 Mithril 小约 20×、比 ProTRR 小约 170×）；TRH-D=250 时 1.5%（MINT 10.7%，7.1× 降低）。安全用 circular-X-rows 最坏攻击 + MTTF 10,000 年/bank 目标评估（详见 MTTF 条目）。Web 佐证：PrISM 论文（arXiv 2605.17358）与官方仓库（perf_analysis/ 复现 Fig.7/8/9、Table VI；security_analysis/ 复现 Fig.5/6）。
+
+从芯片设计角度拆解术语，比如术语如何在芯片设计中发挥作用，给出术语在芯片设计中运转流程的具体例子。通过联网搜索让回答具体和精准。
+- 芯片内运转流程（一次触发额外缓解的完整链路）：控制器照常发 ACT → 芯片内采样逻辑在窗口 W 内随机选 R 个激活槽记入 SSQ → 每次采样激活时与 SHQ 逐项比对 → 命中交集则把该行入 PMQ（激活计数累加）→ 窗口末从 SSQ 随机选 1 个非交集行作默认缓解候选入 PMQ → 其余采样未选行 FIFO 插入 SHQ（补无效占位保持 L 窗口确定性）→ 默认缓解机会（每 2 tREFI 一次的 TRR，或 proactive RFMsb）服务 PMQ 中计数最高项 → 若 PMQ 满或最高计数超 TPMQ=4，置 Alert → 控制器发 1 个 RFMab（350ns 停通道）额外缓解最高计数项。设计要点：PMQ 解耦"缓解选择"与"缓解执行"，让选中行可等待默认 TRR/RFM 机会（兼容 refresh/RFM 推迟）；因 Alert 是 channel 级而各 bank 窗口完成时间不同，per-bank PMQ 让其他 bank 保留有用待缓解项、一次 ABO 的 RFM 可跨 bank 服务，减少未来 Alert；SSQ 缓冲 ABO 排空窗口（1 项/4 激活）期间的交集突发，W≥4R 保证长期交集率不超排空率。存储：每 SHQ/SSQ 项 17-bit 行地址 + valid bit（18 bit），PMQ 额外 3-bit 计数；TRH-D=500 时 625B、1000 时 152B SRAM/bank。ultra-low TRH-D≤250 时启用 Rubix 风格随机行映射打散空间局部性、减少良性交集（Alert 率 312.3→50.3/1K tREFI）。
+- 与 baseline 的芯片设计取舍：vs PRAC（per-row 计数器、每次激活 read-modify-write、tRP 16→36ns/tRC 48→52ns、core 面积 +9%）——PrISM 无 per-row 计数器、无每激活计数更新，per-activation 逻辑落在 tRC 内零时序开销；vs MINT（固定速率升级）——PrISM 用更大默认窗口 W（更低默认 RFM 速率）+ 交集按需额外缓解。
+
+术语一般如何实现？如何使用？通过联网搜索让回答具体和精准。
+- 实现：在 Ramulator 2.0 中实现 per-bank 采样/交集/缓解逻辑与 ABO 交互（性能实验入口 `cd prism/perf_analysis && ./run_artifact.sh --method slurm --artifact all`，按 Table II 配置各 TRH-D 的 (W,R,L) 与 16 项 PMQ）；安全分析用纯 Python 解析模型 + 5M-epoch Monte Carlo（`cd prism/security_analysis && python3 prism_circular_security_analysis.py figure8 --w 72 --mc-windows 1000000 --mc-seeds 5`）。随机采样由 in-DRAM 7-bit TRNG 实现（290µW）。使用场景：作为"无需 DRAM array/接口改动、复用现有 ABO 协议"的低成本 DDR5 RowHammer 缓解（PRAC 为 optional 特性、商用采纳不确定），阈值可低至 250。
+
+涉及论文标题：
+- Loaded Dice: Solving the Non-Selection Problem for Scalable Probabilistic RowHammer Defense

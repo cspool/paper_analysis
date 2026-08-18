@@ -1,0 +1,20 @@
+# III. MOTIVATION
+
+### *A. Prior Works Cannot Converge Performance Distribution*
+
+Existing hardware redundancy strategies raise functional yield but do not narrow performance variance. As clarified in Sec.II-B, array-preserving redundancy schemes maintain array size while ignoring topology uniformity; they revive compute capacity but introduce uneven local connectivity and bottlenecks, producing scattered performance under realistic workloads. Fully-preserving redundancy schemes attempt to retain both array size and mesh topology, but face scalability issues at wafer scale, which limits their practicality. Topology-preserving redundancy schemes, such as the approach disclosed in the Cerebras patent [39] that maintains mesh regularity while relaxing array size, reduce routing irregularity but cause large chip-to-chip differences in activated cores and effective bandwidth density, again yielding dispersed performance across WSCs.
+
+Existing software strategies optimize for maximum performance recovery rather than performance convergence. When fault distributions cause severe performance degradation, these schedulers should provide large recovery gains; when fault impact is mild, only limited performance recovery is needed. However, the very chips that need greater recovery are also harder to optimize due to clustered faults along key paths and heavy congestion bottlenecks, while defective chips with slighter fault impact are easier to accelerate. Consequently, scheduling amplifies inter-chip performance variance — the strong gets stronger, and the weak stays weak — leading to even wider performance dispersion after optimization, as shown in Fig.5.
+
+Across layers, these solutions optimize disjoint objectives, none of which explicitly target performance convergence. What is missing is the hardware- and software-level optimization toward a single system objective: converging the performance distribution. ConBIN is motivated precisely by these needs, aligning full-stack optimization toward performance convergence and practical binning effectiveness.
+
+# III. MOTIVATION
+
+### *A. Prior Works Cannot Converge Performance Distribution*
+
+Existing hardware redundancy strategies raise functional yield but do not narrow performance variance. As clarified in Sec.II-B, array-preserving redundancy schemes maintain array size while ignoring topology uniformity; they revive compute capacity but introduce uneven local connectivity and bottlenecks, producing scattered performance under realistic workloads. Fully-preserving redundancy schemes attempt to retain both array size and mesh topology, but face scalability issues at wafer scale, which limits their practicality. Topology-preserving redundancy schemes, such as the approach disclosed in the Cerebras patent [39] that maintains mesh regularity while relaxing array size, reduce routing irregularity but cause large chip-to-chip differences in activated cores and effective bandwidth density, again yielding dispersed performance across WSCs.
+
+Existing software strategies optimize for maximum performance recovery rather than performance convergence. When fault distributions cause severe performance degradation, these schedulers should provide large recovery gains; when fault impact is mild, only limited performance recovery is needed. However, the very chips that need greater recovery are also harder to optimize due to clustered faults along key paths and heavy congestion bottlenecks, while defective chips with slighter fault impact are easier to accelerate. Consequently, scheduling amplifies inter-chip performance variance — the strong gets stronger, and the weak stays weak — leading to even wider performance dispersion after optimization, as shown in Fig.5.
+
+Across layers, these solutions optimize disjoint objectives, none of which explicitly target performance convergence. What is missing is the hardware- and software-level optimization toward a single system objective: converging the performance distribution. ConBIN is motivated precisely by these needs, aligning full-stack optimization toward performance convergence and practical binning effectiveness.
+

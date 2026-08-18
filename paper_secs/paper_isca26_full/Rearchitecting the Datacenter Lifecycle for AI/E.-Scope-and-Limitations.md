@@ -1,0 +1,4 @@
+# *E. Scope and Limitations*
+
+Our framework has several limitations. First, all cost inputs rely on publicly available sources (*e.g.*, vendor pricing, industry reports, open-source traces) rather than proprietary deployment data. Although we validate key trends and projections, absolute TCO values will vary across providers due to negotiated pricing, supply-chain agreements, and site-specific factors. Second, our performance model uses a roofline-based analytical approach rather than cycle-accurate simulation or production-scale measurement, and thus cannot capture all system-level effects. Third, forward-looking projections of hardware capabilities, model scaling, and demand growth carry inherent uncertainty. Accordingly, the primary value of this work lies in *relative* comparisons across lifecycle strategies and the qualitative insights they reveal about cross-stage cooptimization, not in any single absolute TCO estimate.
+

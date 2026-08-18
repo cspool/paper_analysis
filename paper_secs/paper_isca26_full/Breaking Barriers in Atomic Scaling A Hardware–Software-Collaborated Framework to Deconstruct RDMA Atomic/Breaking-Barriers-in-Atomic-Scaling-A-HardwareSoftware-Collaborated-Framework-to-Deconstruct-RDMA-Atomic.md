@@ -1,0 +1,12 @@
+# Breaking Barriers in Atomic Scaling: A Hardware–Software-Collaborated Framework to Deconstruct RDMA Atomic
+
+Guangyang Deng† , Qiangsheng Su† , Zhirong Shen†, Qing Wang‡ , Yina Lv† , Ronglong Wu† , Jiwu Shu† †School of Informatics, Xiamen University ‡School of Computer Science Nanjing University Corresponding Author: Zhirong Shen (shenzr@xmu.edu.cn)
+
+*Abstract*—*Remote Direct Memory Access* (RDMA) Atomics are widely adopted to ensure correctness in distributed synchronization. However, their scalability is still seriously constrained by internal locking within RNICs. This paper provides systematic analysis that uncovers fundamental bottlenecks when scaling atomic operations. To break the constraints in RDMA Atomic scaling, we present **Fusa**, a framework that transparently coordinates server-side hardware (RNIC) and software (CPU) to accelerate atomic executions. **Fusa** integrates fine-grained contention detection with selective onloading, which executes uncontended operations in hardware while redirecting contended ones to software. **Fusa** further designs a consensus mechanism for strategy switching. We evaluate **Fusa** using microbenchmarks and unmodified RDMA-based systems, showing that **Fusa** improves throughput by up to 4.6×.
+
+# Breaking Barriers in Atomic Scaling: A Hardware–Software-Collaborated Framework to Deconstruct RDMA Atomic
+
+Guangyang Deng† , Qiangsheng Su† , Zhirong Shen†, Qing Wang‡ , Yina Lv† , Ronglong Wu† , Jiwu Shu† †School of Informatics, Xiamen University ‡School of Computer Science Nanjing University Corresponding Author: Zhirong Shen (shenzr@xmu.edu.cn)
+
+*Abstract*—*Remote Direct Memory Access* (RDMA) Atomics are widely adopted to ensure correctness in distributed synchronization. However, their scalability is still seriously constrained by internal locking within RNICs. This paper provides systematic analysis that uncovers fundamental bottlenecks when scaling atomic operations. To break the constraints in RDMA Atomic scaling, we present **Fusa**, a framework that transparently coordinates server-side hardware (RNIC) and software (CPU) to accelerate atomic executions. **Fusa** integrates fine-grained contention detection with selective onloading, which executes uncontended operations in hardware while redirecting contended ones to software. **Fusa** further designs a consensus mechanism for strategy switching. We evaluate **Fusa** using microbenchmarks and unmodified RDMA-based systems, showing that **Fusa** improves throughput by up to 4.6×.
+

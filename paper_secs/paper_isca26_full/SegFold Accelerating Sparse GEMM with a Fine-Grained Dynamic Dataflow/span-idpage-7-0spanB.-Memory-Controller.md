@@ -1,0 +1,10 @@
+# <span id="page-7-0"></span>*B. Memory Controller*
+
+The memory controller in SegFold realizes the scheduling logic of the Segment dataflow: it maintains an active window over B rows, filters rows by intersection, and tracks partialrow progress, while also serving the underlying load/store requests for A, B, and C. Since the goal of SELECTA is to choose multiple A values from the same column, A is stored in a column-major format. In contrast, B is processed at row granularity, so it is stored in a row-major format. Only nonzero elements of both matrices are stored. Because accesses typically touch consecutive elements within a column of A or a row of B, the memory controller includes a coalescing unit that merges fine-grain requests before issuing them to the cache and DRAM.
+
+As discussed in §[III-A,](#page-3-0) the active window tracks a bounded set of K values for both A and B. The metadata for A is a compact bitmask recording consumption status. The SELECTA logic scans this A-side bitmask over the active window each cycle to avoid m-index conflicts among already-selected pairs and to maximize the nonzero k-index within a single column. The bitmask read and window scan are O(W) in the window size; for our default W = 32, the entire scan completes within a single cycle as a modest combinational circuit.
+
+For B, we use a doubly compressed sparse-row format (DCSR) [\[1\]](#page-13-14), augmented with an extra start pointer per active row to track unprocessed elements. The second level of compression skips empty rows in O(1) during scheduling, which is critical for highly sparse matrices where many rows in the active window contribute no nonzero intersections with the selected A columns and would otherwise be enumerated explicitly.
+
+Supporting intra-window reordering of k means that a larger window enables more B rows to be processed in parallel. However, a larger window increases metadata size and update traffic. In §[VI-D,](#page-10-0) we evaluate different window sizes and select a configuration that preserves performance while capping metadata overhead.
+

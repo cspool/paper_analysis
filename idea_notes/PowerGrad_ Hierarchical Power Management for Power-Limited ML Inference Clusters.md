@@ -1,0 +1,15 @@
+## PowerGrad: Hierarchical Power Management for Power-Limited ML Inference Clusters
+
+- baseline方法是什么？
+  - Baseline 是三类软件透明（software-transparent）的集中式功率管理方法（均在 PG-central 拓扑的集群控制器中实现）：
+    1. Fair：所有处理器均分集群功率预算，最简单也最无效——异构工作负载下把功率均分给功率不敏感（内存密集）与功率敏感（计算密集）的工作负载，浪费功率、无法最大化吞吐；
+    2. SLURM [35]：若某节点/处理器用不完其功率分配，把超额功率的 50% 均匀分给其他节点/处理器——只看"是否用满分配"，不看功率增减对性能的实际影响，功率受限时所有应用都功率饥饿、无超额可回收，与 Fair 无异；
+    3. DPS [8]：按各节点功率消耗历史决定分配优先级——在严重功率受限环境（所有节点需求都超过分配）下所有节点都被标记为 high-priority，Readjusting 模块把高优先级功率均分，同样退化为 Fair。
+  - 共同缺陷：只观测功率消耗，无法识别哪些工作负载计算密集、哪些内存密集（论文 II 章证明：内存密集的 Llama decode 阶段功率仍高达 60W+，功率模式无法可靠区分计算/内存密集行为）；且是集中式算法，每步需要全部节点信息，大集群扩展性差。
+  - Baseline 全栈执行例子（16 节点 Legacy 双 CPU 集群、集群总预算 880W、Llama-high 与 Llama-low 各占一个处理器）：算法pipeline——Llama-3.1-8b 请求（batch 2–8、tokens 40–80）前向，prefill 计算密集、decode 内存密集，模型无改动；系统框架层——集群控制器每 100ms 经网络 socket 收集各节点功率消耗（Fair 不看、SLURM/DPS 看），按各自规则算出新功率分配；编译框架层：论文未明确说明（无编译框架修改）；kernel调度层——无功率感知调度，只有集中控制器按功率历史/均分规则计算功率上限，RAPL 强制到各处理器；硬件架构层——所有处理器都被分到相同或功率历史决定的功率上限，计算密集的 Llama-high prefill 与内存密集的 Llama-low decode 得不到差异化分配，内存密集工作负载仍高功率空转（>60W），功率严重受限时（55W/节点）两类工作负载都挨饿，响应延迟高；芯片设计层：论文未明确说明（商用 CPU，无芯片结构改动）。结果：SLURM/DPS 在低功率预算下相对 Fair 几乎无改善，响应延迟高企。
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  - 论文方法 = PowerGrad 分层梯度驱动功率管理框架。核心思想：动态估计每个运行工作负载的性能梯度 ∂perf/∂power（性能对功率的性能敏感度），把功率从低梯度（失去单位功率损失的性能少）工作负载转移到高梯度（获得单位功率增益的性能多）工作负载，同总功率下获得净性能增益——这正好解决严重功率受限环境（所有节点需求>分配）下"无法用功率模式确定优先级"的痛点。三个组件逐点对应缺陷：
+    1. Gradient Estimator（对应"只观测功率无法区分计算/内存密集"）：每 100ms 读硬件性能计数器（BIPS、util、ldm_stalls、频率 f），在线构建每个核心的功率模型 P(V)（idle 三次多项式 + 活动功率 Σw_i E_i (V^γ+V)）与性能模型 CPI(f)=CCPI+MCPI×f/f^(t)，用链式法则（假设 V 是 f 的二次多项式、事件计数 ∝BIPS、非空闲时长∝1/f）微分出 ∂BIPS/∂P，再用 (13) 聚合为处理器/节点梯度——用计数器而非功率模式识别功率敏感度，无需预 profile 工作负载；
+    2. Local Controller（对应"集中式不可扩展、无法快速响应"）：每 100ms 在节点内处理器间跑 Algorithm 1（PL'[i]=PL[i]+lr×G[i]−α(PL[i]−P[i])，均分校正到节点上限，fmin=1W 防饿死），RAPL 强制执行——细粒度、本地、快，处理动态 ML 工作负载；
+    3. Hierarchical Controller（对应"集中式需要全部信息、慢"）：同一算法递归应用于节点/子集群/集群层（子集群 1s、集群 4s，由最坏网络往返 100ms 推导），子控制器异步向父控制器报 G、f、P，层次可无限扩展——通信开销只在高层、低层控制不受影响。架构可移植：新架构只需重训 Gradient Estimator 的回归系数（Legacy 用 PARSEC 3.0、Accelerated 用 TorchBench 训系数，功率模型 AAE 4.1%/2.5%）。
+  - 论文方法全栈执行例子（同一 16 节点 Legacy 双 CPU 集群、总预算 880W、Llama-high/Llama-low 分占两个处理器）：算法pipeline——Llama-3.1-8b 请求前向不变（无算法改动）；系统框架层——节点内 Gradient Estimator（Java 线程）每 100ms 从 RAPL/性能计数器读 BIPS、util、ldm_stalls、f → 在线构建 P(V)、CPI(f) → 微分出每核心 ∂BIPS/∂P → 链式聚合为每处理器梯度 G；Local Controller（Java 线程，共享内存）跑 Algorithm 1 重分配节点内功率（把功率从低梯度内存密集的 Llama-low decode 阶段移到高梯度计算密集的 Llama-high prefill 阶段），同时 Hierarchical Controller（Python 进程，网络 socket）每 4s 在 16 节点间做同样的梯度分配；编译框架层：论文未明确说明（无编译框架修改）；kernel调度层——功率上限经 RAPL 强制到各处理器（控制 V-f 状态），处理器在新 V-f 点继续执行请求（Poisson 到达，High/Low 目标利用率 60%/30%），下个 100ms 重新采样形成闭环；硬件架构层——Intel Haswell E5-2660 v3（Legacy）双 CPU 节点或 Emerald Rapids Xeon Gold 5512U + AMX（Accelerated），RAPL 以 50ms 以上周期可靠测量并封顶功率，处理器按新功率上限运行（55–75W/节点）；芯片设计层：论文未明确说明（商用 CPU，无芯片结构改动；GPU/加速器因无法在 kernel 执行中动态读计数器而暂不支持）。结果：PG-multi 相对最强 baseline 平均/P95 延迟降 22.9%/23.0%（Legacy）、9.0%/9.9%（Accelerated），严重受限时（55W/节点）降 23.6%/27.4%。

@@ -1,0 +1,183 @@
+# IX. CONCLUSION
+
+This work introduces a silicon-proven unified CXL controller and PBR switch that enable deterministic, memory-centric fabrics. The integrated hardware pipeline removes firmware overhead, achieving  $2.1\times$  latency reduction compared with legacy HBR-based designs, and improve system-level performance up to  $2\times$ . These results demonstrate a practical path toward scalable, hardware-deterministic CXL infrastructures for future data-centers.
+
+#### REFERENCES
+
+- [1] NVIDIA, "NVIDIA NVLink and NVLink Switch," https://www.nvidia. com/en-us/data-center/nvlink/, 2026.
+- [2] UALink Consortium, "Introducing UALink 200G 1.0 Specification," https://ualinkconsortium.org/wp-content/uploads/2025/04/UALink-1.0-White\_Paper\_FINAL.pdf, 2025.
+- [3] Unified Bus Community, "An Interconnect Protocol for SuperPoD," https://www.unifiedbus.com/en, 2025.
+- [4] A. Li, S. L. Song, J. Chen, J. Li, X. Liu, N. R. Tallent, and K. J. Barker, "Evaluating modern gpu interconnect: PCIe, NVLink, nv-sli, nvswitch and GPUdirect," *IEEE Transactions on Parallel and Distributed Systems*, 2019.
+- [5] H.-H. S. Lee, "Toward disaggregated and heterogenous ai systems," *IEEE Micro*, 2025.
+- [6] J. Choquette and W. Gandhi, "NVIDIA A100 GPU: Performance & innovation for gpu computing," in *2020 IEEE Hot Chips 32 Symposium (HCS)*, 2020.
+- [7] S. Potluri, A. Goswami, D. Rossetti, C. J. Newburn, M. G. Venkata, and N. Imam, "GPU-centric communication on NVIDIA gpu clusters with infiniband: A case study with openshmem," in *2017 IEEE 24th International Conference on High Performance Computing (HiPC)*, 2017.
+- [8] J. Zuckerman, D. Giri, J. Kwon, P. Mantovani, and L. P. Carloni, "Cohmeleon: Learning-based orchestration of accelerator coherence in heterogeneous socs," in *MICRO-54: 54th Annual IEEE/ACM International Symposium on Microarchitecture*, 2021.
+- [9] X. Zhou, H. Chen, S. Luo, Y. Gao, S. Yan, W. Liu, B. Lewis, and B. Saha, "A case for software managed coherence in manycore processors," in *Poster on 2nd USENIX Workshop on Hot Topics in Parallelism HotPar10*, 2010.
+- [10] X. Wang, J. Liu, J. Wu, S. Yang, J. Ren, B. Shankar, and D. Li, "Performance characterization of CXL memory and its use cases," in *2025 IEEE International Parallel and Distributed Processing Symposium (IPDPS)*, 2025.
+- [11] X. Yang, Y. Zhang, H. Chen, F. Li, G. Fan, Y. Kong, B. Wang, J. Fang, Y. Wang, T. Huang *et al.*, "Unlocking the potential of CXL for disaggregated memory in cloud-native databases," in *Companion of the 2025 International Conference on Management of Data*, 2025.
+- [12] J. Liu, H. Hadian, Y. Wang, D. S. Berger, M. Nguyen, X. Jian, S. H. Noh, and H. Li, "Systematic CXL memory characterization and performance analysis at scale," in *Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2*, 2025.
+- [13] M. Lu, G. Liu, K. Wang, F. Zhu, and S. Li, "Chash: A high costperformance hash design for CXL-based disaggregated memory system," *Proceedings of the ACM on Measurement and Analysis of Computing Systems*, 2025.
+- [14] J. Park, W. Lee, T. Kim, Y. Lee, and S. Hong, "Performance characterization of CXL memory expander: Impact on read and write latencies," in *2024 IEEE International Conference on Consumer Electronics-Asia (ICCE-Asia)*. IEEE, 2024.
+- [15] M. Weisgut, D. Ritter, P. Tözün, L. Benson, and T. Rabl, "CXL memory performance for in-memory data processing," *Proceedings of the VLDB Endowment*, 2025.
+- [16] Y. Fridman, S. Mutalik Desai, N. Singh, T. Willhalm, and G. Oren, "CXL memory as persistent memory for disaggregated hpc: A practical approach," in *Proceedings of the SC'23 Workshops of The International Conference on High Performance Computing, Network, Storage, and Analysis*, 2023.
+- [17] M. Ha, J. Ryu, J. Choi, K. Ko, S. Kim, S. Hyun, D. Moon, B. Koh, H. Lee, M. Kim *et al.*, "Dynamic capacity service for improving CXL pooled memory efficiency," *IEEE Micro*, 2023.
+- [18] H. Li, D. S. Berger, L. Hsu, D. Ernst, P. Zardoshti, S. Novakovic, M. Shah, S. Rajadnya, S. Lee, I. Agarwal *et al.*, "Pond: CXL-based memory pooling systems for cloud platforms," in *Proceedings of the 28th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2*, 2023.
+- [19] Y. Zhong, D. S. Berger, P. Zardoshti, E. Saurez, J. Nelson, A. Psistakis, J. Fried, and A. Cidon, "My CXL pool obviates your PCIe switch," in *Proceedings of the 2025 Workshop on Hot Topics in Operating Systems*, 2025.
+- [20] X. Wang, B. Ma, J. Kim, B. Koh, H. Kim, and D. Li, "cMPI: Using CXL memory sharing for mpi one-sided and two-sided inter-node communications," *arXiv preprint arXiv:2510.05476*, 2025.
+
+- [21] A. Cho and A. Daglis, "Starnuma: Mitigating numa challenges with memory pooling," in *2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO)*, 2024.
+- [22] A. Danesh, "Unlocking Cloud Server Performance with CXL," 2024, https://www.asteralabs.com/unlocking-cloud-server-performancewith-cxl/.
+- [23] D. E. Difallah, A. Pavlo, C. Curino, and P. Cudre-Mauroux, "Oltpbench: An extensible testbed for benchmarking relational databases," *Proceedings of the VLDB Endowment*, vol. 7, no. 4, pp. 277–288, 2013.
+- [24] B. F. Cooper, A. Silberstein, E. Tam, R. Ramakrishnan, and R. Sears, "Benchmarking cloud serving systems with ycsb," in *Proceedings of the 1st ACM symposium on Cloud computing*, 2010, pp. 143–154.
+- [25] Transaction Processing Performance Council (TPC), "TPC Benchmark C Standard Specification, Revision 5.11," https://www.tpc.org/tpc\_ documents\_current\_versions/pdf/tpc-c\_v5.11.0.pdf, 2010.
+- [26] ——, "TPC Benchmark H Standard Specification, Revision 3.0.1," https: //www.tpc.org/tpc\_documents\_current\_versions/pdf/tpc-h\_v3.0.1.pdf, 2022.
+- [27] C. Lutz, S. Breß, S. Zeuch, T. Rabl, and V. Markl, "Pump up the volume: Processing large data on gpus with fast interconnects," in *Proceedings of the 2020 ACM SIGMOD International Conference on Management of Data*, 2020.
+- [28] P. D. Ivan Goldwasser, Harry Petty and K. Devleker, "NVIDIA GB200 NVL72 Delivers Trillion-Parameter LLM Training and Real-Time Inference," https://developer.nvidia.com/blog/nvidia-gb200-nvl72-deliverstrillion-parameter-llm-training-and-real-time-inference/, 2024.
+- [29] C. Petersen, "Building the Case for UALink™: A Dedicated Scale-Up Memory Semantic Fabric," https://www.asteralabs.com/building-the-casefor-ualink-a-dedicated-scale-up-memory-semantic-fabric/, 2024.
+- [30] R. L. Jon Ames, "How Ultra Ethernet and UALink Enable High-Performance, Scalable AI Networks," https://www.synopsys.com/articles/ultra-ethernet-ualink-ai-networks, 2025.
+- [31] M. Shoeybi, M. Patwary, R. Puri, P. LeGresley, J. Casper, and B. Catanzaro, "Megatron-LM: Training multi-billion parameter language models using model parallelism," *arXiv preprint arXiv:1909.08053*, 2019.
+- [32] Y. You, A. Buluç, and J. Demmel, "Scaling deep learning on gpu and knights landing clusters," in *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis*, 2017.
+- [33] C. Clos, "A study of non-blocking switching networks," *Bell System Technical Journal*, 1953.
+- [34] A. Singh, J. Ong, A. Agarwal, G. Anderson, A. Armistead, R. Bannon, S. Boving, G. Desai, B. Felderman, P. Germano *et al.*, "Jupiter rising: A decade of clos topologies and centralized control in google's datacenter network," *ACM SIGCOMM computer communication review*, 2015.
+- [35] R. Niranjan Mysore, A. Pamboris, N. Farrington, N. Huang, P. Miri, S. Radhakrishnan, V. Subramanya, and A. Vahdat, "Portland: a scalable fault-tolerant layer 2 data center network fabric," in *Proceedings of the ACM SIGCOMM 2009 conference on Data communication*, 2009.
+- [36] D. D. Sharma, "Compute Express Link," *CXL Consortium White Paper*, 2019.
+- [37] D. Das Sharma, R. Blankenship, and D. Berger, "An introduction to the compute express link (CXL) interconnect," *ACM Computing Surveys*, 2024.
+- [38] D. J. Miller, P. M. Watts, and A. W. Moore, "Motivating future interconnects: a differential measurement analysis of pci latency," in *Proceedings of the 5th ACM/IEEE Symposium on Architectures for Networking and Communications Systems*, 2009.
+- [39] R. Bittner, "Speedy bus mastering pci express," in *22nd International Conference on Field Programmable Logic and Applications (FPL)*, 2012.
+- [40] PCISIG, "PCI Express Base," 2026.
+- [41] R. Neugebauer, G. Antichi, J. F. Zazo, Y. Audzevich, S. López-Buedo, and A. W. Moore, "Understanding PCIe performance for end host networking," in *Proceedings of the 2018 Conference of the ACM Special Interest Group on Data Communication*, 2018.
+- [42] A. Tavakkol, A. Kolli, S. Novakovic, K. Razavi, J. Gómez-Luna, H. Hassan, C. Barthels, Y. Wang, M. Sadrosadati, S. Ghose *et al.*, "Enabling efficient rdma-based synchronous mirroring of persistent memory transactions," *arXiv preprint arXiv:1810.09360*, 2018.
+- [43] D. Vucini ˇ c, Q. Wang, C. Guyot, R. Mateescu, F. Blagojevi ´ c, L. Franca- ´ Neto, D. Le Moal, T. Bunker, J. Xu, S. Swanson *et al.*, "{DC} express: Shortest latency protocol for reading phase change memory over {PCI}
+
+- express," in 12th USENIX Conference on File and Storage Technologies (FAST 14), 2014.
+- [44] M. Flajslik and M. Rosenblum, "Network interface design for low latency {Request-Response} protocols," in 2013 USENIX Annual Technical Conference (USENIX ATC 13), 2013.
+- [45] D. S. Berger, D. Ernst, H. Li, P. Zardoshti, M. Shah, S. Rajadnya, S. Lee, L. Hsu, I. Agarwal, M. D. Hill *et al.*, "Design tradeoffs in CXL-based memory pools for public cloud platforms," *IEEE Micro*, 2023.
+- [46] R. Budruk, D. Anderson, and T. Shanley, PCI express system architecture. Addison-Wesley Professional, 2004.
+- [47] CXL Consortium, "CXL 3.2 specification," 2024.
+- [48] J. Jang, H. Choi, H. Bae, S. Lee, M. Kwon, and M. Jung, "CXL-ANNS:Software-Hardware collaborative memory disaggregation and computation for Billion-Scale approximate nearest neighbor search," in 2023 USENIX Annual Technical Conference (USENIX ATC 23), 2023.
+- [49] D. D. Sharma, "Compute express link (CXL): Enabling heterogeneous data-centric computing with heterogeneous memory hierarchy," *IEEE Micro*, 2022.
+- [50] CXL Consortium, "CXL 3.1 specification," 2023.
+- [51] X. Li, Z. Guo, Y. Bai, M. Ketkar, H. Wilkinson, and M. Liu, "Understanding and profiling CXL.mem Using PathFinder," in *Proceedings of* the ACM SIGCOMM 2025 Conference, 2025.
+- [52] Z. Wang, S. Mahar, L. Li, J. Park, J. Kim, T. Michailidis, Y. Pan, M. Shen, T. Rosing, D. Tullsen, S. Swanson, and J. Zhao, "The Hitchhiker's Guide to Programming and Optimizing Cache Coherent Heterogeneous Systems: CXL, NVLink-C2C, and AMD Infinity Fabric," arXiv preprint arXiv:2411.02814, 2025.
+- [53] H. A. Maruf, H. Wang, A. Dhanotia, J. Weiner, N. Agarwal, P. Bhattacharya, C. Petersen, M. Chowdhury, S. Kanaujia, and P. Chauhan, "Tpp: Transparent page placement for CXL-enabled tiered-memory," in Proceedings of the 28th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3, 2023, pp. 742–755.
+- [54] M. Ahn, T. Willhalm, N. May, D. Lee, S. M. Desai, D. Booss, J. Kim, N. Singh, D. Ritter, and O. Rebholz, "An examination of CXL memory use cases for in-memory database management systems using sap hana," *Proceedings of the VLDB Endowment*, 2024.
+- [55] Y. Zhong, D. S. Berger, P. Zardoshti, E. Saurez, J. Nelson, D. R. Ports, A. Psistakis, J. Fried, and A. Cidon, "Oasis: Pooling PCIe devices over CXL to boost utilization," in *Proceedings of the ACM SIGOPS 31st* Symposium on Operating Systems Principles, 2025.
+- [56] Y. Zhong, D. S. Berger, C. Waldspurger, R. Wee, I. Agarwal, R. Agarwal, F. Hady, K. Kumar, M. D. Hill, M. Chowdhury et al., "Managing memory tiers with CXL in virtualized environments," in 18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24), 2024.
+- [57] D. S. Berger, Y. Zhong, F. Kazhamiaka, P. Zardoshti, S. Teng, M. D. Hill, and R. Fonseca, "Octopus: Scalable low-cost CXL memory pooling," arXiv preprint arXiv:2501.09020, 2025.
+- [58] D. Gouk, S. Lee, M. Kwon, and M. Jung, "Direct access, High-Performance memory disaggregation with DirectCXL," in 2022 USENIX Annual Technical Conference (USENIX ATC 22), 2022.
+- [59] P. Levis, K. Lin, and A. Tai, "A Case Against CXL Memory Pooling," in Proceedings of the 22nd ACM Workshop on Hot Topics in Networks, 2023.
+- [60] D. S. Berger, K. Kumar, M. Vuppalapati, C. Douglas, J. Sathre, I. Robinson, P. Tandon, and M. D. Hill, "Cxl in cloud practice: Practical lessons for incrementally scaling deployment," *IEEE Transactions on Computers*, 2026.
+- [61] D. D. Sharma, "A low latency approach to delivering alternate protocols with coherency and memory semantics using PCI Express® 6.0 PHY at 64.0 gt/s," in 2021 IEEE Symposium on High-Performance Interconnects (HOTI), 2021.
+- [62] M. G. Saber and Z. Jiang, "Physical layer standardization for ai data centers: Challenges, progress and perspectives," *IEEE Network*, 2025.
+- [63] D. D. Sharma, "The pcie® 6.0 specification webinar q&a: A deeper dive into flit mode, pam4, and forward error correction (fec)," https://pcisig.com/blog/pcie%C2%AE-60-specification-webinar-qa-deeper-dive-flit-mode-pam4-and-forward-error-correction-fec, 2021.
+- [64] A. Alvarado, E. Agrell, D. Lavery, R. Maher, and P. Bayvel, "Replacing the soft-decision fee limit paradigm in the design of optical communication systems," *Journal of Lightwave Technology*, 2015.
+- [65] D. D. Sharma, "Pci-express: Evolution of a ubiquitous load-store interconnect over two decades and the path forward for the next two decades," *IEEE Circuits and Systems Magazine*, 2024.
+
+- [66] D. Das Sharma, "Pci express 6.0 specification: A low-latency, high-bandwidth, high-reliability, and cost-effective interconnect with 64.0 gt/s pam-4 signaling," *IEEE Micro*, 2021.
+- [67] NVIDIA, "Connectx-7 400g adapters," https://resources.nvidia.com/enus-accelerated-networking-resource-library/connectx-7-datasheet, 2025.
+- [68] The PostgreSQL Global Development Group, "PostgreSQL 17," https://www.postgresql.org/docs/17/, 2024.
+- [69] V. Viswanathan, K. Kumar, T. Willhalm, S. Sakthivelu, and S. Srikanthan, "Intel® memory latency checker v3.12," https://www.intel.com/content/www/us/en/developer/articles/tool/intelrmemory-latency-checker.html, 2025.
+- [70] P. Antonopoulos, A. Budovski, C. Diaconu, A. Hernandez Saenz, J. Hu, H. Kodavalla, D. Kossmann, S. Lingam, U. F. Minhas, N. Prakash et al., "Socrates: The new sql server in the cloud," in Proceedings of the 2019 International Conference on Management of Data, 2019, pp. 1743–1756.
+- [71] A. Verbitski, A. Gupta, D. Saha, M. Brahmadesam, K. Gupta, R. Mittal, S. Krishnamurthy, S. Maurice, T. Kharatishvili, and X. Bao, "Amazon aurora: Design considerations for high throughput cloud-native relational databases," in *Proceedings of the 2017 ACM International Conference* on Management of Data, 2017, pp. 1041–1052.
+- [72] W. Cao, Y. Zhang, X. Yang, F. Li, S. Wang, Q. Hu, X. Cheng, Z. Chen, Z. Liu, J. Fang, B. Wang, Y. Wang, H. Sun, Z. Yang, Z. Cheng, S. Chen, J. Wu, W. Hu, J. Zhao, Y. Gao, S. Cai, Y. Zhang, and J. Tong, "Polardb serverless: A cloud native database for disaggregated data centers," in Proceedings of the 2021 International Conference on Management of Data, 2021.
+- [73] D. S. Berger, K. Kumar, M. Vuppalapati, C. Douglas, J. Sathre, I. Robinson, P. Tandon, and M. D. Hill, "CXL in cloud practice: Practical lessons for incrementally scaling deployment," *IEEE Trans. Computers*, vol. 75, no. 4, pp. 1234–1246, 2026. [Online]. Available: https://doi.org/10.1109/TC.2026.3667614
+- [74] M. Ahn, A. Chang, D. Lee, J. Gim, J. Kim, J. Jung, O. Rebholz, V. Pham, K. Malladi, and Y. S. Ki, "Enabling CXL memory expansion for inmemory database management systems," in *Proceedings of the 18th International Workshop on Data Management on New Hardware*, 2022, pp. 1–5.
+- [75] K. Song, J. Yang, Z. Wang, J. Zhao, S. Liu, and G. Pekhimenko, "Hybridtier: an adaptive and lightweight CXL-Memory Tiering System," in Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3, 2025, pp. 112–128.
+- [76] Z. Zhou, Y. Chen, T. Zhang, Y. Wang, R. Shu, S. Xu, P. Cheng, L. Qu, Y. Xiong, J. Zhang et al., "Neomem: Hardware/software co-design for CXL-Native Memory Tiering," in 2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO). IEEE, 2024, pp. 1518–1531.
+- [77] W. Cao, Z. Liu, P. Wang, S. Chen, C. Zhu, S. Zheng, Y. Wang, and G. Ma, "Polarfs: an ultra-low latency and failure resilient distributed file system for shared storage cloud database," *Proceedings of the VLDB Endowment*, vol. 11, no. 12, pp. 1849–1862, 2018.
+- [78] H. Liu, L. Zheng, Y. Huang, J. Zhou, C. Liu, R. Wang, X. Liao, H. Jin, and J. Xue, "Enabling efficient large recommendation model training with near CXL memory processing," in 2024 ACM/IEEE 51st Annual International Symposium on Computer Architecture (ISCA). IEEE, 2024, pp. 382–395
+- [79] W. Huangfu, K. T. Malladi, A. Chang, and Y. Xie, "Beacon: Scalable near-data-processing accelerators for genome analysis near memory pool with the cxl support," in 2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO). IEEE, 2022, pp. 727–743.
+- [80] P. Huo, A. Devulapally, H. Al Maruf, M. Park, K. Nair, M. Arunachalam, G. G. Akbulut, M. T. Kandemir, and V. Narayanan, "Pifs-rec: Processin-fabric-switch for large-scale recommendation system inferences," in 2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO), 2024.
+- [81] X. Zhang, K. Liu, Y. Hui, X. Zheng, Y. Chang, Y. Shan, G. Zhang, K. Zhang, Y. Bao, M. Chen et al., "{DRack}: A {CXL-Disaggregated} rack architecture to boost {Inter-Rack} communication," in 2025 USENIX Annual Technical Conference (USENIX ATC 25), 2025, pp. 1261–1279.
+- [82] M. Liu, "Fabric-centric computing," in Proceedings of the 19th Workshop on Hot Topics in Operating Systems, 2023, pp. 118–126.# IX. CONCLUSION
+
+This work introduces a silicon-proven unified CXL controller and PBR switch that enable deterministic, memory-centric fabrics. The integrated hardware pipeline removes firmware overhead, achieving  $2.1\times$  latency reduction compared with legacy HBR-based designs, and improve system-level performance up to  $2\times$ . These results demonstrate a practical path toward scalable, hardware-deterministic CXL infrastructures for future data-centers.
+
+#### REFERENCES
+
+- [1] NVIDIA, "NVIDIA NVLink and NVLink Switch," https://www.nvidia. com/en-us/data-center/nvlink/, 2026.
+- [2] UALink Consortium, "Introducing UALink 200G 1.0 Specification," https://ualinkconsortium.org/wp-content/uploads/2025/04/UALink-1.0-White\_Paper\_FINAL.pdf, 2025.
+- [3] Unified Bus Community, "An Interconnect Protocol for SuperPoD," https://www.unifiedbus.com/en, 2025.
+- [4] A. Li, S. L. Song, J. Chen, J. Li, X. Liu, N. R. Tallent, and K. J. Barker, "Evaluating modern gpu interconnect: PCIe, NVLink, nv-sli, nvswitch and GPUdirect," *IEEE Transactions on Parallel and Distributed Systems*, 2019.
+- [5] H.-H. S. Lee, "Toward disaggregated and heterogenous ai systems," *IEEE Micro*, 2025.
+- [6] J. Choquette and W. Gandhi, "NVIDIA A100 GPU: Performance & innovation for gpu computing," in *2020 IEEE Hot Chips 32 Symposium (HCS)*, 2020.
+- [7] S. Potluri, A. Goswami, D. Rossetti, C. J. Newburn, M. G. Venkata, and N. Imam, "GPU-centric communication on NVIDIA gpu clusters with infiniband: A case study with openshmem," in *2017 IEEE 24th International Conference on High Performance Computing (HiPC)*, 2017.
+- [8] J. Zuckerman, D. Giri, J. Kwon, P. Mantovani, and L. P. Carloni, "Cohmeleon: Learning-based orchestration of accelerator coherence in heterogeneous socs," in *MICRO-54: 54th Annual IEEE/ACM International Symposium on Microarchitecture*, 2021.
+- [9] X. Zhou, H. Chen, S. Luo, Y. Gao, S. Yan, W. Liu, B. Lewis, and B. Saha, "A case for software managed coherence in manycore processors," in *Poster on 2nd USENIX Workshop on Hot Topics in Parallelism HotPar10*, 2010.
+- [10] X. Wang, J. Liu, J. Wu, S. Yang, J. Ren, B. Shankar, and D. Li, "Performance characterization of CXL memory and its use cases," in *2025 IEEE International Parallel and Distributed Processing Symposium (IPDPS)*, 2025.
+- [11] X. Yang, Y. Zhang, H. Chen, F. Li, G. Fan, Y. Kong, B. Wang, J. Fang, Y. Wang, T. Huang *et al.*, "Unlocking the potential of CXL for disaggregated memory in cloud-native databases," in *Companion of the 2025 International Conference on Management of Data*, 2025.
+- [12] J. Liu, H. Hadian, Y. Wang, D. S. Berger, M. Nguyen, X. Jian, S. H. Noh, and H. Li, "Systematic CXL memory characterization and performance analysis at scale," in *Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2*, 2025.
+- [13] M. Lu, G. Liu, K. Wang, F. Zhu, and S. Li, "Chash: A high costperformance hash design for CXL-based disaggregated memory system," *Proceedings of the ACM on Measurement and Analysis of Computing Systems*, 2025.
+- [14] J. Park, W. Lee, T. Kim, Y. Lee, and S. Hong, "Performance characterization of CXL memory expander: Impact on read and write latencies," in *2024 IEEE International Conference on Consumer Electronics-Asia (ICCE-Asia)*. IEEE, 2024.
+- [15] M. Weisgut, D. Ritter, P. Tözün, L. Benson, and T. Rabl, "CXL memory performance for in-memory data processing," *Proceedings of the VLDB Endowment*, 2025.
+- [16] Y. Fridman, S. Mutalik Desai, N. Singh, T. Willhalm, and G. Oren, "CXL memory as persistent memory for disaggregated hpc: A practical approach," in *Proceedings of the SC'23 Workshops of The International Conference on High Performance Computing, Network, Storage, and Analysis*, 2023.
+- [17] M. Ha, J. Ryu, J. Choi, K. Ko, S. Kim, S. Hyun, D. Moon, B. Koh, H. Lee, M. Kim *et al.*, "Dynamic capacity service for improving CXL pooled memory efficiency," *IEEE Micro*, 2023.
+- [18] H. Li, D. S. Berger, L. Hsu, D. Ernst, P. Zardoshti, S. Novakovic, M. Shah, S. Rajadnya, S. Lee, I. Agarwal *et al.*, "Pond: CXL-based memory pooling systems for cloud platforms," in *Proceedings of the 28th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2*, 2023.
+- [19] Y. Zhong, D. S. Berger, P. Zardoshti, E. Saurez, J. Nelson, A. Psistakis, J. Fried, and A. Cidon, "My CXL pool obviates your PCIe switch," in *Proceedings of the 2025 Workshop on Hot Topics in Operating Systems*, 2025.
+- [20] X. Wang, B. Ma, J. Kim, B. Koh, H. Kim, and D. Li, "cMPI: Using CXL memory sharing for mpi one-sided and two-sided inter-node communications," *arXiv preprint arXiv:2510.05476*, 2025.
+
+- [21] A. Cho and A. Daglis, "Starnuma: Mitigating numa challenges with memory pooling," in *2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO)*, 2024.
+- [22] A. Danesh, "Unlocking Cloud Server Performance with CXL," 2024, https://www.asteralabs.com/unlocking-cloud-server-performancewith-cxl/.
+- [23] D. E. Difallah, A. Pavlo, C. Curino, and P. Cudre-Mauroux, "Oltpbench: An extensible testbed for benchmarking relational databases," *Proceedings of the VLDB Endowment*, vol. 7, no. 4, pp. 277–288, 2013.
+- [24] B. F. Cooper, A. Silberstein, E. Tam, R. Ramakrishnan, and R. Sears, "Benchmarking cloud serving systems with ycsb," in *Proceedings of the 1st ACM symposium on Cloud computing*, 2010, pp. 143–154.
+- [25] Transaction Processing Performance Council (TPC), "TPC Benchmark C Standard Specification, Revision 5.11," https://www.tpc.org/tpc\_ documents\_current\_versions/pdf/tpc-c\_v5.11.0.pdf, 2010.
+- [26] ——, "TPC Benchmark H Standard Specification, Revision 3.0.1," https: //www.tpc.org/tpc\_documents\_current\_versions/pdf/tpc-h\_v3.0.1.pdf, 2022.
+- [27] C. Lutz, S. Breß, S. Zeuch, T. Rabl, and V. Markl, "Pump up the volume: Processing large data on gpus with fast interconnects," in *Proceedings of the 2020 ACM SIGMOD International Conference on Management of Data*, 2020.
+- [28] P. D. Ivan Goldwasser, Harry Petty and K. Devleker, "NVIDIA GB200 NVL72 Delivers Trillion-Parameter LLM Training and Real-Time Inference," https://developer.nvidia.com/blog/nvidia-gb200-nvl72-deliverstrillion-parameter-llm-training-and-real-time-inference/, 2024.
+- [29] C. Petersen, "Building the Case for UALink™: A Dedicated Scale-Up Memory Semantic Fabric," https://www.asteralabs.com/building-the-casefor-ualink-a-dedicated-scale-up-memory-semantic-fabric/, 2024.
+- [30] R. L. Jon Ames, "How Ultra Ethernet and UALink Enable High-Performance, Scalable AI Networks," https://www.synopsys.com/articles/ultra-ethernet-ualink-ai-networks, 2025.
+- [31] M. Shoeybi, M. Patwary, R. Puri, P. LeGresley, J. Casper, and B. Catanzaro, "Megatron-LM: Training multi-billion parameter language models using model parallelism," *arXiv preprint arXiv:1909.08053*, 2019.
+- [32] Y. You, A. Buluç, and J. Demmel, "Scaling deep learning on gpu and knights landing clusters," in *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis*, 2017.
+- [33] C. Clos, "A study of non-blocking switching networks," *Bell System Technical Journal*, 1953.
+- [34] A. Singh, J. Ong, A. Agarwal, G. Anderson, A. Armistead, R. Bannon, S. Boving, G. Desai, B. Felderman, P. Germano *et al.*, "Jupiter rising: A decade of clos topologies and centralized control in google's datacenter network," *ACM SIGCOMM computer communication review*, 2015.
+- [35] R. Niranjan Mysore, A. Pamboris, N. Farrington, N. Huang, P. Miri, S. Radhakrishnan, V. Subramanya, and A. Vahdat, "Portland: a scalable fault-tolerant layer 2 data center network fabric," in *Proceedings of the ACM SIGCOMM 2009 conference on Data communication*, 2009.
+- [36] D. D. Sharma, "Compute Express Link," *CXL Consortium White Paper*, 2019.
+- [37] D. Das Sharma, R. Blankenship, and D. Berger, "An introduction to the compute express link (CXL) interconnect," *ACM Computing Surveys*, 2024.
+- [38] D. J. Miller, P. M. Watts, and A. W. Moore, "Motivating future interconnects: a differential measurement analysis of pci latency," in *Proceedings of the 5th ACM/IEEE Symposium on Architectures for Networking and Communications Systems*, 2009.
+- [39] R. Bittner, "Speedy bus mastering pci express," in *22nd International Conference on Field Programmable Logic and Applications (FPL)*, 2012.
+- [40] PCISIG, "PCI Express Base," 2026.
+- [41] R. Neugebauer, G. Antichi, J. F. Zazo, Y. Audzevich, S. López-Buedo, and A. W. Moore, "Understanding PCIe performance for end host networking," in *Proceedings of the 2018 Conference of the ACM Special Interest Group on Data Communication*, 2018.
+- [42] A. Tavakkol, A. Kolli, S. Novakovic, K. Razavi, J. Gómez-Luna, H. Hassan, C. Barthels, Y. Wang, M. Sadrosadati, S. Ghose *et al.*, "Enabling efficient rdma-based synchronous mirroring of persistent memory transactions," *arXiv preprint arXiv:1810.09360*, 2018.
+- [43] D. Vucini ˇ c, Q. Wang, C. Guyot, R. Mateescu, F. Blagojevi ´ c, L. Franca- ´ Neto, D. Le Moal, T. Bunker, J. Xu, S. Swanson *et al.*, "{DC} express: Shortest latency protocol for reading phase change memory over {PCI}
+
+- express," in 12th USENIX Conference on File and Storage Technologies (FAST 14), 2014.
+- [44] M. Flajslik and M. Rosenblum, "Network interface design for low latency {Request-Response} protocols," in 2013 USENIX Annual Technical Conference (USENIX ATC 13), 2013.
+- [45] D. S. Berger, D. Ernst, H. Li, P. Zardoshti, M. Shah, S. Rajadnya, S. Lee, L. Hsu, I. Agarwal, M. D. Hill *et al.*, "Design tradeoffs in CXL-based memory pools for public cloud platforms," *IEEE Micro*, 2023.
+- [46] R. Budruk, D. Anderson, and T. Shanley, PCI express system architecture. Addison-Wesley Professional, 2004.
+- [47] CXL Consortium, "CXL 3.2 specification," 2024.
+- [48] J. Jang, H. Choi, H. Bae, S. Lee, M. Kwon, and M. Jung, "CXL-ANNS:Software-Hardware collaborative memory disaggregation and computation for Billion-Scale approximate nearest neighbor search," in 2023 USENIX Annual Technical Conference (USENIX ATC 23), 2023.
+- [49] D. D. Sharma, "Compute express link (CXL): Enabling heterogeneous data-centric computing with heterogeneous memory hierarchy," *IEEE Micro*, 2022.
+- [50] CXL Consortium, "CXL 3.1 specification," 2023.
+- [51] X. Li, Z. Guo, Y. Bai, M. Ketkar, H. Wilkinson, and M. Liu, "Understanding and profiling CXL.mem Using PathFinder," in *Proceedings of* the ACM SIGCOMM 2025 Conference, 2025.
+- [52] Z. Wang, S. Mahar, L. Li, J. Park, J. Kim, T. Michailidis, Y. Pan, M. Shen, T. Rosing, D. Tullsen, S. Swanson, and J. Zhao, "The Hitchhiker's Guide to Programming and Optimizing Cache Coherent Heterogeneous Systems: CXL, NVLink-C2C, and AMD Infinity Fabric," arXiv preprint arXiv:2411.02814, 2025.
+- [53] H. A. Maruf, H. Wang, A. Dhanotia, J. Weiner, N. Agarwal, P. Bhattacharya, C. Petersen, M. Chowdhury, S. Kanaujia, and P. Chauhan, "Tpp: Transparent page placement for CXL-enabled tiered-memory," in Proceedings of the 28th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3, 2023, pp. 742–755.
+- [54] M. Ahn, T. Willhalm, N. May, D. Lee, S. M. Desai, D. Booss, J. Kim, N. Singh, D. Ritter, and O. Rebholz, "An examination of CXL memory use cases for in-memory database management systems using sap hana," *Proceedings of the VLDB Endowment*, 2024.
+- [55] Y. Zhong, D. S. Berger, P. Zardoshti, E. Saurez, J. Nelson, D. R. Ports, A. Psistakis, J. Fried, and A. Cidon, "Oasis: Pooling PCIe devices over CXL to boost utilization," in *Proceedings of the ACM SIGOPS 31st* Symposium on Operating Systems Principles, 2025.
+- [56] Y. Zhong, D. S. Berger, C. Waldspurger, R. Wee, I. Agarwal, R. Agarwal, F. Hady, K. Kumar, M. D. Hill, M. Chowdhury et al., "Managing memory tiers with CXL in virtualized environments," in 18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24), 2024.
+- [57] D. S. Berger, Y. Zhong, F. Kazhamiaka, P. Zardoshti, S. Teng, M. D. Hill, and R. Fonseca, "Octopus: Scalable low-cost CXL memory pooling," arXiv preprint arXiv:2501.09020, 2025.
+- [58] D. Gouk, S. Lee, M. Kwon, and M. Jung, "Direct access, High-Performance memory disaggregation with DirectCXL," in 2022 USENIX Annual Technical Conference (USENIX ATC 22), 2022.
+- [59] P. Levis, K. Lin, and A. Tai, "A Case Against CXL Memory Pooling," in Proceedings of the 22nd ACM Workshop on Hot Topics in Networks, 2023.
+- [60] D. S. Berger, K. Kumar, M. Vuppalapati, C. Douglas, J. Sathre, I. Robinson, P. Tandon, and M. D. Hill, "Cxl in cloud practice: Practical lessons for incrementally scaling deployment," *IEEE Transactions on Computers*, 2026.
+- [61] D. D. Sharma, "A low latency approach to delivering alternate protocols with coherency and memory semantics using PCI Express® 6.0 PHY at 64.0 gt/s," in 2021 IEEE Symposium on High-Performance Interconnects (HOTI), 2021.
+- [62] M. G. Saber and Z. Jiang, "Physical layer standardization for ai data centers: Challenges, progress and perspectives," *IEEE Network*, 2025.
+- [63] D. D. Sharma, "The pcie® 6.0 specification webinar q&a: A deeper dive into flit mode, pam4, and forward error correction (fec)," https://pcisig.com/blog/pcie%C2%AE-60-specification-webinar-qa-deeper-dive-flit-mode-pam4-and-forward-error-correction-fec, 2021.
+- [64] A. Alvarado, E. Agrell, D. Lavery, R. Maher, and P. Bayvel, "Replacing the soft-decision fee limit paradigm in the design of optical communication systems," *Journal of Lightwave Technology*, 2015.
+- [65] D. D. Sharma, "Pci-express: Evolution of a ubiquitous load-store interconnect over two decades and the path forward for the next two decades," *IEEE Circuits and Systems Magazine*, 2024.
+
+- [66] D. Das Sharma, "Pci express 6.0 specification: A low-latency, high-bandwidth, high-reliability, and cost-effective interconnect with 64.0 gt/s pam-4 signaling," *IEEE Micro*, 2021.
+- [67] NVIDIA, "Connectx-7 400g adapters," https://resources.nvidia.com/enus-accelerated-networking-resource-library/connectx-7-datasheet, 2025.
+- [68] The PostgreSQL Global Development Group, "PostgreSQL 17," https://www.postgresql.org/docs/17/, 2024.
+- [69] V. Viswanathan, K. Kumar, T. Willhalm, S. Sakthivelu, and S. Srikanthan, "Intel® memory latency checker v3.12," https://www.intel.com/content/www/us/en/developer/articles/tool/intelrmemory-latency-checker.html, 2025.
+- [70] P. Antonopoulos, A. Budovski, C. Diaconu, A. Hernandez Saenz, J. Hu, H. Kodavalla, D. Kossmann, S. Lingam, U. F. Minhas, N. Prakash et al., "Socrates: The new sql server in the cloud," in Proceedings of the 2019 International Conference on Management of Data, 2019, pp. 1743–1756.
+- [71] A. Verbitski, A. Gupta, D. Saha, M. Brahmadesam, K. Gupta, R. Mittal, S. Krishnamurthy, S. Maurice, T. Kharatishvili, and X. Bao, "Amazon aurora: Design considerations for high throughput cloud-native relational databases," in *Proceedings of the 2017 ACM International Conference* on Management of Data, 2017, pp. 1041–1052.
+- [72] W. Cao, Y. Zhang, X. Yang, F. Li, S. Wang, Q. Hu, X. Cheng, Z. Chen, Z. Liu, J. Fang, B. Wang, Y. Wang, H. Sun, Z. Yang, Z. Cheng, S. Chen, J. Wu, W. Hu, J. Zhao, Y. Gao, S. Cai, Y. Zhang, and J. Tong, "Polardb serverless: A cloud native database for disaggregated data centers," in Proceedings of the 2021 International Conference on Management of Data, 2021.
+- [73] D. S. Berger, K. Kumar, M. Vuppalapati, C. Douglas, J. Sathre, I. Robinson, P. Tandon, and M. D. Hill, "CXL in cloud practice: Practical lessons for incrementally scaling deployment," *IEEE Trans. Computers*, vol. 75, no. 4, pp. 1234–1246, 2026. [Online]. Available: https://doi.org/10.1109/TC.2026.3667614
+- [74] M. Ahn, A. Chang, D. Lee, J. Gim, J. Kim, J. Jung, O. Rebholz, V. Pham, K. Malladi, and Y. S. Ki, "Enabling CXL memory expansion for inmemory database management systems," in *Proceedings of the 18th International Workshop on Data Management on New Hardware*, 2022, pp. 1–5.
+- [75] K. Song, J. Yang, Z. Wang, J. Zhao, S. Liu, and G. Pekhimenko, "Hybridtier: an adaptive and lightweight CXL-Memory Tiering System," in Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3, 2025, pp. 112–128.
+- [76] Z. Zhou, Y. Chen, T. Zhang, Y. Wang, R. Shu, S. Xu, P. Cheng, L. Qu, Y. Xiong, J. Zhang et al., "Neomem: Hardware/software co-design for CXL-Native Memory Tiering," in 2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO). IEEE, 2024, pp. 1518–1531.
+- [77] W. Cao, Z. Liu, P. Wang, S. Chen, C. Zhu, S. Zheng, Y. Wang, and G. Ma, "Polarfs: an ultra-low latency and failure resilient distributed file system for shared storage cloud database," *Proceedings of the VLDB Endowment*, vol. 11, no. 12, pp. 1849–1862, 2018.
+- [78] H. Liu, L. Zheng, Y. Huang, J. Zhou, C. Liu, R. Wang, X. Liao, H. Jin, and J. Xue, "Enabling efficient large recommendation model training with near CXL memory processing," in 2024 ACM/IEEE 51st Annual International Symposium on Computer Architecture (ISCA). IEEE, 2024, pp. 382–395
+- [79] W. Huangfu, K. T. Malladi, A. Chang, and Y. Xie, "Beacon: Scalable near-data-processing accelerators for genome analysis near memory pool with the cxl support," in 2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO). IEEE, 2022, pp. 727–743.
+- [80] P. Huo, A. Devulapally, H. Al Maruf, M. Park, K. Nair, M. Arunachalam, G. G. Akbulut, M. T. Kandemir, and V. Narayanan, "Pifs-rec: Processin-fabric-switch for large-scale recommendation system inferences," in 2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO), 2024.
+- [81] X. Zhang, K. Liu, Y. Hui, X. Zheng, Y. Chang, Y. Shan, G. Zhang, K. Zhang, Y. Bao, M. Chen et al., "{DRack}: A {CXL-Disaggregated} rack architecture to boost {Inter-Rack} communication," in 2025 USENIX Annual Technical Conference (USENIX ATC 25), 2025, pp. 1261–1279.
+- [82] M. Liu, "Fabric-centric computing," in Proceedings of the 19th Workshop on Hot Topics in Operating Systems, 2023, pp. 118–126.

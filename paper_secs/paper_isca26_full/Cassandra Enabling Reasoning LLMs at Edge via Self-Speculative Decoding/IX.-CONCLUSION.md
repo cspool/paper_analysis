@@ -1,0 +1,8 @@
+# IX. CONCLUSION
+
+The availability of lossless LLM acceleration on consumergrade devices has been notably limited to date. However, to overcome the inherent limitations of lossy compression that have emerged in the era of reasoning LLMs, we propose Cassandra, a training-free self-speculative decoding method tailored for low-batch LLM acceleration. Cassandra introduces a hardware-assisted approach that constructs a highperformance draft model based on fine-grained criteria without requiring additional training. Our experimental results demonstrate that this approach achieves superior throughput and significantly reduces the memory footprint compared to the baseline. This outcome suggests the unique advantage of Cassandra in fully harnessing the potential of reasoning LLMs within edge environments.
+
+# IX. CONCLUSION
+
+The availability of lossless LLM acceleration on consumergrade devices has been notably limited to date. However, to overcome the inherent limitations of lossy compression that have emerged in the era of reasoning LLMs, we propose Cassandra, a training-free self-speculative decoding method tailored for low-batch LLM acceleration. Cassandra introduces a hardware-assisted approach that constructs a highperformance draft model based on fine-grained criteria without requiring additional training. Our experimental results demonstrate that this approach achieves superior throughput and significantly reduces the memory footprint compared to the baseline. This outcome suggests the unique advantage of Cassandra in fully harnessing the potential of reasoning LLMs within edge environments.
+

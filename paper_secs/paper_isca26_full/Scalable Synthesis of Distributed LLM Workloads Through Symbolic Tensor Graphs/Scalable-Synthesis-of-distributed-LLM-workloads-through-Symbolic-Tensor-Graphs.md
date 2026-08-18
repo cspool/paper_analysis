@@ -1,0 +1,8 @@
+# Scalable Synthesis of distributed LLM workloads through Symbolic Tensor Graphs
+
+Changhai Man<sup>1</sup> , Joongun Park<sup>1</sup> , Hanjiang Wu<sup>1</sup> , Huan Xu<sup>1</sup> , Srinivas Sridharan<sup>2</sup> , Tushar Krishna<sup>1</sup> <sup>1</sup>Georgia Institute of Technology <sup>2</sup>NVIDIA Inc.
+
+{cman8,jpark3234,hwu419,hxu398}@gatech.edu srisridharan@nvidia.com tushar@ece.gatech.edu
+
+*Abstract*—Optimizing the performance of large language models (LLMs) on large-scale AI training and inference systems requires a scalable and expressive mechanism to model distributed workload execution. Such modeling is essential for pre-deployment system-level optimizations (e.g., parallelization strategies) and hardware design-space explorations. While recent efforts have proposed collecting execution traces from real systems, access to large-scale infrastructure remains limited to major cloud providers. Moreover, traces capturing execution on a specific platform cannot be easily adapted to study alternate software and/or hardware configurations, especially at scale. We introduce STAGE[1](#page-0-0) , a framework that synthesizes high-fidelity execution graphs to accurately model distributed AI workloads (including LLMs and MoEs). STAGE supports a comprehensive set of parallelization strategies, allowing users to systematically explore a wide spectrum of model architectures and system configurations. STAGE demonstrates its scalability by synthesizing high-fidelity LLM traces spanning over 128K GPUs, while preserving tensorlevel accuracy in compute, memory, and communication. STAGE is publicy available at [https://github.com/astra-sim/stage]( https://github.com/astra-sim/stage)
+

@@ -1,0 +1,14 @@
+# C. Limitations of Existing LLM Accelerator Co-Design
+
+Numerous co-design solutions have been proposed by the architecture community to accelerate quantized LLMs, as summarized in Table I. BitMoD [6] and Oaken [42] focus on 4-bit quantization of weights and KV-cache, respectively. But since all other operands remain in FP16, these two approaches provide moderate memory saving and hardware efficiency. MANT [29] and Ecco [8] achieve greater memory saving and efficiency via W4A8KV4 quantization. Nevertheless, MANT exhibits noticeable accuracy drop under this aggressive quantization scheme since it does not address the outlier issue presented in activations and KV-cache. Whereas Ecco requires complicated online decompression of quantized operand back
+
+<span id="page-4-1"></span>![](_page_4_Figure_0.jpeg)
+
+Fig. 5: KV-cache distribution (in absolute value) of Wikitext-2 dataset from representative layers and heads of Llama-2-7B and Llama-3.1-8B. The context length is 4K. (a)(e) The value cache shows no outlier pattern. (b)(f) The pre-RoPE key cache shows distinct outlier channels. (c) The post-RoPE key cache of Llama-2-7B contains much less structured outlier pattern. (g) The post-RoPE key cache of Llama-3.1-8B still exhibits distinct outlier channels. (d)(h) P<sup>3</sup> -LLM employs dynamic per-channel smoothing to eliminate the outlier channels of key cache.
+
+to FP16 for computation, leading to considerable hardware overhead. Thus, although Ecco achieves high accuracy, its idea cannot be applied to designing low-precision PCUs for more effieicnt LLM decoding. On the other hand, Pimba [\[44\]](#page-14-7) introduces a low-precision PIM architecture that exploits the 8-bit microscaling format [\[79\]](#page-14-24) to mitigate the area overhead of PCUs. However, it leaves the linear layer unquantized, and the FP32 accumulation pipeline in the microscaling data path limits the overall hardware efficiency gain. Unlike these proposals, P<sup>3</sup> -LLM seeks to strike a balanced trade-off among memory footprint, model accuracy, and hardware efficiency. By assigning a dedicated precision and efficient numerical format to each LLM operand, P<sup>3</sup> -LLM minimizes both quantization error and memory usage. Our careful choice of hybrid numerical formats allows to co-design low-precision PIM that significantly boosts the computation throughput under isocompute-area constraints.
+
+### IV. P<sup>3</sup> -LLM QUANTIZATION FRAMEWORK
+
+<span id="page-4-0"></span>This section details the P<sup>3</sup> -LLM quantization framework, the core of which is a mixed-precision W4A8KV4P8 scheme employing hybrid numerical formats. Furthermore, P<sup>3</sup> -LLM introduces a dynamic input-aware smoothing strategy to effectively suppress KV-cache outliers without overfitting.
+

@@ -1,0 +1,10 @@
+# *A. Experiment Setup*
+
+Benchmarks. In our experiment design, we selected a set of benchmark circuits that have been widely used in previous circuit optimization research [\[9\]](#page-13-8)–[\[11\]](#page-13-10), [\[17\]](#page-13-15)–[\[19\]](#page-13-16), [\[39\]](#page-13-37), [\[41\]](#page-13-39), [\[42\]](#page-13-40), complemented by new benchmarks representing near-term and fault-tolerant applications. The suite includes quantum arithmetic circuits, MCX, Hamming coding functions, Hamiltonian simulation, QAOA, Grover's algorithm, and Shor's algorithm.
+
+Baselines. We compare *PhasePoly* with three phase polynomial baselines: (i) *Rotation Merging* [\[11\]](#page-13-10) merges phase gates that share identical phase polynomials, but does not optimize the CNOT network. (ii) *Single-block Greedy Optimization* [\[10\]](#page-13-9), [\[15\]](#page-13-27) greedily synthesizes the phase-parity network within each phase-polynomial block. The output-parity network is handled separately using Gaussian elimination. (iii) Gray-Synth [\[10\]](#page-13-9) reduces two-qubit gates using the *sum-overpaths* representation. We report the CNOT-count results from the original paper.
+
+We also integrate our technique into two general-purpose optimizers. We use Quartz [\[17\]](#page-13-15) and QUESO [\[18\]](#page-13-25). Quartz performs equivalent subcircuit rewriting and does not model phase contributions. QUESO adopts the *sum-over-paths* form to enhance phase polynomial ECCs and uses search-based rewriting methods to enlarge optimization coverage.
+
+Setup. All experiments run on a 2.8 GHz AMD EPYC 7313 CPU. *PhasePoly* uses a priority queue and a solution pool with maximum sizes chosen according to the runtime budget. We enable an *Incremental Block Merging* strategy to improve robustness during cross-block optimization. For Quartz and QUESO, we follow their recommended equivalent subcircuit sizes and allocate up to 2-hour per circuit. *PhasePoly* attains the reported results without consuming the full runtime budget.
+

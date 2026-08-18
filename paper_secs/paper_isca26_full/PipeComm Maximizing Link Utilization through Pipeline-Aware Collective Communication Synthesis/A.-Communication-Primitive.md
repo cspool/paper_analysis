@@ -1,0 +1,4 @@
+# *A. Communication Primitive*
+
+The first category is the communication primitive, which defines the basic functionality for collective communication using *reduce at* and *broadcast from*. A key concept here is the bubble b, which indicates a data dependency—specifically, the broadcast operation must wait until the corresponding buffers produced by all reduce operations are available. To further enhance bandwidth utilization, we incorporate two compiler-inspired techniques: tiling and pipelining. Tiling partitions data into smaller chunks to enable finer-grained parallelism, while pipelining overlaps communication stages to better utilize links. These techniques, expressible through the communication primitives, can be composed to maximize resource efficiency, increase throughput, and reduce overall communication overhead.
+

@@ -1,0 +1,10 @@
+## Cerberus: Cross-Layer ECC Co-Design for Robust and Efficient Memory Protection（近似层次匹配：HBM/LPDDR 片上 ECC 与冗余分配的 DRAM 芯片结构优化，RTL/模拟器细节见 实验_硬件架构.md）
+
+- 属于芯片设计的实现是什么？实验比较什么？
+  - 近似匹配（论文主体是跨层 ECC 码设计与 RTL 硬件，此处覆盖其 DRAM 芯片级冗余结构改动）：实现 = 重排 HBM 类单设备通道（SDPC）的片上冗余组织——把 HBM4 每 pseudo-channel 的 2B S-ECC + 4B O-ECC + 1B L-ECC（18.8%）压缩为 32b 共享冗余（12.5%，另评估 40b/15.6%），由 Encode-Once/Decode-Many（EODM）复用：bank group 内 O-ECC 不再用 16-bit SSC 而是复用 R2 做 SEC-DED（bounded-fault 16b 符号粒度，miscorrection 不跨符号）；DRAM 写路径用 Decoder1 + H2 校验替代 L-ECC、错误经 ALERT 重传；读路径 DRAM 不再生成读侧 L-ECC，直接转发带冗余的 288b 码字给控制器；控制器用完整 32b 做 SSC+DEC 端到端保护。实验比较：可靠性（错误注入覆盖 in-bank SE/16E/32E/SE+SE、write-link SE/DQE/DQSE、out-bank SE/DE/DQE/DQSE 单/多位置，vs HBM4/LPDDR6/Unity ECC/DUO）；DRAM 能耗（HBM2E 数据手册电流 + Micron DDR4 power calculator）；面积（UMC 28nm 综合、NAND2 等价门）。结果：冗余较 HBM4 −33.3% 仍全面更强纠错（16E 100% 纠正 vs LPDDR6 仅 0.048%；out-bank SE/DE/DQE 100% 纠正，HBM4-CRC 对 SE 也只能检测不能纠）；32b 能耗较 HBM4 −1.84%（减少 bank-group 内部传输位宽：HBM4 内部传 256+32+16、外部传 256+16，Cerberus 内部外部均传 256+32）。
+- 模拟器名，模拟器链接（web search），或论文修改的模拟器。
+  - 可靠性：论文自建 Monte Carlo 错误注入模拟器（未给源码链接，无法确认）；GPU 性能：Accel-Sim（https://github.com/accel-sim/accel-sim-framework）；面积：Synopsys Design Compiler + UMC 28nm 标准库；DRAM 能耗：Samsung 16Gb HBM Flashbolt（HBM2E）数据手册电流 [81] + Micron DDR4 power calculator [82]。
+- 模拟器模拟什么的性能，修改了什么。
+  - 错误注入模拟器按错误位置与场景（in bank / write link / out bank；SE、DE、16E、32E、SE+SE、DQE、DQSE）在指定位独立以 50% 概率翻转比特，逐方案对 (D+R1)+R2 码字按 Decoder1/2/3 顺序执行译码并分类 CE/DUE/SDC，1000 万次迭代统计覆盖率（Table II/III 单/多位置）。不是对既有 DRAM 结构模拟器的修改，而是对 Cerberus 新冗余组织下各层译码行为的建模；Accel-Sim 修改（tCL/tWL 时序）与综合细节见 实验_硬件架构.md 同名条目。
+- 开源情况。基于开源文档和论文，使用例子解释模拟器如何使用？作用是什么？
+  - 开源情况：Cerberus 相关代码未开源（论文未给链接、联网搜索未发现官方仓库，无法确认）；Accel-Sim 开源。使用例子：把构造好的 H2（16×288）与 H^S-ECC（32×288）代入错误注入模拟器，对 288b 码字在指定位置注入错误，模拟 bank-group 内 Decoder2 的 bounded-fault SEC 纠错与控制器 Decoder3 的 SSC+DEC 纠错，统计各方案 CE/DUE/SDC 比率并与 HBM4/LPDDR6 的分层独立配置对比，验证 12.5% 共享冗余下"in-bank 16E 全纠正 + out-bank 全纠正 + 32E 高检测"的片上冗余结构收益；能耗侧按 (256+32) vs (256+32+16) 的存储/传输位宽缩放 HBM2E 电流，评估削减片上冗余对 DRAM 电流（Table V：IDD0/IDD3N/IDD4R/IDD4W 较 HBM4 降 0.1%–0.8%）与总能量的影响。

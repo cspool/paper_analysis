@@ -1,0 +1,4 @@
+# *C. Weight Quantization*
+
+For weight quantization, we build upon an existing numerical format, BitMoD [\[6\]](#page-13-13), which adaptively remaps the redundant negative zero encoding of FP4 to some pre-defined special values. On top of the basic FP4 quantization values {± 0, ± 0.5, ± 1, ± 1.5, ±2, ±3, ±4, ±6}, BitMoD introduces four additional special values {± 5, ± 8}, where one of them can be selected to replace the negative zero. By searching for the optimal special value for each group of weights, it reduces the quantization error compared to asymmetric integer quantization with minimal hardware overhead. Notably, since weights and KV-cache are mapped to the same operand on the MAC hardware, a decoder is required to accommodate the numerical formats of both weights and KV-cache (i.e., BitMoD and INT4-Asym), which we discuss in Section [V-A.](#page-6-1)
+

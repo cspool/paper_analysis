@@ -1,0 +1,20 @@
+# DESSCam: An Event-Driven Architecture with In-Sensor Epitopological Sparse Sampling to Break the Latency-Power Tradeoff in Eye Tracking
+
+Zhijie Jian, Shangyu Yang, Yuan Hua, Jilin Zhang, Ziyi Cheng, and Hong Chen Tsinghua University, Beijing, China {jzj24, yangsy23, huay24, chengziy24}@mails.tsinghua.edu.cn, {zhangjil, hongchen} @mail.tsinghua.edu.cn
+
+*Abstract*—Eye tracking is crucial for emerging augmented/virtual reality (AR/VR) platforms, yet existing eye trackers suffer from high end-to-end latency (>15ms) and high power consumption (>2W), resulting in motion sickness and thermal discomfort, and thus making prolonged immersive interaction infeasible. These primarily arise from the frame-based dense sampling mechanism of image sensors, which mismatches the temporally varying and spatially sparse nature of eye movements.
+
+To address these problems, we propose DESSCam, a 3Dstacked event-driven image sensor architecture with a dynamic sparse imaging paradigm, which achieves low latency through temporally dynamic sampling adaptive to eye movement speed, and low power consumption by spatially pixel-wise sparse sampling. In particular, we put forward a novel in-sensor epitopological sparse sampling (ESS) mechanism, which achieves attention-guided 50× pixel downsampling while preserving global data correlations. Moreover, we introduce a patch activation mechanism that only allows the events to be read out from the pixel blocks whose event count exceeds a threshold, and a robust vision transformer to accurately extract global features from sparse data. Furthermore, we implement DESSCam's hardware through co-optimized pixel and peripheral circuits with minimal overhead. Our experimental results show up to 2.7× power saving and 15.2× end-to-end latency reduction compared to the stateof-the-art eye tracking system, enabling sub-millisecond gaze updates and unlocking deeply immersive AR/VR experiences.
+
+*Index Terms*—In-sensor computing, eye tracking, sparse sampling, dynamic vision sensor, AR/VR.
+
+# DESSCam: An Event-Driven Architecture with In-Sensor Epitopological Sparse Sampling to Break the Latency-Power Tradeoff in Eye Tracking
+
+Zhijie Jian, Shangyu Yang, Yuan Hua, Jilin Zhang, Ziyi Cheng, and Hong Chen Tsinghua University, Beijing, China {jzj24, yangsy23, huay24, chengziy24}@mails.tsinghua.edu.cn, {zhangjil, hongchen} @mail.tsinghua.edu.cn
+
+*Abstract*—Eye tracking is crucial for emerging augmented/virtual reality (AR/VR) platforms, yet existing eye trackers suffer from high end-to-end latency (>15ms) and high power consumption (>2W), resulting in motion sickness and thermal discomfort, and thus making prolonged immersive interaction infeasible. These primarily arise from the frame-based dense sampling mechanism of image sensors, which mismatches the temporally varying and spatially sparse nature of eye movements.
+
+To address these problems, we propose DESSCam, a 3Dstacked event-driven image sensor architecture with a dynamic sparse imaging paradigm, which achieves low latency through temporally dynamic sampling adaptive to eye movement speed, and low power consumption by spatially pixel-wise sparse sampling. In particular, we put forward a novel in-sensor epitopological sparse sampling (ESS) mechanism, which achieves attention-guided 50× pixel downsampling while preserving global data correlations. Moreover, we introduce a patch activation mechanism that only allows the events to be read out from the pixel blocks whose event count exceeds a threshold, and a robust vision transformer to accurately extract global features from sparse data. Furthermore, we implement DESSCam's hardware through co-optimized pixel and peripheral circuits with minimal overhead. Our experimental results show up to 2.7× power saving and 15.2× end-to-end latency reduction compared to the stateof-the-art eye tracking system, enabling sub-millisecond gaze updates and unlocking deeply immersive AR/VR experiences.
+
+*Index Terms*—In-sensor computing, eye tracking, sparse sampling, dynamic vision sensor, AR/VR.
+

@@ -1,0 +1,8 @@
+# *A. Abstract*
+
+The artifact includes the compression algorithms and their evaluation pipeline from IcePack. It takes no external input data. Syndrome datasets are generated at runtime using Stim, a quantum error correction simulator. The artifact applies the full proposed compression pipeline (spatial clustering, temporal clustering, and Rice-Golomb encoding) across a sweep of surface code distances and physical error rates under both phenomenological and circuit-level noise models. It produces the CSV data and plots behind Figures 5, 7, 8, and 15 in the paper. The CSV data can be compared against the data we used to generate the figures in the paper in the folder reference/, whereas the produced figures can be visually compared against the paper directly. A Docker container provides a self-contained environment to build and run the experiments with a single command.
+
+# *A. Abstract*
+
+The artifact includes the compression algorithms and their evaluation pipeline from IcePack. It takes no external input data. Syndrome datasets are generated at runtime using Stim, a quantum error correction simulator. The artifact applies the full proposed compression pipeline (spatial clustering, temporal clustering, and Rice-Golomb encoding) across a sweep of surface code distances and physical error rates under both phenomenological and circuit-level noise models. It produces the CSV data and plots behind Figures 5, 7, 8, and 15 in the paper. The CSV data can be compared against the data we used to generate the figures in the paper in the folder reference/, whereas the produced figures can be visually compared against the paper directly. A Docker container provides a self-contained environment to build and run the experiments with a single command.
+

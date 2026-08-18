@@ -1,0 +1,13 @@
+## 数据类型自适应 MAC 微架构（Datatype-Adaptive MAC：统一尾数乘积公式化 + 四阶段流水线）
+
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
+XtraMAC 的总体架构：把"格式解释"与"算术执行"解耦——轻量周边逻辑做格式解码/位映射/打包/后计算，算术核是数据类型无关的 DSP 乘法器 + 分离式 INT/FP 累加路径。理论基础是统一处理模式公式化（Section III）：对 IEEE 浮点操作数 x=s_x·2^(e_x-bias)·m_x（m_x 含隐式前导 1），乘积 x·y=(s_x⊕s_y)·2^(e_x+e_y-bias)·(m_x·m_y)（Eq.1）；对 INT×FP，整数 a 解出符号与幅值 a=s_a·m_a 并赋逻辑无偏指数 0（偏置指数=输出格式 bias），乘积 a·y=(s_a⊕s_y)·2^(e_y-bias)·(m_a·m_y)（Eq.4）——两者 DSP 都只算整数尾数乘积，符号/指数在 DSP 外处理，归一化用前导零计数（LZC）：Δ=LZC(m_prod)、m_norm=m_prod<<Δ、e_out=e_x+e_y-bias-Δ（Eq.2/3/5/6）。因此所有 INT/FP/混合精度乘法共享同一乘法 datapath，数据类型差异只在轻量映射与后计算逻辑。累加则相反：整数加法 (x⊕y)⊕carry 直接映射进位链、成本线性 C_int≈α_int·w_int（Eq.7）；浮点加法需运行时可变距离对齐右移与归一化左移，barrel shifter 成本超线性 C_sh≈β_sh·w_fp·log2(w_fp)（Eq.8）——故保持分离式 INT/FP 累加路径，避免统一 adder 让整数路径白付 shifter 面积。固定四阶段流水线（Fig.5）：Stage1 操作数解释/位映射、Stage2 DSP 乘法+逐 lane 后计算、Stage3 数据类型特定累加（INT 二补码 bank / FP 对齐+加减+重归一化）、Stage4 输出选择与打包；每 stage 默认 1 cycle，可综合期插入寄存器换频率（仅需延长匹配延迟切片），全数据类型恒定 4 cycle 时延、II=1。特殊值处理：FTZ/DAZ（flush-to-zero/denormals-are-zero）、NaN 传播 canonical qNaN、∞ 保留符号、∞×0 与 +∞+(-∞)→qNaN、overflow 饱和到 ±∞——在输入检测为状态标志随匹配寄存器切片转发、输出纯组合选择，无 stall/冲刷；与 NVIDIA A100/H100 Tensor Cores 及 AMD FP Operator 语义一致、结果 bit-exact。
+
+从硬件架构角度拆解术语，比如术语如何在硬件架构中发挥作用，给出术语在硬件架构中运转流程的具体例子。通过联网搜索让回答具体和精准。
+运转流程（一次 INT4×BF16+BF16→BF16 混合精度 MAC）：① Stage1 按 datatype 信号在 N 个并行映射子模块中选 INT4×BF16 路径——INT4 幅值 4-bit 与 BF16 尾数 8-bit（含隐式 1）按 stride 打包进 DSP 口（2 lane），指数/符号作为元数据转发，整数操作数赋偏置指数=BF16 bias；② Stage2 DSP48E2 一次整数乘法得到两 lane 乘积位域，per-lane 后计算：FP lane 做 LZC 归一化移位 + e_out=e_y-bias-Δ，INT lane 只取幅值 + 符号 XOR；③ Stage3 分离式累加——选浮点 bank：指数对齐（barrel shifter 右移较小尾数）、尾数加减、重归一化（LZC 左移），与累加器 C 合并；④ Stage4 把 2 个 lane 结果拼成打包输出字。系统集成：XtraMAC 加一个 datatype 输入端口（仅作流水线对齐的控制元数据），外部模块仍提供/消费 lane 打包操作数，因恒定时延+II=1 可 drop-in 替换 GEMV/GEMM 流水线标量 MAC（U55c 1920 实例、300 MHz）。可扩展性：从 BF16/FP16 基线逐步使能 INT8/FP8/FP4，DSP 恒 1、LUT 缓增（周边映射/归一化逻辑）、Fmax 483→462 MHz。
+
+术语一般如何实现？如何使用？通过联网搜索让回答具体和精准。
+实现：Verilog（参数 N=数据类型数、P=最大并行度，P 不超 Eq.12 上界；N 个映射子模块 + P 条 lane 后计算流水 + 分离 adder bank + 匹配延迟切片），Vivado 2022.2/Vitis 2022.2 综合（xcu55c），iverilog/xsim 验证（自检 testbench 检查 4c/5c/6c 变体 bit-exact 一致），仓库 generate_mac_bundle.py 生成 bundle、run_one_synth.sh 出资源/时序 CSV。使用：混合精度 LLM 推理的 GEMV/GEMM 标量 MAC 替换（Qwen3-8B-AWQ 等 5 个部署 profile），相对 vendor IP 平均降 LUT 30.0%/FF 47.9%/DSP 50.0%、计算密度 1.4–2.0×，batch=32 端到端 LLM 推理（Alveo V80 analytical 仿真）降时延 1.5–1.8×；设计准则：优先 sub-8-bit 量化最大化 per-DSP 并行度。局限：浮点配置 LUT/FF 明显高于整数（mantissa 对齐 shifter 主导）、Fmax 平均比 vendor IP 慢 22%（周边逻辑与路由拥塞，但 >400 MHz 且 2× 并行度补回 ~1.56× 每 DSP 吞吐）。
+
+涉及论文标题：
+- XtraMAC An Efficient MAC Architecture for Mixed-Precision LLM Inference on FPGA

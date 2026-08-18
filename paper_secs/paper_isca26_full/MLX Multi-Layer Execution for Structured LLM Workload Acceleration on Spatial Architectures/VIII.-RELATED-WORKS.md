@@ -1,0 +1,10 @@
+# VIII. RELATED WORKS
+
+We discuss related work in sparse transformer acceleration and spatial dataflow to situate MLX within prior research. **Sparse Accelerator Design:** Recent accelerators [24, 26, 37, 53, 54, 55] primarily target dynamic or unstructured sparsity, or exploit sparsity-like patterns in graph workloads [56, 57, 58]. Structured sparsity remains less explored in practice.
+
+While prior analytical frameworks study its potential benefits [59, 60], they do not extend to end-to-end, realized hardware. In contrast, MLX provides practical knobs to tune structured sparsity granularity in attention blocks [61, 62], enabling adaptive trade-offs across model variants. Co-designed systems such as FABNet [29] and EIE [63] are closest to our goal, while these butterfly-oriented designs [64, 65, 66] lack generality and adaptability for modern AI workloads.
+
+**LLM Acceleration:** Other LLM systems largely focus on numerical optimizations, such as quantization [67] and bitlevel sparsity [40, 68, 69] as well as online–offline hybrid KV-cache quantization [22, 70]. MLX instead explores an *orthogonal* axis via structured sequence/hidden compression, which complements low-bit arithmetic and may enable hybrid optimizations that further reduce memory traffic.
+
+Spatial Dataflow Paradigm: Spatial dataflow architectures provide dependency-driven execution and ISA-exposed resource allocation, enabling aggressive software pipelining [30, 71]. Prior designs enhance sparsity support through address generation [72, 73], buffering optimizations [11], and sparse-aware execution [10, 74]. Execution in spatial arrays is shaped jointly by PEs and interconnects[75, 76, 77], with heterogeneity explored along timing and resource dimensions [78]. MLX differs from conventional dataflow designs in that it exploits the regularity of predictable dependencies as a first-class mapping abstraction. This allows large, regularized dataflow graphs to be folded onto compact spatial arrays, effectively decoupling logical graph scale from physical array size—an ability that prior designs have not explicitly addressed.
+

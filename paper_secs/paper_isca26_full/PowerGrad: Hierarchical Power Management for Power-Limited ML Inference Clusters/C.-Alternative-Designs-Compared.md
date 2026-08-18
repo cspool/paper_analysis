@@ -1,0 +1,6 @@
+# C. Alternative Designs Compared
+
+We compare PowerGrad to three baseline approaches for power-performance management: SLURM [35], DPS [8], and Fair (i.e., equal power assigned to all processors). SLURM is a well-known algorithm whose operating principle is that, if a node or processor uses less power than its allocation, a portion of this excess power is uniformly distributed to the other nodes or processors equally. For this portion that is distributed, we use 50% of the excess power, which is the default SLURM configuration [35]. DPS is a recent, state-of-the-art power management scheme that works without application profiling. DPS uses each node's power consumption history to determine the new allocation priority. While DPS uses a sophisticated algorithm, when all nodes are power-starved—which is common in power-limited environments—DPS falls back to equal power distribution.
+
+All these three baseline schemes are software transparent, as they only rely on runtime power measurements, and are thus applicable to dynamic ML workloads. These schemes are centralized control methods. Hence, we implement them in the Cluster-level controller and follow the PG-central control topology (Figure 6b).
+

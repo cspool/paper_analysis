@@ -1,0 +1,6 @@
+# *C. Energy Comparison*
+
+Fig. 21 shows energy breakdown across representative realworld workloads. For the baseline accelerators, we estimate total energy as the sum of compute energy and HBM access energy, since only aggregate accelerator power is reported. For HiT, we provide a finer-grained energy breakdown across components to highlight the source of its efficiency. Since Trapezoid reports a range of power values, we estimate its MS energy using the peak power, HS×HS using its lowest, and the lowest power plus additional activated resources for other HS workloads.
+
+In MS workloads, compute energy dominates due to high operation volume compared to the access energy of a small matrix size. HiT reduces energy by 3.01× , 5.02×, 5.79×, and 5.59× over TPU-like, Sigma-E, Flexagon-E and Trapezoid. In HS workloads, compute remains dominant in Trapezoid and HiT due to the power-consuming sparsity handling components. Excluding unavailable results, HiT achieves 8.86× and 2.11× lower geomean energy than Sigma-E and Flexagon-E, respectively. HiT consumes 1.27× less energy than Trapezoid, except in *p2p-p2p*, where limited speedup (2.02×) of HiT and Trapezoid's 3.09× lower power result in 39% higher energy.
+

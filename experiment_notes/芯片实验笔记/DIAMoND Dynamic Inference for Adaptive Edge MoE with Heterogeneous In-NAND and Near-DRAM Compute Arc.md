@@ -1,0 +1,10 @@
+## DIAMoND Dynamic Inference for Adaptive Edge MoE with Heterogeneous In-NAND and Near-DRAM Compute Architecture
+
+- 属于芯片设计的实现是什么？实验比较什么？
+  - 实现：与物理存储介质直接关联的结构级设计：① in-NAND 计算——在 3D NAND 阵列内做模拟域 VMM（电流域计算 [27][51]：WL 激活一层、TSG 馈输入向量（输入 1 加导通电压、0 加截止电压）、BL 汇流聚合电流、ADC 量化），利用 NAND string 串接结构实现跨层 AND（两层 WL 同选：一层权重 + 一层 mask 门控）→ mask 层设计（4~64 额外 NAND 层、占 1.7%~27.6% 存储）实现 OU 级灵活门控；多 WL 激活仅改外围偏置（Flash-Cosmos/TCAM-SSD 已验证非标 WL 偏置可行性）；外围仅改控制逻辑与接口电路、NAND 阵列不变（Xtacking 外围面积大、可增逻辑，类比 SanDisk/SK-Hynix HBF 外围改动）；② near-DRAM 计算——3D-stacked DRAM（4 层 × 每层 2×2 tiles，共 1.5GB）经 hybrid bonding + mini-TSV 连底部 Logic & Control die（4 tile PE 阵列），带宽 1620GB/s；③ 2.5D 封装把 in-NAND SSD（16 die、2 通道）与 near-DRAM 模块经独立 SSD 通道集成。实验比较：总面积 149.02mm² vs GPU/Cambricon-LLM（显著更小）；单 NAND die 功率（Fig.17b：DIAMoND 每 die 功率更高但 die 数远少——near-NAND 基线单页/plane 串行读需 256+ die 才有同等并行度，WL 电容预充 establish 功率与 die 数成正比，故总功率更低）；可靠性：D2D 变差（抬高 Vread 至饱和区，σ 0.15→0.02）、Current Clamping（读电流限 ~30nA，兼顾低功耗与低变差）、Vth 漂移（降 Vpass + on-the-fly 校准，>10G 可靠读、每 token 每权重至多读一次 → 80+ 天连续运行；超限 block 刷新，1K P/E 耐久下 10+ 年寿命）、ADC 7-bit@SDNR 40dB 精度几乎无损。
+- 模拟器名，模拟器链接（web search），或论文修改的模拟器。
+  - 芯片结构无专用物理/工艺仿真：电路级可靠性模型内置于基于 SSDsim 的 cycle-accurate 模拟器（SSDsim 开源 https://github.com/jiangyu718/ssdsim，论文引用 [17]）；数字电路用 Synopsys Design Compiler 28nm 商用 PDK 综合、CACTI 建 SRAM buffer、7-bit ADC 采 [31]（28nm）、softmax/SiLU 单元采 [46][62]。DIAMoND 修改版模拟器无公开链接（无法确认）。
+- 模拟器模拟什么的性能，修改了什么。
+  - 模拟 3D NAND 阵列内模拟 VMM 的精度与可靠性：修改 = 注入 D2D 变差（读电流噪声）、Vth 漂移、ADC 量化噪声（SDNR 40dB），评估 read 策略优化（Vread 抬升 + Current Clamping）前后各 MoE 模型在四 benchmark 上的推理精度（Fig.6）；能耗建模假设 plane 内所有 BL 通电产生电流（与常规 NAND read 及既有 in-NAND 策略一致）。输出：精度 vs 噪声注入、功率/面积/能效分解。
+- 开源情况。基于开源文档和论文，使用例子解释模拟器如何使用？作用是什么？
+  - 开源：DIAMoND 未开源（无法确认）；SSDsim 开源（链接如上）。使用例子（in-NAND VMM 一次读 cycle 的芯片级数据路径）：INT8 权重按 2's complement 编程进 SLC cell → 推理时选 OU（512 TSG 层 × BL 组）→ 权重层与 mask 层 WL 同加 Vread（饱和区 + clamping ~30nA 抑制 D2D）→ TSG 按激活 bit 施加导通/截止电压 → BL 汇流模拟电流 → 7-bit ADC 量化 → Shifter/Adder 位权重合成 → Control die 加法树聚合 8 die（位并行）结果得 8-bit MAC。作用：证明存储介质级 in-NAND VMM 在 read 策略优化后可靠性可接受（精度损失可忽略）、面积/功率满足边缘约束；异构分工（FFN 入 NAND、attention/KV cache 入 DRAM）绕开 NAND 10^3 P/E 耐久限制。

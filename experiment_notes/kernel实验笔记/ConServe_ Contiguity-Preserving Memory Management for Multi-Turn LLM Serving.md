@@ -1,0 +1,11 @@
+## ConServe: Contiguity-Preserving Memory Management for Multi-Turn LLM Serving
+
+- 属于kernel调度/运行时计算的实现是什么？实验比较什么？
+  - （近似归类，反馈：论文不写新 attention kernel，而是把现有 FlashInfer 风格 variable-length attention kernel 的 KV 寻址从"block-table 间接 + 跨块 gather"改为"conversation 级连续 VA slice 上的 base+offset 流式访问"，并量化两种布局的 kernel 性能差异；内存管理主体见 实验_Serving调度.md 同名条目。）实现：(1) kernel 侧——micro-batch 描述符只含每序列 KV base 指针与 live 长度，kernel 先加载 base 再按 VA(t,l)=base+seg_off[l]+t×B_layer+δ 连续流式读 K/V，去掉 block table 查表、块内偏移计算与跨块取下一块指针；(2) runtime 侧——为每 conversation 提供 layer-major 连续 VA slice（K/V 按层连续存放，对齐 decode kernel 逐层顺序扫描的访问模式）；(3) resize 的 copy-free remap 在 layer ℓ 完成后、下一 layer 执行期间重叠进行，迭代边界切换 base，使在飞 kernel 观察到的 VA 镜像稳定。实验比较：FlashInfer native（每请求单虚拟区域 base+offset）vs FlashInfer-paged（vLLM block table + 散页 gather），同上下文长度、同逐 token 算数，仅 KV 放置与访存模式不同。
+- 后端平台是什么，配置是什么。
+  - NVIDIA A100-80GB（Llama-3-8B，8K prefill + 1K decode，batch 1–16；多轮场景每轮 512 输入 + 64 decode）；CUDA VMM 2 MB 页。
+- 评估性能的软件/脚本是什么。修改了什么。
+  - FlashInfer（native 与 paged 两套注意力实现，https://github.com/flashinfer-ai/flashinfer）；NVIDIA Nsight Compute（论文写作 NVIDIA Compute）profile 长 scoreboard stall 比例、每活跃周期 eligible warps、SM/L2/DRAM 吞吐。修改了什么：kernel 寻址方式（block-table gather → base+offset 流式）+ 调用方式（variable-length 模式 + 紧凑描述符）；论文未给出 benchmark 脚本名。
+- 开源情况。基于开源文档和论文，使用例子解释评估软件/脚本如何使用？至少具体到评估软件的评估原理和kernel输入到性能输出的全过程。
+  - 开源情况：ConServe 未开源（论文无链接、未检索到公开仓库，无法确认）；FlashInfer 开源，Nsight Compute 公开（https://docs.nvidia.com/nsight-compute/NsightCompute/index.html）。
+  - 评估原理与全过程（一次多轮 prefill kernel）：kernel 输入 = micro-batch 描述符（每序列 base 指针、live 长度）与 Q 张量；paged 路径 = 每个 KV 访问先查 block table 取块虚拟地址 → 算块内偏移 → 跨块边界再取下一块指针 → 散页 gather；native/ConServe 路径 = base+offset 算术得 VA → warp 对齐连续访问合并为大事务 → 硬件页表翻译（连续范围命中少数 TLB 项与 page-walk cache 行）。Nsight Compute 输出：FlashInfer-paged 长 scoreboard stall 84.64% vs native 79.37%、eligible warps/cycle 0.718 vs 0.825、SM/L2/DRAM 吞吐 −22.4%/−16.7%/−21.1%，prefill kernel 慢 12–24%（batch 1–16）；随轮数累积 paged/native 运行时比从 1.2× 升至 1.75× 后饱和（每轮 512 输入 + 64 decode）。resize 微基准（2 MB 页）：cuMemAddressReserve 2 µs、cuMemCreate 29.2 µs、cuMemMap 1.9 µs、cuMemSetAccess 36.8 µs、cuMemUnmap 34.3 µs、cuMemRelease 24 µs、cuMemAddressFree 1.6 µs；Llama-3-8B batch=32 下 94.7% resize 完全隐藏、99% 暴露 ≤1.5 ms（不与计算重叠时每次 resize 尖峰 4–18 ms）。

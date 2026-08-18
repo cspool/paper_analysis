@@ -1,0 +1,4 @@
+# IX. CONCLUSION
+
+This work re-examines the five-minute rule from first principles and recasts it as a feasibility-aware provisioning framework for AI-era systems. Our analysis shows that, when GPUcentric hosts are paired with Storage-Next SSDs engineered for fine-grained random access, the DRAM-to-flash caching threshold collapses from minutes to seconds, effectively promoting NAND flash to an active extension tier of DRAM. We implemented MQSim-Next to reproduce the key trends and support basic sensitivity studies. We further examined SSD-resident KV store and ANN search as concrete case studies, illustrating the algorithm and data-structure design space unlocked by such a paradigm shift. Overall, this work turns a heuristic into a quantitative, cross-layer framework for the AI era, laying a foundation for treating flash as a firstclass citizen in the memory hierarchy, bridging device physics, system design, and algorithm co-optimization.
+

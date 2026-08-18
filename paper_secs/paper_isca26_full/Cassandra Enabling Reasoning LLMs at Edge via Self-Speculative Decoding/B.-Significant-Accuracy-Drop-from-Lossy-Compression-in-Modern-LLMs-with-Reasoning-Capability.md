@@ -1,0 +1,16 @@
+# B. Significant Accuracy Drop from Lossy Compression in Modern LLMs with Reasoning Capability
+
+In edge LLM inference scenarios with limited batching, lossy compression has been widely adopted as a primary acceleration technique. While effective in improving performance, lossy compression inevitably introduces accuracy degradation, and most existing approaches focus on minimizing this loss. However, techniques that are reported to incur negligible degradation on standard benchmarks often fail to generalize to more challenging tasks, where the resulting accuracy drop becomes substantial.
+
+Table III in section VI-B presents the measured accuracy after applying several state-of-the-art lossy compression techniques to various reasoning LLMs. As shown in the table, even lossy compressions that exhibit little performance degradation on relatively easy benchmarks suffer non-negligible performance drops on complex reasoning benchmarks.
+
+This observation does not invalidate the overall effectiveness of lossy compression. Techniques such as quantization and pruning continue to provide significant performance gains while maintaining acceptable accuracy for less demanding workloads. However, considering that most recent small LLMs possess reasoning capabilities, and in contrast, quantization and pruning research is increasingly proposing aggressive techniques, relying solely on lossy compression going forward is not appropriate. To fully harness the performance of state-of-the-art LLMs in an edge environment, a method to accelerate low-batch LLMs while maintaining accuracy is absolutely essential.
+
+# B. Significant Accuracy Drop from Lossy Compression in Modern LLMs with Reasoning Capability
+
+In edge LLM inference scenarios with limited batching, lossy compression has been widely adopted as a primary acceleration technique. While effective in improving performance, lossy compression inevitably introduces accuracy degradation, and most existing approaches focus on minimizing this loss. However, techniques that are reported to incur negligible degradation on standard benchmarks often fail to generalize to more challenging tasks, where the resulting accuracy drop becomes substantial.
+
+Table III in section VI-B presents the measured accuracy after applying several state-of-the-art lossy compression techniques to various reasoning LLMs. As shown in the table, even lossy compressions that exhibit little performance degradation on relatively easy benchmarks suffer non-negligible performance drops on complex reasoning benchmarks.
+
+This observation does not invalidate the overall effectiveness of lossy compression. Techniques such as quantization and pruning continue to provide significant performance gains while maintaining acceptable accuracy for less demanding workloads. However, considering that most recent small LLMs possess reasoning capabilities, and in contrast, quantization and pruning research is increasingly proposing aggressive techniques, relying solely on lossy compression going forward is not appropriate. To fully harness the performance of state-of-the-art LLMs in an edge environment, a method to accelerate low-batch LLMs while maintaining accuracy is absolutely essential.
+

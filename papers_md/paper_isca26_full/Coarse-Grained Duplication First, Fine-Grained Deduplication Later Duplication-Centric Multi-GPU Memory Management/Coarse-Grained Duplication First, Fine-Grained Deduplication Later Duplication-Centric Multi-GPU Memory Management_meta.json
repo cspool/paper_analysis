@@ -1,0 +1,1391 @@
+{
+  "table_of_contents": [
+    {
+      "title": "Coarse-Grained Duplication First, Fine-Grained\nDeduplication Later: Duplication-Centric\nMulti-GPU Memory Management",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          81.28125,
+          93.2249755859375
+        ],
+        [
+          521.6571655273438,
+          93.2249755859375
+        ],
+        [
+          521.6571655273438,
+          169.5784912109375
+        ],
+        [
+          81.28125,
+          169.5784912109375
+        ]
+      ]
+    },
+    {
+      "title": "I. INTRODUCTION",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          140.150390625,
+          512.40234375
+        ],
+        [
+          214.8704071044922,
+          512.40234375
+        ],
+        [
+          214.8704071044922,
+          523.6185302734375
+        ],
+        [
+          140.150390625,
+          523.6185302734375
+        ]
+      ]
+    },
+    {
+      "title": "II. BACKGROUND",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          141.64453125,
+          638.859375
+        ],
+        [
+          214.43890380859375,
+          638.859375
+        ],
+        [
+          214.43890380859375,
+          649.405517578125
+        ],
+        [
+          141.64453125,
+          649.405517578125
+        ]
+      ]
+    },
+    {
+      "title": "A. UVM-Enabled Multi-GPU System",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          57.673828125,
+          651.62109375
+        ],
+        [
+          203.08326721191406,
+          651.62109375
+        ],
+        [
+          203.08326721191406,
+          663.3412322998047
+        ],
+        [
+          57.673828125,
+          663.3412322998047
+        ]
+      ]
+    },
+    {
+      "title": "B. NVIDIA TLB Sub-entries",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          313.171875,
+          504.9554443359375
+        ],
+        [
+          423.99835205078125,
+          504.9554443359375
+        ],
+        [
+          423.99835205078125,
+          514.9184265136719
+        ],
+        [
+          313.171875,
+          514.9184265136719
+        ]
+      ]
+    },
+    {
+      "title": "C. Multi-GPU Page Migration and Page Duplication",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          58.5703125,
+          158.79498291015625
+        ],
+        [
+          264.8808898925781,
+          158.79498291015625
+        ],
+        [
+          264.8808898925781,
+          168.75799560546875
+        ],
+        [
+          58.5703125,
+          168.75799560546875
+        ]
+      ]
+    },
+    {
+      "title": "D. GPU Memory Consistency",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          57.97265625,
+          450.52734375
+        ],
+        [
+          175.32522583007812,
+          450.52734375
+        ],
+        [
+          175.32522583007812,
+          461.034912109375
+        ],
+        [
+          57.97265625,
+          461.034912109375
+        ]
+      ]
+    },
+    {
+      "title": "III. OBSERVATION AND MOTIVATION",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          100.705078125,
+          595.93359375
+        ],
+        [
+          251.82554626464844,
+          595.93359375
+        ],
+        [
+          251.82554626464844,
+          607.1012573242188
+        ],
+        [
+          100.705078125,
+          607.1012573242188
+        ]
+      ]
+    },
+    {
+      "title": "A. Performance Characterization of NVLink 3.0",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          57.375,
+          663.99609375
+        ],
+        [
+          244.78311157226562,
+          663.99609375
+        ],
+        [
+          244.78311157226562,
+          674.5173797607422
+        ],
+        [
+          57.375,
+          674.5173797607422
+        ]
+      ]
+    },
+    {
+      "title": "C. Performance Characterization of NVLink 4.0",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          59.16796875,
+          380.91796875
+        ],
+        [
+          246.22836303710938,
+          380.91796875
+        ],
+        [
+          246.22836303710938,
+          391.4916687011719
+        ],
+        [
+          59.16796875,
+          391.4916687011719
+        ]
+      ]
+    },
+    {
+      "title": "D. Limitations of Fine-Grained Migration and Duplication",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          314.3671875,
+          539.9271545410156
+        ],
+        [
+          542.8541870117188,
+          539.9271545410156
+        ],
+        [
+          542.8541870117188,
+          549.8901519775391
+        ],
+        [
+          314.3671875,
+          549.8901519775391
+        ]
+      ]
+    },
+    {
+      "title": "E. Accessed GPU Memory Fraction over Time",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          58.5,
+          396.75
+        ],
+        [
+          240.75,
+          396.75
+        ],
+        [
+          240.75,
+          406.5
+        ],
+        [
+          58.5,
+          406.5
+        ]
+      ]
+    },
+    {
+      "title": "IV. DESIGN",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          408.0,
+          161.25
+        ],
+        [
+          458.25,
+          161.25
+        ],
+        [
+          458.25,
+          169.5
+        ],
+        [
+          408.0,
+          169.5
+        ]
+      ]
+    },
+    {
+      "title": "A. Overview",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          313.5,
+          174.75
+        ],
+        [
+          364.5703125,
+          174.75
+        ],
+        [
+          364.5703125,
+          183.0
+        ],
+        [
+          313.5,
+          183.0
+        ]
+      ]
+    },
+    {
+      "title": "B. High-level Design of CDFD",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          314.3671875,
+          597.75
+        ],
+        [
+          438.0,
+          597.75
+        ],
+        [
+          438.0,
+          607.53515625
+        ],
+        [
+          314.3671875,
+          607.53515625
+        ]
+      ]
+    },
+    {
+      "title": "C. Detailed Architecture Design of CDFD",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          58.5,
+          221.25
+        ],
+        [
+          223.5,
+          221.25
+        ],
+        [
+          223.5,
+          230.25
+        ],
+        [
+          58.5,
+          230.25
+        ]
+      ]
+    },
+    {
+      "title": "D. Handling Sys-scoped Writes",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          313.5,
+          384.0
+        ],
+        [
+          437.25,
+          384.0
+        ],
+        [
+          437.25,
+          393.0
+        ],
+        [
+          313.5,
+          393.0
+        ]
+      ]
+    },
+    {
+      "title": "E. Area Overhead analysis",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          313.5,
+          564.75
+        ],
+        [
+          421.048828125,
+          564.75
+        ],
+        [
+          421.048828125,
+          573.75
+        ],
+        [
+          313.5,
+          573.75
+        ]
+      ]
+    },
+    {
+      "title": "V. EVALUATION METHODOLOGY",
+      "heading_level": null,
+      "page_id": 9,
+      "polygon": [
+        [
+          110.865234375,
+          440.6149597167969
+        ],
+        [
+          244.40972900390625,
+          440.6149597167969
+        ],
+        [
+          244.40972900390625,
+          450.5779724121094
+        ],
+        [
+          110.865234375,
+          450.5779724121094
+        ]
+      ]
+    },
+    {
+      "title": "VI. EVALUATION",
+      "heading_level": null,
+      "page_id": 9,
+      "polygon": [
+        [
+          397.44140625,
+          427.31280517578125
+        ],
+        [
+          469.0029296875,
+          427.31280517578125
+        ],
+        [
+          469.0029296875,
+          437.37890625
+        ],
+        [
+          397.44140625,
+          437.37890625
+        ]
+      ]
+    },
+    {
+      "title": "A. End-to-End Performance",
+      "heading_level": null,
+      "page_id": 9,
+      "polygon": [
+        [
+          313.76953125,
+          443.44158935546875
+        ],
+        [
+          423.71246337890625,
+          443.44158935546875
+        ],
+        [
+          423.71246337890625,
+          453.4045715332031
+        ],
+        [
+          313.76953125,
+          453.4045715332031
+        ]
+      ]
+    },
+    {
+      "title": "B. Detailed Analysis",
+      "heading_level": null,
+      "page_id": 10,
+      "polygon": [
+        [
+          58.5,
+          100.5
+        ],
+        [
+          141.0,
+          100.5
+        ],
+        [
+          141.0,
+          109.5
+        ],
+        [
+          58.5,
+          109.5
+        ]
+      ]
+    },
+    {
+      "title": "C. Sensitive Study",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          313.5,
+          174.41015625
+        ],
+        [
+          385.5,
+          174.41015625
+        ],
+        [
+          385.5,
+          183.0
+        ],
+        [
+          313.5,
+          183.0
+        ]
+      ]
+    },
+    {
+      "title": "D. Evaluation with NVLink 4.0",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          59.7781982421875,
+          72.5550537109375
+        ],
+        [
+          181.26309204101562,
+          72.5550537109375
+        ],
+        [
+          181.26309204101562,
+          82.51806640625
+        ],
+        [
+          59.7781982421875,
+          82.51806640625
+        ]
+      ]
+    },
+    {
+      "title": "VII. DESIGN CHOICE AND COST-BENEFIT ANALYSIS",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          69.92578125,
+          314.72705078125
+        ],
+        [
+          284.49005126953125,
+          314.72705078125
+        ],
+        [
+          284.49005126953125,
+          324.6900634765625
+        ],
+        [
+          69.92578125,
+          324.6900634765625
+        ]
+      ]
+    },
+    {
+      "title": "TABLE VI\nADVANTAGES OF CDFD OVER COARSEDUP",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          103.693359375,
+          338.765625
+        ],
+        [
+          248.12794494628906,
+          338.765625
+        ],
+        [
+          248.12794494628906,
+          356.3123474121094
+        ],
+        [
+          103.693359375,
+          356.3123474121094
+        ]
+      ]
+    },
+    {
+      "title": "VIII. RELATED WORK",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          383.994140625,
+          122.612548828125
+        ],
+        [
+          478.81732177734375,
+          122.612548828125
+        ],
+        [
+          478.81732177734375,
+          132.5755615234375
+        ],
+        [
+          383.994140625,
+          132.5755615234375
+        ]
+      ]
+    },
+    {
+      "title": "IX. CONCLUSION",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          393.85546875,
+          478.16851806640625
+        ],
+        [
+          469.0364990234375,
+          478.16851806640625
+        ],
+        [
+          469.0364990234375,
+          488.13153076171875
+        ],
+        [
+          393.85546875,
+          488.13153076171875
+        ]
+      ]
+    },
+    {
+      "title": "ACKNOWLEDGMENT",
+      "heading_level": null,
+      "page_id": 12,
+      "polygon": [
+        [
+          391.763671875,
+          609.8844451904297
+        ],
+        [
+          473.8279113769531,
+          609.8844451904297
+        ],
+        [
+          473.8279113769531,
+          619.91015625
+        ],
+        [
+          391.763671875,
+          619.91015625
+        ]
+      ]
+    },
+    {
+      "title": "REFERENCES",
+      "heading_level": null,
+      "page_id": 13,
+      "polygon": [
+        [
+          150.310546875,
+          71.54296875
+        ],
+        [
+          204.55618286132812,
+          71.54296875
+        ],
+        [
+          204.55618286132812,
+          81.75811767578125
+        ],
+        [
+          150.310546875,
+          81.75811767578125
+        ]
+      ]
+    }
+  ],
+  "page_stats": [
+    {
+      "page_id": 0,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          214
+        ],
+        [
+          "Line",
+          104
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "PageFooter",
+          3
+        ],
+        [
+          "PageHeader",
+          2
+        ],
+        [
+          "SectionHeader",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 1,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          301
+        ],
+        [
+          "Line",
+          131
+        ],
+        [
+          "Text",
+          11
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 2,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          214
+        ],
+        [
+          "Line",
+          109
+        ],
+        [
+          "Text",
+          15
+        ],
+        [
+          "SectionHeader",
+          4
+        ],
+        [
+          "PageFooter",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 3,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          141
+        ],
+        [
+          "Span",
+          15
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "Figure",
+          3
+        ],
+        [
+          "Caption",
+          3
+        ],
+        [
+          "FigureGroup",
+          3
+        ],
+        [
+          "PageFooter",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 4,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          149
+        ],
+        [
+          "Line",
+          74
+        ],
+        [
+          "Text",
+          9
+        ],
+        [
+          "Figure",
+          3
+        ],
+        [
+          "Caption",
+          3
+        ],
+        [
+          "FigureGroup",
+          3
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "PageFooter",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 5,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          115
+        ],
+        [
+          "Span",
+          37
+        ],
+        [
+          "Text",
+          11
+        ],
+        [
+          "SectionHeader",
+          4
+        ],
+        [
+          "Figure",
+          3
+        ],
+        [
+          "Caption",
+          3
+        ],
+        [
+          "FigureGroup",
+          3
+        ],
+        [
+          "PageFooter",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 6,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          263
+        ],
+        [
+          "Line",
+          106
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "FigureGroup",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 7,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          121
+        ],
+        [
+          "Span",
+          51
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "FigureGroup",
+          2
+        ],
+        [
+          "SectionHeader",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 8,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          137
+        ],
+        [
+          "Span",
+          44
+        ],
+        [
+          "TableCell",
+          27
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "Caption",
+          3
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "FigureGroup",
+          2
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "TableGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 9,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          371
+        ],
+        [
+          "Line",
+          114
+        ],
+        [
+          "TableCell",
+          84
+        ],
+        [
+          "Text",
+          8
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Table",
+          3
+        ],
+        [
+          "Caption",
+          2
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "TableGroup",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 10,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "Line",
+          105
+        ],
+        [
+          "Span",
+          34
+        ],
+        [
+          "Text",
+          5
+        ],
+        [
+          "Figure",
+          4
+        ],
+        [
+          "Caption",
+          4
+        ],
+        [
+          "ListItem",
+          4
+        ],
+        [
+          "FigureGroup",
+          4
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "ListGroup",
+          2
+        ],
+        [
+          "SectionHeader",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 11,
+      "text_extraction_method": "surya",
+      "block_counts": [
+        [
+          "TableCell",
+          184
+        ],
+        [
+          "Line",
+          89
+        ],
+        [
+          "Span",
+          29
+        ],
+        [
+          "Text",
+          5
+        ],
+        [
+          "Caption",
+          4
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Table",
+          2
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "FigureGroup",
+          2
+        ],
+        [
+          "TableGroup",
+          2
+        ],
+        [
+          "SectionHeader",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 12,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          333
+        ],
+        [
+          "Line",
+          111
+        ],
+        [
+          "TableCell",
+          15
+        ],
+        [
+          "Text",
+          10
+        ],
+        [
+          "SectionHeader",
+          6
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Caption",
+          1
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "FigureGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 13,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          375
+        ],
+        [
+          "Line",
+          149
+        ],
+        [
+          "ListItem",
+          31
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "ListGroup",
+          2
+        ],
+        [
+          "SectionHeader",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    },
+    {
+      "page_id": 14,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          160
+        ],
+        [
+          "Line",
+          67
+        ],
+        [
+          "ListItem",
+          16
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "ListGroup",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0,
+        "previous_text": "",
+        "previous_type": "",
+        "previous_order": 0
+      }
+    }
+  ],
+  "debug_data_path": "debug_data/Coarse-Grained Duplication First, Fine-Grained Deduplication Later Duplication-Centric Multi-GPU Memory Management"
+}

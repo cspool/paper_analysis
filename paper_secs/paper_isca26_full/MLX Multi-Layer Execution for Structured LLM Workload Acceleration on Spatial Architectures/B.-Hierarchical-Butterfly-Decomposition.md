@@ -1,0 +1,9 @@
+# B. Hierarchical Butterfly Decomposition
+
+Conventional BSMM applies butterfly decomposition to the entire weight matrix, which is theoretically expensive and impractical for large LLM models [4, 6]. We instead adopt a hierarchical variant that confines butterfly structure within local tiles. The weight matrix W is partitioned into  $(D/B)\times(D/B)$  tiles of size  $B\times B$ , and apply butterfly factors only within each tile. Therefore, the total butterfly parameter computation becomes  $(D/B)^2 \cdot O(B \log B) = O\left(\frac{D^2}{B} \log B\right)$ , compared to the global factoring of  $O(D \log D)$ :  $O\left(\frac{\log D}{D}\right) \implies O\left(\frac{\log B}{B}\right) \tag{2}$ 
+
+$$O(\frac{\log D}{D}) \Rightarrow O(\frac{\log B}{B})$$
+ (2)
+
+The tile size B therefore provides another tunable accuracy efficiency knob: under fixed butterfly factoring, increasing B enforces a stronger structured sparsity (lower complexity ratio,  $O(\log B/B)$ ), which reduces compute cost but tends to increase approximation error. This structure naturally maps to a hierarchical, tile-wise execution: inter-tile computation follows a coarse-grained blocked-GEMM dataflow, while intratile BSMM realizes fine-grained structured butterfly dataflow. Hybridized Butterfly Kernels. As listed in Table I, prior butterfly-based uses (e.g., FFT attention variants and global BSMM [6, 9, 29]) have mostly been studied in settings that do not directly address prefill-decode inference at modern LLM scales. We therefore couple semantic-aware chunked FFT (sequence dimension N) with hierarchical BSMM (hidden dimension D). Together, they expose parallelism in orthogonal dimensions and induce complementary dataflows. This motivates the spatial execution model introduced next, which co-designs hardware and mapping support to translate these algorithmic benefits into unified spatial acceleration.
+

@@ -1,0 +1,10 @@
+## Don't Surrender to Low QPS/$: Fast and Cost-Efficient ANNS with TridentANN
+
+- 属于kernel调度/运行时计算的实现是什么？实验比较什么？
+  三项运行时设计：(1) GPU-SSD 直通 P2P 数据路径——硬件上把 4×NVMe SSD（各 4 PCIe lanes）+1×GPU（16 lanes）组成 32-lane Work Group，簇列表不经主机内存直接 SSD→GPU；(2) 自研轻量用户态 I/O 栈（SPDK 风格 driver-level 抽象）：磁盘空间表示为三元组 (nvme_ns, lba, block_cnt)，应用直接向 NVMe I/O 队列提交请求，线程与核一一绑定轮询完成；(3) measure-then-allocate 异构算子调度——微基准实测后把距离计算放 GPU（cuBLAS）、top-k 排序放 CPU（partial_sort），thread-local GPU stream 并发执行多查询 kernel，noise 搜索与 cluster 加载/计算并行流水。实验比较：微基准（GPU cuBLAS vs SPANN CPU SIMD 距离；GPU AIR-TOPK vs CPU partial_sort）；消融 SPANN→+GPU→+Separate Noise→GDS 直通 vs 自研直通→排序移 CPU→noise/cluster 并行（最终 2.17-2.43×）；各系统 SSD 带宽利用率对比。
+- 后端平台是什么，配置是什么。
+  AMD EPYC 7453 28 核 CPU + 8×1-TiB Samsung 980 Pro PCIe-Gen4 NVMe SSD（单盘约 7 GiB/s 读带宽）+ 2× NVIDIA A2000-6GB GPU（合计 16 TFLOPS、>200 GB/s 设备带宽、6 GB GDDR）；Ubuntu 22.04、Linux 6.8、CUDA 12.1、GCC 11.4。读操作基于 SPDK 实现；对比对象 NVIDIA GDS、BaM、CAM、GeminiFS。
+- 评估性能的软件/脚本是什么。修改了什么。
+  自研 TRIDENTANN 运行时（SPDK 风格用户态 NVMe 轮询 I/O + CUDA P2P 直传 + cuBLAS 距离 kernel + CPU partial_sort 排序），未修改现有开源 Serving/框架而是自建 I/O 栈：绕开内核页缓存（SPDK 式轮询）后进一步绕开主机内存（P2P 直写 GPU query slot）。弃用 GDS 原因：8-12 KB 小粒度随机读（每查询数百次）下 CPU-side kernel 开销使带宽利用率仅 ~40-70%（消融中仅 +5%）；BaM/CAM/GeminiFS 面向多轮 GPU-initiated I/O 且依赖大 BAR 空间的高端 GPU，与"单轮 I/O + 单距离 kernel"的 ANNS 负载及低端 GPU 定位不匹配。
+- 开源情况。基于开源文档和论文，使用例子解释评估软件/脚本如何使用？至少具体到评估软件的评估原理和kernel输入到性能输出的全过程。
+  论文正文未给出 TRIDENTANN 代码开源链接（仓库地址未能确认）；构建于 SPDK（https://spdk.io/）、Faiss、cuBLAS（https://developer.nvidia.com/cublas）、SPTAG（https://github.com/microsoft/SPTAG）。评估原理与全过程：运行时为每个查询分配 GPU/CPU 各一个 query slot（GPU slot 含 Cluster Lists 加载区 + Inner Product 结果区；CPU slot 含 Inner Product 区与 Norm 区）。单查询：CPU 在质心 HNSW 中定位最近簇并得到 (nvme_ns, lba) → 按簇列表大小换算 block_cnt → 绑定核线程向 NVMe I/O 队列直接提交读请求并轮询完成 → SSD 经 PCIe P2P 把簇列表写入 GPU slot 的 Cluster Lists 区（MB 级传输：数百个 8-12 KB 随机读/查询）→ GPU 用 thread-local stream 执行 cuBLAS 距离 kernel（输入 query 向量 + 簇内原始向量，输出 FP32 Inner Product，KB 级）→ cudaMemcpy 回传 CPU slot → CPU 由 IP+Norm 推导 L2 距离并 partial_sort 取 top-k，与内存 BKT 的 noise 搜索结果合并。吞吐测量：逐步增加搜索线程至吞吐饱和；P99.9 尾延迟在峰值吞吐点记录。

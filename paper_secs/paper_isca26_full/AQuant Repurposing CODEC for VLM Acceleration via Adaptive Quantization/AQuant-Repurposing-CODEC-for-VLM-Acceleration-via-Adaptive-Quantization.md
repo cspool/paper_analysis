@@ -1,0 +1,68 @@
+# AQuant: Repurposing CODEC for VLM Acceleration via Adaptive Quantization
+
+Zhuoran Song† , Chunyu Qi† , Jian Weng‡ , Xiaoyao Liang† , Haibing Guan†\* †*School of Computer Science, Shanghai Jiao Tong University, Shanghai, China* ‡ *Computer Science, King Abdullah University of Science and Technology, Thuwal, Mecca, Saudi Arabia Email: songzhuoran@sjtu.edu.cn*
+
+*Abstract*—Vision-Language Models (VLMs) have reached the forefront of accuracy in various vision understanding tasks. Despite their remarkable success, the computing costs of VLMs scale significantly with the high image resolutions or the increasing number of video frames that need to be processed, posing substantial challenges for deployment to real-time applications. Although specialized quantization accelerators have been developed, they may not be the optimal solutions due to their neglect of the inherent data similarity within VLMs. Additionally, the use of floating-point units for floating-point to integer conversion introduces non-negligible hardware overhead.
+
+This paper introduces Adaptive Quantization (AQuant), an algorithm-hardware co-design framework that repurposes the CODEC to accelerate VLM inference in an end-to-end and unified manner. AQuant leverages the inherent similarities in visual tokens, exploiting them for differential value (delta) generation, which is well-suited for dynamic quantization due to its narrower distribution. To eliminate the expensive floating-point similarity detection, AQuant integrates an exponent-based similarity detection operation. On the hardware side, we enhance the video CODEC's capabilities to efficiently implement exponentsimilarity detection and adaptive quantization. The framework also incorporates a Neural Processing Unit (NPU) with mixedprecision support, which collaborates closely with the CODEC to translate algorithmic savings into real speedup. Experimental results show that AQuant achieves speedups of 4.5×, 2.8×, and 6.9× over state-of-the-art accelerators, such as LLM.265, CMC, and Xavier AGX GPU, with negligible accuracy loss.
+
+*Index Terms*—CODEC, VLM, Quantization.
+
+## I. INTRODUCTION
+
+Vision-Language Models (VLMs) have become powerful tools for a wide range of multimodal tasks [26], [5]. Their remarkable success has drawn substantial attention from both the computer vision (CV) and natural language processing (NLP) communities. The number of visual tokens grows rapidly along with the improvements on VLMs' capability of processing long visual context, such as high-resolution images, multiple images, or multi-frame videos [22], leading to an exponential inference latency increase. This long inference latency significantly hinders the applicability of VLMs in realtime applications such as visual question answering, scene understanding, and image captioning [14], [36], [19], [46], [45], [42].
+
+This work is partly supported by National Natural Science Foundation of China (Grant No. 62572301, U25B2057). \*Haibing Guan is the corresponding author.
+
+![](_page_0_Figure_10.jpeg)
+
+Fig. 1. Quantization comparison: (a) Prior quantization works; (b) Our proposed CODEC-assisted quantization.
+
+Quantization is a promising approach to mitigate the high memory and computing cost in VLM inferences. By approximating the input data with lower-bit precision, the performance can be orders of magnitude improved with modest accuracy degradation. Many prior works proposed quantizationaccelerator codesigned [11], [12], [38], [21], [15]. These works are limited in two aspects: First, many prior works still focus on statically quantizing the weight matrices, while the similarity of the input visual tokens is often overlooked. As shown in Fig. 2, unlike LLM tokens, visual tokens in VLMs are highly similar, which enables the potential to approximate the input tokens. Second, quantization can only be applied to linear layers, and to preserve the accuracy, precision-critical non-linear operators (e.g., GELU, Softmax, and Layer Normalization) still accept FP activations cast from quantized INT from linear operators. Naively implementing full floating-point operations, including but not limited to multiplication, addition, and clamping, for quantization is hardware-expensive.
+
+*Takeaway.* While quantization offers significant potential for reducing computation costs through low-bit processing, prior works miss the opportunities of leveraging the visual token similarity, and saving the cost of casting floating-point and integer back-and-forth.
+
+A specialized and dedicated video encoding/decoding unit (also known as CODEC) is often integrated into a realtime multi-media system, like an edge multi-media SoC or other GPU-based systems. Such CODEC units are particularly attractive to our target workloads, real-time quantized VLM inference: 1) CODEC units already have deep specialization for quantization and de-quantization by exploiting the data similarity from the raw video frames, and such similarity still exists in visual tokens; 2) CODEC units are mostly idle during model inference, which could be leveraged. However, existing CODEC units were designed for INT-pixel quantization, while visual tokens to VLM models are floatingpoint. As discussed above, naively extending CODEC with full floating-point operation will be hardware-expensive. In addition, such CODEC units are hardwired for a specific video encoding/decoding standard, while model quantization requires some flexibility for different data distributions, which requires careful management to extend the CODEC microarchitecture.
+
+*Takeaway.* CODEC can be a promising unit for quantization and de-quantization, but some extensions are required to make it fit input visual token quantization.
+
+Our goal is to have an *end-to-end and unified* flow for input visual token quantization and inference. *End-to-end* means this approach is useful for both prefilling and decoding, and *unified* means this approach is applicable to all matrix multiplications, including projection, feed forward, and attention. The quantization and de-quantization shall have negligible accuracy loss, and can be achieved with modest underlying hardware cost. We address these issues by presenting AQuant, a software/hardware co-designed instance for VLM quantization and inference, as presented in Fig. 1. The technical contributions of this work are:
+
+- An algorithm that captures the input similarity among visual tokens for dynamic quantization, while avoiding expensive floating-point operations. (§III-A)
+- A software-hardware co-designed workload-balanced adaptive quantization approach that reduces cost while improving hardware utilization. (§III-B)
+- Novel micro-architectural extensions to existing CODEC to flexibly support different quantization configurations with modest cost. (§IV)
+
+# AQuant: Repurposing CODEC for VLM Acceleration via Adaptive Quantization
+
+Zhuoran Song† , Chunyu Qi† , Jian Weng‡ , Xiaoyao Liang† , Haibing Guan†\* †*School of Computer Science, Shanghai Jiao Tong University, Shanghai, China* ‡ *Computer Science, King Abdullah University of Science and Technology, Thuwal, Mecca, Saudi Arabia Email: songzhuoran@sjtu.edu.cn*
+
+*Abstract*—Vision-Language Models (VLMs) have reached the forefront of accuracy in various vision understanding tasks. Despite their remarkable success, the computing costs of VLMs scale significantly with the high image resolutions or the increasing number of video frames that need to be processed, posing substantial challenges for deployment to real-time applications. Although specialized quantization accelerators have been developed, they may not be the optimal solutions due to their neglect of the inherent data similarity within VLMs. Additionally, the use of floating-point units for floating-point to integer conversion introduces non-negligible hardware overhead.
+
+This paper introduces Adaptive Quantization (AQuant), an algorithm-hardware co-design framework that repurposes the CODEC to accelerate VLM inference in an end-to-end and unified manner. AQuant leverages the inherent similarities in visual tokens, exploiting them for differential value (delta) generation, which is well-suited for dynamic quantization due to its narrower distribution. To eliminate the expensive floating-point similarity detection, AQuant integrates an exponent-based similarity detection operation. On the hardware side, we enhance the video CODEC's capabilities to efficiently implement exponentsimilarity detection and adaptive quantization. The framework also incorporates a Neural Processing Unit (NPU) with mixedprecision support, which collaborates closely with the CODEC to translate algorithmic savings into real speedup. Experimental results show that AQuant achieves speedups of 4.5×, 2.8×, and 6.9× over state-of-the-art accelerators, such as LLM.265, CMC, and Xavier AGX GPU, with negligible accuracy loss.
+
+*Index Terms*—CODEC, VLM, Quantization.
+
+## I. INTRODUCTION
+
+Vision-Language Models (VLMs) have become powerful tools for a wide range of multimodal tasks [26], [5]. Their remarkable success has drawn substantial attention from both the computer vision (CV) and natural language processing (NLP) communities. The number of visual tokens grows rapidly along with the improvements on VLMs' capability of processing long visual context, such as high-resolution images, multiple images, or multi-frame videos [22], leading to an exponential inference latency increase. This long inference latency significantly hinders the applicability of VLMs in realtime applications such as visual question answering, scene understanding, and image captioning [14], [36], [19], [46], [45], [42].
+
+This work is partly supported by National Natural Science Foundation of China (Grant No. 62572301, U25B2057). \*Haibing Guan is the corresponding author.
+
+![](_page_0_Figure_10.jpeg)
+
+Fig. 1. Quantization comparison: (a) Prior quantization works; (b) Our proposed CODEC-assisted quantization.
+
+Quantization is a promising approach to mitigate the high memory and computing cost in VLM inferences. By approximating the input data with lower-bit precision, the performance can be orders of magnitude improved with modest accuracy degradation. Many prior works proposed quantizationaccelerator codesigned [11], [12], [38], [21], [15]. These works are limited in two aspects: First, many prior works still focus on statically quantizing the weight matrices, while the similarity of the input visual tokens is often overlooked. As shown in Fig. 2, unlike LLM tokens, visual tokens in VLMs are highly similar, which enables the potential to approximate the input tokens. Second, quantization can only be applied to linear layers, and to preserve the accuracy, precision-critical non-linear operators (e.g., GELU, Softmax, and Layer Normalization) still accept FP activations cast from quantized INT from linear operators. Naively implementing full floating-point operations, including but not limited to multiplication, addition, and clamping, for quantization is hardware-expensive.
+
+*Takeaway.* While quantization offers significant potential for reducing computation costs through low-bit processing, prior works miss the opportunities of leveraging the visual token similarity, and saving the cost of casting floating-point and integer back-and-forth.
+
+A specialized and dedicated video encoding/decoding unit (also known as CODEC) is often integrated into a realtime multi-media system, like an edge multi-media SoC or other GPU-based systems. Such CODEC units are particularly attractive to our target workloads, real-time quantized VLM inference: 1) CODEC units already have deep specialization for quantization and de-quantization by exploiting the data similarity from the raw video frames, and such similarity still exists in visual tokens; 2) CODEC units are mostly idle during model inference, which could be leveraged. However, existing CODEC units were designed for INT-pixel quantization, while visual tokens to VLM models are floatingpoint. As discussed above, naively extending CODEC with full floating-point operation will be hardware-expensive. In addition, such CODEC units are hardwired for a specific video encoding/decoding standard, while model quantization requires some flexibility for different data distributions, which requires careful management to extend the CODEC microarchitecture.
+
+*Takeaway.* CODEC can be a promising unit for quantization and de-quantization, but some extensions are required to make it fit input visual token quantization.
+
+Our goal is to have an *end-to-end and unified* flow for input visual token quantization and inference. *End-to-end* means this approach is useful for both prefilling and decoding, and *unified* means this approach is applicable to all matrix multiplications, including projection, feed forward, and attention. The quantization and de-quantization shall have negligible accuracy loss, and can be achieved with modest underlying hardware cost. We address these issues by presenting AQuant, a software/hardware co-designed instance for VLM quantization and inference, as presented in Fig. 1. The technical contributions of this work are:
+
+- An algorithm that captures the input similarity among visual tokens for dynamic quantization, while avoiding expensive floating-point operations. (§III-A)
+- A software-hardware co-designed workload-balanced adaptive quantization approach that reduces cost while improving hardware utilization. (§III-B)
+- Novel micro-architectural extensions to existing CODEC to flexibly support different quantization configurations with modest cost. (§IV)
+

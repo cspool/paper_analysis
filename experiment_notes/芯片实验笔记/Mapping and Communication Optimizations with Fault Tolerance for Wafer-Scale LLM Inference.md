@@ -1,0 +1,11 @@
+## Mapping and Communication Optimizations with Fault Tolerance for Wafer-Scale LLM Inference
+
+- 属于芯片设计的实现是什么？实验比较什么？
+  - 属于芯片设计：论文（ISCA 2026，HKUST-GZ，BusyBarn）以 wafer-scale chiplet 集成（先进封装）系统为目标平台做部署优化，涉及芯片结构级优化：(1) 层次化两级 2D mesh（die 级 + die 内 core 级），die 间 D2D 链路（多 SerDes lanes、AXI→UCIe 协议转换）跨硅 interposer 互联；(2) HBM 放置于 die 角落（Fig.2a），平衡 die-to-HBM 与 die-to-die 链路带宽；(3) CoWoS 封装（interposer 金属布线 + TSV）增强 D2D 互连；(4) 每 die 本地 DDR/HBM 扩展调度空间（时空复用，对比 Cerebras 纯片内 SRAM 空间并行）；(5) 通信路径级容错（类似 TPUv4 流量重路由，避免 Cerebras 冗余 core/互连的硬件开销），针对制造缺陷（光刻误差、颗粒污染、晶格缺陷）与运行期退化（电迁移、热载流子注入）两类故障源。
+  - 实验比较：(a) 缺陷率敏感——20×20 core mesh、10%/15%/20% 缺陷率 × cluster/random 故障模式，BusyBarn 相对 Gemini 1.24–1.53× 延迟加速；(b) die 形状敏感——8 种 die-group 形状，3×3 最优但 2.25× die 成本仅省 21% 延迟（die 数量/pipeline vs intra-die 混合并行权衡）；(c) 故障敏感性——6×6 mesh 上 1/2 节点、1/2 链路故障（覆盖不等价故障类），BALD 通信有效带宽 1–2.55× vs XY routing；(d) 故障映射可视化——2×2 die、每 die 4 core、D2D 链路故障（Die1-Core2 与 Die3-Core0 间）下 Gemini vs BusyBarn 的 core/link 负载热力图（Fig.11）。
+- 模拟器名，模拟器链接（web search），或论文修改的模拟器。
+  - 自研事件驱动后端模拟器（10K+ 行 Python），非修改开源模拟器；随 artifact 开源：https://github.com/redbird-arch/isca2026-busybarn-artifact.git（Zenodo: https://doi.org/10.5281/zenodo.19686855）。
+- 模拟器模拟什么的性能，修改了什么。
+  - 模拟 wafer-scale chiplet 系统在故障下的通信与推理性能：D2D 链路（20 ns、256 GB/s）、片上 NoC 链路（1 ns、256 GB/s）、HBM（100 ns、256 GB/s/die、8 GB）、tensor/vector 计算单元（1 GHz、16 MB SRAM/core）；建模制造缺陷与运行期故障（故障节点=节点及其所有邻接链路失效；故障链路=双向链路失效），BALD 通过 LUT 重配置在存活图连通前提下重路由。修改了什么：在模拟器中实现故障注入、BALD 容错链路分配、层次化 SA 映射对故障拓扑的适配（Hamiltonian Loop 构造含硬件故障约束）；对比 XY-YX-FT（带回溯的 XY-YX 路由）baseline。
+- 开源情况。
+  - 开源：GitHub https://github.com/redbird-arch/isca2026-busybarn-artifact.git，Zenodo https://doi.org/10.5281/zenodo.19686855；`bash run_all.sh 16` 复现 12 张图，`bash run_quick_test.sh 16` 快速验证；Python 3.9 + numpy/networkx/simanneal/matplotlib/tqdm/PyYAML；Makefile + Bash，可选 SLURM。使用例子：以 6×8 die 阵列、每 die 16×16 core、1.02 TFLOPs/core、每 die 边 1.5 TB/s D2D 的 DOJO 风格 WSC-LLM 平台评估 Qwen2.5-32B（seq 4096）消融（G+XY / B+XY / G+BALD / B+BALD 四种映射×路由组合）：事件驱动模拟器逐事件（计算/通信/HBM）ASAP 推进，输出端到端延迟与纯通信/重叠/纯计算时间占比，证明 BALD 通信优化（缩短关键路径上的通信阶段、让下游计算提前开始）比单独映射改进带来更大端到端收益；缺陷率实验：20×20 mesh 注入 10–20% 随机/聚集故障 core，层次化映射在故障拓扑上重建 Hamiltonian Loop/负载均衡映射，模拟器输出相对 Gemini 的延迟加速比（1.24–1.53×），量化通信路径级容错（相对冗余硬件）在 wafer 级缺陷下的性能保持能力。

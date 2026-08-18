@@ -1,0 +1,12 @@
+## Approaching Shannon Bound with Lossless LLM Weight Compression
+
+- 属于算法pipeline的实现是什么？实验比较什么？
+  - 实现为 tile-level 无损 ANS（rANS）LLM 权重压缩算法 pipeline：(1) 信息论分析——逐层把权重矩阵 W^(l) 的每个元素按数值格式视为离散符号，建经验直方图估计 Shannon 熵 H^(l) = −Σ_i p_i^(l)·log2 p_i^(l)，模型级为按参数量加权平均 H_model = Σ_l H^(l)|W^(l)| / Σ_l |W^(l)|，即任意无损编码下的 bits/weight 下界；(2) 离线压缩——对每个投影矩阵（W_Q/W_K/W_V 等）先 profiling 确定 tensor-core tiling 几何（如 128×32、256×64、128×128），聚合整层权重统计构造共享 ANS codebook（概率精度 b=12，2^12 项），把权重张量切成与 GEMM tile 对齐的 tile，每 tile 以独立初始状态 rANS 编码为自包含 substream（ANS 支持任意初始状态不损失压缩率，故 tile 可独立解码），tile 起始偏移记入 4B/条 的 offset table；(3) 在线解码——运行时按 GEMM tiling 顺序按需解码 tile 直接写 shared memory 供 tensor core 消费。严格无损：解码结果与原始权重 bit-exact，零精度损失，且与量化/剪枝/低秩等有损方法正交可叠加。
+  - 实验比较对象：名义存储位宽（bf16/fp8/int8/fp4/int4/sq8/awq4）与 Shannon 熵界（Fig. 6）；SOTA 无损压缩系统 NeuZip（层级 decompress-store-compute）与 DFloat11（H200 微基准）；CUTLASS 原生 GEMM（kernel 级）；KTransformer（OOM 场景 CPU offload）。指标：bits/weight、与 Shannon 界的比特差、TFLOP/s、吞吐 tokens/s、最大可行 batch size、median TPOT。
+- 硬件平台是什么，配置是什么。
+  - 两台 GPU 服务器：① 8× NVIDIA A100（80 GB HBM2e，2 TB/s 峰值带宽）；② NVIDIA Hopper H200。软件栈 PyTorch 2.5.1 + CUDA 12.1，GEMM 基于 CUTLASS。
+- 模型是什么。数据集和bench分别是什么。
+  - 模型（1.5B–405B，稠密 + MoE）：Qwen2-1.5B、Mistral-7B-v0.3、Qwen-14B、DeepSeek-LLM-67B、Llama-3.1-405B、Mixtral-8x22B（176B 总参数）。数值格式：bfloat16（bf16）、FP8-E5M2、INT8、FP4-E2M1、INT4、SmoothQuant sq8、AWQ awq4。数据集/benchmark：无损压缩为纯后处理、无需校准数据集；benchmark 为单层投影 GEMM 微基准（4096 input tokens、batch 1–64）与 SGLang 端到端推理（seq len 1024/2048）。
+- 开源情况。基于开源文档和论文，使用例子解释，解释算法pipeline，至少具体到伪代码或张量计算。
+  - 论文自身代码未找到公开仓库（arXiv 2606.15789，论文未给代码链接，联网搜索未见官方 repo）。基座开源：rANS 内核基于 DietGPU（https://github.com/facebookresearch/dietgpu），GEMM 基于 CUTLASS（https://github.com/NVIDIA/cutlass），serving 集成于 SGLang（https://github.com/sgl-project/sglang）。
+  - 算法 pipeline 执行例子（离线压缩 W∈R^{K×N} 的一个 128×128 tile）：① 按数值格式把 tile 内权重视为符号 s∈{0..2^b−1}（如 int8 取 8-bit 码），聚合整层计数频率归一化为 ANS 概率表（b=12，频率定标到 2^12，共享 codebook）；② rANS 编码：对符号逆序维护状态 x，编码 s：x ← ⌊x/fs⌋·R + (x mod fs) + cs（R=2^b、fs 归一化频率、cs 累积频率）；③ 每 tile 独立初始状态 x0，输出 tile substream，offset 表记录其起始位置；④ 运行时解码（Algorithm V.2）：每 warp lane 维护一个 rANS 状态 s.value，x ← s mod R → 查 shared memory 解码表 T̃[x]=(σ,f,c) → w ← DecodeSymbol(σ) 写入 shared memory tile A[r,c] → s.value ← f·⌊s.value/R⌋ + (x − c) → s 低于归一化阈值时以 coalesced 32-bit load 从压缩流补位。效果：ANS bitrate 与 Shannon 界差距仅 0.01–0.05 bits/weight（bf16 因 2^12 表有限精度定标约 0.1–0.2 bits 偏差）；实测熵：bf16 约 10–12 bits、int8 约 4–5 bits、int4 仅 0.6–1.0 bits（熵比达 6–10× 冗余）；sq8/awq4 仍有 1.1–1.3× 冗余；元数据开销仅 0.015%–0.108% 权重大小（A100 32×128 / H200 64×256 tile）。

@@ -1,0 +1,10 @@
+# Early Silicon of Raptor: The First 3D-DRAM Accelerator for Generative Inference
+
+Prashant J. Nair<sup>1,2</sup>, Ramyad Hadidi<sup>1</sup>, Subramani Ganesh<sup>1</sup>, Sangamesh Kodge<sup>1</sup>, Shubhankit Rathore<sup>1</sup>, Neil Thanawala<sup>1</sup>, Nikitha Reddy<sup>1</sup>, Gyanesh Saharia<sup>1</sup>, Vinayak Patankar<sup>1</sup>, Arun Tiruvur<sup>1</sup>, Nithesh Kurella<sup>1</sup>, and Sudeep Bhoja<sup>1</sup>
+
+<sup>1</sup>d-Matrix Inc. <sup>2</sup>University of British Columbia
+
+Abstract—Generative Inference is largely memory-bound. Autoregressive decoding dominates inference runtime and thus drives memory bandwidth and capacity demands. SRAM-based accelerators offer high bandwidth but limited capacity, while HBM DRAM provides capacity but is constrained by bandwidth and power. 3D-stacked logic-on-DRAM (3D-DRAM) helps close this gap, but integrating 3D-DRAM with accelerator logic introduces four challenges: (1) workload-aware mapping to exploit parallelism, (2) power optimization without burst-based data bus inversion (DBI), (3) resilience with high bank counts, and (4) thermal reliability at elevated junction temperatures.
+
+This paper distills lessons from the early silicon of Raptor, the first commercial generative inference accelerator with 3D-stacked DRAM (3D-DRAM). This paper introduces four key architectural features to enable practical 3D-DRAM integration. First, stream-blocking maps KV-cache streams onto configurable 3D-DRAM channels, sustaining up to 100 TB/s per card while preserving bank-level parallelism. Second, pinless DBI on the single-cycle  $\mu$ bump interface reduces memory-subsystem energy. Third, topology-preserving redundancy with thermal-aware refresh. Fourth, interleaved ECC for reliability at high temperatures. Across Llama-3.1 70B, DeepSeek-V3, Kimi K2, GPT-OSS, Whisper, and Canary, Raptor 3D-DRAM gives 4.71× and 2.44× higher throughput than with HBM and SRAM, respectively, while being less sensitive to network latency and bandwidth.
+

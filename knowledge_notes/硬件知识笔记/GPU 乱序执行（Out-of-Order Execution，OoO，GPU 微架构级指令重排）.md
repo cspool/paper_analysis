@@ -1,0 +1,13 @@
+## GPU 乱序执行（Out-of-Order Execution，OoO，GPU 微架构级指令重排）
+
+术语是什么？回答尽量完整，回答逻辑链中每一步都解释出来。通过联网搜索让回答具体和精准。
+GPU OoO 执行指在 GPU 流水线内对指令进行动态重排、让无依赖的指令越过被阻塞的前序指令提前执行，从而挖掘被 TLP 掩盖的 Instruction-Level Parallelism（ILP）。逻辑链：GPU 传统上靠 TLP（warp 上下文切换）隐藏延迟，但很多通用负载 TLP 不足且增加并发 warp 会加剧 cache 争用，导致 stall 与资源闲置；OoO 重排即在此背景下提出，分两类——frontend 方案在 Issue 阶段重排（依赖检查器 + 队列，如 GhOST、SIMIL），backend 方案在 Operand Collect（OC）阶段重排（保留站 + 寄存器重命名，如 LOOG）。注意区分：商业 GPU（NVIDIA Blackwell/Ampere/Volta）每个 sub-core 每 cycle 只按序调度一条 warp 指令，并不支持真正的指令级 OoO（vault 笔记"GPU 的 SIMT 执行模型"明确指出 GPU 没有乱序发射）；而 kernel 级的"乱序 kernel 调度"（ACS）是把 OoO 思想搬到 kernel 发射层，与本术语的指令粒度不同。sCROOGe（ISCA'26）是首个在可综合 RTL（Vortex GPGPU 框架内）同时实现 frontend 与 backend 两种 OoO 执行方案的工作，此前所有方案（LOOG/GhOST/SIMIL 等）仅在软件仿真器（PTXPlus/SASS/Accel-Sim）中评估，IPC 增益被系统性高估（仿真报 LOOG 23% / GhOST 6.9% / SIMIL 31%，RTL 实测仅 4.18% / 0.86%）。
+
+从硬件架构角度拆解术语，比如术语如何在硬件架构中发挥作用，给出术语在硬件架构中运转流程的具体例子。通过联网搜索让回答具体和精准。
+在 Vortex 六段流水（Schedule→Fetch→Decode→Issue→Execute→Commit）上的运转流程：frontend 方案在 Issue 阶段插入 Issue Buffer（IsB）+ In-Flight buffer（InFL）+ Dependence Checker + Issue Arbiter——译码后的指令进入 IsB，Dependence Checker 标记其依赖位向量，Issue Arbiter 优先把"独立指令"越过依赖未决的旧指令发射进 Execute（后端顺序执行、写回时按 eop 更新 InFL）；backend 方案删除 Scoreboard 阶段，指令进 OC 后分配 Collector Unit（CU，作保留站）+ Register Alias Table（RAT）重命名（rd→RRS ID），CU 收集操作数（从 RF 直读或等待 broadcast），ready 的 CU 经 Dispatch arbiter 乱序派遣进 Execute，Commit 后结果经 broadcast 写回、eop 触发 RAT 更新与 RF 写。以一条依赖链 A→B（B 用 A 的结果）+ 一条独立指令 C 为例：in-order baseline 中 B 阻塞在 A 未完成上，C 即使可执行也得等 B 发射；backend OoO 下 C 的 CU 先集齐操作数，绕过 B 的 CU 先执行，stall 显著下降（sched stall -61%）。评估结果：backend 通用负载最高 27.3%、ML 负载最高 53%，frontend 平均 6.7%；iso-area 对比中 OoO SM 相对增加 warp 数的 in-order SM 平均 IPC +14.4%；{64,32} 等最大配置因结构成本高而收益为负，16 warps 设计点最优（EDP 改善 frontend 12.4% / backend 27.9%）。
+
+术语一般如何实现？如何使用？通过联网搜索让回答具体和精准。
+实现：sCROOGe 用 SystemVerilog 在 Vortex（https://github.com/vortexgpgpu/vortex）RTL 中实现两套可配置 OoO 扩展（IsB 4-12 项 / CU 4-14 个 / RRS / UUID），性能经 Verilator cycle-accurate RTL 仿真（per-kernel cycles/IPC）、PPA 经 Synopsys DC 综合（GF 22nm FDSOI、TT/0.9V/25°C）+ PrimeTime VCD 功耗 + Cadence Innovus PnR 验证并扩展到 IMEC N2 2nm；开源 artifact 在 Zenodo（DOI 10.5281/zenodo.19453033，Docker 容器，含源码/benchmark/预计算 .csv）。使用方式：22 个 Vortex benchmark + ML 负载（llama2-Gemm、CNN-Layer、SqueezeLayer、llama-260k）上对比 baseline/frontend/backend，扫描 {warp,thread} 与 CU/IsB 尺寸。Web 证据：NVIDIA 专利"ACROSS-THREAD OUT-OF-ORDER INSTR DISPATCH IN A MT MP"描述了 GPU 内指令级乱序发射的早期设想；vault 笔记（human_notes/GPU架构笔记/GPU的SIMT执行模型、NV GPU专利）说明现代 NVIDIA SM 通过 Bank 裁决/dispatch 顺序发射并在收集操作数与写回无冲突时允许乱序完成。
+
+涉及论文标题：
+- sCROOGe Circuit-level Design and Optimization Framework for RISC-V Out-of-Order GPUs

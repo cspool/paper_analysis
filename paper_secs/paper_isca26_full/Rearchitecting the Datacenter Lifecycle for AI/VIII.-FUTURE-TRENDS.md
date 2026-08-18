@@ -1,0 +1,6 @@
+# VIII. FUTURE TRENDS
+
+We analyze model scaling and hardware trajectories to offer guidance for future AI datacenters. [Table IX](#page-11-1) shows the optimal strategies across stages with different growth patterns: *slow* (sub-linear), *medium* (linear), and *fast* (exponential) growths. AI Hardware. When hardware performance scales rapidly, frequent *refresh* cycles are advantageous, justifying earlier adoption and earlier decommissioning. However, if performance gains slow or power efficiency declines, it becomes more beneficial to extend refresh intervals and design infrastructure for long-term use. Lower-power, lower-density hardware can also extend infrastructure lifetimes by reducing the need for costly upgrades to power and cooling systems.
+
+AI Model Size. So far, we have assumed that AI models will grow linearly. Larger models amplify compute, memory, and networking requirements, accelerating refresh cadence and demanding infrastructure explicitly designed for modular expansion. If model size growth slows down, operators can rely on more cost-effective infrastructures (*e.g.*, Infini-Band networking). Conversely, if models continue to scale rapidly, more expensive infrastructures become necessary (*e.g.*, NVLink), alongside more aggressive software optimizations.
+

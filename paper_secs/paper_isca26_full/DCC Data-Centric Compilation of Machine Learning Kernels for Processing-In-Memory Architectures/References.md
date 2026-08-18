@@ -1,0 +1,298 @@
+# References
+
+- <span id="page-14-0"></span>[1] J. B. Heaton, N. G. Polson, and J. H. Witte, "Deep Learning for Finance: Deep Portfolios," Appl. Stoch. Model. Bus. Ind., 2017.
+- <span id="page-14-1"></span>[2] A. M. Ozbayoglu, M. U. Gudelek, and O. B. Sezer, "Deep Learning for Financial Applications: A Survey," Appl. Soft Comput., 2020.
+- <span id="page-14-2"></span>[3] K. Oosthuizen, E. Botha, J. Robertson, and M. Montecchi, "Artificial Intelligence in Retail: The AI-Enabled Value Chain," Australasian Marketing Journal, 2021.
+- <span id="page-14-3"></span>[4] D. Ravì, C. Wong, F. Deligianni, M. Berthelot, J. Andreu-Perez, B. Lo, and G.-Z. Yang, "Deep Learning for Health Informatics," IEEE J. Biomed. Health Inform., 2016.
+- <span id="page-14-4"></span>[5] R. Miotto, F. Wang, S. Wang, X. Jiang, and J. T. Dudley, "Deep Learning for Healthcare: Review, Opportunities and Challenges," Brief Bioinform, 2018.
+- <span id="page-14-5"></span>[6] R. S. Baker and P. S. Inventado, Educational Data Mining and Learning Analytics. Springer New York, 2014.
+- <span id="page-14-6"></span>[7] V. Zhang, B. Jeffries, and I. Koprinska, "A Machine Learning Approach for Predicting Student Progress in Online Programming Education," Int. J. Artif. Intell. Educ., 2025.
+- <span id="page-14-7"></span>[8] K. Ota, M. S. Dao, V. Mezaris, and F. G. D. Natale, "Deep Learning for Mobile Multimedia: A Survey," TOMM, 2017.
+- <span id="page-14-8"></span>[9] Y. Zheng, "Predicting Movie Box Office Based on Machine Learning, Deep Learning, and Statistical Methods," Appl. Comput. Eng., 2024.
+- <span id="page-14-9"></span>[10] Y. Tang, C. Zhao, J. Wang, C. Zhang, Q. Sun, W. X. Zheng, W. Du, F. Qian, and J. Kurths, "Perception and Navigation in Autonomous Systems in the Era of Learning: A Survey," IEEE TNNLS, 2022.
+- <span id="page-14-10"></span>[11] M. Cordts, M. Omran, S. Ramos, T. Rehfeld, M. Enzweiler, R. Benenson, U. Franke, S. Roth, and B. Schiele, "The Cityscapes Dataset for Semantic Urban Scene Understanding," in CVPR, 2016.
+- <span id="page-14-11"></span>[12] Y. Zhong, S. Liu, J. Chen, J. Hu, Y. Zhu, X. Liu, X. Jin, and H. Zhang, "DistServe: Disaggregating Prefill and Decoding for Goodput-Optimized Large Language Model Serving," in OSDI, 2024.
+- [13] Q. Su, W. Zhao, X. Li, M. Andoorveedu, C. Jiang, Z. Zhu, K. Song, C. Giannoula, and G. Pekhimenko, "Seesaw: High-Throughput LLM Inference via Model Re-Sharding," MLSys, 2026.
+- [14] M. Kim, S. Hong, R. Ko, S. Choi, H. Lee, J. Kim, J.-Y. Kim, and J. Park, "Oaken: Fast and Efficient LLM Serving with Online-Offline Hybrid KV Cache Quantization," in ISCA, 2025.
+- [15] A. K. Kamath, R. Prabhu, J. Mohan, S. Peter, R. Ramjee, and A. Panwar, "POD-Attention: Unlocking Full Prefill-Decode Overlap for Faster LLM Inference," in ASPLOS, 2025.
+- [16] C. Li and Y. Xu, "Foreseer: Knowledge-Driven Acceleration of Memory-Bound Matrix Multiplications for Large Language Model Inference," in SYSTOR, 2024.
+- <span id="page-14-12"></span>[17] X. Jiang, Y. Zhou, S. Cao, I. Stoica, and M. Yu, "NEO: Saving GPU Memory Crisis with CPU Offloading for Online LLM Inference," in MLSys, 2024.
+- <span id="page-14-13"></span>[18] J. Gómez-Luna, Y. Guo, S. Brocard, J. Legriel, R. Cimadomo, G. F. Oliveira, G. Singh, and O. Mutlu, "Evaluating Machine Learning Workloads on Memory-Centric Computing Systems," in ISPASS, 2023.
+- <span id="page-14-15"></span>[19] J. Gómez-Luna, I. E. Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, "Benchmarking a New Paradigm: Experimental Analysis and Characterization of a Real Processing-in-Memory System," IEEE Access, 2022.
+- <span id="page-14-22"></span>[20] C. Giannoula, P. Yang, I. Fernandez, J. Yang, S. Durvasula, Y. X. Li, M. Sadrosadati, J. G. Luna, O. Mutlu, and G. Pekhimenko, "PyGim: An Efficient Graph Neural Network Library for Real Processing-In-Memory Architectures," POMACS, 2025.
+- <span id="page-14-29"></span>[21] C. Li, Z. Zhou, Y. Wang, F. Yang, T. Cao, M. Yang, Y. Liang, and G. Sun, "PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning via Algorithm-System Co-Optimization," in ASPLOS, 2024.
+- [22] A. Boroumand, S. Ghose, B. Akin, R. Narayanaswami, G. F. Oliveira, X. Ma, E. Shiu, and O. Mutlu, "Google Neural Network Models for Edge Devices: Analyzing and Mitigating Machine Learning Inference Bottlenecks," in PACT, 2021.
+- <span id="page-14-14"></span>[23] A. Boroumand, S. Ghose, Y. Kim, R. Ausavarungnirun, E. Shiu, R. Thakur, D. Kim, A. Kuusela, A. Knies, P. Ranganathan, and O. Mutlu, "Google Workloads for Consumer Devices: Mitigating Data Movement Bottlenecks," in ASPLOS, 2018.
+- <span id="page-14-16"></span>[24] F. Devaux, "The True Processing In Memory Accelerator," in HCS, 2019.
+- <span id="page-14-26"></span>[25] S. Lee, S.-h. Kang, J. Lee, H. Kim, E. Lee, S. Seo, H. Yoon, S. Lee, K. Lim, H. Shin, J. Kim, O. Seongil, A. Iyer, D. Wang, K. Sohn, and N. S. Kim, "Hardware Architecture
+
+- and Software Stack for PIM Based on Commercial DRAM Technology: Industrial Product," in ISCA, 2021.
+- <span id="page-14-27"></span>[26] S. Lee, K. Kim, S. Oh, J. Park, G. Hong, D. Ka, K. Hwang, J. Park, K. Kang, J. Kim et al., "A 1ynm 1.25 V 8GB, 16GB/s/Pin GDDR6-Based Accelerator-in-Memory Supporting 1Tflops MAC Operation and Various Activation Functions for Deep-Learning Applications," in ISSCC, 2022.
+- <span id="page-14-28"></span>[27] M. He, C. Song, I. Kim, C. Jeong, S. Kim, I. Park, M. Thottethodi, and T. N. Vijaykumar, "Newton: A DRAM-Maker's Accelerator-in-Memory (AiM) Architecture for Machine Learning," in MICRO, 2020.
+- <span id="page-14-18"></span>[28] J. Park, J. Choi, K. Kyung, M. J. Kim, Y. Kwon, N. S. Kim, and J. H. Ahn, "Attacc! Unleashing the Power of PIM for Batched Transformer-Based Generative Model Inference," in ASPLOS, 2024.
+- [29] B. Kim, C. Lee, G. Kim, and E. Park, "Cost-Effective Extension of DRAM-PIM for Group-Wise LLM Quantization," IEEE, 2025.
+- [30] Z. Li, J. Zhou, X. Li, and N. Sun, "BlockPIM: Optimizing Memory Management for PIM-Enabled Long-Context LLM Inference," in DAC, 2025.
+- [31] S. Liu, Z. Huang, J. Yu, Q. Liu, and C. Chen, "McPAL: Scaling Unstructured Sparse Inference with Multi-Chiplet HBM-PIM Architecture for LLMs," in DAC, 2025.
+- <span id="page-14-39"></span>[32] L. Chen, D. Lyu, Z. Li, J. Jiang, Q. Wang, Z. Mao, and N. Jing, "AttenPIM: Accelerating LLM Attention with Dual-Mode GEMV in Processing-in-Memory," in DAC, 2025.
+- <span id="page-14-34"></span>[33] Y. He, H. Mao, C. Giannoula, M. Sadrosadati, J. Gómez-Luna, H. Li, X. Li, Y. Wang, and O. Mutlu, "Papi: Exploiting Dynamic Parallelism in Large Language Model Decoding with a Processing-in-Memory-Enabled Computing System," in ASPLOS, 2025.
+- <span id="page-14-35"></span>[34] C. Li, Z. Zhou, S. Zheng, J. Zhang, Y. Liang, and G. Sun, "SpecPIM: Accelerating Speculative Inference on PIM-Enabled System via Architecture-Dataflow Co-Exploration," in ASPLOS, 2024.
+- <span id="page-14-40"></span>[35] Y. Wu, Z. Wang, and W. D. Lu, "PIM GPT: A Hybrid Process in Memory Accelerator for Autoregressive Transformers," npj Unconventional Computing, 2024.
+- [36] H. Lee, D. Baek, J. Son, J. Choi, K. Moon, and M. Jang, "PAISE: PIM-Accelerated Inference Scheduling Engine for Transformer-Based LLM," in HPCA, 2025.
+- <span id="page-14-36"></span>[37] W. Kim, Y. Lee, Y. Kim, J. Hwang, S. Oh, J. Jung, A. Huseynov, W. G. Park, C. H. Park, D. Mahajan, and J. Park, "Pimba: A Processing-in-Memory Acceleration for Post-Transformer Large Language Model Serving," in MICRO, 2025.
+- <span id="page-14-19"></span>[38] D. Quinn, E. E. Yücel, J. Kim, J. F. Martínez, and M. Alian, "LongSight: Compute-Enabled Memory to Accelerate Large-Context LLMs via Sparse Attention," in MICRO, 2025.
+- <span id="page-14-23"></span>[39] J. Gómez-Luna, I. El Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, "Benchmarking Memory-Centric Computing Systems: Analysis of Real Processingin-Memory Hardware," in IGSC, 2021.
+- <span id="page-14-24"></span>[40] J. Gómez-Luna, I. El Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, "Benchmarking Memory-Centric Computing Systems: Analysis of Real Processingin-Memory Hardware," in CUT Workshop, 2021.
+- <span id="page-14-17"></span>[41] D. Niu, S. Li, Y. Wang, W. Han, Z. Zhang, Y. Guan, T. Guan, F. Sun, F. Xue, L. Duan et al., "184QPS/W 64Mb/mm2 3D Logic-to-DRAM Hybrid Bonding With Process-Near-Memory Engine for Recommendation System," in ISSCC, 2022.
+- <span id="page-14-20"></span>[42] Y. Shin, D. Kang, and H. Sung, "ATiM: Autotuning Tensor Programs for Processingin-DRAM," in ISCA, 2025.
+- [43] Y. Gu, A. Khadem, S. Umesh, N. Liang, X. Servot, O. Mutlu, R. Iyer, and R. Das, "PIM Is All You Need: A CXL-Enabled GPU-Free System for Large Language Model Inference," in ASPLOS, 2025.
+- [44] H. Shin, D. Kim, E. Park, S. Park, Y. Park, and S. Yoo, "McDRAM: Low Latency and Energy-Efficient Matrix Computations in DRAM," TCAD, 2018.
+- [45] M. A. Alves, P. C. Santos, F. B. Moreira, M. Diener, and L. Carro, "Saving Memory Movements Through Vector Processing in the DRAM," in CASES, 2015.
+- [46] E. Lockerman, A. Feldmann, M. Bakhshalipour, A. Stanescu, S. Gupta, D. Sanchez, and N. Beckmann, "Livia: Data-Centric Computing Throughout the Memory Hierarchy," in ASPLOS, 2020.
+- [47] M. Gao, J. Pu, X. Yang, M. Horowitz, and C. Kozyrakis, "Tetris: Scalable and Efficient Neural Network Acceleration With 3D Memory," in ASPLOS, 2017.
+- <span id="page-14-37"></span>[48] L. Ke, X. Zhang, J. So, J.-G. Lee, S.-H. Kang, S. Lee, S. Han, Y. Cho, J. H. Kim, Y. Kwon et al., "Near-Memory Processing in Action: Accelerating Personalized Recommendation With AXDIMM," MICRO, 2021.
+- <span id="page-14-21"></span>[49] O. Mutlu, S. Ghose, J. Gómez-Luna, and R. Ausavarungnirun, "Processing Data Where It Makes Sense: Enabling In-Memory Computation," Microprocessors and Microsystems, 2019.
+- <span id="page-14-25"></span>[50] C. Giannoula, I. Fernandez, J. G. Luna, N. Koziris, G. Goumas, and O. Mutlu, "SparseP: Towards Efficient Sparse Matrix Vector Multiplication on Real Processingin-Memory Architectures," in POMACS, 2022.
+- <span id="page-14-30"></span>[51] S. Rhyner, H. Luo, J. Gómez-Luna, M. Sadrosadati, J. Jiang, A. Olgun, H. Gupta, C. Zhang, and O. Mutlu, "Analysis of Distributed Optimization Algorithms on a Real Processing-In-Memory System," in PACT, 2024.
+- <span id="page-14-31"></span>[52] J. Chen, J. Gómez-Luna, I. E. Hajj, Y. Guo, and O. Mutlu, "SimplePIM: A Software Framework for Productive and Efficient Programming of Real PIM Systems," in PACT, 2023.
+- <span id="page-14-32"></span>[53] Y. Gu, A. Khadem, S. Umesh, N. Liang, X. Servot, O. Mutlu, R. Iyer, and R. Das, "PIM Is All You Need: A CXL-Enabled GPU-Free System for Large Language Model Inference," in ASPLOS, 2025.
+- <span id="page-14-33"></span>[54] A. A. Khan, H. Farzaneh, K. F. A. Friebel, C. Fournier, L. Chelini, and J. Castrillon, "Cinm (Cinnamon): A Compilation Infrastructure for Heterogeneous Compute In-Memory and Compute Near-Memory Paradigms," in ASPLOS, 2024.
+- <span id="page-14-38"></span>[55] Y. Shin, J. Park, S. Cho, and H. Sung, "PIMFlow: Compiler and Runtime Support for CNN Models on Processing-in-Memory DRAM," in CGO, 2023.
+- <span id="page-14-41"></span>[56] T. Xie, Z. Zhu, B. Li, Y. He, C. Li, G. Sun, H. Yang, Y. Xie, and Y. Wang, "UniNDP: A Unified Compilation and Simulation Tool for Near DRAM Processing Architectures," in HPCA, 2025.
+
+- <span id="page-15-0"></span>[57] I. Hwang, D. Kim, S. Kang, T. Park, T. Kim, J. Seo, H. Kim, Y. Kim, and Y. Park, "PIM-CARE: A Compiler-Assisted Dynamic Resource Allocation Framework for Real-World DRAM PIM," in ICS, 2025.
+- <span id="page-15-1"></span>[58] O. Mutlu, S. Ghose, J. Gómez-Luna, and R. Ausavarungnirun, "A Modern Primer on Processing in Memory," in Emerging Computing: From Devices to Systems - Looking Beyond Moore and Von Neumann, 2021.
+- [59] O. Mutlu, S. Ghose, J. Gómez-Luna, and R. Ausavarungnirun, "Enabling Practical Processing In and Near Memory for Data-Intensive Computing," in DAC, 2019.
+- <span id="page-15-2"></span>[60] O. Mutlu, A. Olgun, and I. E. Yuksel, "Memory-Centric Computing: Solving Computing's Memory Problem," in IMW, 2025.
+- <span id="page-15-3"></span>[61] T. Chen, T. Moreau, Z. Jiang, L. Zheng, E. Yan, H. Shen, M. Cowan, L. Wang, Y. Hu, L. Ceze, C. Guestrin, and A. Krishnamurthy, "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning," in OSDI, 2018.
+- [62] S. Feng, B. Hou, H. Jin, W. Lin, J. Shao, R. Lai, Z. Ye, L. Zheng, C. H. Yu, Y. Yu et al., "TensorIR: An Abstraction for Automatic Tensorized Program Optimization," in ASPLOS, 2023.
+- <span id="page-15-12"></span>[63] Y. Ding, C. H. Yu, B. Zheng, Y. Liu, Y. Wang, and G. Pekhimenko, "Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs," in ASPLOS, 2023.
+- [64] J. Xing, L. Wang, S. Zhang, J. Chen, A. Chen, and Y. Zhu, "Bolt: Bridging the Gap Between Auto-Tuners and Hardware-Native Performance," MLSys, 2022.
+- [65] A. Gupta, Y. Yuan, D. Jain, Y. Ge, D. Aponte, Y. Zhou, and C. Mendis, "SPLAT: A Framework for Optimised GPU Code-Generation for SParse reguLar ATtention," Proc. ACM Program. Lang., 2025.
+- [66] F. Liu, S. Huang, N. Yang, Z. Wang, H. Li, and L. Jiang, "CROSS: Compiler-Driven Optimization of Sparse DNNs Using Sparse/Dense Computation Kernels," in HPCA, 2025.
+- [67] W. Ahrens, T. F. Collin, R. Patel, K. Deeds, C. Hong, and S. Amarasinghe, "Finch: Sparse and Structured Tensor Programming with Control Flow," Proc. ACM Program. Lang., 2025.
+- [68] Z. Du, Y. Liu, N. Sun, H. Cui, X. Feng, and J. Li, "SRSparse: Generating Codes for High-Performance Sparse Matrix-Vector Semiring Computations," ACM Trans. Archit. Code Optim., 2025.
+- [69] J. Won, C. Hong, C. Mendis, J. Emer, and S. Amarasinghe, "Unified Convolution Framework: A Compiler-Based Approach to Support Sparse Convolutions," MLSys, 2023.
+- [70] Z. Ye, R. Lai, J. Shao, T. Chen, and L. Ceze, "SparseTIR: Composable Abstractions for Sparse Compilation in Deep Learning," in ASPLOS, 2023.
+- <span id="page-15-4"></span>[71] F. Kjolstad, S. Kamil, S. Chou, D. Lugato, and S. Amarasinghe, "The Tensor Algebra Compiler," Proc. ACM Program. Lang., 2017.
+- <span id="page-15-5"></span>[72] L. Zheng, C. Jia, M. Sun, Z. Wu, C. H. Yu, A. Haj-Ali, Y. Wang, J. Yang, D. Zhuo, K. Sen et al., "Ansor: Generating High-Performance Tensor Programs for Deep Learning," in OSDI, 2020.
+- <span id="page-15-6"></span>[73] T. Chen, L. Zheng, E. Yan, Z. Jiang, T. Moreau, L. Ceze, C. Guestrin, and A. Krishnamurthy, "Learning to Optimize Tensor Programs," NeurIPS, 2018.
+- <span id="page-15-7"></span>[74] T. Chen and C. Guestrin, "XGBoost: A Scalable Tree Boosting System," in KDD, 2016.
+- <span id="page-15-8"></span>[75] J. Shao, X. Zhou, S. Feng, B. Hou, R. Lai, H. Jin, W. Lin, M. Masuda, C. H. Yu, and T. Chen, "Tensor Program Optimization with Probabilistic Programs," NeurIPS, 2022.
+- [76] V. Ganesan, S. Selvam, S. Sen, P. Kumar, and A. Raghunathan, "A Case for Generalizable DNN Cost Models for Mobile Devices," in IISWC, 2020.
+- [77] B. H. Ahn, P. Pilligundla, A. Yazdanbakhsh, and H. Esmaeilzadeh, "Chameleon: Adaptive Code Optimization for Expedited Deep Neural Network Compilation," ICLR, 2020.
+- <span id="page-15-9"></span>[78] A. Mishra, S. Chheda, C. Soto, A. M. Malik, M. Lin, and B. Chapman, "Compoff: A Compiler Cost Model Using Machine Learning to Predict the Cost of OpenMP Offloading," in IPDPSW, 2022.
+- <span id="page-15-10"></span>[79] Python Software Foundation, "Python language reference, version 3.x," 2016. [Online]. Available: <https://www.python.org>
+- <span id="page-15-11"></span>[80] A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan, T. Killeen, Z. Lin, N. Gimelshein, L. Antiga, A. Desmaison, A. Köpf, E. Yang, Z. DeVito, M. Raison, A. Tejani, S. Chilamkurthy, B. Steiner, L. Fang, J. Bai, and S. Chintala, "PyTorch: An Imperative Style, High-Performance Deep Learning Library," in NeurIPS, 2019.
+- <span id="page-15-13"></span>[81] H. Luo, Y. C. Tuğrul, F. Bostancı, A. Olgun, A. G. Yağlıkçı, and O. Mutlu, "Ramulator 2.0: A Modern, Modular, and Extensible DRAM Simulator," arXiv preprint arXiv:2308.11030, 2023.
+- <span id="page-15-14"></span>[82] L. T. Clark, V. Vashishtha, L. Shifren, A. Gujja, S. Sinha, B. Cline, C. Ramamurthy, and G. Yeric, "ASAP7: A 7-nm FinFET Predictive Process Design Kit," Microelectronics Journal, 2016.
+- <span id="page-15-15"></span>[83] A. Shafaei, Y. Wang, X. Lin, and M. Pedram, "FinCACTI: Architectural Analysis and Modeling of Caches with Deeply-Scaled FinFET Devices," in ISVLSI, 2014.
+- <span id="page-15-16"></span>[84] Y. Ryu, S.-G. Ahn, J. H. Lee, J. Park, Y. K. Kim, H. Kim, Y. G. Song, H.-W. Cho, S. Cho, S. H. Song, H. Lee, U. Shin, J. Ahn, J.-M. Ryu, S. Lee, K.-H. Lim, J. Lee, J. H. Park, J.-S. Jeong, S. Joo, D. Cho, S. Y. Kim, M. Lee, H. Kim, M. Kim, J.-S. Kim, J. Kim, H. G. Kang, M.-K. Lee, S.-R. Kim, Y.-C. Kwon, Y. Y. Byun, K. Lee, S. Park, J. Youn, M.-O. Kim, K. Sohn, S.-J. Hwang, and J. Lee, "A 16 GB 1024 GB/s HBM3 DRAM With Source-Synchronized Bus Design and On-Die Error Control Scheme for Enhanced RAS Features," IEEE Journal of Solid-State Circuits, 2023.
+- <span id="page-15-17"></span>[85] M.-J. Park, H. S. Cho, T.-S. Yun, S. Byeon, Y. J. Koo, S. Yoon, D. U. Lee, S. Choi, J. Park, J. Lee, K. Cho, J. Moon, B.-K. Yoon, Y.-J. Park, S.-m. Oh, C. K. Lee, T.-K. Kim, S.-H. Lee, H.-W. Kim, Y. Ju, S.-K. Lim, S. G. Baek, K. Y. Lee, S. H. Lee, W. S. We, S. Kim, Y. Choi, S.-H. Lee, S. M. Yang, G. Lee, I.-K. Kim, Y. Jeon, J.-H. Park, J. C. Yun, C. Park, S.-Y. Kim, S. Kim, D.-Y. Lee, S.-H. Oh, T. Hwang, J. Shin, Y. Lee, H. Kim, J. Lee, Y. Hur, S. Lee, J. Jang, J. Chun, and J. Cho, "A 192-Gb 12-High 896-GB/s HBM3 DRAM with a TSV Auto-Calibration Scheme and Machine-Learning-Based
+
+- Layout Optimization," in ISSCC, 2022.
+- <span id="page-15-18"></span>[86] J. Liu, M. Zhou, Y. Pan, C.-Y. Yang, L. Josipović, and T. Rosing, "OptiPIM: Optimizing Processing-in-Memory Acceleration Using Integer Linear Programming," in ISCA, 2025.
+- <span id="page-15-19"></span>[87] A. Khadem, D. Fujiki, H. Chen, Y. Gu, N. Talati, S. Mahlke, and R. Das, "Multi-Dimensional Vector ISA Extension for Mobile In-Cache Computing," in HPCA, 2025.
+- <span id="page-15-20"></span>[88] A. Drebes, L. Chelini, O. Zinenko, A. Cohen, H. Corporaal, T. Grosser, K. Vadivel, and N. Vasilache, "TC-CIM: Empowering Tensor Comprehensions for Computing-In-Memory," in IMPACT, 2020.
+- <span id="page-15-21"></span>[89] M. Rhee, J. Sim, T. Ahn, S. Lee, D. Yoon, E. Kim, K. Park, Y. Joo, and H. Kim, "HPU: High-Bandwidth Processing Unit for Scalable, Cost-Effective LLM Inference via GPU Co-Processing," arXiv preprint arXiv:2504.16112, 2025.
+- <span id="page-15-27"></span>[90] Y. Kwon, Y. Lee, and M. Rhu, "TensorDimm: A Practical Near-Memory Processing Architecture for Embeddings and Tensor Operations in Deep Learning," in MICRO, 2019.
+- <span id="page-15-22"></span>[91] L. Liu, S. Zhao, B. Li, H. Ren, Z. Xu, M. Wang, X. Li, Y. Han, and Y. Wang, "Make LLM Inference Affordable to Everyone: Augmenting GPU Memory with NDP-DIMM," in HPCA, 2025.
+- <span id="page-15-23"></span>[92] J.-W. Jang, J. Oh, Y. Kong, J.-Y. Hong, S.-H. Cho, J. Lee, H. Yang, and J.-S. Yang, "Accelerating Retrieval Augmented Language Model via PIM and PNM Integration," in MICRO, 2025.
+- [93] D. Quinn, E. E. Yücel, M. Prammer, Z. Fan, K. Skadron, J. M. Patel, J. F. Martínez, and M. Alian, "DReX: Accurate and Scalable Dense Retrieval Acceleration via Algorithmic-Hardware Codesign," in ISCA, 2025.
+- <span id="page-15-24"></span>[94] D. Kim, J.-Y. Kim, W. Han, J. Won, H. Choi, Y. Kwon, and J.-Y. Kim, "Darwin: A DRAM-Based Multi-Level Processing-in-Memory Architecture for Column-Oriented Database," IEEE Trans. Emerging Top. Comput., 2024.
+- <span id="page-15-25"></span>[95] S. He, Z. Zhu, Y. He, and T. Jia, "LP-Spec: Leveraging LPDDR PIM for Efficient LLM Mobile Speculative Inference with Architecture-Dataflow Co-Optimization," arXiv, 2025.
+- [96] S. Han, B. Yoon, G. Park, C. Song, D. Kim, and J.-J. Kim, "Near-Memory LLM Inference Processor Based on 3D DRAM-to-Logic Hybrid Bonding," in DAC, 2025.
+- [97] L. Wu, H. Zhu, S. He, X. Lin, X. Zeng, and C. Chen, "PIMoE: Towards Efficient MoE Transformer Deployment on NPU-PIM System Through Throttle-Aware Task Offloading," in DAC, 2025.
+- [98] M. Seo, X. T. Nguyen, S. J. Hwang, Y. Kwon, G. Kim, C. Park, I. Kim, J. Park, J. Kim, W. Shin et al., "Ianus: Integrated Accelerator Based on NPU-PIM Unified Memory System," in ASPLOS, 2024.
+- [99] G. Heo, S. Lee, J. Cho, H. Choi, S. Lee, H. Ham, G. Kim, D. Mahajan, and J. Park, "NeuPIMS: NPU-PIM Heterogeneous Acceleration for Batched LLM Inferencing," in ASPLOS, 2024.
+- <span id="page-15-26"></span>[100] R. Chen, Z. Song, Y. Zheng, Z. Zhu, G. Li, N. Jing, X. Liang, and H. Guan, "HEAT: NPU-NDP Heterogeneous Architecture for Transformer-Empowered Graph Neural Networks," in MICRO, 2025.
+- <span id="page-15-28"></span>[101] J. Ahn, S. Hong, S. Yoo, O. Mutlu, and K. Choi, "A Scalable Processing-in-Memory Accelerator for Parallel Graph Processing," in ISCA, 2015.
+- [102] G. Dai, T. Huang, Y. Chi, J. Zhao, G. Sun, Y. Liu, Y. Wang, Y. Xie, and H. Yang, "GraphH: A Processing-in-Memory Architecture for Large-Scale Graph Processing," IEEE TCAD, 2018.
+- [103] T. Kang, G. Choi, T. Suh, and G. Koo, "SparsePIM: An Efficient HBM-Based PIM Architecture for Sparse Matrix-Vector Multiplications," in ICS, 2025.
+- [104] D. Lee, B. Hyun, T. Kim, and M. Rhu, "PIM-MMU: A Memory Management Unit for Accelerating Data Transfers in Commercial PIM Systems," in MICRO, 2024.
+- [105] Z. Zhou, C. Li, X. Wei, X. Wang, and G. Sun, "Gnnear: Accelerating Full-Batch Training of Graph Neural Networks with Near-Memory Processing," in PACT, 2022.
+- [106] T. Tian, X. Wang, L. Zhao, W. Wu, X. Zhang, F. Lu, T. Wang, and X. Jin, "G-NMP: Accelerating Graph Neural Networks with DIMM-Based Near-Memory Processing," Journal of Systems Architecture, 2022.
+- [107] S. Yun, H. Nam, J. Park, B. Kim, J. H. Ahn, and E. Lee, "GraNDe: Efficient Near-Data Processing Architecture for Graph Neural Networks," IEEE Transactions on Computers, 2023.
+- [108] D. Chen, H. He, H. Jin, L. Zheng, Y. Huang, X. Shen, and X. Liao, "MetaNMP: Leveraging Cartesian-Like Product to Accelerate HGNNs with Near-Memory Processing," in ISCA, 2023.
+- [109] M. Saed, P. J. Nair, and T. M. Aamodt, "RayN: Ray Tracing Acceleration with Near-Memory Computing," in MICRO, 2025.
+- <span id="page-15-29"></span>[110] L. Yan, M. Zhang, R. Wang, X. Chen, X. Zou, X. Lu, Y. Han, and X.-H. Sun, "CoPIM: A Concurrency-Aware PIM Workload Offloading Architecture for Graph Applications," in ISLPED, 2021.
+- <span id="page-15-30"></span>[111] C. Giannoula, I. Fernandez, J. G. Luna, N. Koziris, G. Goumas, and O. Mutlu, "SparseP: Towards Efficient Sparse Matrix Vector Multiplication on Real Processingin-Memory Architectures," POMACS, 2022.
+- [112] S. Diab, A. Nassereldine, M. Alser, J. Gómez Luna, O. Mutlu, and I. El Hajj, "A Framework for High-Throughput Sequence Alignment Using Real Processing-in-Memory Systems," in Bioinformatics, 2023.
+- [113] C. Lim, S. Lee, J. Choi, J. Lee, S. Park, H. Kim, J. Lee, and Y. Kim, "Design and Analysis of a Processing-in-DIMM Join Algorithm: A Case Study with UPMEM DIMMs," in Proc. ACM Manag. Data, 2023.
+- [114] M. Item, G. F. Oliveira, J. Gómez-Luna, M. Sadrosadati, Y. Guo, and O. Mutlu, "TransPimLib: Efficient Transcendental Functions for Processing-in-Memory Systems," in ISPASS, 2023.
+- [115] P. Das, P. R. Sutradhar, M. Indovina, S. M. P. Dinakarrao, and A. Ganguly, "Implementation and Evaluation of Deep Neural Networks in Commercially Available Processing in Memory Hardware," in SOCC, 2022.
+- [116] M. A. Jibril, H. Al-Sayeh, and K.-U. Sattler, "Accelerating Aggregation Using a Real
+
+- Processing-in-Memory System," in ICDE, 2024.
+- [117] J. Chen, J. Gómez-Luna, I. El Hajj, Y. Guo, and O. Mutlu, "SimplePIM: A Software Framework for Productive and Efficient Processing-in-Memory," in PACT, 2023.
+- [118] C. Giannoula, I. Fernandez, J. Gómez-Luna, N. Koziris, G. Goumas, and O. Mutlu, "Towards Efficient Sparse Matrix Vector Multiplication on Real Processing-In-Memory Architectures," in SIGMETRICS, 2022.
+- [119] C. Lim, S. Lee, J. Choi, J. Lee, S. Park, H. Kim, J. Lee, and Y. Kim, "Design and Analysis of a Processing-in-DIMM Join Algorithm: A Case Study with UPMEM DIMMs," in SIGMOD, 2023.
+- [120] S. Cai, B. Tian, H. Zhang, and M. Gao, "PIM-PAM: Efficient Graph Pattern Matching on Real Processing-in-Memory Hardware," in SIGMOD, 2024.
+- [121] J. Nider, C. Mustard, A. Zoltan, J. Ramsden, L. Liu, J. Grossbard, M. Dashti, R. Jodin, A. Ghiti, J. Chauzi et al., "A Case Study of Processing-in-Memory in Off-the-Shelf Systems," in USENIX ATC, 2021.
+- [122] H. Kang, Y. Zhao, G. E. Blelloch, L. Dhulipala, Y. Gu, C. McGuffey, and P. B. Gibbons, "PIM-Tree: A Skew-Resistant Index for Processing-in-Memory," in VLDB, 2025.
+- [123] H. Kim, Y. Zhao, A. Pavlo, and P. B. Gibbons, "No Cap, This Memory Slaps: Breaking Through the Memory Wall of Transactional Database Systems with Processing-in-Memory," in VLDB, 2025.
+- [124] W. Kong, S. Zheng, Y. Hua, R. Ma, Y. Wen, G. Wang, C. Zhou, and L. Huang, "PimBeam: Efficient Regular Path Queries Over Graph Database Using Processingin-Memory," TPDS, 2025.
+- [125] C. Giannoula, P. Yang, I. F. Vega, J. Yang, Y. X. Li, J. G. Luna, M. Sadrosadati, O. Mutlu, and G. Pekhimenko, "Accelerating Graph Neural Networks on Real Processing-in-Memory Systems," arXiv, 2024.
+- <span id="page-16-0"></span>[126] M. Barkhordar, A. Tabatabaeian, M. Sadrosadati, C. Giannoula, J. G. Luna, I. El Hajj, O. Mutlu, and A. R. Alameldeen, "ALPHA-PIM: Analysis of Linear Algebraic Processing for High-Performance Graph Applications on a Real Processing-In-Memory System," in IISWC, 2025.
+- <span id="page-16-1"></span>[127] S. Yu, H. Kim, K. Jeun, S. Hwang, S. Cho, and E. Lee, "ComPASS: A Compatible PIM Protocol Architecture and Scheduling Solution for Processor-PIM Collaboration," in MICRO, 2025.
+- [128] S. U. Noh, J. Hong, C. Lim, S. Park, J. Kim, H. Kim, Y. Kim, and J. Lee, "PID-Comm: A Fast and Flexible Collective Communication Framework for Commodity Processing-in-DIMM Devices," in ISCA, 2024.
+- [129] D. Lee, B. Hyun, T. Kim, and M. Rhu, "PIM-MMU: A Memory Management Unit for Accelerating Data Transfers in Commercial PIM Systems," in MICRO, 2024.
+- [130] Y. Zhao, M. Gao, F. Liu, Y. Hu, Z. Wang, H. Lin, J. Li, H. Xian, H. Dong, T. Yang et al., "UM-PIM: DRAM-Based PIM with Uniform and Shared Memory Space," in ISCA, 2024.
+- [131] D. Teguia, J. Chen, S. Bitchebe, O. Balmau, and A. Tchana, "vPIM: Processing-in-Memory Virtualization," in Middleware, 2024.
+- [132] C. Giannoula, N. Vijaykumar, N. Papadopoulou, V. Karakostas, I. Fernandez, J. Gómez-Luna, L. Orosa, N. Koziris, G. Goumas, and O. Mutlu, "Syncron: Efficient Synchronization Support for Near-Data-Processing Architectures," in HPCA, 2021.
+- [133] J. Shin, S. An, S. Lee, and S. E. Lee, "PIMCoSim: Hardware/Software Co-Simulator for Exploring Processing-in-Memory Architectures," Electronics, 2024.
+- [134] B. Hyun, T. Kim, D. Lee, and M. Rhu, "Pathfinding Future PIM Architectures by Demystifying a Commercial PIM Technology," in HPCA, 2024.
+- [135] J. Heo, Y. Shin, S. Choi, S. Yune, J.-H. Kim, H. Sung, Y. Kwon, and J.-Y. Kim, "Primo: A Full-Stack Processing-in-DRAM Emulation Framework for Machine Learning Workloads," in ICCAD, 2023.
+- <span id="page-16-2"></span>[136] J. Kim, D. Kim, S. Kang, B. Hyun, I. Lee, and Y. Park, "PIM-CCA: An Efficient PIM Architecture with Optimized Integration of Configurable Functional Units," in MICRO, 2025.
+- <span id="page-16-3"></span>[137] S. Nakandala, K. Saur, G.-I. Yu, K. Karanasos, C. Curino, M. Weimer, and M. Interlandi, "A Tensor Compiler for Unified Machine Learning Prediction Serving," in OSDI, 2020.
+- [138] A. Sabne, "XLA: Compiling Machine Learning for Peak Performance," in Google Research Publications, 2020.
+- <span id="page-16-4"></span>[139] S. Pouget, M. Lo, L.-N. Pouchet, and J. Cong, "Holistic Optimization Framework for FPGA Accelerators," in TODAES, 2025.
+
+# References
+
+- <span id="page-14-0"></span>[1] J. B. Heaton, N. G. Polson, and J. H. Witte, "Deep Learning for Finance: Deep Portfolios," Appl. Stoch. Model. Bus. Ind., 2017.
+- <span id="page-14-1"></span>[2] A. M. Ozbayoglu, M. U. Gudelek, and O. B. Sezer, "Deep Learning for Financial Applications: A Survey," Appl. Soft Comput., 2020.
+- <span id="page-14-2"></span>[3] K. Oosthuizen, E. Botha, J. Robertson, and M. Montecchi, "Artificial Intelligence in Retail: The AI-Enabled Value Chain," Australasian Marketing Journal, 2021.
+- <span id="page-14-3"></span>[4] D. Ravì, C. Wong, F. Deligianni, M. Berthelot, J. Andreu-Perez, B. Lo, and G.-Z. Yang, "Deep Learning for Health Informatics," IEEE J. Biomed. Health Inform., 2016.
+- <span id="page-14-4"></span>[5] R. Miotto, F. Wang, S. Wang, X. Jiang, and J. T. Dudley, "Deep Learning for Healthcare: Review, Opportunities and Challenges," Brief Bioinform, 2018.
+- <span id="page-14-5"></span>[6] R. S. Baker and P. S. Inventado, Educational Data Mining and Learning Analytics. Springer New York, 2014.
+- <span id="page-14-6"></span>[7] V. Zhang, B. Jeffries, and I. Koprinska, "A Machine Learning Approach for Predicting Student Progress in Online Programming Education," Int. J. Artif. Intell. Educ., 2025.
+- <span id="page-14-7"></span>[8] K. Ota, M. S. Dao, V. Mezaris, and F. G. D. Natale, "Deep Learning for Mobile Multimedia: A Survey," TOMM, 2017.
+- <span id="page-14-8"></span>[9] Y. Zheng, "Predicting Movie Box Office Based on Machine Learning, Deep Learning, and Statistical Methods," Appl. Comput. Eng., 2024.
+- <span id="page-14-9"></span>[10] Y. Tang, C. Zhao, J. Wang, C. Zhang, Q. Sun, W. X. Zheng, W. Du, F. Qian, and J. Kurths, "Perception and Navigation in Autonomous Systems in the Era of Learning: A Survey," IEEE TNNLS, 2022.
+- <span id="page-14-10"></span>[11] M. Cordts, M. Omran, S. Ramos, T. Rehfeld, M. Enzweiler, R. Benenson, U. Franke, S. Roth, and B. Schiele, "The Cityscapes Dataset for Semantic Urban Scene Understanding," in CVPR, 2016.
+- <span id="page-14-11"></span>[12] Y. Zhong, S. Liu, J. Chen, J. Hu, Y. Zhu, X. Liu, X. Jin, and H. Zhang, "DistServe: Disaggregating Prefill and Decoding for Goodput-Optimized Large Language Model Serving," in OSDI, 2024.
+- [13] Q. Su, W. Zhao, X. Li, M. Andoorveedu, C. Jiang, Z. Zhu, K. Song, C. Giannoula, and G. Pekhimenko, "Seesaw: High-Throughput LLM Inference via Model Re-Sharding," MLSys, 2026.
+- [14] M. Kim, S. Hong, R. Ko, S. Choi, H. Lee, J. Kim, J.-Y. Kim, and J. Park, "Oaken: Fast and Efficient LLM Serving with Online-Offline Hybrid KV Cache Quantization," in ISCA, 2025.
+- [15] A. K. Kamath, R. Prabhu, J. Mohan, S. Peter, R. Ramjee, and A. Panwar, "POD-Attention: Unlocking Full Prefill-Decode Overlap for Faster LLM Inference," in ASPLOS, 2025.
+- [16] C. Li and Y. Xu, "Foreseer: Knowledge-Driven Acceleration of Memory-Bound Matrix Multiplications for Large Language Model Inference," in SYSTOR, 2024.
+- <span id="page-14-12"></span>[17] X. Jiang, Y. Zhou, S. Cao, I. Stoica, and M. Yu, "NEO: Saving GPU Memory Crisis with CPU Offloading for Online LLM Inference," in MLSys, 2024.
+- <span id="page-14-13"></span>[18] J. Gómez-Luna, Y. Guo, S. Brocard, J. Legriel, R. Cimadomo, G. F. Oliveira, G. Singh, and O. Mutlu, "Evaluating Machine Learning Workloads on Memory-Centric Computing Systems," in ISPASS, 2023.
+- <span id="page-14-15"></span>[19] J. Gómez-Luna, I. E. Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, "Benchmarking a New Paradigm: Experimental Analysis and Characterization of a Real Processing-in-Memory System," IEEE Access, 2022.
+- <span id="page-14-22"></span>[20] C. Giannoula, P. Yang, I. Fernandez, J. Yang, S. Durvasula, Y. X. Li, M. Sadrosadati, J. G. Luna, O. Mutlu, and G. Pekhimenko, "PyGim: An Efficient Graph Neural Network Library for Real Processing-In-Memory Architectures," POMACS, 2025.
+- <span id="page-14-29"></span>[21] C. Li, Z. Zhou, Y. Wang, F. Yang, T. Cao, M. Yang, Y. Liang, and G. Sun, "PIM-DL: Expanding the Applicability of Commodity DRAM-PIMs for Deep Learning via Algorithm-System Co-Optimization," in ASPLOS, 2024.
+- [22] A. Boroumand, S. Ghose, B. Akin, R. Narayanaswami, G. F. Oliveira, X. Ma, E. Shiu, and O. Mutlu, "Google Neural Network Models for Edge Devices: Analyzing and Mitigating Machine Learning Inference Bottlenecks," in PACT, 2021.
+- <span id="page-14-14"></span>[23] A. Boroumand, S. Ghose, Y. Kim, R. Ausavarungnirun, E. Shiu, R. Thakur, D. Kim, A. Kuusela, A. Knies, P. Ranganathan, and O. Mutlu, "Google Workloads for Consumer Devices: Mitigating Data Movement Bottlenecks," in ASPLOS, 2018.
+- <span id="page-14-16"></span>[24] F. Devaux, "The True Processing In Memory Accelerator," in HCS, 2019.
+- <span id="page-14-26"></span>[25] S. Lee, S.-h. Kang, J. Lee, H. Kim, E. Lee, S. Seo, H. Yoon, S. Lee, K. Lim, H. Shin, J. Kim, O. Seongil, A. Iyer, D. Wang, K. Sohn, and N. S. Kim, "Hardware Architecture
+
+- and Software Stack for PIM Based on Commercial DRAM Technology: Industrial Product," in ISCA, 2021.
+- <span id="page-14-27"></span>[26] S. Lee, K. Kim, S. Oh, J. Park, G. Hong, D. Ka, K. Hwang, J. Park, K. Kang, J. Kim et al., "A 1ynm 1.25 V 8GB, 16GB/s/Pin GDDR6-Based Accelerator-in-Memory Supporting 1Tflops MAC Operation and Various Activation Functions for Deep-Learning Applications," in ISSCC, 2022.
+- <span id="page-14-28"></span>[27] M. He, C. Song, I. Kim, C. Jeong, S. Kim, I. Park, M. Thottethodi, and T. N. Vijaykumar, "Newton: A DRAM-Maker's Accelerator-in-Memory (AiM) Architecture for Machine Learning," in MICRO, 2020.
+- <span id="page-14-18"></span>[28] J. Park, J. Choi, K. Kyung, M. J. Kim, Y. Kwon, N. S. Kim, and J. H. Ahn, "Attacc! Unleashing the Power of PIM for Batched Transformer-Based Generative Model Inference," in ASPLOS, 2024.
+- [29] B. Kim, C. Lee, G. Kim, and E. Park, "Cost-Effective Extension of DRAM-PIM for Group-Wise LLM Quantization," IEEE, 2025.
+- [30] Z. Li, J. Zhou, X. Li, and N. Sun, "BlockPIM: Optimizing Memory Management for PIM-Enabled Long-Context LLM Inference," in DAC, 2025.
+- [31] S. Liu, Z. Huang, J. Yu, Q. Liu, and C. Chen, "McPAL: Scaling Unstructured Sparse Inference with Multi-Chiplet HBM-PIM Architecture for LLMs," in DAC, 2025.
+- <span id="page-14-39"></span>[32] L. Chen, D. Lyu, Z. Li, J. Jiang, Q. Wang, Z. Mao, and N. Jing, "AttenPIM: Accelerating LLM Attention with Dual-Mode GEMV in Processing-in-Memory," in DAC, 2025.
+- <span id="page-14-34"></span>[33] Y. He, H. Mao, C. Giannoula, M. Sadrosadati, J. Gómez-Luna, H. Li, X. Li, Y. Wang, and O. Mutlu, "Papi: Exploiting Dynamic Parallelism in Large Language Model Decoding with a Processing-in-Memory-Enabled Computing System," in ASPLOS, 2025.
+- <span id="page-14-35"></span>[34] C. Li, Z. Zhou, S. Zheng, J. Zhang, Y. Liang, and G. Sun, "SpecPIM: Accelerating Speculative Inference on PIM-Enabled System via Architecture-Dataflow Co-Exploration," in ASPLOS, 2024.
+- <span id="page-14-40"></span>[35] Y. Wu, Z. Wang, and W. D. Lu, "PIM GPT: A Hybrid Process in Memory Accelerator for Autoregressive Transformers," npj Unconventional Computing, 2024.
+- [36] H. Lee, D. Baek, J. Son, J. Choi, K. Moon, and M. Jang, "PAISE: PIM-Accelerated Inference Scheduling Engine for Transformer-Based LLM," in HPCA, 2025.
+- <span id="page-14-36"></span>[37] W. Kim, Y. Lee, Y. Kim, J. Hwang, S. Oh, J. Jung, A. Huseynov, W. G. Park, C. H. Park, D. Mahajan, and J. Park, "Pimba: A Processing-in-Memory Acceleration for Post-Transformer Large Language Model Serving," in MICRO, 2025.
+- <span id="page-14-19"></span>[38] D. Quinn, E. E. Yücel, J. Kim, J. F. Martínez, and M. Alian, "LongSight: Compute-Enabled Memory to Accelerate Large-Context LLMs via Sparse Attention," in MICRO, 2025.
+- <span id="page-14-23"></span>[39] J. Gómez-Luna, I. El Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, "Benchmarking Memory-Centric Computing Systems: Analysis of Real Processingin-Memory Hardware," in IGSC, 2021.
+- <span id="page-14-24"></span>[40] J. Gómez-Luna, I. El Hajj, I. Fernandez, C. Giannoula, G. F. Oliveira, and O. Mutlu, "Benchmarking Memory-Centric Computing Systems: Analysis of Real Processingin-Memory Hardware," in CUT Workshop, 2021.
+- <span id="page-14-17"></span>[41] D. Niu, S. Li, Y. Wang, W. Han, Z. Zhang, Y. Guan, T. Guan, F. Sun, F. Xue, L. Duan et al., "184QPS/W 64Mb/mm2 3D Logic-to-DRAM Hybrid Bonding With Process-Near-Memory Engine for Recommendation System," in ISSCC, 2022.
+- <span id="page-14-20"></span>[42] Y. Shin, D. Kang, and H. Sung, "ATiM: Autotuning Tensor Programs for Processingin-DRAM," in ISCA, 2025.
+- [43] Y. Gu, A. Khadem, S. Umesh, N. Liang, X. Servot, O. Mutlu, R. Iyer, and R. Das, "PIM Is All You Need: A CXL-Enabled GPU-Free System for Large Language Model Inference," in ASPLOS, 2025.
+- [44] H. Shin, D. Kim, E. Park, S. Park, Y. Park, and S. Yoo, "McDRAM: Low Latency and Energy-Efficient Matrix Computations in DRAM," TCAD, 2018.
+- [45] M. A. Alves, P. C. Santos, F. B. Moreira, M. Diener, and L. Carro, "Saving Memory Movements Through Vector Processing in the DRAM," in CASES, 2015.
+- [46] E. Lockerman, A. Feldmann, M. Bakhshalipour, A. Stanescu, S. Gupta, D. Sanchez, and N. Beckmann, "Livia: Data-Centric Computing Throughout the Memory Hierarchy," in ASPLOS, 2020.
+- [47] M. Gao, J. Pu, X. Yang, M. Horowitz, and C. Kozyrakis, "Tetris: Scalable and Efficient Neural Network Acceleration With 3D Memory," in ASPLOS, 2017.
+- <span id="page-14-37"></span>[48] L. Ke, X. Zhang, J. So, J.-G. Lee, S.-H. Kang, S. Lee, S. Han, Y. Cho, J. H. Kim, Y. Kwon et al., "Near-Memory Processing in Action: Accelerating Personalized Recommendation With AXDIMM," MICRO, 2021.
+- <span id="page-14-21"></span>[49] O. Mutlu, S. Ghose, J. Gómez-Luna, and R. Ausavarungnirun, "Processing Data Where It Makes Sense: Enabling In-Memory Computation," Microprocessors and Microsystems, 2019.
+- <span id="page-14-25"></span>[50] C. Giannoula, I. Fernandez, J. G. Luna, N. Koziris, G. Goumas, and O. Mutlu, "SparseP: Towards Efficient Sparse Matrix Vector Multiplication on Real Processingin-Memory Architectures," in POMACS, 2022.
+- <span id="page-14-30"></span>[51] S. Rhyner, H. Luo, J. Gómez-Luna, M. Sadrosadati, J. Jiang, A. Olgun, H. Gupta, C. Zhang, and O. Mutlu, "Analysis of Distributed Optimization Algorithms on a Real Processing-In-Memory System," in PACT, 2024.
+- <span id="page-14-31"></span>[52] J. Chen, J. Gómez-Luna, I. E. Hajj, Y. Guo, and O. Mutlu, "SimplePIM: A Software Framework for Productive and Efficient Programming of Real PIM Systems," in PACT, 2023.
+- <span id="page-14-32"></span>[53] Y. Gu, A. Khadem, S. Umesh, N. Liang, X. Servot, O. Mutlu, R. Iyer, and R. Das, "PIM Is All You Need: A CXL-Enabled GPU-Free System for Large Language Model Inference," in ASPLOS, 2025.
+- <span id="page-14-33"></span>[54] A. A. Khan, H. Farzaneh, K. F. A. Friebel, C. Fournier, L. Chelini, and J. Castrillon, "Cinm (Cinnamon): A Compilation Infrastructure for Heterogeneous Compute In-Memory and Compute Near-Memory Paradigms," in ASPLOS, 2024.
+- <span id="page-14-38"></span>[55] Y. Shin, J. Park, S. Cho, and H. Sung, "PIMFlow: Compiler and Runtime Support for CNN Models on Processing-in-Memory DRAM," in CGO, 2023.
+- <span id="page-14-41"></span>[56] T. Xie, Z. Zhu, B. Li, Y. He, C. Li, G. Sun, H. Yang, Y. Xie, and Y. Wang, "UniNDP: A Unified Compilation and Simulation Tool for Near DRAM Processing Architectures," in HPCA, 2025.
+
+- <span id="page-15-0"></span>[57] I. Hwang, D. Kim, S. Kang, T. Park, T. Kim, J. Seo, H. Kim, Y. Kim, and Y. Park, "PIM-CARE: A Compiler-Assisted Dynamic Resource Allocation Framework for Real-World DRAM PIM," in ICS, 2025.
+- <span id="page-15-1"></span>[58] O. Mutlu, S. Ghose, J. Gómez-Luna, and R. Ausavarungnirun, "A Modern Primer on Processing in Memory," in Emerging Computing: From Devices to Systems - Looking Beyond Moore and Von Neumann, 2021.
+- [59] O. Mutlu, S. Ghose, J. Gómez-Luna, and R. Ausavarungnirun, "Enabling Practical Processing In and Near Memory for Data-Intensive Computing," in DAC, 2019.
+- <span id="page-15-2"></span>[60] O. Mutlu, A. Olgun, and I. E. Yuksel, "Memory-Centric Computing: Solving Computing's Memory Problem," in IMW, 2025.
+- <span id="page-15-3"></span>[61] T. Chen, T. Moreau, Z. Jiang, L. Zheng, E. Yan, H. Shen, M. Cowan, L. Wang, Y. Hu, L. Ceze, C. Guestrin, and A. Krishnamurthy, "TVM: An Automated End-to-End Optimizing Compiler for Deep Learning," in OSDI, 2018.
+- [62] S. Feng, B. Hou, H. Jin, W. Lin, J. Shao, R. Lai, Z. Ye, L. Zheng, C. H. Yu, Y. Yu et al., "TensorIR: An Abstraction for Automatic Tensorized Program Optimization," in ASPLOS, 2023.
+- <span id="page-15-12"></span>[63] Y. Ding, C. H. Yu, B. Zheng, Y. Liu, Y. Wang, and G. Pekhimenko, "Hidet: Task-Mapping Programming Paradigm for Deep Learning Tensor Programs," in ASPLOS, 2023.
+- [64] J. Xing, L. Wang, S. Zhang, J. Chen, A. Chen, and Y. Zhu, "Bolt: Bridging the Gap Between Auto-Tuners and Hardware-Native Performance," MLSys, 2022.
+- [65] A. Gupta, Y. Yuan, D. Jain, Y. Ge, D. Aponte, Y. Zhou, and C. Mendis, "SPLAT: A Framework for Optimised GPU Code-Generation for SParse reguLar ATtention," Proc. ACM Program. Lang., 2025.
+- [66] F. Liu, S. Huang, N. Yang, Z. Wang, H. Li, and L. Jiang, "CROSS: Compiler-Driven Optimization of Sparse DNNs Using Sparse/Dense Computation Kernels," in HPCA, 2025.
+- [67] W. Ahrens, T. F. Collin, R. Patel, K. Deeds, C. Hong, and S. Amarasinghe, "Finch: Sparse and Structured Tensor Programming with Control Flow," Proc. ACM Program. Lang., 2025.
+- [68] Z. Du, Y. Liu, N. Sun, H. Cui, X. Feng, and J. Li, "SRSparse: Generating Codes for High-Performance Sparse Matrix-Vector Semiring Computations," ACM Trans. Archit. Code Optim., 2025.
+- [69] J. Won, C. Hong, C. Mendis, J. Emer, and S. Amarasinghe, "Unified Convolution Framework: A Compiler-Based Approach to Support Sparse Convolutions," MLSys, 2023.
+- [70] Z. Ye, R. Lai, J. Shao, T. Chen, and L. Ceze, "SparseTIR: Composable Abstractions for Sparse Compilation in Deep Learning," in ASPLOS, 2023.
+- <span id="page-15-4"></span>[71] F. Kjolstad, S. Kamil, S. Chou, D. Lugato, and S. Amarasinghe, "The Tensor Algebra Compiler," Proc. ACM Program. Lang., 2017.
+- <span id="page-15-5"></span>[72] L. Zheng, C. Jia, M. Sun, Z. Wu, C. H. Yu, A. Haj-Ali, Y. Wang, J. Yang, D. Zhuo, K. Sen et al., "Ansor: Generating High-Performance Tensor Programs for Deep Learning," in OSDI, 2020.
+- <span id="page-15-6"></span>[73] T. Chen, L. Zheng, E. Yan, Z. Jiang, T. Moreau, L. Ceze, C. Guestrin, and A. Krishnamurthy, "Learning to Optimize Tensor Programs," NeurIPS, 2018.
+- <span id="page-15-7"></span>[74] T. Chen and C. Guestrin, "XGBoost: A Scalable Tree Boosting System," in KDD, 2016.
+- <span id="page-15-8"></span>[75] J. Shao, X. Zhou, S. Feng, B. Hou, R. Lai, H. Jin, W. Lin, M. Masuda, C. H. Yu, and T. Chen, "Tensor Program Optimization with Probabilistic Programs," NeurIPS, 2022.
+- [76] V. Ganesan, S. Selvam, S. Sen, P. Kumar, and A. Raghunathan, "A Case for Generalizable DNN Cost Models for Mobile Devices," in IISWC, 2020.
+- [77] B. H. Ahn, P. Pilligundla, A. Yazdanbakhsh, and H. Esmaeilzadeh, "Chameleon: Adaptive Code Optimization for Expedited Deep Neural Network Compilation," ICLR, 2020.
+- <span id="page-15-9"></span>[78] A. Mishra, S. Chheda, C. Soto, A. M. Malik, M. Lin, and B. Chapman, "Compoff: A Compiler Cost Model Using Machine Learning to Predict the Cost of OpenMP Offloading," in IPDPSW, 2022.
+- <span id="page-15-10"></span>[79] Python Software Foundation, "Python language reference, version 3.x," 2016. [Online]. Available: <https://www.python.org>
+- <span id="page-15-11"></span>[80] A. Paszke, S. Gross, F. Massa, A. Lerer, J. Bradbury, G. Chanan, T. Killeen, Z. Lin, N. Gimelshein, L. Antiga, A. Desmaison, A. Köpf, E. Yang, Z. DeVito, M. Raison, A. Tejani, S. Chilamkurthy, B. Steiner, L. Fang, J. Bai, and S. Chintala, "PyTorch: An Imperative Style, High-Performance Deep Learning Library," in NeurIPS, 2019.
+- <span id="page-15-13"></span>[81] H. Luo, Y. C. Tuğrul, F. Bostancı, A. Olgun, A. G. Yağlıkçı, and O. Mutlu, "Ramulator 2.0: A Modern, Modular, and Extensible DRAM Simulator," arXiv preprint arXiv:2308.11030, 2023.
+- <span id="page-15-14"></span>[82] L. T. Clark, V. Vashishtha, L. Shifren, A. Gujja, S. Sinha, B. Cline, C. Ramamurthy, and G. Yeric, "ASAP7: A 7-nm FinFET Predictive Process Design Kit," Microelectronics Journal, 2016.
+- <span id="page-15-15"></span>[83] A. Shafaei, Y. Wang, X. Lin, and M. Pedram, "FinCACTI: Architectural Analysis and Modeling of Caches with Deeply-Scaled FinFET Devices," in ISVLSI, 2014.
+- <span id="page-15-16"></span>[84] Y. Ryu, S.-G. Ahn, J. H. Lee, J. Park, Y. K. Kim, H. Kim, Y. G. Song, H.-W. Cho, S. Cho, S. H. Song, H. Lee, U. Shin, J. Ahn, J.-M. Ryu, S. Lee, K.-H. Lim, J. Lee, J. H. Park, J.-S. Jeong, S. Joo, D. Cho, S. Y. Kim, M. Lee, H. Kim, M. Kim, J.-S. Kim, J. Kim, H. G. Kang, M.-K. Lee, S.-R. Kim, Y.-C. Kwon, Y. Y. Byun, K. Lee, S. Park, J. Youn, M.-O. Kim, K. Sohn, S.-J. Hwang, and J. Lee, "A 16 GB 1024 GB/s HBM3 DRAM With Source-Synchronized Bus Design and On-Die Error Control Scheme for Enhanced RAS Features," IEEE Journal of Solid-State Circuits, 2023.
+- <span id="page-15-17"></span>[85] M.-J. Park, H. S. Cho, T.-S. Yun, S. Byeon, Y. J. Koo, S. Yoon, D. U. Lee, S. Choi, J. Park, J. Lee, K. Cho, J. Moon, B.-K. Yoon, Y.-J. Park, S.-m. Oh, C. K. Lee, T.-K. Kim, S.-H. Lee, H.-W. Kim, Y. Ju, S.-K. Lim, S. G. Baek, K. Y. Lee, S. H. Lee, W. S. We, S. Kim, Y. Choi, S.-H. Lee, S. M. Yang, G. Lee, I.-K. Kim, Y. Jeon, J.-H. Park, J. C. Yun, C. Park, S.-Y. Kim, S. Kim, D.-Y. Lee, S.-H. Oh, T. Hwang, J. Shin, Y. Lee, H. Kim, J. Lee, Y. Hur, S. Lee, J. Jang, J. Chun, and J. Cho, "A 192-Gb 12-High 896-GB/s HBM3 DRAM with a TSV Auto-Calibration Scheme and Machine-Learning-Based
+
+- Layout Optimization," in ISSCC, 2022.
+- <span id="page-15-18"></span>[86] J. Liu, M. Zhou, Y. Pan, C.-Y. Yang, L. Josipović, and T. Rosing, "OptiPIM: Optimizing Processing-in-Memory Acceleration Using Integer Linear Programming," in ISCA, 2025.
+- <span id="page-15-19"></span>[87] A. Khadem, D. Fujiki, H. Chen, Y. Gu, N. Talati, S. Mahlke, and R. Das, "Multi-Dimensional Vector ISA Extension for Mobile In-Cache Computing," in HPCA, 2025.
+- <span id="page-15-20"></span>[88] A. Drebes, L. Chelini, O. Zinenko, A. Cohen, H. Corporaal, T. Grosser, K. Vadivel, and N. Vasilache, "TC-CIM: Empowering Tensor Comprehensions for Computing-In-Memory," in IMPACT, 2020.
+- <span id="page-15-21"></span>[89] M. Rhee, J. Sim, T. Ahn, S. Lee, D. Yoon, E. Kim, K. Park, Y. Joo, and H. Kim, "HPU: High-Bandwidth Processing Unit for Scalable, Cost-Effective LLM Inference via GPU Co-Processing," arXiv preprint arXiv:2504.16112, 2025.
+- <span id="page-15-27"></span>[90] Y. Kwon, Y. Lee, and M. Rhu, "TensorDimm: A Practical Near-Memory Processing Architecture for Embeddings and Tensor Operations in Deep Learning," in MICRO, 2019.
+- <span id="page-15-22"></span>[91] L. Liu, S. Zhao, B. Li, H. Ren, Z. Xu, M. Wang, X. Li, Y. Han, and Y. Wang, "Make LLM Inference Affordable to Everyone: Augmenting GPU Memory with NDP-DIMM," in HPCA, 2025.
+- <span id="page-15-23"></span>[92] J.-W. Jang, J. Oh, Y. Kong, J.-Y. Hong, S.-H. Cho, J. Lee, H. Yang, and J.-S. Yang, "Accelerating Retrieval Augmented Language Model via PIM and PNM Integration," in MICRO, 2025.
+- [93] D. Quinn, E. E. Yücel, M. Prammer, Z. Fan, K. Skadron, J. M. Patel, J. F. Martínez, and M. Alian, "DReX: Accurate and Scalable Dense Retrieval Acceleration via Algorithmic-Hardware Codesign," in ISCA, 2025.
+- <span id="page-15-24"></span>[94] D. Kim, J.-Y. Kim, W. Han, J. Won, H. Choi, Y. Kwon, and J.-Y. Kim, "Darwin: A DRAM-Based Multi-Level Processing-in-Memory Architecture for Column-Oriented Database," IEEE Trans. Emerging Top. Comput., 2024.
+- <span id="page-15-25"></span>[95] S. He, Z. Zhu, Y. He, and T. Jia, "LP-Spec: Leveraging LPDDR PIM for Efficient LLM Mobile Speculative Inference with Architecture-Dataflow Co-Optimization," arXiv, 2025.
+- [96] S. Han, B. Yoon, G. Park, C. Song, D. Kim, and J.-J. Kim, "Near-Memory LLM Inference Processor Based on 3D DRAM-to-Logic Hybrid Bonding," in DAC, 2025.
+- [97] L. Wu, H. Zhu, S. He, X. Lin, X. Zeng, and C. Chen, "PIMoE: Towards Efficient MoE Transformer Deployment on NPU-PIM System Through Throttle-Aware Task Offloading," in DAC, 2025.
+- [98] M. Seo, X. T. Nguyen, S. J. Hwang, Y. Kwon, G. Kim, C. Park, I. Kim, J. Park, J. Kim, W. Shin et al., "Ianus: Integrated Accelerator Based on NPU-PIM Unified Memory System," in ASPLOS, 2024.
+- [99] G. Heo, S. Lee, J. Cho, H. Choi, S. Lee, H. Ham, G. Kim, D. Mahajan, and J. Park, "NeuPIMS: NPU-PIM Heterogeneous Acceleration for Batched LLM Inferencing," in ASPLOS, 2024.
+- <span id="page-15-26"></span>[100] R. Chen, Z. Song, Y. Zheng, Z. Zhu, G. Li, N. Jing, X. Liang, and H. Guan, "HEAT: NPU-NDP Heterogeneous Architecture for Transformer-Empowered Graph Neural Networks," in MICRO, 2025.
+- <span id="page-15-28"></span>[101] J. Ahn, S. Hong, S. Yoo, O. Mutlu, and K. Choi, "A Scalable Processing-in-Memory Accelerator for Parallel Graph Processing," in ISCA, 2015.
+- [102] G. Dai, T. Huang, Y. Chi, J. Zhao, G. Sun, Y. Liu, Y. Wang, Y. Xie, and H. Yang, "GraphH: A Processing-in-Memory Architecture for Large-Scale Graph Processing," IEEE TCAD, 2018.
+- [103] T. Kang, G. Choi, T. Suh, and G. Koo, "SparsePIM: An Efficient HBM-Based PIM Architecture for Sparse Matrix-Vector Multiplications," in ICS, 2025.
+- [104] D. Lee, B. Hyun, T. Kim, and M. Rhu, "PIM-MMU: A Memory Management Unit for Accelerating Data Transfers in Commercial PIM Systems," in MICRO, 2024.
+- [105] Z. Zhou, C. Li, X. Wei, X. Wang, and G. Sun, "Gnnear: Accelerating Full-Batch Training of Graph Neural Networks with Near-Memory Processing," in PACT, 2022.
+- [106] T. Tian, X. Wang, L. Zhao, W. Wu, X. Zhang, F. Lu, T. Wang, and X. Jin, "G-NMP: Accelerating Graph Neural Networks with DIMM-Based Near-Memory Processing," Journal of Systems Architecture, 2022.
+- [107] S. Yun, H. Nam, J. Park, B. Kim, J. H. Ahn, and E. Lee, "GraNDe: Efficient Near-Data Processing Architecture for Graph Neural Networks," IEEE Transactions on Computers, 2023.
+- [108] D. Chen, H. He, H. Jin, L. Zheng, Y. Huang, X. Shen, and X. Liao, "MetaNMP: Leveraging Cartesian-Like Product to Accelerate HGNNs with Near-Memory Processing," in ISCA, 2023.
+- [109] M. Saed, P. J. Nair, and T. M. Aamodt, "RayN: Ray Tracing Acceleration with Near-Memory Computing," in MICRO, 2025.
+- <span id="page-15-29"></span>[110] L. Yan, M. Zhang, R. Wang, X. Chen, X. Zou, X. Lu, Y. Han, and X.-H. Sun, "CoPIM: A Concurrency-Aware PIM Workload Offloading Architecture for Graph Applications," in ISLPED, 2021.
+- <span id="page-15-30"></span>[111] C. Giannoula, I. Fernandez, J. G. Luna, N. Koziris, G. Goumas, and O. Mutlu, "SparseP: Towards Efficient Sparse Matrix Vector Multiplication on Real Processingin-Memory Architectures," POMACS, 2022.
+- [112] S. Diab, A. Nassereldine, M. Alser, J. Gómez Luna, O. Mutlu, and I. El Hajj, "A Framework for High-Throughput Sequence Alignment Using Real Processing-in-Memory Systems," in Bioinformatics, 2023.
+- [113] C. Lim, S. Lee, J. Choi, J. Lee, S. Park, H. Kim, J. Lee, and Y. Kim, "Design and Analysis of a Processing-in-DIMM Join Algorithm: A Case Study with UPMEM DIMMs," in Proc. ACM Manag. Data, 2023.
+- [114] M. Item, G. F. Oliveira, J. Gómez-Luna, M. Sadrosadati, Y. Guo, and O. Mutlu, "TransPimLib: Efficient Transcendental Functions for Processing-in-Memory Systems," in ISPASS, 2023.
+- [115] P. Das, P. R. Sutradhar, M. Indovina, S. M. P. Dinakarrao, and A. Ganguly, "Implementation and Evaluation of Deep Neural Networks in Commercially Available Processing in Memory Hardware," in SOCC, 2022.
+- [116] M. A. Jibril, H. Al-Sayeh, and K.-U. Sattler, "Accelerating Aggregation Using a Real
+
+- Processing-in-Memory System," in ICDE, 2024.
+- [117] J. Chen, J. Gómez-Luna, I. El Hajj, Y. Guo, and O. Mutlu, "SimplePIM: A Software Framework for Productive and Efficient Processing-in-Memory," in PACT, 2023.
+- [118] C. Giannoula, I. Fernandez, J. Gómez-Luna, N. Koziris, G. Goumas, and O. Mutlu, "Towards Efficient Sparse Matrix Vector Multiplication on Real Processing-In-Memory Architectures," in SIGMETRICS, 2022.
+- [119] C. Lim, S. Lee, J. Choi, J. Lee, S. Park, H. Kim, J. Lee, and Y. Kim, "Design and Analysis of a Processing-in-DIMM Join Algorithm: A Case Study with UPMEM DIMMs," in SIGMOD, 2023.
+- [120] S. Cai, B. Tian, H. Zhang, and M. Gao, "PIM-PAM: Efficient Graph Pattern Matching on Real Processing-in-Memory Hardware," in SIGMOD, 2024.
+- [121] J. Nider, C. Mustard, A. Zoltan, J. Ramsden, L. Liu, J. Grossbard, M. Dashti, R. Jodin, A. Ghiti, J. Chauzi et al., "A Case Study of Processing-in-Memory in Off-the-Shelf Systems," in USENIX ATC, 2021.
+- [122] H. Kang, Y. Zhao, G. E. Blelloch, L. Dhulipala, Y. Gu, C. McGuffey, and P. B. Gibbons, "PIM-Tree: A Skew-Resistant Index for Processing-in-Memory," in VLDB, 2025.
+- [123] H. Kim, Y. Zhao, A. Pavlo, and P. B. Gibbons, "No Cap, This Memory Slaps: Breaking Through the Memory Wall of Transactional Database Systems with Processing-in-Memory," in VLDB, 2025.
+- [124] W. Kong, S. Zheng, Y. Hua, R. Ma, Y. Wen, G. Wang, C. Zhou, and L. Huang, "PimBeam: Efficient Regular Path Queries Over Graph Database Using Processingin-Memory," TPDS, 2025.
+- [125] C. Giannoula, P. Yang, I. F. Vega, J. Yang, Y. X. Li, J. G. Luna, M. Sadrosadati, O. Mutlu, and G. Pekhimenko, "Accelerating Graph Neural Networks on Real Processing-in-Memory Systems," arXiv, 2024.
+- <span id="page-16-0"></span>[126] M. Barkhordar, A. Tabatabaeian, M. Sadrosadati, C. Giannoula, J. G. Luna, I. El Hajj, O. Mutlu, and A. R. Alameldeen, "ALPHA-PIM: Analysis of Linear Algebraic Processing for High-Performance Graph Applications on a Real Processing-In-Memory System," in IISWC, 2025.
+- <span id="page-16-1"></span>[127] S. Yu, H. Kim, K. Jeun, S. Hwang, S. Cho, and E. Lee, "ComPASS: A Compatible PIM Protocol Architecture and Scheduling Solution for Processor-PIM Collaboration," in MICRO, 2025.
+- [128] S. U. Noh, J. Hong, C. Lim, S. Park, J. Kim, H. Kim, Y. Kim, and J. Lee, "PID-Comm: A Fast and Flexible Collective Communication Framework for Commodity Processing-in-DIMM Devices," in ISCA, 2024.
+- [129] D. Lee, B. Hyun, T. Kim, and M. Rhu, "PIM-MMU: A Memory Management Unit for Accelerating Data Transfers in Commercial PIM Systems," in MICRO, 2024.
+- [130] Y. Zhao, M. Gao, F. Liu, Y. Hu, Z. Wang, H. Lin, J. Li, H. Xian, H. Dong, T. Yang et al., "UM-PIM: DRAM-Based PIM with Uniform and Shared Memory Space," in ISCA, 2024.
+- [131] D. Teguia, J. Chen, S. Bitchebe, O. Balmau, and A. Tchana, "vPIM: Processing-in-Memory Virtualization," in Middleware, 2024.
+- [132] C. Giannoula, N. Vijaykumar, N. Papadopoulou, V. Karakostas, I. Fernandez, J. Gómez-Luna, L. Orosa, N. Koziris, G. Goumas, and O. Mutlu, "Syncron: Efficient Synchronization Support for Near-Data-Processing Architectures," in HPCA, 2021.
+- [133] J. Shin, S. An, S. Lee, and S. E. Lee, "PIMCoSim: Hardware/Software Co-Simulator for Exploring Processing-in-Memory Architectures," Electronics, 2024.
+- [134] B. Hyun, T. Kim, D. Lee, and M. Rhu, "Pathfinding Future PIM Architectures by Demystifying a Commercial PIM Technology," in HPCA, 2024.
+- [135] J. Heo, Y. Shin, S. Choi, S. Yune, J.-H. Kim, H. Sung, Y. Kwon, and J.-Y. Kim, "Primo: A Full-Stack Processing-in-DRAM Emulation Framework for Machine Learning Workloads," in ICCAD, 2023.
+- <span id="page-16-2"></span>[136] J. Kim, D. Kim, S. Kang, B. Hyun, I. Lee, and Y. Park, "PIM-CCA: An Efficient PIM Architecture with Optimized Integration of Configurable Functional Units," in MICRO, 2025.
+- <span id="page-16-3"></span>[137] S. Nakandala, K. Saur, G.-I. Yu, K. Karanasos, C. Curino, M. Weimer, and M. Interlandi, "A Tensor Compiler for Unified Machine Learning Prediction Serving," in OSDI, 2020.
+- [138] A. Sabne, "XLA: Compiling Machine Learning for Peak Performance," in Google Research Publications, 2020.
+- <span id="page-16-4"></span>[139] S. Pouget, M. Lo, L.-N. Pouchet, and J. Cong, "Holistic Optimization Framework for FPGA Accelerators," in TODAES, 2025.
+

@@ -1,0 +1,12 @@
+## Patterns behind Chaos: Forecasting Data Movement for Efficient Large-Scale MoE LLM Inference
+
+- 属于Serving调度的实现是什么？实验比较什么？
+  - 实现（Case Study 2，prefill-guided decode expert placement）：利用 profiling 得到的 Insight 1（prefill 与 decode 阶段专家选择高度相似，Spearman ρ≥0.7、top-20 专家重叠 90%），解决大 scale MoE serving 中初始 decode 阶段（~前 1000 token）的负载不均问题——现有 EPLB 每 3000+ step 才基于周期 profile 动态调整专家放置，短输出请求永远收集不到足够数据。提出两个专家放置算法（Algorithm 2）在 decode 前用 prefill 阶段的专家选择 trace 确定初始放置：(1) Remap-based：保持每 GPU 专家数不变（容量 E/G），按 roofline cost 降序排序专家、贪心分配给最轻负载 GPU，重排专家实现负载均衡；(2) Duplication-based：每 GPU 预留 R 个额外专家槽，从默认连续布局开始，贪心迭代 R·G 次、每次选使瓶颈负载 max_g load_g 下降最多的 (expert, GPU) 对复制热门专家，复制专家的 token 在副本间均分（DeepEP dynamic dispatch）。两者都用 roofline cost model 估计每 GPU 负载。Serving 调度层面：在解码早期无历史数据时用 prefill 信息设置专家放置，属调度/负载均衡优化。
+  - 实验比较：Default（Qwen/SGLang 标准连续放置：专家 0-15 在 GPU0、16-31 在 GPU1……）、Best/Worst（用 oracle decode 阶段选择生成的理论最优/最差放置，实际不可得）、Remap、Dup（R=1，128+8=136 专家/层）。指标：MoE 计算时间（三个专家线性层 up/gate+down，不含 attention、all-to-all、top-k）。结果：Remap +15.5%、Dup +12.5%（相对 Default，即最高 1.25x speedup），两者均 >2x 于 Worst，与 Best 差距 <10%；EP8 规模下 max/min 执行时间比仅 ~1.3x，更大 EP 规模预计收益更大。
+- 硬件平台是什么，配置是什么。
+  - 8× NVIDIA H100 80GB GPU，NVLink 互联（8×H100 DGX 服务器）。
+- 开源Serving框架是什么。修改了什么。
+  - Serving 框架：SGLang（论文引用 [51]），MoE 后端 DeepEP（ep_dispatch_algorithm 设为 "dynamic" 使复制专家 token 均分），并提及 DeepGEMM 软件依赖。修改：(1) 在 SGLang 中插入 cuda. Event timer 构建分布式 profiler，在每 GPU 独立测量 attention、top-k、all-to-all、MoE 各操作耗时；(2) 通过 SGLang 的 init_expert_location 接口操纵专家在 GPU 上的放置（按 Algorithm 2 计算结果加载专家权重到指定 GPU）；调度算法本身（batching 等）未改。
+- 开源情况。基于开源文档和论文，使用例子解释Serving框架如何使用？作用是什么？至少具体到框架输入到硬件执行的全过程。
+  - 开源：https://github.com/zhongkaiyu/moe_exp_placement（DOI 10.5281/zenodo.19617695，Apache-2.0）。需要 8×H100 80GB、CUDA 12.0+、约 300GB 磁盘、PyTorch、修改版 SGLang fork、DeepEP、DeepGEMM；main_ae.py 下载 traces、跑实验、输出 CSV 生成 Figure 17，耗时 12-16 小时，真实 GPU 测量波动 ±5%（热、系统负载、NCCL 非确定性、SGLang micro-batching），预填感知放置使 MoE kernel 性能提升约 5-25%。
+  - 全过程（Qwen3-235B，94 个 MoE 层、每层 128 专家、top-8 路由，SGLang + DeepEP on 8×H100）：请求从 MMLU / Global-MMLU 进入（batch 64-16384）→ prefill 阶段：分布式 profiler 采集每层每个专家的选择频率 f_{l,e}，SGLang 执行注意力 + gate + all-to-all + MoE（DeepEP）；放置计算：用 Algorithm 2 从 prefill trace 为每层算出专家到 GPU 的放置 S_g（remap 重排或 dup 复制热门专家）→ 通过 init_expert_location 让 SGLang 把专家权重加载到指定 GPU（复制专家出现多副本）→ decode 阶段逐 token 生成：gate 选 top-8 专家 → DeepEP all-to-all 把 token dispatch 到持有对应专家的 GPU（dynamic 模式下复制专家 token 均分到各副本）→ 每 GPU 运行该专家三个线性层 GEMM → all-to-all 返回结果继续下一层/下一 token；profiler 用 cuda. Event timer 记录每 GPU MoE 层耗时作为指标。效果：更均衡的负载使 MoE 计算最多提速 25%（相对默认连续放置）。

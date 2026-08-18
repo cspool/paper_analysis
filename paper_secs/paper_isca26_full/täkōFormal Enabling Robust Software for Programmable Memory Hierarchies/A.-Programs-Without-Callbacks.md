@@ -1,0 +1,8 @@
+# *A. Programs Without Callbacks*
+
+Our MCM imposes minimal restrictions on programs without callbacks to avoid adding ordering requirements to nontak¨ o programs. We do not require preservation of program or- ¯ der between different addresses, so for instance, the execution of mp in Figure 5b is allowed under our model.
+
+Similar to release consistency [14] and C11 [8], we classify addresses as data or synchronization addresses, and enforce that if one thread performs a synchronization write that is read by a synchronization read on another thread, accesses after the synchronization read are required to observe accesses before the synchronization write. In our model's parlance, this synchronization read-write pair induces an sw edge between the two accesses. We chose RMW operations to implement all accesses to synchronization addresses [1] for simplicity. (Additional constructs like C11 low-level atomics [9] could be added in the future.) For instance, consider the mprmw litmus test in Figure 9a (where [b] is a regular address and its OnMiss is thus omitted). This test changes the read and write of [b] in Figure 5b to RMW operations, inducing an sw edge from the write of [b] to the read of [b], as shown in Figure 9b. The Vis axiom then enforces that the read of [a] is required to see the write of 1 to [a], forbidding the outcome of r1=1,r2=0. Vis also enforces per-address SC for regular addresses.
+
+Both regular and phantom conflicting accesses (i.e., a pair of accesses to the same address in different threads not ordered by hb where at least one is a write) constitute a race if they are to a data address, e.g., Figure 5b's read of [a] and write of 1 to [a] constitute a race. Figure 6 defines our race relation.
+

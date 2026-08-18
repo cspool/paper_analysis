@@ -1,0 +1,12 @@
+# *A. Hardware Overview*
+
+Fig. [5](#page-6-0) shows a two-stage architecture aligned with the algorithm: a fully pipelined clustering engine feeds K parallel *Ensemble Forest Exploration (EFE)* instances and a Voting module. Clustering is a streaming growth-and-merge computation that naturally maps to a seven-stage pipeline (S1–S7). Each EFE instance then performs a stateful forest traversal followed by ROE; because this traversal state cannot be timemultiplexed without overwriting in-flight adjacency data, the K instances are replicated and run in parallel. Adjacencylist construction overlaps with clustering, and after clustering terminates each EFE instance traverses under a distinct priority scheme before the Voting module aggregates the predicted logical outcomes.
+
+The main architectural bottleneck lies in the clustering pipeline: as profiled in Fig. [3,](#page-3-0) pipeline stalls dominate decoding latency. Clustering has low arithmetic intensity and is driven by indirect metadata accesses, so concurrent updates to shared global data can trigger severe bank conflicts. The remainder of this section therefore focuses on the conflictaware multi-bank hashed memory system and hierarchical ID mapping scheme that keep this pipeline busy.
+
+# *A. Hardware Overview*
+
+Fig. [5](#page-6-0) shows a two-stage architecture aligned with the algorithm: a fully pipelined clustering engine feeds K parallel *Ensemble Forest Exploration (EFE)* instances and a Voting module. Clustering is a streaming growth-and-merge computation that naturally maps to a seven-stage pipeline (S1–S7). Each EFE instance then performs a stateful forest traversal followed by ROE; because this traversal state cannot be timemultiplexed without overwriting in-flight adjacency data, the K instances are replicated and run in parallel. Adjacencylist construction overlaps with clustering, and after clustering terminates each EFE instance traverses under a distinct priority scheme before the Voting module aggregates the predicted logical outcomes.
+
+The main architectural bottleneck lies in the clustering pipeline: as profiled in Fig. [3,](#page-3-0) pipeline stalls dominate decoding latency. Clustering has low arithmetic intensity and is driven by indirect metadata accesses, so concurrent updates to shared global data can trigger severe bank conflicts. The remainder of this section therefore focuses on the conflictaware multi-bank hashed memory system and hierarchical ID mapping scheme that keep this pipeline busy.
+

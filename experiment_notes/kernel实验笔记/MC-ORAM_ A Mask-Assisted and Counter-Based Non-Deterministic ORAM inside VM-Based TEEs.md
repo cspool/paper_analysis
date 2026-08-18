@@ -1,0 +1,11 @@
+## MC-ORAM: A Mask-Assisted and Counter-Based Non-Deterministic ORAM inside VM-Based TEEs
+
+- 属于kernel调度/运行时计算的实现是什么？实验比较什么？
+  - （近似分层：本论文核心是 TEE 内 ORAM 客户端的运行时安全机制（软件运行在 CPU TEE 中，非 GPU kernel/加速器），此处从"CPU 上运行时计算"角度记录）实现为运行在 Intel TDX 虚拟机内的 ORAM 客户端运行时计算集合：每次逻辑访问对路径上每个节点的全部 Z 个 ORAM 块执行掩码写（data⊕node.mask）与 16 位计数器递增；对暂存执行 oblivious 全扫描（readPath 与 eviction 各一次，共 2ZL 次线性暂存槽更新，每次计数器 +1，即使槽未被写入）；并触发掩码刷新运行时流程（Refresh：整节点/暂存重新生成 112 位掩码并清零计数器）。计数器/掩码递增与刷新频率完全由公开 ORAM 参数与访问次数决定、与逻辑访问模式无关，保证确定性 AES-XTS 密文每次访问都变化且不引入新泄漏。
+  - 实验比较什么：与采用 64 位交错计数器（每 64 位数据配 64 位计数器，Obelix 风格）的 PathORAM/RingORAM 及其暂存优化版（+，Oblix 思路）baseline 在真实 TDX 硬件上比较平均访问延迟（1M 次访问）：MC-ORAM 最高加速 1.82×（PathORAM）/1.85×（RingORAM），MC-ORAM+ 最高 1.77×/1.60×；带宽仅 baseline 的 1.125×（vs 64 位计数器 2×）；另验证访问模式不变性（四种模式延迟几乎一致）、N/B 全组合、SPEC CPU2017 映射与 DLRM/Qwen-8B 端到端。
+- 后端平台是什么，配置是什么。
+  - 后端平台：CPU——双路 Intel Xeon 6548Y+、512 GB DDR5，guest 运行在 Intel TDX VM-based TEE（Ubuntu 22.04.5）内；TME 硬件 AES-XTS（按物理地址确定性加密）作为唯一内存加密机制，ORAM 树/暂存/位置图全部驻留 TEE 加密 DRAM；无 GPU/异构/PIM/加速器后端。
+- 评估性能的软件/脚本是什么。修改了什么。
+  - 评估软件：论文自研的 TDX 内 PathORAM/RingORAM 实现（各 <1000 行，其中 <200 行 MC-ORAM 特有：mask/counter/refresh 元数据管理），以开源 PathORAMSimulator 与 oram_simulator 为参考基础；Intel PIN 采集 SPEC CPU2017 数据地址轨迹（每 benchmark 5M 个地址）确定 ORAM 高度；延迟测量为每访问含递归位置图查询+readPath+驱逐、1M 次访问取算术平均。修改了什么：在 baseline ORAM 上加 112+16 位 AES 块布局、共享掩码管理、计数器递增、Refresh 算法与 obliv 暂存全扫描；为公平对比，所有 baseline（PathORAM/RingORAM/+/+）也实现了 64 位交错计数器方案（同 [43] Obelix 风格），纯 masking baseline 单独评估（慢 13.5×）。
+  - 开源情况：MC-ORAM 未开源（截至 2026-08 联网搜索未找到公开仓库）；参考实现开源：PathORAMSimulator（https://github.com/renling/PathORAMSimulator，PathORAM 模拟器）与 oram_simulator（https://github.com/wangxiao1254/oram_simulator，含 PathORAM/Circuit ORAM 等多 ORAM 模拟）。
+  - 评估原理与 kernel 输入→性能输出全过程：输入 = ORAM 配置（N=2^14/2^23、B=512b/256B/2048B、Z=4、stash 90/10）与 1M 次逻辑访问地址序列（或 SPEC CPU2017 轨迹映射的配置）→ TDX 内 ORAM 客户端逐访问执行：位置图查找（递归 ORAM 查询）→ readPath（L 个节点×Z 块读入暂存，TreeToStash 掩码写+全暂存计数器 +1）→ 目标块处理 → PosM 更新 → eviction（StashToTree 写回，树节点+暂存计数器 +1，含 RingORAM 周期 A=4 与 (Z+S) 块驱逐、reverse-lexicographic 路径调度）→ 计数器溢出触发 Refresh（整节点/暂存新掩码+清零）→ 每步经 TME AES-XTS(addr,·) 加密读写 DRAM，用高精度时钟对每次逻辑访问计时 → 输出平均访问延迟（ms）、加速比（vs 64 位计数器 baseline）、带宽倍率（1.125×）、刷新频率（节点 3.05×10^−5/访问、暂存每 ~585 次）、存储减少（43.75%）。作用：量化"掩码+短计数器+摊销刷新"这一运行时机制相对 64 位计数器的性能收益，证明 1.125× 带宽即可恢复密文非确定性。

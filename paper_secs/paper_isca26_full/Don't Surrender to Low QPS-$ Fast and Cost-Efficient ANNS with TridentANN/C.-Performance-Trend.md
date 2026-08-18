@@ -1,0 +1,12 @@
+# *C. Performance Trend*
+
+In Figure 13, we record throughput–latency trends of SPANN, DiskANN, PipeANN, and TRIDENTANN under different numbers of SSDs, with recall@10 at 90%. We gradually increase the number of query threads to obtain records.
+
+When only 1 and 2 SSDs are equipped, our TRIDENTANN and SPANN can maintain low latency under low concurrency, but exhibit limited peak throughput because of constrained SSD bandwidth. As the number of SSDs increases and I/O bandwidth is no longer the bottleneck, our TRIDENTANN shows superiority, achieving high throughput with stable low latency. Specifically, it achieves the highest throughput with 4/8 SSDs, and simultaneously keeps the lowest latency (∼1 ms). Although SPANN no longer suffers a noticeable disadvantage compared to graph-based systems once I/O bandwidth is no longer the bottleneck, it still cannot achieve the optimal performance of ours. As search threads increase, PipeANN experiences performance degradation after reaching peak throughput, because it launches multiple threads within a single-threaded search to overlap I/O and computation. With more threads, contention for CPU cores among threads leads to increased switching overhead.
+
+# *C. Performance Trend*
+
+In Figure 13, we record throughput–latency trends of SPANN, DiskANN, PipeANN, and TRIDENTANN under different numbers of SSDs, with recall@10 at 90%. We gradually increase the number of query threads to obtain records.
+
+When only 1 and 2 SSDs are equipped, our TRIDENTANN and SPANN can maintain low latency under low concurrency, but exhibit limited peak throughput because of constrained SSD bandwidth. As the number of SSDs increases and I/O bandwidth is no longer the bottleneck, our TRIDENTANN shows superiority, achieving high throughput with stable low latency. Specifically, it achieves the highest throughput with 4/8 SSDs, and simultaneously keeps the lowest latency (∼1 ms). Although SPANN no longer suffers a noticeable disadvantage compared to graph-based systems once I/O bandwidth is no longer the bottleneck, it still cannot achieve the optimal performance of ours. As search threads increase, PipeANN experiences performance degradation after reaching peak throughput, because it launches multiple threads within a single-threaded search to overlap I/O and computation. With more threads, contention for CPU cores among threads leads to increased switching overhead.
+

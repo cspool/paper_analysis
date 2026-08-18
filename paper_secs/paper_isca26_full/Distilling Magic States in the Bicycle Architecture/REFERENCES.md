@@ -1,0 +1,113 @@
+# REFERENCES
+
+- [1] P. W. Shor, "Algorithms for quantum computation: discrete logarithms and factoring," in *Proceedings 35th annual symposium on foundations of computer science*. Ieee, 1994, pp. 124–134.
+- [2] P. Shor, "Fault-tolerant quantum computation," in *Proceedings of 37th Conference on Foundations of Computer Science*, 1996, pp. 56–65.
+   [Online]. Available: https://ieeexplore.ieee.org/document/548464
+
+- [3] A. Y. Kitaev, "Quantum computations: algorithms and error correction," *Russian Mathematical Surveys*, vol. 52, no. 6, p. 1191–1249, Dec 1997. [Online]. Available: http://dx.doi.org/10.1070/ RM1997v052n06ABEH002155
+- [4] P. W. Shor, "Scheme for reducing decoherence in quantum computer memory," *Physical review A*, vol. 52, no. 4, p. R2493, 1995.
+- [5] A. Steane, "Multiple-particle interference and quantum error correction," *Proceedings of the Royal Society of London. Series A: Mathematical, Physical and Engineering Sciences*, vol. 452, no. 1954, pp. 2551–2577, 1996. [Online]. Available: https://royalsocietypublishing.org/doi/10.1098/ rspa.1996.0136
+- [6] A. R. Calderbank and P. W. Shor, "Good quantum error-correcting codes exist," *Physical Review A*, vol. 54, no. 2, p. 1098, 1996. [Online]. Available: https://journals.aps.org/pra/abstract/10.1103/ PhysRevA.54.1098
+- [7] D. Gottesman, "Stabilizer codes and quantum error correction," Ph.D. dissertation, California Institute of Technology, 1997. [Online]. Available: https://thesis.library.caltech.edu/2900/
+- [8] D. Aharonov and M. Ben-Or, "Fault-tolerant quantum computation with constant error," in *Proceedings of the Twenty-Ninth Annual ACM Symposium on Theory of Computing*, ser. STOC '97. New York, NY, USA: Association for Computing Machinery, 1997, p. 176–188. [Online]. Available: https://doi.org/10.1145/258533.258579
+- [9] S. B. Bravyi and A. Y. Kitaev, "Quantum codes on a lattice with boundary," *arXiv:quant-ph/9811052*, 1998. [Online]. Available: https://arxiv.org/abs/quant-ph/9811052
+- [10] E. Dennis, A. Kitaev, A. Landahl, and J. Preskill, "Topological quantum memory," *Journal of Mathematical Physics*, vol. 43, no. 9, p. 4452–4505, Sep 2002. [Online]. Available: http://dx.doi.org/10.1063/1.1499754
+- [11] "Kitaev surface code," in *The Error Correction Zoo*, V. V. Albert and P. Faist, Eds., 2025. [Online]. Available: https://errorcorrectionzoo.org/c/ surface
+- [12] C. Gidney and M. Ekera, "How to factor 2048 bit RSA integers in 8 ˚ hours using 20 million noisy qubits," *Quantum*, vol. 5, p. 433, Apr 2021. [Online]. Available: https://doi.org/10.22331/q-2021-04-15-433
+- [13] C. Gidney, "How to factor 2048 bit RSA integers with less than a million noisy qubits," *arXiv preprint arXiv:2505.15917*, 2025.
+- [14] D. Gottesman, "Fault-Tolerant Quantum Computation with Constant Overhead," *Quantum Info. Comput.*, vol. 14, no. 15–16, p. 1338–1372, Nov 2014. [Online]. Available: https://dl.acm.org/doi/10.5555/2685179. 2685184
+- [15] "Quantum LDPC (QLDPC) code," in *The Error Correction Zoo*, V. V. Albert and P. Faist, Eds., 2025. [Online]. Available: https://errorcorrectionzoo.org/c/qldpc
+- [16] S. Bravyi, A. W. Cross, J. M. Gambetta, D. Maslov, P. Rall, and T. J. Yoder, "High-threshold and low-overhead fault-tolerant quantum memory," *Nature*, vol. 627, no. 8005, p. 778–782, Mar 2024. [Online]. Available: http://dx.doi.org/10.1038/s41586-024-07107-7
+- [17] A. G. Fowler, M. Mariantoni, J. M. Martinis, and A. N. Cleland, "Surface codes: Towards practical large-scale quantum computation," *Phys. Rev. A*, vol. 86, p. 032324, Sep 2012. [Online]. Available: https://link.aps.org/doi/10.1103/PhysRevA.86.032324
+- [18] A. G. Fowler and C. Gidney, "Low overhead quantum computation using lattice surgery," 2018. [Online]. Available: https://arxiv.org/abs/ 1808.06709
+- [19] D. Litinski, "A Game of Surface Codes: Large-Scale Quantum Computing with Lattice Surgery," *Quantum*, vol. 3, p. 128, Mar 2019. [Online]. Available: http://dx.doi.org/10.22331/q-2019-03-05-128
+- [20] H. Zhou, C. Zhao, M. Cain, D. Bluvstein, C. Duckering, H.-Y. Hu, S.-T. Wang, A. Kubica, and M. D. Lukin, "Algorithmic Fault Tolerance for Fast Quantum Computing," 2024. [Online]. Available: https://arxiv.org/abs/2406.17653
+- [21] O. Fawzi, A. Grospellier, and A. Leverrier, "Constant Overhead Quantum Fault-Tolerance with Quantum Expander Codes," in *2018 IEEE 59th Annu. Symp. Found. Comput. Scie. (FOCS)*, vol. 64, no. 1. ACM New York, NY, USA, Oct 2018, pp. 106–114. [Online]. Available: https://doi.org/10.1109%2Ffocs.2018.00076
+- [22] S. Tamiya, M. Koashi, and H. Yamasaki, "Polylog-time-and constantspace-overhead fault-tolerant quantum computation with quantum low-density parity-check codes," *arXiv preprint arXiv:2411.03683*, 2024. [Online]. Available: https://arxiv.org/abs/2411.03683
+- [23] Q. T. Nguyen, "Good Binary Quantum Codes with Transversal CCZ Gate," in *Proceedings of the 57th Annual ACM Symposium on Theory of Computing*, ser. STOC '25. New York, NY, USA: Association
+
+- for Computing Machinery, 2025, p. 697–706. [Online]. Available: https://doi.org/10.1145/3717823.3718186
+- [24] Z. He, Q. T. Nguyen, and C. A. Pattison, "Composable Quantum Fault-Tolerance," 2025. [Online]. Available: https://arxiv.org/abs/2508.08246
+- [25] G. Zhang, Y. Zhu, and Y. Li, "Accelerating Fault-Tolerant Quantum Computation with Good qLDPC Codes," *arXiv preprint arXiv:2510.19442*, 2025.
+- [26] Z. He, A. Cowtan, D. J. Williamson, and T. J. Yoder, "Extractors: QLDPC Architectures for Efficient Pauli-Based Computation," 2025. [Online]. Available: https://arxiv.org/abs/2503.10390
+- [27] T. J. Yoder, E. Schoute, P. Rall, E. Pritchett, J. M. Gambetta, A. W. Cross, M. Carroll, and M. E. Beverland, "Tour de gross: A modular quantum computer based on bivariate bicycle codes," *arXiv preprint arXiv:2506.03094*, 2025. [Online]. Available: https://arxiv.org/abs/2506.03094
+- [28] D. Gottesman and I. L. Chuang, "Demonstrating the viability of universal quantum computation using teleportation and single-qubit operations," *Nature*, vol. 402, no. 6760, p. 390–393, Nov 1999. [Online]. Available: http://dx.doi.org/10.1038/46503
+- [29] S. Bravyi and A. Kitaev, "Universal quantum computation with ideal Clifford gates and noisy ancillas," *Phys. Rev. A*, vol. 71, p. 022316, Feb 2005. [Online]. Available: https://link.aps.org/doi/10.1103/PhysRevA.71. 022316
+- [30] C. Gidney, N. Shutty, and C. Jones, "Magic state cultivation: growing T states as cheap as CNOT gates," 2024. [Online]. Available: https://arxiv.org/abs/2409.17595
+- [31] A. Cross, Z. He, P. Rall, and T. Yoder, "Improved QLDPC Surgery: Logical Measurements and Bridging Codes," 2024. [Online]. Available: https://arxiv.org/abs/2407.18393
+- [32] D. J. Williamson and T. J. Yoder, "Low-overhead fault-tolerant quantum computation by gauging logical operators," *arXiv preprint arXiv:2410.02213*, 2024. [Online]. Available: https://arxiv.org/abs/2410. 02213
+- [33] B. Ide, M. G. Gowda, P. J. Nadkarni, and G. Dauphinais, "Fault-Tolerant Logical Measurements via Homological Measurement," *Phys. Rev. X*, vol. 15, p. 021088, Jun 2025. [Online]. Available: https://link.aps.org/doi/10.1103/PhysRevX.15.021088
+- [34] E. Swaroop, T. Jochym-O'Connor, and T. J. Yoder, "Universal adapters between quantum LDPC codes," 2025. [Online]. Available: https://arxiv.org/abs/2410.03628
+- [35] P. Panteleev and G. Kalachev, "Degenerate Quantum LDPC Codes With Good Finite Length Performance," *Quantum*, vol. 5, p. 585, Nov 2021. [Online]. Available: https://doi.org/10.22331/q-2021-11-22-585
+- [36] Q. Xu, J. P. Bonilla Ataides, C. A. Pattison, N. Raveendran, D. Bluvstein, J. Wurtz, B. Vasic, M. D. Lukin, L. Jiang, and H. Zhou, "Constant- ´ overhead fault-tolerant quantum computation with reconfigurable atom arrays," *Nature Physics*, vol. 20, no. 7, p. 1084–1090, Apr 2024. [Online]. Available: http://dx.doi.org/10.1038/s41567-024-02479-z
+- [37] H.-K. Lin and L. P. Pryadko, "Quantum two-block group algebra codes," *Physical Review A*, vol. 109, no. 2, p. 022407, 2024.
+- [38] N. P. Breuckmann and S. Burton, "Fold-Transversal Clifford Gates for Quantum Codes," *Quantum*, vol. 8, p. 1372, Jun. 2024. [Online]. Available: http://dx.doi.org/10.22331/q-2024-06-13-1372
+- [39] Q. Xu, H. Zhou, D. Bluvstein, M. Cain, M. Kalinowski, J. Preskill, M. D. Lukin, and N. Maskara, "Batched high-rate logical operations for quantum LDPC codes," 2025. [Online]. Available: https://arxiv.org/abs/2510.06159
+- [40] S. Bravyi, O. Dial, J. M. Gambetta, D. Gil, and Z. Nazario, "The future of quantum computing with superconducting qubits," *Journal of Applied Physics*, vol. 132, no. 16, Oct 2022. [Online]. Available: http://dx.doi.org/10.1063/5.0082975
+- [41] P. Team, "A manufacturable platform for photonic quantum computing," *Nature*, pp. 1–3, 2025.
+- [42] H. Aghaee Rad, T. Ainsworth, R. Alexander, B. Altieri, M. Askarani, R. Baby, L. Banchi, B. Baragiola, J. Bourassa, R. Chadwick *et al.*, "Scaling and networking a modular photonic quantum computer," *Nature*, pp. 1–8, 2025.
+- [43] D. Bluvstein, S. J. Evered, A. A. Geim, S. H. Li, H. Zhou, T. Manovitz, S. Ebadi, M. Cain, M. Kalinowski, D. Hangleiter, J. P. Bonilla Ataides, N. Maskara, I. Cong, X. Gao, P. Sales Rodriguez, T. Karolyshyn, G. Semeghini, M. J. Gullans, M. Greiner, V. Vuletic, and M. D. ´ Lukin, "Logical quantum processor based on reconfigurable atom arrays," *Nature*, vol. 626, no. 7997, p. 58–65, Dec. 2023. [Online]. Available: http://dx.doi.org/10.1038/s41586-023-06927-3
+
+- [44] S. Bravyi, G. Smith, and J. A. Smolin, "Trading Classical and Quantum Computational Resources," *Physical Review X*, vol. 6, no. 2, Jun 2016. [Online]. Available: http://dx.doi.org/10.1103/PhysRevX.6.021043
+- [45] L. Z. Cohen, I. H. Kim, S. D. Bartlett, and B. J. Brown, "Low-overhead fault-tolerant quantum computing using long-range connectivity," *Science Advances*, vol. 8, no. 20, May 2022. [Online]. Available: http://dx.doi.org/10.1126/sciadv.abn1717
+- [46] D. Litinski, "Magic State Distillation: Not as Costly as You Think," *Quantum*, vol. 3, p. 205, Dec. 2019. [Online]. Available: http://dx.doi.org/10.22331/q-2019-12-02-205
+- [47] S. Bravyi and J. Haah, "Magic-state distillation with low overhead," *Physical Review A*, vol. 86, no. 5, Nov. 2012. [Online]. Available: http://dx.doi.org/10.1103/PhysRevA.86.052329
+- [48] K. Sahay, P.-K. Tsai, K. Chang, Q. Su, T. B. Smith, S. Singh, and S. Puri, "Fold-transversal surface code cultivation," 2025. [Online]. Available: https://arxiv.org/abs/2509.05212
+- [49] Y. Li, "A magic state's fidelity can be superior to the operations that created it," *New Journal of Physics*, vol. 17, no. 2, p. 023037, Feb. 2015. [Online]. Available: http://dx.doi.org/10.1088/1367-2630/17/2/023037
+- [50] N. Yoshioka, A. Seif, A. Cross, and A. Javadi-Abhari, "Transversal gates for probabilistic implementation of multi-qubit Pauli rotations," 2025. [Online]. Available: https://arxiv.org/abs/2510.08290# REFERENCES
+
+- [1] P. W. Shor, "Algorithms for quantum computation: discrete logarithms and factoring," in *Proceedings 35th annual symposium on foundations of computer science*. Ieee, 1994, pp. 124–134.
+- [2] P. Shor, "Fault-tolerant quantum computation," in *Proceedings of 37th Conference on Foundations of Computer Science*, 1996, pp. 56–65.
+   [Online]. Available: https://ieeexplore.ieee.org/document/548464
+
+- [3] A. Y. Kitaev, "Quantum computations: algorithms and error correction," *Russian Mathematical Surveys*, vol. 52, no. 6, p. 1191–1249, Dec 1997. [Online]. Available: http://dx.doi.org/10.1070/ RM1997v052n06ABEH002155
+- [4] P. W. Shor, "Scheme for reducing decoherence in quantum computer memory," *Physical review A*, vol. 52, no. 4, p. R2493, 1995.
+- [5] A. Steane, "Multiple-particle interference and quantum error correction," *Proceedings of the Royal Society of London. Series A: Mathematical, Physical and Engineering Sciences*, vol. 452, no. 1954, pp. 2551–2577, 1996. [Online]. Available: https://royalsocietypublishing.org/doi/10.1098/ rspa.1996.0136
+- [6] A. R. Calderbank and P. W. Shor, "Good quantum error-correcting codes exist," *Physical Review A*, vol. 54, no. 2, p. 1098, 1996. [Online]. Available: https://journals.aps.org/pra/abstract/10.1103/ PhysRevA.54.1098
+- [7] D. Gottesman, "Stabilizer codes and quantum error correction," Ph.D. dissertation, California Institute of Technology, 1997. [Online]. Available: https://thesis.library.caltech.edu/2900/
+- [8] D. Aharonov and M. Ben-Or, "Fault-tolerant quantum computation with constant error," in *Proceedings of the Twenty-Ninth Annual ACM Symposium on Theory of Computing*, ser. STOC '97. New York, NY, USA: Association for Computing Machinery, 1997, p. 176–188. [Online]. Available: https://doi.org/10.1145/258533.258579
+- [9] S. B. Bravyi and A. Y. Kitaev, "Quantum codes on a lattice with boundary," *arXiv:quant-ph/9811052*, 1998. [Online]. Available: https://arxiv.org/abs/quant-ph/9811052
+- [10] E. Dennis, A. Kitaev, A. Landahl, and J. Preskill, "Topological quantum memory," *Journal of Mathematical Physics*, vol. 43, no. 9, p. 4452–4505, Sep 2002. [Online]. Available: http://dx.doi.org/10.1063/1.1499754
+- [11] "Kitaev surface code," in *The Error Correction Zoo*, V. V. Albert and P. Faist, Eds., 2025. [Online]. Available: https://errorcorrectionzoo.org/c/ surface
+- [12] C. Gidney and M. Ekera, "How to factor 2048 bit RSA integers in 8 ˚ hours using 20 million noisy qubits," *Quantum*, vol. 5, p. 433, Apr 2021. [Online]. Available: https://doi.org/10.22331/q-2021-04-15-433
+- [13] C. Gidney, "How to factor 2048 bit RSA integers with less than a million noisy qubits," *arXiv preprint arXiv:2505.15917*, 2025.
+- [14] D. Gottesman, "Fault-Tolerant Quantum Computation with Constant Overhead," *Quantum Info. Comput.*, vol. 14, no. 15–16, p. 1338–1372, Nov 2014. [Online]. Available: https://dl.acm.org/doi/10.5555/2685179. 2685184
+- [15] "Quantum LDPC (QLDPC) code," in *The Error Correction Zoo*, V. V. Albert and P. Faist, Eds., 2025. [Online]. Available: https://errorcorrectionzoo.org/c/qldpc
+- [16] S. Bravyi, A. W. Cross, J. M. Gambetta, D. Maslov, P. Rall, and T. J. Yoder, "High-threshold and low-overhead fault-tolerant quantum memory," *Nature*, vol. 627, no. 8005, p. 778–782, Mar 2024. [Online]. Available: http://dx.doi.org/10.1038/s41586-024-07107-7
+- [17] A. G. Fowler, M. Mariantoni, J. M. Martinis, and A. N. Cleland, "Surface codes: Towards practical large-scale quantum computation," *Phys. Rev. A*, vol. 86, p. 032324, Sep 2012. [Online]. Available: https://link.aps.org/doi/10.1103/PhysRevA.86.032324
+- [18] A. G. Fowler and C. Gidney, "Low overhead quantum computation using lattice surgery," 2018. [Online]. Available: https://arxiv.org/abs/ 1808.06709
+- [19] D. Litinski, "A Game of Surface Codes: Large-Scale Quantum Computing with Lattice Surgery," *Quantum*, vol. 3, p. 128, Mar 2019. [Online]. Available: http://dx.doi.org/10.22331/q-2019-03-05-128
+- [20] H. Zhou, C. Zhao, M. Cain, D. Bluvstein, C. Duckering, H.-Y. Hu, S.-T. Wang, A. Kubica, and M. D. Lukin, "Algorithmic Fault Tolerance for Fast Quantum Computing," 2024. [Online]. Available: https://arxiv.org/abs/2406.17653
+- [21] O. Fawzi, A. Grospellier, and A. Leverrier, "Constant Overhead Quantum Fault-Tolerance with Quantum Expander Codes," in *2018 IEEE 59th Annu. Symp. Found. Comput. Scie. (FOCS)*, vol. 64, no. 1. ACM New York, NY, USA, Oct 2018, pp. 106–114. [Online]. Available: https://doi.org/10.1109%2Ffocs.2018.00076
+- [22] S. Tamiya, M. Koashi, and H. Yamasaki, "Polylog-time-and constantspace-overhead fault-tolerant quantum computation with quantum low-density parity-check codes," *arXiv preprint arXiv:2411.03683*, 2024. [Online]. Available: https://arxiv.org/abs/2411.03683
+- [23] Q. T. Nguyen, "Good Binary Quantum Codes with Transversal CCZ Gate," in *Proceedings of the 57th Annual ACM Symposium on Theory of Computing*, ser. STOC '25. New York, NY, USA: Association
+
+- for Computing Machinery, 2025, p. 697–706. [Online]. Available: https://doi.org/10.1145/3717823.3718186
+- [24] Z. He, Q. T. Nguyen, and C. A. Pattison, "Composable Quantum Fault-Tolerance," 2025. [Online]. Available: https://arxiv.org/abs/2508.08246
+- [25] G. Zhang, Y. Zhu, and Y. Li, "Accelerating Fault-Tolerant Quantum Computation with Good qLDPC Codes," *arXiv preprint arXiv:2510.19442*, 2025.
+- [26] Z. He, A. Cowtan, D. J. Williamson, and T. J. Yoder, "Extractors: QLDPC Architectures for Efficient Pauli-Based Computation," 2025. [Online]. Available: https://arxiv.org/abs/2503.10390
+- [27] T. J. Yoder, E. Schoute, P. Rall, E. Pritchett, J. M. Gambetta, A. W. Cross, M. Carroll, and M. E. Beverland, "Tour de gross: A modular quantum computer based on bivariate bicycle codes," *arXiv preprint arXiv:2506.03094*, 2025. [Online]. Available: https://arxiv.org/abs/2506.03094
+- [28] D. Gottesman and I. L. Chuang, "Demonstrating the viability of universal quantum computation using teleportation and single-qubit operations," *Nature*, vol. 402, no. 6760, p. 390–393, Nov 1999. [Online]. Available: http://dx.doi.org/10.1038/46503
+- [29] S. Bravyi and A. Kitaev, "Universal quantum computation with ideal Clifford gates and noisy ancillas," *Phys. Rev. A*, vol. 71, p. 022316, Feb 2005. [Online]. Available: https://link.aps.org/doi/10.1103/PhysRevA.71. 022316
+- [30] C. Gidney, N. Shutty, and C. Jones, "Magic state cultivation: growing T states as cheap as CNOT gates," 2024. [Online]. Available: https://arxiv.org/abs/2409.17595
+- [31] A. Cross, Z. He, P. Rall, and T. Yoder, "Improved QLDPC Surgery: Logical Measurements and Bridging Codes," 2024. [Online]. Available: https://arxiv.org/abs/2407.18393
+- [32] D. J. Williamson and T. J. Yoder, "Low-overhead fault-tolerant quantum computation by gauging logical operators," *arXiv preprint arXiv:2410.02213*, 2024. [Online]. Available: https://arxiv.org/abs/2410. 02213
+- [33] B. Ide, M. G. Gowda, P. J. Nadkarni, and G. Dauphinais, "Fault-Tolerant Logical Measurements via Homological Measurement," *Phys. Rev. X*, vol. 15, p. 021088, Jun 2025. [Online]. Available: https://link.aps.org/doi/10.1103/PhysRevX.15.021088
+- [34] E. Swaroop, T. Jochym-O'Connor, and T. J. Yoder, "Universal adapters between quantum LDPC codes," 2025. [Online]. Available: https://arxiv.org/abs/2410.03628
+- [35] P. Panteleev and G. Kalachev, "Degenerate Quantum LDPC Codes With Good Finite Length Performance," *Quantum*, vol. 5, p. 585, Nov 2021. [Online]. Available: https://doi.org/10.22331/q-2021-11-22-585
+- [36] Q. Xu, J. P. Bonilla Ataides, C. A. Pattison, N. Raveendran, D. Bluvstein, J. Wurtz, B. Vasic, M. D. Lukin, L. Jiang, and H. Zhou, "Constant- ´ overhead fault-tolerant quantum computation with reconfigurable atom arrays," *Nature Physics*, vol. 20, no. 7, p. 1084–1090, Apr 2024. [Online]. Available: http://dx.doi.org/10.1038/s41567-024-02479-z
+- [37] H.-K. Lin and L. P. Pryadko, "Quantum two-block group algebra codes," *Physical Review A*, vol. 109, no. 2, p. 022407, 2024.
+- [38] N. P. Breuckmann and S. Burton, "Fold-Transversal Clifford Gates for Quantum Codes," *Quantum*, vol. 8, p. 1372, Jun. 2024. [Online]. Available: http://dx.doi.org/10.22331/q-2024-06-13-1372
+- [39] Q. Xu, H. Zhou, D. Bluvstein, M. Cain, M. Kalinowski, J. Preskill, M. D. Lukin, and N. Maskara, "Batched high-rate logical operations for quantum LDPC codes," 2025. [Online]. Available: https://arxiv.org/abs/2510.06159
+- [40] S. Bravyi, O. Dial, J. M. Gambetta, D. Gil, and Z. Nazario, "The future of quantum computing with superconducting qubits," *Journal of Applied Physics*, vol. 132, no. 16, Oct 2022. [Online]. Available: http://dx.doi.org/10.1063/5.0082975
+- [41] P. Team, "A manufacturable platform for photonic quantum computing," *Nature*, pp. 1–3, 2025.
+- [42] H. Aghaee Rad, T. Ainsworth, R. Alexander, B. Altieri, M. Askarani, R. Baby, L. Banchi, B. Baragiola, J. Bourassa, R. Chadwick *et al.*, "Scaling and networking a modular photonic quantum computer," *Nature*, pp. 1–8, 2025.
+- [43] D. Bluvstein, S. J. Evered, A. A. Geim, S. H. Li, H. Zhou, T. Manovitz, S. Ebadi, M. Cain, M. Kalinowski, D. Hangleiter, J. P. Bonilla Ataides, N. Maskara, I. Cong, X. Gao, P. Sales Rodriguez, T. Karolyshyn, G. Semeghini, M. J. Gullans, M. Greiner, V. Vuletic, and M. D. ´ Lukin, "Logical quantum processor based on reconfigurable atom arrays," *Nature*, vol. 626, no. 7997, p. 58–65, Dec. 2023. [Online]. Available: http://dx.doi.org/10.1038/s41586-023-06927-3
+
+- [44] S. Bravyi, G. Smith, and J. A. Smolin, "Trading Classical and Quantum Computational Resources," *Physical Review X*, vol. 6, no. 2, Jun 2016. [Online]. Available: http://dx.doi.org/10.1103/PhysRevX.6.021043
+- [45] L. Z. Cohen, I. H. Kim, S. D. Bartlett, and B. J. Brown, "Low-overhead fault-tolerant quantum computing using long-range connectivity," *Science Advances*, vol. 8, no. 20, May 2022. [Online]. Available: http://dx.doi.org/10.1126/sciadv.abn1717
+- [46] D. Litinski, "Magic State Distillation: Not as Costly as You Think," *Quantum*, vol. 3, p. 205, Dec. 2019. [Online]. Available: http://dx.doi.org/10.22331/q-2019-12-02-205
+- [47] S. Bravyi and J. Haah, "Magic-state distillation with low overhead," *Physical Review A*, vol. 86, no. 5, Nov. 2012. [Online]. Available: http://dx.doi.org/10.1103/PhysRevA.86.052329
+- [48] K. Sahay, P.-K. Tsai, K. Chang, Q. Su, T. B. Smith, S. Singh, and S. Puri, "Fold-transversal surface code cultivation," 2025. [Online]. Available: https://arxiv.org/abs/2509.05212
+- [49] Y. Li, "A magic state's fidelity can be superior to the operations that created it," *New Journal of Physics*, vol. 17, no. 2, p. 023037, Feb. 2015. [Online]. Available: http://dx.doi.org/10.1088/1367-2630/17/2/023037
+- [50] N. Yoshioka, A. Seif, A. Cross, and A. Javadi-Abhari, "Transversal gates for probabilistic implementation of multi-qubit Pauli rotations," 2025. [Online]. Available: https://arxiv.org/abs/2510.08290

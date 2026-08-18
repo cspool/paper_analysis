@@ -1,0 +1,8 @@
+## Democratizing and Accelerating Hardware Verification with Software-Native Optimization
+
+- baseline方法是什么？
+  - baseline 是模拟器中心（simulator-centric）的验证架构：① 传统 UVM/SystemVerilog 测试台依赖模拟器事件调度执行 timing discipline（driver 在采样沿前驱动、monitor 在传播稳定后采样），VIP 复用成熟但门槛高；② Cocotb 把 Python 协程嵌入模拟器进程，经 foreign-interface 回调分派——回调时机由模拟器决定，可能在信号稳定前唤醒协程读到瞬态/陈旧值（Issue#3110），且回调循环与软件异步运行时（asyncio）不兼容；③ step-peek（PyMTL/ChiselTest）时序正确但只支持整周期步进，无法表达异步/周期内行为；④ 调试走 VPI/DPI：Verilator 开 VPI 性能损失 70%、二进制翻倍（信号导出 4× 膨胀 + 每寄存器更新检查分支 + 禁用优化合并）。
+  - baseline 全栈执行例子（一次 request-ack 握手验证，Cocotb 路径）：模型推理算法层 = 论文未明确说明；系统框架层 = Python 测试协程注册到 cocotb，信号按层级路径字符串查找句柄，需人工掌握 RTL 结构；编译框架层 = 论文未明确说明（模拟器编译不受控）；kernel调度/运行时层 = 模拟器内核调度回调，每次回调只给软件短暂执行窗，软件不拥有时间推进，回调可能在 ack 稳定前触发读到旧值；硬件架构层 = 论文未明确说明（不改模拟器/RTL）。
+- 论文方法是什么？如何对应解决Baseline的缺陷？
+  - UCV 把时序管理、跨域协调与可观测性从模拟器上移到显式软件事件循环，模拟器降为可插拔后端，对应三个痛点：① 软件原生时序 XClock+XData：软件声明时钟规范 commit/sample 边界，HWStep(T0→T1) 由软件控制推进，写缓冲在边沿提交、读在静止后采样——事件级表达力 + 周期精确语义，并原生兼容 asyncio/Boost.Asio（解决范式差）；② 透明软硬件映射 XEvent+XSocket：事件注册表镜像 HVL 事件状态，有界线程池把 TLM 事务同步阻塞转为异步阻塞，UVM VIP 的事件与事务提升为软件可 await 对象（解决组件组合难题，执行快 16.6%、验证 LOC 少 12%）；③ 非侵入式内省 MemD：编译期从模拟器发射工件提取寄存器指针+逆优化映射，运行时按需重算调试信号，不引入中间态（解决性能-调试权衡，比 VPI 快 4.8×–17.5×、比 cocotb 快 16.3×–25.2×、内存降 46%–77%），同一机制支撑热补丁（寄存器覆盖 + 组合逻辑函数指针钩子）与单进程多实例（符号隔离，XiangShan 内存降 52%）。
+  - 论文方法全栈执行例子（同一多周期 request-ack/BPU 预测验证，UCV 路径）：模型推理算法层 = 论文未明确说明；系统框架层 = RTL 经 Picker 打包为可 import 的软件包（类型化 DUT 接口 + 绑定元数据），测试用 pytest/JUnit 编写，XClock 暴露 awaitable 时序点，重叠 in-flight 交互各占独立异步流（而非手写每周期状态机）；编译框架层 = Picker 流水线：RTL→模拟器编译动态库→自动生成 backend adapter→SWIG 多语言绑定→软件包，编译期提取指针数据库；kernel调度/运行时层 = 软件事件循环处理 T0 事件→提交缓冲写→HWStep 推进模拟器→读信号/派发回调→入队；VIP 事件经 XEvent 注册表镜像、事务经 XSocket 线程池异步化；硬件架构层 = 论文未明确说明（模拟器不改动，仅作为执行硬件设计的后端）。

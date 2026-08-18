@@ -1,0 +1,4 @@
+# VIII. CONCLUSION
+
+This paper presents SSBench, the first automated framework for identifying and characterizing Memory Dependence Predictors (MDPs) on modern CPUs. SSBench employs a workflow-based taxonomy to classify MDP designs, a counterbased model solver to characterize MDP state machines, and the store–load bounce to characterize the MDP organization. We deploy SSBench on 30 CPUs across Intel, AMD, Arm, and RISC-V, uncovering three types of MDP designs and 14 distinct parameter configurations. SSBench also reveals previously unknown security issues. Based on these findings, we propose three novel MDP side-channel attacks, including (1) MDP-Gates on Intel, which significantly enhance the performance of cache weird machines by 100ˆ, (2) MDP-CF on AMD, which broadens the exploitable loads in applications such as the latest version of WolfSSL, and (3) MDP-CC, which improves both the performance and stealth of the covert channels on Apple CPUs.
+

@@ -1,0 +1,4 @@
+# *D. Cache Management Under the Presence of Prefetching*
+
+PACMan [42] is a cache replacement policy design that is prefetching-aware. It separately handles the replacement of blocks that are demanded or prefetched to reduce the potential negative effect cache prefetching may bring in. KPC [22] also attempts to manage both prefetching and replacement policy. KPC proposes a separate prefetcher inspired by SPP together with a simple LLC replacement policy where information is shared between the policies to improve speculation. Jain and Lin [13] by argue that huge space remains unexplored for cache replacement policies with data prefetchers enabled. Their work addresses both cache replacement and data prefetching simultaneously, but lacks an upper bound of what both can do best. R-Max attempts to bring both cache replacement and data prefetching to extremes to show the space for improvement.
+

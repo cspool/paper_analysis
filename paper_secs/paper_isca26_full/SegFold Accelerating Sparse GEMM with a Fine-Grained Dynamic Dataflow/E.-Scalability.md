@@ -1,0 +1,4 @@
+# *E. Scalability*
+
+SegFold's control complexity scales linearly with array size in the dominant terms. The merge network traversal within each PE row is O(P) in the worst case, where P is the number of PEs per row; however, the expected traversal is much shorter because the IPM provides a near-optimal starting position via O(log P) binary search, whose latency could be amortized through pipelining. The IPM itself uses a treestructured lookup table whose depth grows as log P, and whose total storage scales as O(P) entries per row. The spad for overflow C values scales linearly with the number of PE rows (R), as each row maintains an independent spad. Overall, scaling the array from P to 2P PEs per row doubles the merge network width and IPM size, but does not change the asymptotic complexity of the control logic.
+

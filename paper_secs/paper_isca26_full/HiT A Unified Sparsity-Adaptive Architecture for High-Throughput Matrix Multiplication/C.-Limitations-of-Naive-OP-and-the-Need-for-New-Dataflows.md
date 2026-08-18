@@ -1,0 +1,6 @@
+# *C. Limitations of Naive OP and the Need for New Dataflows*
+
+While OP mitigates memory contention, naively scaling it introduces a different challenge. Each non-zero in A generates a full row of partial sums with B, leading to a large number of unmerged partial sums (psums). As shown in Fig. 4(b), the number of psums grows approximately superlinearly with the number of active PE rows, creating significant on-chip accumulation pressure. Therefore, while OP mitigates memory contention, it shifts the scalability bottleneck to psum management. Simply adopting OP is insufficient for sustaining high throughput at scale.
+
+These observations motivate the need for a new approach that: (1) retains OP's regular memory access, (2) reduces the large number of psum through immediate on-chip accumulation, and (3) adapts behavior across HS and MS workloads, which exhibit drastically different intersection characteristics. To this end, we introduce two novel dataflows: HSparse and MSparse. By removing memory contention and bounding psum growth, the two dataflows enable sparse execution to scale with available compute resources, allowing throughput to scale more effectively with parallelism. These dataflows form the core of HiT, delivering high throughput across the full sparsity spectrum.
+

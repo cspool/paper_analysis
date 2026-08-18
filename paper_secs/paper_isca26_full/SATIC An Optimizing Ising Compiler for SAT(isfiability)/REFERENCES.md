@@ -1,0 +1,77 @@
+# REFERENCES
+
+- [1] E. Clarke, D. Kroening, N. Sharygina, and K. Yorav, "Predicate Abstraction of ANSI-C Programs Using SAT," *Form. Methods Syst. Des.*, vol. 25, no. 2, pp. 105–127, 2004.
+- [2] A. Gupta, M. K. Ganai, and C. Wang, "SAT-Based Verification Methods and Applications in Hardware Verification," in *Int. School Formal Methods Des. Comput., Commun. Softw. Syst.* Springer, 2006, pp. 108– 143.
+- [3] S. Izawa, K. Kitai, S. Tanaka, R. Tamura, and K. Tsuda, "Continuous Black-box Optimization with an Ising Machine and Random Subspace Coding," *Phys. Rev. Res.*, vol. 4, p. 023062, Apr 2022. [Online]. Available: https://link.aps.org/doi/10.1103/PhysRevResearch.4.023062
+- [4] W. R. S. Guimaraes and L. S. Lima, "Self-organizing Threedimensional Ising Model of Financial Markets," *Phys. Rev. E*, vol. 103, p. 062130, Jun 2021. [Online]. Available: https://link.aps.org/doi/ 10.1103/PhysRevE.103.062130
+- [5] H. A. Kautz and B. Selman, "Planning as Satisfiability," in *Proc. Eur. Conf. Artif. Intell. (ECAI)*, vol. 1992, 1992, pp. 359–363.
+- [6] S. A. Cook, "The Complexity of Theorem-Proving Procedures," in *Proceedings of the 3rd Annual ACM Symposium on Theory of Computing (STOC)*. ACM, 1971, pp. 151–158.
+- [7] E. Clarke, A. Biere, R. Raimi, and Y. Zhu, "Bounded Model Checking Using Satisfiability Solving," *Formal Methods in System Design*, vol. 19, pp. 7–34, 2001.
+- [8] A. Biere, A. Cimatti, E. M. Clarke, M. Fujita, and Y. Zhu, "Symbolic Model Checking Using SAT Procedures instead of BDDs," in *Proceedings of the 36th Annual ACM/IEEE Design Automation Conference (DAC)*, 1999, pp. 317–320.
+- [9] A. Biere, A. Cimatti, E. Clarke, and Y. Zhu, "Symbolic Model Checking without BDDs," in *Proc. 5th Int. Conf. on Tools and Algorithms for the Construction and Analysis of Systems (TACAS)*, ser. Lecture Notes in Computer Science, vol. 1579. Springer, 1999, pp. 193–207.
+- [10] R. Brayton and A. Mishchenko, "ABC: An Academic Industrial-Strength Verification Tool," in *Proc. 22nd Int. Conf. on Computer Aided Verification (CAV)*, ser. Lecture Notes in Computer Science, vol. 6174. Springer, 2010, pp. 24–40.
+- [11] A. Biere, M. Heule, and H. van Maaren, Eds., *Handbook of Satisfiability*, ser. Frontiers in Artificial Intelligence and Applications. IOS Press, 2009, vol. 185.
+- [12] I. Lynce and J. Marques-Silva, "SAT in Bioinformatics: Making the Case with Haplotype Inference," in *International Conference on Theory and Applications of Satisfiability Testing (SAT)*. Springer, 2006, pp. 136–141.
+- [13] G. Bard, *Algebraic Cryptanalysis*. Springer Science & Business Media, 2009.
+- [14] N. T. Courtois and G. V. Bard, "Algebraic Cryptanalysis of the Data Encryption Standard," in *Cryptography and Coding: 11th IMA International Conference, Cirencester, UK, December 18–20, 2007*. Springer, 2007, pp. 152–169.
+- [15] A. Semenov, O. Zaikin, D. Bespalov, and M. Posypkin, "Parallel Logical Cryptanalysis of the Generator A5/1 in BNB-Grid System," in *Proc. Int. Conf. on Parallel Computing Technologies (PaCT)*. Springer, 2011, pp. 473–483.
+- [16] A. Semenov, O. Zaikin, I. Otpuschennikov, S. Kochemazov, and A. Ignatiev, "On Cryptographic Attacks Using Backdoors for SAT," in *Proc. AAAI Conf. on Artificial Intelligence*, vol. 32, no. 1, 2018.
+- [17] K. Jia and M. Rinard, "Efficient Exact Verification of Binarized Neural Networks," *Advances in Neural Information Processing Systems*, vol. 33, pp. 1782–1795, 2020.
+- [18] N. Narodytska, "Formal Analysis of Deep Binarized Neural Networks," in *Proceedings of the 27th International Joint Conference on Artificial Intelligence (IJCAI)*, 2018, pp. 5692–5696.
+- [19] N. Narodytska, S. Kasiviswanathan, L. Ryzhyk, M. Sagiv, and T. Walsh, "Verifying Properties of Binarized Deep Neural Networks," in *Proceedings of the AAAI Conference on Artificial Intelligence*, vol. 32, no. 1, 2018.
+- [20] H. Cılasun, W. Moy, Z. Zeng, T. Islam, H. Lo, A. Vanasse, M. Tan, M. Anees, R. S, A. Kumar, S. S. Sapatnekar, C. H. Kim, and U. R. Karpuzcu, "A Coupled-Oscillator-based Ising Chip for Combinatorial Optimization," *Nature Electronics*, vol. 8, no. 6, pp. 537–546, 2025.
+- [21] P. I. Bunyk, E. M. Hoskinson, M. W. Johnson, E. Tolkacheva, F. Altomare, A. J. Berkley, R. Harris, J. P. Hilton, T. Lanting, and A. J.
+
+- Przybysz, "Architectural Considerations in the Design of a Superconducting Quantum Annealing Processor," *IEEE Trans. Appl. Supercond.*, vol. 24, no. 4, pp. 1–10, 2014.
+- [22] D-Wave Systems Inc., "dwave-tabu," GitHub repository, 2022, version 0.5.0, commit 3b64cff, accessed Oct. 19, 2025. [Online]. Available: https://github.com/dwavesystems/dwave-tabu
+- [23] A. Kumar, R. S., C. H. Kim, U. R. Karpuzcu, and S. S. Sapatnekar, "DROID: Discrete-Time Simulation for Ring-Oscillator-Based Ising Design," *Scientific Reports*, vol. 15, p. 18643, 2025.
+- [24] R. M. Karp, "Reducibility among Combinatorial Problems," in *Complexity of Computer Computations*, R. E. Miller, J. W. Thatcher, and J. D. Bohlinger, Eds. Boston, MA: Springer US, 1972, pp. 85–103. [Online]. Available: https://doi.org/10.1007/978-1-4684-2001-2 9
+- [25] T. H. Cormen, C. E. Leiserson, R. L. Rivest, and C. Stein, *Introduction to Algorithms*. MIT Press, 2022.
+- [26] I. Rish and R. Dechter, "Resolution Versus Search: Two Strategies for SAT," *J. Autom. Reason.*, vol. 24, no. 1–2, pp. 225–275, 2000.
+- [27] P. C. Cheeseman, B. Kanefsky, and W. M. Taylor, "Where the Really Hard Problems Are," in *Proceedings of the 12th International Joint Conference on Artificial Intelligence (IJCAI)*, vol. 1, 1991, pp. 331–337.
+- [28] H. H. Hoos and T. Stutzle, "SATLIB: An Online Resource for Research ¨ on SAT," in *SAT 2000: Theory and Applications of Satisfiability Testing*. IOS Press, 2000, pp. 283–292, available: http://www.satlib.org.
+- [29] W. Lenz, "Beitrage zum Verst ¨ andnis der magnetischen Eigenschaften in ¨ festen Korpern," ¨ *Physikalische Zeitschrift*, vol. 21, pp. 613–615, 1920.
+- [30] E. Ising, "Beitrag zur Theorie des Ferromagnetismus," *Zeitschrift fur¨ Physik*, vol. 31, no. 1, pp. 253–258, 1925.
+- [31] S. G. Brush, "History of the Lenz–Ising Model," *Reviews of Modern Physics*, vol. 39, no. 4, pp. 883–893, Oct 1967. [Online]. Available: https://link.aps.org/doi/10.1103/RevModPhys.39.883
+- [32] M. W. Johnson, M. H. S. Amin, S. Gildert, T. Lanting, F. Hamze, N. Dickson, R. Harris, A. J. Berkley, J. Johansson, P. Bunyk *et al.*, "Quantum Annealing with Manufactured Spins," *Nature*, vol. 473, no. 7346, pp. 194–198, 2011.
+- [33] K. Boothby, P. Bunyk, J. Raymond, and A. Roy, "Next-Generation Topology of D-Wave Quantum Processors," *arXiv preprint arXiv:2003.00133*, 2020.
+- [34] S. Ebadi, T. T. Wang, H. Levine, A. Keesling, G. Semeghini, A. Omran, D. Bluvstein, R. Samajdar, H. Pichler, W. W. Ho *et al.*, "Quantum Phases of Matter on a 256-Atom Programmable Quantum Simulator," *Nature*, vol. 595, no. 7866, pp. 227–232, 2021.
+- [35] P. Scholl, M. Schuler, H. J. Williams, A. A. Eberharter, D. Barredo, K.-N. Schymik, V. Lienhard, L.-P. Henry, T. C. Lang, T. Lahaye *et al.*, "Quantum Simulation of 2D Antiferromagnets with Hundreds of Rydberg Atoms," *Nature*, vol. 595, no. 7866, pp. 233–238, 2021.
+- [36] M. Yamaoka, C. Yoshimura, M. Hayashi, T. Okuyama, H. Aoki, and H. Mizuno, "A 20k-Spin Ising Chip to Solve Combinatorial Optimization Problems with CMOS Annealing," *IEEE Journal of Solid-State Circuits*, vol. 51, no. 1, pp. 303–309, 2015.
+- [37] W. Moy, I. Ahmed, P.-W. Chiu, J. Moy, S. S. Sapatnekar, and C. H. Kim, "A 1,968-node Coupled Ring Oscillator Circuit for Combinatorial Optimization Problem Solving," *Nature Electronics*, vol. 5, no. 5, pp. 310–317, 2022.
+- [38] H. Lo, W. Moy, H. Yu, S. Sapatnekar, and C. H. Kim, "An Ising Solver Chip Based on Coupled Ring Oscillators with a 48-Node All-to-All Connected Array Architecture," *Nature Electronics*, vol. 6, no. 10, pp. 771–778, 2023.
+- [39] A. Lucas, "Ising Formulations of Many NP Problems," *Frontiers in Physics*, vol. 2, p. 5, 2014.
+- [40] G. Kochenberger, J.-K. Hao, F. Glover, Z. Lu, H. Wang, and Y. Wang, ¨ "The Unconstrained Binary Quadratic Programming Problem: A Survey," *Journal of Combinatorial Optimization*, vol. 28, 2014.
+- [41] F. Glover, G. Kochenberger, and Y. Du, "A Tutorial on Formulating and Using QUBO Models," *arXiv preprint arXiv:1811.11538*, 2018.
+- [42] S. Zielinski, J. Nußlein, J. Stein, T. Gabor, C. Linnhoff-Popien, and ¨ S. Feld, "Influence of Different 3SAT-to-QUBO Transformations on the Solution Quality of Quantum Annealing: A Benchmark Study," in *Proceedings of the Companion Conference on Genetic and Evolutionary Computation (GECCO Companion)*, 2023, pp. 2263–2271.
+- [43] J. Nußlein, S. Zielinski, T. Gabor, C. Linnhoff-Popien, and S. Feld, ¨ "Solving (max) 3-SAT via Quadratic Unconstrained Binary Optimization," in *International Conference on Computational Science*. Springer, 2023, pp. 34–47.
+
+- [44] N. Chancellor, S. Zohren, P. A. Warburton, S. C. Benjamin, and S. Roberts, "A Direct Mapping of Max k-SAT and High Order Parity Checks to a Chimera Graph," *Scientific Reports*, vol. 6, p. 37107, 2016.
+- [45] S. Dasgupta, C. H. Papadimitriou, and U. Vazirani, *Algorithms*, 1st ed. USA: McGraw-Hill, Inc., 2006.
+- [46] H. Cılasun, Z. Zeng, A. Kumar, H. Lo, W. Cho, W. Moy, C. H. Kim, U. R. Karpuzcu, and S. S. Sapatnekar, "3SAT on an All-to-All-Connected CMOS Ising Solver Chip," *Scientific Reports*, vol. 14, no. 1, p. 10757, 2024.
+- [47] M. J. Heule, O. Kullmann, S. Wieringa, and A. Biere, "Cube and Conquer: Guiding CDCL SAT Solvers by Lookaheads," in *Proceedings of the Haifa Verification Conference (HVC)*. Springer, 2011, pp. 50–65.
+- [48] A. Biere and C. Sinz, "Decomposing SAT Problems into Connected Components," *Journal on Satisfiability, Boolean Modeling and Computation*, vol. 2, no. 1–4, pp. 201–208, 2006.
+- [49] R. J. Bayardo Jr and R. Schrag, "Using CSP Look-Back Techniques to Solve Real-World SAT Instances," in *Proceedings of the Fourteenth National Conference on Artificial Intelligence (AAAI)*. AAAI Press, 1997, pp. 203–208.
+- [50] M. Boost, S. Reinhardt, and A. Roy, "Partitioning Optimization Problems for Hybrid Classical/Quantum Execution," D-Wave Systems Inc., Burnaby, Canada, Technical Report D-Wave Technical Report Series, 2017.
+- [51] A. Sharma, R. Afoakwa, Z. Ignjatovic, and M. Huang, "Increasing Ising Machine Capacity with Multi-Chip Architectures," in *Proceedings of the 49th Annual International Symposium on Computer Architecture (ISCA)*, 2022, pp. 508–521.
+- [52] G. Bass, M. Henderson, J. Heath, and J. Dulny III, "Optimizing the Optimizer: Decomposition Techniques for Quantum Annealing," *Quantum Machine Intelligence*, vol. 3, no. 1, p. 10, 2021.
+- [53] M. Davis, G. Logemann, and D. Loveland, "A Machine Program for Theorem-Proving," *Commun. ACM*, vol. 5, no. 7, pp. 394–397, 1962.
+- [54] W. F. Dowling and J. H. Gallier, "Linear-Time Algorithms for Testing the Satisfiability of Propositional Horn Formulae," *The Journal of Logic Programming*, vol. 1, no. 3, pp. 267–284, 1984.
+- [55] I. P. Gent and T. Walsh, "The SAT Phase Transition," in *Proc. 11th European Conference on Artificial Intelligence (ECAI)*, A. G. Cohn, Ed. John Wiley and Sons, 1994, pp. 105–109.
+- [56] C. Sinz and E.-M. Dieringer, "DPvis: A Tool to Visualize the Structure of SAT Instances," in *Proc. 8th Int. Conf. Theory Appl. Satisfiability Testing (SAT)*, ser. Lecture Notes in Computer Science, vol. 3569. Springer, 2005, pp. 257–268.
+- [57] C. Sinz, "Visualizing SAT Instances and Runs of the DPLL Algorithm," *J. Autom. Reason.*, vol. 39, no. 2, pp. 219–243, 2007.
+- [58] Z. Newsham, W. Lindsay, V. Ganesh, J. H. Liang, S. Fischmeister, and K. Czarnecki, "SATGraf: Visualizing the Evolution of SAT Formula Structure in Solvers," in *Proc. 18th Int. Conf. Theory Appl. Satisfiability Testing (SAT)*, ser. Lecture Notes in Computer Science, vol. 9340. Springer, 2015, pp. 62–70.
+- [59] S. Boixo, T. F. Rønnow, S. V. Isakov, Z. Wang, D. Wecker, D. A. Lidar, J. M. Martinis, and M. Troyer, "Quantum Annealing with More Than One Hundred Qubits," *arXiv preprint arXiv:1304.4595*, 2013.
+- [60] T. F. Rønnow, Z. Wang, J. Job, S. Boixo, S. V. Isakov, D. Wecker, J. M. Martinis, D. A. Lidar, and M. Troyer, "Defining and Detecting Quantum Speedup," *Science*, vol. 345, no. 6195, pp. 420–424, 2014.
+- [61] W. Regli, G. Mossi, M. T. Hajiaghayi, H. Munoz Bauza, I. J. Whitehouse, K. Banihashem, P. Jabbarzade, and T. H. Paul, "SAT Benchmarks to Assess Quantum-Inspired Solvers," GitHub repository, 2025, uMD-ARLIS / QuICC-SAT-Datasets. [Online]. Available: https: //github.com/UMD-ARLIS/QuICC-SAT-Datasets/tree/main
+- [62] S. Okada, M. Ohzeki, M. Terabe, and S. Taguchi, "Improving Solutions by Embedding Larger Subproblems in a D-Wave Quantum Annealer," *Sci. Rep.*, vol. 9, no. 1, p. 2098, 2019.
+- [63] A. Biere, M. Heule, and H. van Maaren, *Handbook of Satisfiability: Second Edition*, ser. Frontiers in Artificial Intelligence and Applications. IOS Press, 2021. [Online]. Available: https://books.google.com/books? id=dUAvEAAAQBAJ
+- [64] D-Wave Systems, "dwave-hybrid: A Python Framework for Hybrid Quantum-classical Computing," https://pypi.org/project/dwave-hybrid/0. 6.12/, 2024, version 0.6.12, accessed: 2025-08-01.
+- [65] ——, "Energy Impact Decomposer Documentation," https://docs. dwavequantum.com/en/latest/quantum research/decomposing.html, 2024, accessed: 2025-08-01.
+
+- [66] Y. Atobe, M. Tawada, and N. Togawa, "Hybrid Annealing Method Based on subQUBO Model Extraction With Multiple Solution Instances," *IEEE Trans. Comput.*, vol. 71, no. 10, pp. 2606–2619, 2021.
+- [67] Z. Bian, F. Chudak, R. B. Israel, B. Lackey, W. G. Macready, and A. Roy, "Mapping Constrained Optimization Problems to Quantum Annealing with Application to Fault Diagnosis," *Frontiers in ICT*, vol. 3, p. 14, 2016.
+- [68] H. Ushijima-Mwesigwa, R. Shaydulin, C. F. A. Negre, S. M. Mniszewski, Y. Alexeev, and I. Safro, "Multilevel Combinatorial Optimization Across Quantum Architectures," *ACM Trans. Quantum Comput.*, vol. 2, no. 1, pp. 1–29, 2021.
+- [69] M. G. de Andoin, E. Osaba, I. Oregi, E. Villar-Rodriguez, and M. Sanz, "Hybrid Quantum-Classical Heuristic for the Bin Packing Problem," in *Proc. Genet. Evol. Comput. Conf. Companion (GECCO)*, 2022, pp. 2214–2222.
+- [70] A. Angone, X. Liu, R. Shaydulin, and I. Safro, "Hybrid Quantum-Classical Multilevel Approach for Maximum Cuts on Graphs," in *Proc. IEEE High Perform. Extreme Comput. Conf. (HPEC)*, 2023, pp. 1–7.
+- [71] S. Tan, M. Yu, A. Python, Y. Shang, T. Li, L. Lu, and J. Yin, "HyQSAT: A Hybrid Approach for 3-SAT Problems by Integrating Quantum Annealer With CDCL," in *Proc. IEEE Int. Symp. High Perform. Comput. Archit. (HPCA)*, 2023, pp. 731–744.

@@ -1,0 +1,4 @@
+# *A. Abstract*
+
+This paper's artifact comprises the source code for the baseline as well as frontend- and backend- based sCROOGe execution schemes implemented on top of Vortex <sup>3</sup> . All dynamic instruction traces are included for the trace-driven analyses (Fig. 9,10), as well as intermediate .csv files for performance, area and power evaluation. Performance measurements can be collected through RTL simulation within the provided container. Auxiliary scripts for reproducing the plots in the paper are also included. The artifact is available publicly through an archived repository. System requirements are specified and instructions are provided for evaluating sCROOGe, detailed in this appendix. A linux operating system with sufficient resources (detailed below) and Docker support is required to test the artifact. Users can reproduce the results shown in Figures 1,6,9-24, evaluating the performance, power and area overheads of sCROOGe.
+

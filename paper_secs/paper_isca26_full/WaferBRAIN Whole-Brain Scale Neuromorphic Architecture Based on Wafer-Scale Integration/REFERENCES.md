@@ -1,0 +1,51 @@
+# REFERENCES
+
+F. Akopyan, J. Sawada, A. Cassidy, R. Alvarez-Icaza, J. Arthur,
+ P. Merolla, N. Imam, Y. Nakamura, P. Datta, G.-J. Nam et al.,
+ "Truenorth: Design and tool flow of a 65 mw 1 million neuron
+
+- programmable neurosynaptic chip," *IEEE transactions on computeraided design of integrated circuits and systems*, vol. 34, no. 10, pp. 1537–1557, 2015.
+- [2] K. Amunts, J. DeFelipe, C. Pennartz, A. Destexhe, M. Migliore, P. Ryvlin, S. Furber, A. Knoll, L. Bitsch, J. G. Bjaalie *et al.*, "Linking brain structure, activity, and cognitive function through computation," *eneuro*, vol. 9, no. 2, 2022.
+- [3] C. Bunne, Y. Roohani, Y. Rosen, A. Gupta, X. Zhang, M. Roed, T. Alexandrov, M. AlQuraishi, P. Brennan, D. B. Burkhardt *et al.*, "How to build the virtual cell with artificial intelligence: Priorities and opportunities," *Cell*, vol. 187, no. 25, pp. 7045–7063, 2024.
+- [4] M. Chiappalone and T. Levi, "Advancing neuroengineering with neuromorphic twins," *Nature Communications*, 2026.
+- [5] M. Davies, N. Srinivasa, T.-H. Lin, G. Chinya, Y. Cao, S. H. Choday, G. Dimou, P. Joshi, N. Imam, S. Jain *et al.*, "Loihi: A neuromorphic manycore processor with on-chip learning," *Ieee Micro*, vol. 38, no. 1, pp. 82–99, 2018.
+- [6] L. Deng, G. Wang, G. Li, S. Li, L. Liang, M. Zhu, Y. Wu, Z. Yang, Z. Zou, J. Pei *et al.*, "Tianjic: A unified and scalable chip bridging spikebased and continuous neural computation," *IEEE Journal of Solid-State Circuits*, vol. 55, no. 8, pp. 2228–2246, 2020.
+- [7] X. Du, Y. Liu, Z. Lu, Q. Duan, J. Feng, J. Wu, B. Chen, and Q. Zheng, "A low-latency communication design for brain simulations," *IEEE Network*, vol. 36, no. 2, pp. 8–15, 2022.
+- [8] G. T. Einevoll, A. Destexhe, M. Diesmann, S. Grun, V. Jirsa, ¨ M. de Kamps, M. Migliore, T. V. Ness, H. E. Plesser, and F. Schurmann, ¨ "The scientific case for brain simulations," *Neuron*, vol. 102, no. 4, pp. 735–744, 2019.
+- [9] Y. Feng and K. Ma, "Switch-less dragonfly on wafers: A scalable interconnection architecture based on wafer-scale integration," in *SC24: International Conference for High Performance Computing, Networking, Storage and Analysis*. IEEE, 2024, pp. 1–17.
+- [10] T. C. Fischer, A. K. Nivarti, R. Ramachandran, R. Bharti, D. Carson, A. Lawrendra, V. Mudgal, V. Santhosh, S. Shukla, and T.-C. Tsai, "9.1 d1: A 7nm ml training processor with wave clock distribution," in *2023 IEEE International Solid-State Circuits Conference (ISSCC)*. IEEE, 2023, pp. 8–10.
+- [11] A. E. Furtjes, J. H. Cole, B. Couvy-Duchesne, and S. J. Ritchie, "A ¨ quantified comparison of cortical atlases on the basis of trait morphometricity," *Cortex*, vol. 158, pp. 110–126, 2023.
+- [12] A. A. Galakhova, S. Hunt, R. Wilbers, D. B. Heyer, C. P. de Kock, H. D. Mansvelder, and N. A. Goriounova, "Evolution of cortical neurons supporting human cognition," *Trends in cognitive sciences*, vol. 26, no. 11, pp. 909–922, 2022.
+- [13] P. Hagmann, L. Cammoun, X. Gigandet, R. Meuli, C. J. Honey, V. J. Wedeen, and O. Sporns, "Mapping the structural core of human cerebral cortex," *PLoS biology*, vol. 6, no. 7, p. e159, 2008.
+- [14] S. Hou, W. C. Chen, C. Hu, C. Chiu, K. Ting, T. Lin, W. Wei, W. Chiou, V. J. Lin, V. C. Chang *et al.*, "Wafer-level integration of an advanced logic-memory system through the second-generation cowos technology," *IEEE Transactions on Electron Devices*, vol. 64, no. 10, pp. 4071–4077, 2017.
+- [15] P.-K. Hsu, S. Cho, J. Sharda, H. Park, S. Datta, and S. Yu, "Monolithic 3d stackable dram design with beol-compatible oxide channel access transistor," in *2025 IEEE International Memory Workshop (IMW)*. IEEE, 2025, pp. 1–4.
+- [16] J. Igarashi, H. Yamaura, and T. Yamazaki, "Large-scale simulation of a layered cortical sheet of spiking network model using a tile partitioning method," *Frontiers in Neuroinformatics*, vol. 13, p. 71, 2019.
+- [17] D. B. Ingerly, S. Amin, L. Aryasomayajula, A. Balankutty, D. Borst, A. Chandra, K. Cheemalapati, C. Cook, R. Criss, K. Enamul *et al.*, "Foveros: 3d integration and the use of face-to-face chip stacking for logic devices," in *2019 IEEE International Electron Devices Meeting (IEDM)*. IEEE, 2019, pp. 19–6.
+- [18] J. Jeddeloh and B. Keeth, "Hybrid memory cube new dram architecture increases density and performance," in *2012 symposium on VLSI technology (VLSIT)*. IEEE, 2012, pp. 87–88.
+- [19] H. Jun, J. Cho, K. Lee, H.-Y. Son, K. Kim, H. Jin, and K. Kim, "Hbm (high bandwidth memory) dram technology and architecture," in *2017 IEEE International Memory Workshop (IMW)*. IEEE, 2017, pp. 1–4.
+- [20] D. Kudithipudi, C. Schuman, C. M. Vineyard, T. Pandit, C. Merkel, R. Kubendran, J. B. Aimone, G. Orchard, C. Mayr, R. Benosman *et al.*, "Neuromorphic computing at scale," *Nature*, vol. 637, no. 8047, pp. 801–812, 2025.
+
+- [21] H. Liang, Z. Chen, Y. Zeng, G. Feng, and Y. Lu, "Dfmg: Delay-flush multi-group algorithm for spiking neural network simulation," in *Proceedings of the 2025 International Conference on Artificial Intelligence and Computational Intelligence*, 2025, pp. 479–485.
+- [22] S. Lie, "Cerebras architecture deep dive: First look inside the hw/sw codesign for deep learning: Cerebras systems," in *2022 IEEE Hot Chips 34 Symposium (HCS)*. IEEE Computer Society, 2022, pp. 1–34.
+- [23] X. Liu, Z. Pu, P. Qu, W. Zheng, and Y. Zhang, "Activen: a scalable and flexibly-programmable event-driven neuromorphic processor," in *2024 57th IEEE/ACM International Symposium on Microarchitecture (MICRO)*. IEEE, 2024, pp. 1122–1137.
+- [24] W. Lu, X. Du, J. Wang, L. Zeng, L. Ye, S. Xiang, Q. Zheng, J. Zhang, N. Xu, J. Feng *et al.*, "Simulation and assimilation of the digital human brain," *Nature Computational Science*, vol. 4, no. 12, pp. 890–898, 2024.
+- [25] D. Ma, X. Jin, S. Sun, Y. Li, X. Wu, Y. Hu, F. Yang, H. Tang, X. Zhu, P. Lin *et al.*, "Darwin3: a large-scale neuromorphic chip with a novel isa and on-chip learning," *National Science Review*, vol. 11, no. 5, p. nwae102, 2024.
+- [26] D. Ma, J. Shen, Z. Gu, M. Zhang, X. Zhu, X. Xu, Q. Xu, Y. Shen, and G. Pan, "Darwin: A neuromorphic hardware co-processor based on spiking neural networks," *Journal of systems architecture*, vol. 77, pp. 43–51, 2017.
+- [27] N. T. Markov, M. M. Ercsey-Ravasz, A. Ribeiro Gomes, C. Lamy, L. Magrou, J. Vezoli, P. Misery, A. Falchier, R. Quilodran, M.-A. Gariel *et al.*, "A weighted and directed interareal connectivity matrix for macaque cerebral cortex," *Cerebral cortex*, vol. 24, no. 1, pp. 17– 36, 2014.
+- [28] A. Mehonic and A. J. Kenyon, "Brain-inspired computing needs a master plan," *Nature*, vol. 604, no. 7905, pp. 255–260, 2022.
+- [29] E. Painkras, L. A. Plana, J. Garside, S. Temple, F. Galluppi, C. Patterson, D. R. Lester, A. D. Brown, and S. B. Furber, "Spinnaker: A 1-w 18-core system-on-chip for massively-parallel neural network simulation," *IEEE Journal of Solid-State Circuits*, vol. 48, no. 8, pp. 1943–1953, 2013.
+- [30] S. Pal, J. Liu, I. Alam, N. Cebry, H. Suhail, S. Bu, S. S. Iyer, S. Pamarti, R. Kumar, and P. Gupta, "Designing a 2048-chiplet, 14336 core waferscale processor," in *2021 58th ACM/IEEE Design Automation Conference (DAC)*. IEEE, 2021, pp. 1183–1188.
+- [31] S. Pal, D. Petrisko, M. Tomei, P. Gupta, S. S. Iyer, and R. Kumar, "Architecting waferscale processors-a gpu case study," in *2019 IEEE International Symposium on High Performance Computer Architecture (HPCA)*. IEEE, 2019, pp. 250–263.
+- [32] Y. A. Patel, A. George, A. D. Dorval, J. A. White, D. J. Christini, and R. J. Butera, "Hard real-time closed-loop electrophysiology with the real-time experiment interface (rtxi)," *PLoS computational biology*, vol. 13, no. 5, p. e1005430, 2017.
+- [33] T. C. Potjans and M. Diesmann, "The cell-type specific cortical microcircuit: relating structure and activity in a full-scale spiking network model," *Cerebral cortex*, vol. 24, no. 3, pp. 785–806, 2014.
+- [34] V. R. Rao and J. D. Rolston, "Unearthing the mechanisms of responsive neurostimulation for epilepsy," *Communications medicine*, vol. 3, no. 1, p. 166, 2023.
+- [35] H. Schmidt, A. Grubl, J. Montes, E. M ¨ uller, S. Schmitt, and J. Schem- ¨ mel, "Demonstrating the advantages of analog wafer-scale neuromorphic hardware," in *2025 Neuro Inspired Computational Elements (NICE)*. IEEE, 2025, pp. 1–5.
+- [36] O. Sporns, "The human connectome: a complex network," *Annals of the new York Academy of Sciences*, vol. 1224, no. 1, pp. 109–125, 2011.
+- [37] O. Sporns and J. D. Zwi, "The small world of the cerebral cortex," *Neuroinformatics*, vol. 2, no. 2, pp. 145–162, 2004.
+- [38] E. Talpes, D. D. Sarma, D. Williams, S. Arora, T. Kunjan, B. Floering, A. Jalote, C. Hsiong, C. Poorna, V. Samant *et al.*, "The microarchitecture of dojo, tesla's exa-scale computer," *IEEE Micro*, vol. 43, no. 3, pp. 31– 39, 2023.
+- [39] E. Talpes, D. Williams, and D. D. Sarma, "Dojo: The microarchitecture of tesla's exa-scale computer," in *2022 IEEE Hot Chips 34 Symposium (HCS)*. IEEE Computer Society, 2022, pp. 1–28.
+- [40] H. Yamaura, J. Igarashi, and T. Yamazaki, "Simulation of a human-scale cerebellar network model on the k computer," *Frontiers in neuroinformatics*, vol. 14, p. 16, 2020.
+- [41] Y. Zeng, G. Feng, Z. Chen, Y. Lu, and N. Xiao, "Atm: Area-based partition and topology-aware mapping for large-scale snn simulation," in *2024 IEEE International Symposium on Parallel and Distributed Processing with Applications (ISPA)*. IEEE, 2024, pp. 1841–1848.
+
+- [42] Y. Zhang, P. Qu, Y. Ji, W. Zhang, G. Gao, G. Wang, S. Song, G. Li, W. Chen, W. Zheng *et al.*, "A system hierarchy for brain-inspired computing," *Nature*, vol. 586, no. 7829, pp. 378–384, 2020.
+- [43] Y. Zhong, Y. Kuang, K. Liu, Z. Wang, S. Feng, G. Chen, Y. Yang, X. Cui, Q. Wang, J. Cao, S. Jia, Y. Liang, G. Sun, X. Cui, R. Huang, and Y. Wang, "Paicore: A 1.9-million-neuron 5.181-tsops/w digital neuromorphic processor with unified snn-ann and on-chip learning paradigm," *IEEE Journal of Solid-State Circuits*, vol. 60, no. 2, pp. 651–671, 2025.

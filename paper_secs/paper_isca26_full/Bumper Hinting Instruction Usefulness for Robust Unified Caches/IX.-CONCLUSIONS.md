@@ -1,0 +1,8 @@
+# IX. CONCLUSIONS
+
+This paper demonstrates that front-end performance is a significant bottleneck in modern mobile applications while providing evidence that a major contributor to this bottleneck is the presence of many *useless* code lines occupying a large fraction of the L2 cache (L2C). To mitigate this pollution, we propose *Bumper*, a microarchitectural scheme that discriminates *useful* from *useless* code lines through smart instruction commit hints that are carefully propagated through the pipeline to affect the L2C replacement policy, thus significantly reducing the lifetime of *useless* code lines. Our evaluation, using an industry-grade simulator to run real-world mobile applications, reveals that Bumper provides significant performance enhancements over the state-of-the-art mechanisms at negligible storage, area, and energy overheads.
+
+# IX. CONCLUSIONS
+
+This paper demonstrates that front-end performance is a significant bottleneck in modern mobile applications while providing evidence that a major contributor to this bottleneck is the presence of many *useless* code lines occupying a large fraction of the L2 cache (L2C). To mitigate this pollution, we propose *Bumper*, a microarchitectural scheme that discriminates *useful* from *useless* code lines through smart instruction commit hints that are carefully propagated through the pipeline to affect the L2C replacement policy, thus significantly reducing the lifetime of *useless* code lines. Our evaluation, using an industry-grade simulator to run real-world mobile applications, reveals that Bumper provides significant performance enhancements over the state-of-the-art mechanisms at negligible storage, area, and energy overheads.
+

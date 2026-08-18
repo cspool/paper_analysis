@@ -1,0 +1,89 @@
+# REFERENCES
+
+- [1] J. Devlin, M. Chang, K. Lee, and K. Toutanova, "BERT: pre-training of deep bidirectional transformers for language understanding," in *NAACL-HLT 2019*.
+- [2] A. Dosovitskiy, L. Beyer *et al.*, "An image is worth 16x16 words: Transformers for image recognition at scale," in *9th International Conference on Learning Representations, ICLR 2021*.
+- [3] T. Dao, A. Gu, M. Eichhorn, A. Rudra, and C. Re,´ "Learning fast algorithms for linear transforms using butterfly factorizations," in *Proceedings of the 36th International Conference on Machine Learning, ICML 2019*.
+- [4] T. Dao, B. Chen, N. S. Sohoni, A. D. Desai *et al.*, "Monarch: Expressive structured matrices for efficient and accurate training," in *International Conference on Machine Learning, ICML 2022*.
+- [5] B. Li, S. Pandey, H. Fang *et al.*, "FTRANS: energyefficient acceleration of transformers using FPGA," in *ISLPED, 2020*.
+- [6] T. Dao, A. Gu, M. Eichhorn, A. Rudra, and C. Re,´ "Learning fast algorithms for linear transforms using butterfly factorizations," in *Proceedings of the 36th International Conference on Machine Learning, ICML 2019*.
+- [7] M. Zaheer, G. Guruganesh, A. Dubey, J. Ainslie, C. Alberti, S. Ontan˜on, P. Pham, A. Ravula, Q. Wang, L. Yang, ´ and A. Ahmed, "Big bird: Transformers for longer sequences," *CoRR*, vol. abs/2007.14062, 2020.
+- [8] P. Zhang, X. Dai, J. Yang, B. Xiao, L. Yuan, L. Zhang, and J. Gao, "Multi-scale vision longformer: A new vision transformer for high-resolution image encoding," in *International Conference on Computer Vision, ICCV 2021*.
+- [9] J. Lee-Thorp, J. Ainslie, I. Eckstein, and S. Ontan˜on, ´ "Fnet: Mixing tokens with fourier transforms," in *NAACL*, 2021.
+- [10] V. Dadu, J. Weng, S. Liu, and T. Nowatzki, "Towards general purpose acceleration by exploiting common datadependence forms," in *Proceedings of the 52nd Annual IEEE/ACM International Symposium on Microarchitecture, MICRO 2019*.
+- [11] H. Kwon, A. Samajdar, and T. Krishna, "MAERI: enabling flexible dataflow mapping over DNN accelerators via reconfigurable interconnects," in *ASPLOS 2018*.
+- [12] A. Parashar, M. Pellauer, M. Adler, B. Ahsan, N. Crago, D. Lustig, V. Pavlov, A. Zhai *et al.*, "Triggered instructions: a control paradigm for spatially-programmed architectures," in *Proceedings of the 40th Annual International Symposium on Computer Architecture*, 2013.
+- [13] Z. Chen, Z. Qu, Y. Quan, L. Liu, Y. Ding, and Y. Xie, "Dynamic N: M fine-grained structured sparse attention mechanism," in *Proceedings of the 28th ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel Programming, PPoPP 2023*.
+- [14] R. Prabhakar, R. Sivaramakrishnan, D. Gandhi, Y. Du *et al.*, "Sambanova sn40l: Scaling the ai memory wall
+
+- with dataflow and composition of experts," in *57th IEEE/ACM International Symposium on Microarchitecture (MICRO)*, 2024.
+- [15] G. Shen, J. Zhao, Q. Chen, J. Leng, C. Li, and M. Guo, "SALO: an efficient spatial accelerator enabling hybrid sparse attention mechanisms for long sequences," in *59th ACM/IEEE Design Automation Conference*, 2022.
+- [16] J. Zhao, P. Zeng, G. Shen, Q. Chen, and M. Guo, "Hardware–software co-design enabling static and dynamic sparse attention mechanisms," *IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems*, 2024.
+- [17] Y. Qin, Y. Wang, D. Deng, Z. Zhao, X. Yang, L. Liu, S. Wei, Y. Hu, and S. Yin, "Fact: Ffn-attention cooptimized transformer architecture with eager correlation prediction," in *Proceedings of the 50th Annual International Symposium on Computer Architecture*, 2023.
+- [18] L. Zheng, E. Riccietti, and R. Gribonval, "Efficient identification of butterfly sparse matrix factorizations," *SIAM Journal on Mathematics of Data Science*, vol. 5, no. 1, pp. 22–49, 2023.
+- [19] D. Y. Fu, H. Kumbong, E. Nguyen, and C. Re, "Flashfft- ´ conv: Efficient convolutions for long sequences with tensor cores," in *The Twelfth International Conference on Learning Representations (ICLR)*, 2024.
+- [20] A. K. Kamath, R. Prabhu, J. Mohan, S. Peter, R. Ramjee, and A. Panwar, "Pod-attention: Unlocking full prefilldecode overlap for faster LLM inference," in *ASPLOS 2025*.
+- [21] Y. Zhao, D. Wu, and J. Wang, "ALISA: accelerating large language model inference via sparsity-aware KV caching," in *51st ACM/IEEE Annual International Symposium on Computer Architecture, ISCA 2024*.
+- [22] M. Kim, S. Hong, R. Ko, S. Choi, H. Lee, J. Kim, J. Kim, and J. Park, "Oaken: Fast and efficient LLM serving with online-offline hybrid KV cache quantization," in *Proceedings of the 52nd Annual International Symposium on Computer Architecture, ISCA 2025*.
+- [23] B. Li, S. Cheng, and J. Lin, "tcfft: A fast half-precision fft library for nvidia tensor cores," in *2021 IEEE International Conference on Cluster Computing (CLUSTER)*, 2021.
+- [24] Y.-H. Chen, T.-J. Yang, J. Emer, and V. Sze, "Eyeriss v2: A flexible accelerator for emerging deep neural networks on mobile devices," *IEEE Journal on Emerging and Selected Topics in Circuits and Systems*, 2019.
+- [25] T. Liu, Z. Fan, W. Li, Z. Wang, Y. Qiu, S. Tang, H. Wu, Y. Liu, X. Ye, and D. Fan, "Dfgas: Exploring the balance of hw-sw scheduling through the dfg-aware scheme," *ACM Trans. Archit. Code Optim.*, 2025.
+- [26] Z. Qu, L. Liu, F. Tu, Z. Chen, Y. Ding, and Y. Xie, "DOTA: detect and omit weak attentions for scalable transformer acceleration," in *ASPLOS '22*.
+- [27] H. Touvron, L. Martin, K. Stone, P. Albert, A. Almahairi *et al.*, "Llama 2: Open foundation and fine-tuned chat models," *CoRR*, vol. abs/2307.09288, 2023.
+
+- [28] M. H. Rasheed, O. M. Salih, M. M. Siddeq, and M. A. Rodrigues, "Image compression based on 2d discrete fourier transform and matrix minimization algorithm," *Array*, vol. 6, p. 100024, 2020.
+- [29] H. Fan, T. Chau, S. I. Venieris, R. Lee *et al.*, "Adaptable butterfly accelerator for attention-based nns via hardware and algorithm co-design," in *55th IEEE/ACM International Symposium on Microarchitecture, MICRO*, 2022.
+- [30] T. Nowatzki, V. Gangadhar, N. Ardalani, and K. Sankaralingam, "Stream-dataflow acceleration," in *Proceedings of the 44th Annual International Symposium on Computer Architecture, ISCA 2017*.
+- [31] T. Plano and J. Buhler, "Scheduling irregular dataflow pipelines on SIMD architectures," in *WPMVP@PPoPP '20: Sixth Workshop on Programming Models for SIMD/Vector Processing, 2020*.
+- [32] T. J. Repetti, J. P. Cerqueira, M. A. Kim, and M. Seok, "Pipelining a triggered processing element," in *Proceedings of the 50th Annual IEEE/ACM International Symposium on Microarchitecture, MICRO 2017*.
+- [33] O. Ragheb, R. Beidas, and J. Anderson, "Statically scheduled vs. elastic cgra architectures: Impact on mapping feasibility," in *2023 IEEE International Parallel and Distributed Processing Symposium Workshops (IPDPSW)*, 2023, pp. 468–475.
+- [34] A. Shukla and Y. Simmhan, "Toward reliable and rapid elasticity for streaming dataflows on clouds," in *38th IEEE International Conference on Distributed Computing Systems, ICDCS 2018, Vienna, Austria, July 2-6, 2018*.
+- [35] H. Zhao, Y. Xiang, Y. Liu, X. Ye, D. Zeng, J. Yang, W. Cui, Q. Chen, J. Leng, and M. Guo, "DACO: unlocking latent dataflow opportunities in edge-side SIMT accelerators," in *Advanced Parallel Processing Technologies - 16th International Symposium, APPT 2025*.
+- [36] X. Ye, D. Fan, N. Sun, S. Tang, M. Zhang, and H. Zhang, "Simict: A fast and flexible framework for performance and power evaluation of large-scale architecture," in *International Symposium on Low Power Electronics and Design (ISLPED), 2013*.
+- [37] H. Wang, Z. Zhang, and S. Han, "Spatten: Efficient sparse attention architecture with cascade token and head pruning," in *2021 IEEE International Symposium on High-Performance Computer Architecture (HPCA)*, 2021, pp. 97–110.
+- [38] L. Lu, Y. Jin, H. Bi, Z. Luo, P. Li, T. Wang, and Y. Liang, "Sanger: A co-design framework for enabling sparse attention using reconfigurable architecture," in *MICRO '21: 54th Annual IEEE/ACM International Symposium on Microarchitecture*.
+- [39] J. Dass, S. Wu, H. Shi, C. Li, Z. Ye, Z. Wang, and Y. Lin, "Vitality: Unifying low-rank and sparse approximation for vision transformer acceleration with a linear taylor attention," in *IEEE International Symposium on High-Performance Computer Architecture, HPCA 2023*.
+- [40] Y. Chen, J. Meng, J. Seo, and M. S. Abdelfattah, "BBS:
+
+- bi-directional bit-level sparsity for deep learning acceleration," in *57th IEEE/ACM International Symposium on Microarchitecture, MICRO 2024*.
+- [41] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit *et al.*, "Attention is all you need," in *Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017*.
+- [42] Y. Di, Z. Jiang, and H. Zhang, "A public dataset for fine-grained ship classification in optical remote sensing images," *Remote. Sens.*, vol. 13, no. 4, p. 747, 2021.
+- [43] P. Rajpurkar, J. Zhang, K. Lopyrev, and P. Liang, "Squad: 100, 000+ questions for machine comprehension of text," in *Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing, EMNLP 2016*.
+- [44] Z. Cai, M. Cao, H. Chen, K. Chen, K. Chen, X. Chen, X. Chen *et al.*, "Internlm2 technical report," 2024. [Online]. Available: https://arxiv.org/abs/2403.17297
+- [45] Y. Xu, L. Xie, X. Gu, X. Chen, H. Chang, H. Zhang, Z. Chen, X. Zhang, and Q. Tian, "Qa-lora: Quantizationaware low-rank adaptation of large language models," in *The Twelfth International Conference on Learning Representations, ICLR 2024*.
+- [46] K. Sakaguchi, R. L. Bras, C. Bhagavatula, and Y. Choi, "Winogrande: An adversarial winograd schema challenge at scale," in *The Thirty-Fourth AAAI Conference on Artificial Intelligence, AAAI 2020*.
+- [47] S. Merity, C. Xiong, J. Bradbury, and R. Socher, "Pointer sentinel mixture models," 2016. [Online]. Available: https://arxiv.org/abs/1609.07843
+- [48] C. Wang, H. Duan, S. Zhang, D. Lin, and K. Chen, "Ada-leval: Evaluating long-context llms with lengthadaptable benchmarks," 2024. [Online]. Available: https://arxiv.org/abs/2404.06480
+- [49] J. Ainslie, J. Lee-Thorp, M. de Jong, Y. Zemlyanskiy, F. Lebron, and S. Sanghai, "GQA: training general- ´ ized multi-query transformer models from multi-head checkpoints," in *Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing, EMNLP 2023*.
+- [50] M. Pagliardini, D. Paliotta, M. Jaggi, and F. Fleuret, "Fast attention over long sequences with dynamic sparse flash attention," in *Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems NeurIPS 2023*.
+- [51] T. Dao, "Flashattention-2: Faster attention with better parallelism and work partitioning," in *The International Conference on Learning Representations, ICLR 2024*.
+- [52] S. Liu, J. Weng, D. Kupsh, A. Sohrabizadeh, Z. Wang *et al.*, "Overgen: Improving fpga usability through domain-specific overlay generation," in *Proceedings of the 55th Annual IEEE/ACM International Symposium on Microarchitecture*, 2023.
+- [53] U. Bakhtiar, H. Hosseini, and B. Asgari, "Acamar: A dynamically reconfigurable scientific computing accelerator for robust convergence and minimal resource underutilization," in *2024 57th IEEE/ACM International*
+
+- *Symposium on Microarchitecture (MICRO)*.
+- [54] H. Wang, J. Fang, X. Tang, Z. Yue, J. Li, Y. Qin, S. Guan, Q. Yang, Y. Wang, C. Li, Y. Hu, and S. Yin, "SOFA: A compute-memory optimized sparsity accelerator via cross-stage coordinated tiling," in *57th IEEE/ACM International Symposium on Microarchitecture, MICRO 2024*.
+- [55] Z. Fan, W. Li, Z. Wang, T. Liu, H. Wu, Y. Liu, M. Wu, X. Wu *et al.*, "Accelerating convolutional neural networks by exploiting the sparsity of output activation," *IEEE Trans. Parallel Distributed Syst.*, 2023.
+- [56] M. C. Jeffrey, S. Subramanian, C. Yan, J. Emer, and D. Sanchez, "A scalable architecture for ordered parallelism," in *Proceedings of the 48th International Symposium on Microarchitecture*, 2015.
+- [57] V. Dadu and T. Nowatzki, "Taskstream: accelerating taskparallel workloads by recovering program structure," in *ASPLOS '22*, 2022.
+- [58] V. Dadu, S. Liu, and T. Nowatzki, "Polygraph: exposing the value of flexibility for graph processing accelerators," in *Proceedings of the 48th Annual International Symposium on Computer Architecture*, 2021.
+- [59] Y. N. Wu, J. S. Emer, and V. Sze, "Accelergy: An architecture-level energy estimation methodology for accelerator designs," in *2019 IEEE/ACM International Conference on Computer-Aided Design (ICCAD)*, 2019.
+- [60] Y. N. Wu, P.-A. Tsai, A. Parashar, V. Sze, and J. S. Emer, "Sparseloop: An analytical approach to sparse tensor accelerator modeling," in *2022 55th IEEE/ACM International Symposium on Microarchitecture (MICRO)*.
+- [61] J. Liu, S. Zeng, J. Zhao, L. Ding, Z. Wang, J. Li, Z. Zhu, X. Ning, C. Zhang, Y. Wang, and G. Dai, "TB-STC: transposable block-wise N: M structured sparse tensor core," in *IEEE International Symposium on High Performance Computer Architecture, HPCA 2025*.
+- [62] X. Xiong, Z. Chen, Y. Liang, M. Tian, J. Shang, J. Zhong, and D. Liu, "Dynax: Sparse attention acceleration with dynamic X: M fine-grained structured pruning," in *ASP-LOS 2025*.
+- [63] S. Han, X. Liu, H. Mao, J. Pu, A. Pedram, M. A. Horowitz, and W. J. Dally, "Eie: efficient inference engine on compressed deep neural network," in *Proceedings of the 43rd International Symposium on Computer Architecture*, 2016.
+- [64] D. Wang, X. Du, L. Yin, C. Lin, H. Ma, W. Ren, H. Wang, X. Wang *et al.*, "Mapu: A novel mathematical computing architecture," in *2016 IEEE International Symposium on High Performance Computer Architecture (HPCA)*.
+- [65] S. Fan, Z. Wang, W. Xu, R. Hou, D. Meng, and M. Zhang, "Tensorfhe: Achieving practical computation on encrypted data using gpgpu," in *2023 IEEE International Symposium on High-Performance Computer Architecture (HPCA)*, 2023.
+- [66] M. Garrido, "A survey on pipelined fft hardware architectures," *Journal of Signal Processing Systems*, 2021.
+- [67] A. H. Zadeh, M. Mahmoud, A. Abdelhadi, and
+
+- A. Moshovos, "Mokey: enabling narrow fixed-point inference for out-of-the-box floating-point transformer models," in *ISCA '22: The 49th Annual International Symposium on Computer Architecture*, 2022.
+- [68] Y. Liu, W. Li, K. Zhang, Y. Liu, S. Wen, L. Wang, T. Liu, H. Wu, Z. Fan, X. Ye, D. Fan, and X. An, "Bitred: Taming non-uniform bit-level sparsity with a programmable RISC-V ISA for DNN acceleration," in *Proceedings of the 31st ACM International Conference on Architectural Support for Programming Languages and Operating Systems, ASPLOS 2026*.
+- [69] H. Lu, L. Chang, C. Li, Z. Zhu, S. Lu, Y. Liu, and M. Zhang, "Distilling bit-level sparsity parallelism for general purpose deep learning acceleration," in *MICRO-54*, 2021.
+- [70] H. Wang, Y. Li, H. Xu, Y. Wang, L. Liu, J. Yang, and Y. Han, "LAD: efficient accelerator for generative inference of LLM with locality aware decoding," in *IEEE International Symposium on High Performance Computer Architecture, HPCA 2025*.
+- [71] T. Nowatzki, N. Ardalani, K. Sankaralingam, and J. Weng, "Hybrid optimization/heuristic instruction scheduling for programmable accelerator codesign," ser. PACT '18, 2018.
+- [72] Z. Li, P. Dangi, C. Yin, T. K. Bandara *et al.*, "Enhancing CGRA efficiency through aligned compute and communication provisioning," in *ASPLOS 2025*.
+- [73] J. Weng, S. Liu, V. Dadu, Z. Wang, P. Shah, and T. Nowatzki, "Dsagen: Synthesizing programmable spatial accelerators," in *2020 ACM/IEEE 47th Annual International Symposium on Computer Architecture (ISCA)*.
+- [74] L. Wu, A. Lottarini, T. K. Paine, M. A. Kim, and K. A. Ross, "Q100: the architecture and design of a database processing unit," in *Proceedings of the 19th International Conference on Architectural Support for Programming Languages and Operating Systems*, 2014.
+- [75] W. Li, Z. Fan, T. Liu, Z. Wang, H. Wu, M. Wu, K. Zhang, Y. Liu, N. Sun, X. Ye, and D. Fan, "DFU-E: A dataflow architecture for edge DSP and AI applications," *IEEE Trans. Parallel Distributed Syst.*, 2025.
+- [76] R. Prabhakar, Y. Zhang, D. Koeplinger *et al.*, "Plasticine: A reconfigurable architecture for parallel paterns," in *Proceedings of the 44th Annual International Symposium on Computer Architecture*, ser. ISCA '17.
+- [77] H. Wu, W. Li, Z. Fan, Z. Wang, T. Liu *et al.*, "Alleviating transfer latency in dataflow accelerator for DSP applications," in *41st IEEE International Conference on Computer Design, ICCD 2023*.
+- [78] J. Weng, S. Liu, Z. Wang, V. Dadu, and T. Nowatzki, "A hybrid systolic-dataflow architecture for inductive matrix algorithms," in *2020 IEEE International Symposium on High Performance Computer Architecture (HPCA)*.
