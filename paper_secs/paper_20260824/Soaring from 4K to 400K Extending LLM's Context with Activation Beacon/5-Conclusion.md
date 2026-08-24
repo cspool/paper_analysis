@@ -1,0 +1,4 @@
+# 5 Conclusion
+
+This paper introduces Activation Beacon, a plug-in for transformer-based LLMs to enable effective, efficient, and flexible compression of long contexts. Activation Beacon is featured for several critical innovations, including the progressive compression workflow to distill the context into a small set of activations, the compression-based auto-regression to optimize the model with high sample efficiency, and the random sampling of compression ratios to support various downstream scenarios. According to extensive experimental evaluations, Activation Beacon consistently outperforms existing context compression methods across various compression configurations in terms of both effectiveness and efficiency. It even maintains comparable performance to the uncompressed baseline, meanwhile achieving 2x acceleration and 8x KV cache reduction. Moreover, the short-context capabilities of the LLM is well preserved.
+

@@ -1,0 +1,4 @@
+# 7 Conclusion
+
+We present Aragog, an efficient agentic workflow serving system that progressively adapts a request's configuration to runtime dynamics. Aragog's core insight is to decouple accuracy and cost based configuration selection. The expensive accuracy-based configuration prediction happens once and before execution, while the lightweight cost-based configuration selection runs frequently throughout execution. Aragog makes runtime reconfiguration efficient with novel acceleration strategies. Across diverse agentic workflows and model families, Aragog achieves 42.8–217.0% higher serving capacity than baselines while maintaining the accuracy of the most expensive configuration. Aragog delivers lower serving latency under different request loads. Under peak load, it delivers 32.5–86.1% and 46.8–89.0% lower median and P95 latency, respectively.
+

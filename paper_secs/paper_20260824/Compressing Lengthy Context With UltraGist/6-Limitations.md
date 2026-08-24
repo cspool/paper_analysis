@@ -1,0 +1,4 @@
+# 6 Limitations
+
+The current work can be improved from the following perspectives. Firstly, our primary experiments are performed with 7B models (Llama-2-7B and Mistral-7B) due to the limitation of resources. As the compression techniques are even more important for those larger models, it is necessary to make further explorations in this direction. Secondly, our experiment suggests that the compression quality can benefit from the increasing of training scale. Although UltraGist has achieved significant yet preliminary advantages over the existing methods, it will be a more useful tool if it can be continually trained. Finally, it is also meaningful to investigate the potential risks of using context compression, such as hallucinations and the catastrophic forgetting of LLM's general skill.
+

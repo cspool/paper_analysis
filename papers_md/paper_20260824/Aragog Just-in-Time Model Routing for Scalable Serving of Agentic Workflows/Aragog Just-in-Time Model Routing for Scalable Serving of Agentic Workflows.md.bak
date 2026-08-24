@@ -1,0 +1,425 @@
+# Aragog: Just-in-Time Model Routing for Scalable Serving of Agentic Workflows
+
+Yinwei Dai§ Zhuofu Chen§ Anand Iyer† Ravi Netravali§ §Princeton University †Georgia Institute of Technology
+
+# Abstract
+
+Agentic workflows have emerged as a powerful paradigm for solving complex, multi-stage tasks, but serving them at scale is computationally expensive given the many LLM inferences that each request must pass through. Configuration selection, or the cost-aware assignment of workflow agents to specific LLMs, can reduce these costs, but existing approaches bind configuration decisions before request execution, making them ill-suited for the heterogeneous and lengthy execution of workflows. Specifically, system loads can fluctuate rapidly and substantially during a request's lifetime, causing fixed configurations to quickly become suboptimal. We present Aragog, a system that progressively adapts a request's configuration throughout its execution to match runtime dynamics. To make this practical despite the massive space of workflow configurations, Aragog decouples the problem into two core elements – a one-time routing step that identifies all accuracy-preserving configurations, and a cheap per-stage scheduler that selects among them using upto-date system observations – and introduces novel strategies to accelerate each. Across diverse workflows and model families, Aragog increases maximum serving throughput by 42.8–217.0% and reduces median latency by 32.5–86.1% at peak request rates, while maintaining accuracy comparable to the most expensive configurations.
+
+# 1 Introduction
+
+Autonomous agents, or Large Language Models (LLMs) augmented with tools, memory, and planning, have shown impressive ability to tackle complex tasks autonomously [\[39,](#page-13-0) [52\]](#page-14-0). However, fully autonomous agentic systems often lack the structure and reliability needed in production [\[5\]](#page-12-0). This has led to the rise of agentic workflows: directed acyclic graphs with fixed structures that orchestrate multiple agents [\[18,](#page-12-1) [20,](#page-12-2) [22,](#page-12-3) [50\]](#page-14-1), each responsible for a welldefined subtask and passing outputs downstream (Figure [1\)](#page-1-0). These workflows preserve the generative strengths of agents while offering the observability and debuggability of traditional software. Yet serving them at scale remains expensive, largely due to the inflated number of LLM invocations per request. Indeed, a single workflow execution typically triggers several agent invocations, each making multiple LLM calls; the net effect is that LLM inference can account for nearly 80% of end-to-end request time in workflows ([§2.1\)](#page-1-1).
+
+The predominant strategy for reducing these inference costs focuses on intelligently selecting *workflow configurations* – i.e., assignments of specific LLMs to each agent in the workflow – that minimize cost while preserving accuracy. Existing systems make configuration decisions either periodically offline [\[6,](#page-12-4) [9,](#page-12-5) [17\]](#page-12-6) or once per input at request arrival time [\[35,](#page-13-1)[41,](#page-13-2)[57\]](#page-14-2). Regardless, they all commit to configurations before executing a request, focusing on optimizing fixed cost metrics such as API dollars or FLOPs. Unfortunately, such a priori decision making is fundamentally misaligned with the heterogeneous and lengthy nature of workflows: as a request slowly moves through a multi-stage graph, the overall system load it encounters can rapidly fluctuate due to the diverse overheads each agent imposes, and the arrival/departure of other requests. Consequently, a configuration selected at the start may quickly become suboptimal during a request's lifecycle, e.g., an agent assigned a small model to save FLOPs may perform worse than necessary (latency- and throughput-wise) if that model is overloaded and a larger model is idle when the request reaches the agent.
+
+To make matters worse, this early-binding behavior fails to fully exploit the *enhanced configuration flexibility* that workflows naturally afford through multi-stage processing. Specifically, we observe that workflows exhibit substantial fault tolerance – errors introduced at intermediate stages can often be corrected downstream, e.g., via refinement agents. This, in turn, dramatically expands the set of configurations that preserve end-to-end accuracy, providing a means to cope with (and support) the diverse runtime scenarios that could be encountered during serving. Yet, by binding configurations early, existing approaches forego such opportunities, leaving 25-70% of the potential gains from configuration adaptation on the table for diverse agentic workloads ([§2.2\)](#page-1-2).
+
+We present Aragog, an agentic workflow serving system that capitalizes on the aforementioned flexibility by performing stage-wise configuration adaptation.[1](#page-0-0) The primary challenge is one of runtime overheads: per-stage adaptation is prohibitively expensive because it requires frequently exploring an exponentially large configuration space that scales with workflow size and model options. To handle this, our key insight is that, for a given input, the accuracy of a configuration is fixed, whereas its runtime performance can change dramatically as system load fluctuates. Aragog leverages this asymmetry by decomposing configuration selection into two complementary steps. It first performs the expensive, accuracy-related analysis once per request (i.e., when it arrives) to identify all configurations that preserve accuracy. Then, as the request moves through the workflow, Aragog rapidly selects among only the pre-validated configurations for each upcoming stage, using current runtime signals to stay aligned with system conditions.
+
+To realize this decoupling approach while maximizing
+
+<span id="page-0-0"></span><sup>1</sup> In this paper, we use the terms stage and agent interchangeably to refer to individual execution steps in an agentic workflow.
+
+serving throughput and avoiding any added latency from configuration adaptation, Aragog embeds two optimized components. First, to identify the set of accuracy-preserving configurations, Aragog decomposes the routing problem into many simple binary classification problems and exploits the near-monotonic relationship between configuration FLOPs and accuracy to prune configuration space quickly; this keeps routing both accurate and lightweight enough to overlap with request queuing delays. Second, Aragog's (stage-wise) runtime scheduler leverages how FIFO priorities and pruned configuration sets naturally structure the assignment space: earlier requests in the queue have only a few viable configurations – since each choice at an earlier stage can invalidate options that use a different model for that stage - and once chosen, they constrain later requests rather than letting the space fan out. This, in turn, creates a compact search space that beam search can traverse efficiently, avoiding both exhaustive exploration and greedy myopia.
+
+We evaluate Aragog by comparing with existing configuration optimizers - both per-workflow [6, 9, 17] and perinput [35, 41, 57] - augmented with oracle accuracy information about configurations, i.e., representing their best possible performance. Across four popular agentic workflows and diverse model families (Qwen 2.5 [37], Llama 3 [1], and Phi 4 [2]), we find that Aragog improves maximum serving throughput by 42.8-76.3% over per-input optimizations and 78.1–217.0% over per-workflow optimizations. Further, Aragog consistently reduces latency across varying request rates. For instance, at peak load, median and P95 reductions were 32.5-71.1% and 46.2-76.2% over per-input optimizations, and 60.0-86.1% and 63.2-89.0% over per-workflow optimizations. Crucially, Aragog achieves these performance wins while maintaining accuracy within 2% of that when always using the most expensive configuration. We will open source Aragog post publication.
+
+#### 2 Background and Motivation
+
+We begin by providing an overview of agentic workflows (§2.1), highlighting the limitations of current optimization approaches and opportunities they overlook (§2.2). We then discuss the practical challenges in realizing them (§2.3).
+
+#### <span id="page-1-1"></span>2.1 Agentic Workflows
+
+Agentic workflows are directed graphs of agent invocations, where each agent—a prompted LLM augmented with tools, memory, and planning capabilities—executes a well-scoped sub-task and passes its output to downstream agents. As shown in Figure 1, example patterns and application domains include: (1) self-refine workflows [9, 32] that iteratively improve outputs through generation, critique, and refinement agents; (2) natural language to SQL systems [36, 43] that decompose query construction into keyword extraction, column selection, SQL generation, and refinement; (3) task decomposition workflows [50, 51] that split complex prob-
+
+<span id="page-1-0"></span>![](_page_1_Figure_6.jpeg)
+
+Figure 1: Examples of common agentic workflows that vary in terms of both structure and application domains.
+
+lems into parallel sub-tasks handled by different agents before aggregating their results; and (4) multi-agent voting systems [8, 47] that ensemble multiple agents for robust decision-making. In practice, these workflows are explicitly encoded using frameworks like LangChain [22] and DSPy [20]. Once a workflow graph is defined, developers can specify a *configuration* that assigns each agent to a chosen LLM, enabling accuracy-cost tradeoffs without modifying workflow logic. These configurations often utilize heterogeneous models – i.e., smaller models for easier agent tasks, specialized models for domain-specific tasks – that are each hosted on different serving engines and GPUs [9].
+
+Yet despite these intuitive benefits, agentic workflows face significant practical challenges, largely centered around the high costs they bring. Indeed, each agent invocation incurs the inference cost of powerful yet resource-intensive LLM calls. These expenses scale quickly since workflows generally involve multiple sequential or parallel agent calls. For instance, coding workflows require 3–5 agent calls per query to plan, generate, test, and verify solutions [52,60], while even simple workflows such as multi-hop question answering for legal or scientific search can involve 4+ agent calls [4,24,54]. Across our workloads, a request invokes 5.2 LLM calls on average. These LLM calls account for 79.4% of end-toend latency on average, with tool calls and framework (e.g., DSPy) overhead accounting for the remaining 20.6%.
+
+#### <span id="page-1-2"></span>2.2 Limitations of Existing Optimizations
+
+Existing systems primarily focus on configuration selection to reduce these LLM inference costs while preserving workflow accuracy. We categorize and discuss these techniques below, highlighting their limitations; complementary optimizations are covered in §6.
+
+**Per-workflow optimization.** Systems like Cognify [17], LLMSelector [9], and Murakkab [6] perform one-time or periodic configuration selection based on sample data, minimizing costs (e.g., FLOPs, API costs) while preserving accuracy relative to the most expensive configuration. Once selected, a configuration is fixed for all requests, eliminating runtime overhead but sacrificing per-input adaptability.
+
+**Per-input optimization.** In single-LLM serving, existing LLM *routing* approaches [35,46] leverage input heterogene-
+
+<span id="page-2-0"></span>![](_page_2_Figure_0.jpeg)
+
+Figure 2: Agentic workflows exhibit robustness by recovering from intermediate errors. For each configuration, we track the inputs with intermediate errors, and record the fraction subsequently corrected by the remained workflow. The plot shows the CDF of correction percentages across all configurations.
+
+ity by training routers to forward each input to the most cost-efficient model that can accurately respond to that input. Recent works extend this routing paradigm to agentic workflows [41,57] by selecting not just singular models, but a workflow configuration for each input. Routers are often transformer-based and are trained using accuracy labels relative to the most expensive configuration, enabling cost reduction while preserving accuracy.
+
+**The problem.** Though effective, existing optimizations fail to adapt to the intrinsic runtime dynamics of workflows, falling short in two key ways. First, they bind configurations before workflow execution, i.e., either once before all inputs, or at the start of each input. The core issue is that as a request is executing, system states can change rapidly, rendering these a priori selections suboptimal by execution time. Natural LLM dynamics already introduce significant variance: output lengths vary unpredictably, queue depths fluctuate continuously, and dynamic batching reshapes execution efficiency moment by moment [54]. The lengthy, multistage nature of agentic workflows only exacerbates this; the load for each concurrent request can change dramatically as it shifts between workflow agents with different overheads (and potentially different models), and the set of concurrent requests can fluctuate many times as a request slowly passes through the entire workflow graph. Consequently, upfront configuration selections can increasingly become suboptimal as requests progress through multi-stage execution.
+
+Second, these same dynamics make the approach of *optimizing for static cost metrics* problematic. Indeed, current systems all minimize predetermined costs like FLOPs or API call prices, but these commonly fail to translate to actual runtime costs (and thus, performance goals), i.e., for metrics such as throughput, resource utilization, and latency. Instead, what truly governs these aspects is how configurations fit into the current system states and utilize the currently available resources. For instance, a "more expensive" 70B-parameter model on an idle GPU can return results faster than a "cheaper" 14B model with a saturated request queue.
+
+These drawbacks are even more problematic when contextualized relative to the unique opportunities that workflows
+
+<span id="page-2-1"></span>![](_page_2_Figure_6.jpeg)
+
+Figure 3: Numerous workflow configurations can match the accuracy of the most expensive configuration at for each input.
+
+<span id="page-2-2"></span>![](_page_2_Figure_8.jpeg)
+
+Figure 4: Static approaches (per-workflow, per-input) achieve suboptimal serving capacity. Incorporating runtime cost metrics and runtime configuration adaptation incrementally improves serving capacity. Results are evaluated on HumanEval [10], Bird [25], and StrategyQA [15].
+
+bring. Most notably, despite the increased LLM inference overheads, the multi-stage execution of workflows provides remarkable configuration flexibility that exceeds what is typically possible with single-model pipelines, e.g., with classic model routing. Concretely, given multiple model options per stage, agentic workflows elicit an exponentially large configuration space that presents remarkable error tolerance when upstream agents produce suboptimal outputs, downstream agents can often recover from those intermediate errors (Figure 2). This self-correcting behavior dramatically expands the viable configuration space (Figure 3), highlighting an untapped potential: the enhanced configuration flexibility provides support for frequently adapting to dynamic runtime scenarios via stage-wise configuration adaptation using the many options. By making static configuration decisions prior to workflow execution, all existing approaches fail to fully take advantage of this enhanced flexibility.
+
+To quantify this potential (and the drawbacks of existing approaches), we follow the setup from §5.1 and evaluate three representative workflows—self refine, text-to-sql, and task decomposition—with their corresponding datasets (HumanEval [10], Bird [25], StrategyQA [15]) and Qwen {7,14,32}B as model options. We compare the serving capacity (max achieved throughput, normalized to the best approach) of Per-workflow and Per-input configuration strategies (as described above), as well as two more schemes:
+
+• Per-input+, which improves upon Per-input by factoring in runtime observations (in particular, the predicted la-
+
+tency based on current load for each model and serving engine) rather than solely FLOPs when selecting a configuration prior to each request, and
+
+• Per-input++, which improves Per-input+ by continuously re-evaluating and updating configuration selections at each workflow stage (rather than solely before each request) to adapt to changing system dynamics.
+
+To isolate impact of selection strategy, all approaches are given perfect knowledge of accuracy per configuration.
+
+As shown in Figure [4,](#page-2-2) despite the benefits that Per-input strategies bring via input-level configuration adaptation (i.e., 9–33% improvement in serving capacity over Per-workflow schemes), their early binding and static cost metrics leave substantial performance gains on the table. In particular, our results highlight that incorporating dynamic cost metrics (Per-input+) and stage-wise configuration adaptation (Perinput++) can further improve serving capacity by 12–16% and 25–30% when they are incrementally incorporated – a 37–46% increase in maximum achieved throughput over even the best possible version of existing Per-input schemes.
+
+#### <span id="page-3-0"></span>2.3 Challenges
+
+Despite the benefits, realizing stage-wise configuration adaptation requires solving fundamental systems challenges in managing runtime overheads, given the large configuration space to explore and the need for frequent reconfiguration.
+
+C1: Prohibitive and frequent routing overheads. Agentic workflows create configuration spaces that grow exponentially with workflow complexity: *M<sup>N</sup>* configurations for *N* agents and *M* models. Routing must evaluate this massive space to select configurations for each input. Yet, routing overhead scales poorly with the configuration space: stateof-the-art routers already build on large transformers for accurate single-LLM selection [\[35,](#page-13-1) [46\]](#page-13-8), and workflow routing demands substantially more complexity to evaluate exponentially more candidates. Moreover, adapting to rapid system dynamics requires frequent rerouting for every input. The untenable and frequent routing cost for every input can offset the benefit of flexible configuration adaptation.
+
+C2: Joint runtime reconfiguration under concurrency. Beyond per-input routing overheads, runtime reconfiguration amplifies the coordination that serving platforms must consider when managing concurrent requests. Specifically, capitalizing on each request's configuration flexibility can constrain other requests. For instance, consider two requests where R1 can achieve target accuracy with either 7B or 14B models, while R2 needs either 7B or 32B models. If the serving engine for the 7B model can only house one more request in its batch before resorting to queuing, independent scheduling might grant R1 use of the 7B model first (its cheapest option), forcing R2 to use the expensive 32B model. In contrast, joint scheduling would recognize that R1 can make a slight performance sacrifice by using 14B, allowing R2 to
+
+<span id="page-3-1"></span>![](_page_3_Figure_8.jpeg)
+
+Figure 5: Aragog predicts a set of accurate configurations for each input before execution and performs stage-wise scheduling at runtime. In this stage 0 example, model C is overloaded, limiting query 2 to model A. To jointly optimize both queries, the scheduler exploits query 1's flexibility, picking configurations that start with model B.
+
+take the scarce 7B slot—improving overall system throughput and latency. However, such joint optimization becomes computationally expensive as it scales exponentially with the number of concurrent requests and their configurations.
+
+# 3 Design
+
+We present Aragog, an efficient agentic workflow serving system that progressively adapts each request's configuration to cater to runtime system dynamics, i.e., resource availability. Its overarching goal is to maximize serving capacity (throughput) while preserving accuracy. To do so, our key insight is that the accuracy of a configuration for a given request remains constant, while its runtime cost (achieved throughput, latency, utilization) rapidly fluctuates with system dynamics. By recognizing this fundamental asymmetry – accuracy (static but expensive to compute) vs. cost (dynamic but cheap to assess) – we decouple them to make frequent runtime reconfiguration practical. Specifically, Aragog embeds (1) a configuration predictor ([§3.1\)](#page-4-0) that efficiently identifies *all* accurate configurations for each input *once* before execution, rather than just a single configuration as in prior work, to address C1 from [§2.3,](#page-3-0) and (2) a runtime scheduler ([§3.2\)](#page-5-0) that progressively adapts configurations stage by stage (when actual runtime costs are observable) from only this candidate set, efficiently coordinating configuration selection across concurrent requests to maximize serving capacity (addressing C2).
+
+Figure [5](#page-3-1) overviews Aragog's architecture, which runs as a layer between agentic workflow applications and LLM serving engines. Prior to deployment, 1 Aragog trains configuration predictors using representative data for the target workflow, following existing strategies [\[35,](#page-13-1) [46\]](#page-13-8). Additionally, Aragog profiles the latency and throughput of serving engines under different batch sizes to estimate engine available capacity and configuration cost at runtime. Once deployed, 2 incoming requests are queued in FIFO order and first pass through the configuration predictor to obtain their set of accurate configurations. To align the stage-wise scheduling with runtime system states, the runtime scheduler periodically polls each serving engine's load 3 . When serving engines have available resources, the scheduler initiates a scheduling round 4 : using the profiled latency-throughput profiles and current load observations, it jointly selects which requests to dispatch and which models to use for their current stages such that overall serving throughput is maximized. After each scheduling round, Aragog prunes invalid configurations – i.e., those that would have used a different model than the one selected for the current stage – from each scheduled request's set of candidates 5 .
+
+#### <span id="page-4-0"></span>3.1 Efficiently Predicting Accurate Configuration Sets
+
+To effectively achieve stage-wise configuration adaptation, Aragog first needs to exploit the configuration flexibility of agentic workflows. To do that, Aragog's configuration predictor fundamentally differs from traditional routers – instead of selecting a single best configuration, it must identify *the set* of accurate configurations for a given input. This configuration set is essential to Aragog's operation: the prediction must be cheap enough to avoid becoming a bottleneck, while remaining accurate and presenting the maximum number of configurations to maximize adaptation flexibility.
+
+Problem formulation. We formalize configuration prediction as follows. Given an input *x* and a workflow DAG *G* with *n* agents, let *M* = {*m*1,...,*mk*} denote the set of candidate models ordered by size (e.g., Qwen-7B through Qwen-32B), where *C*all = *M <sup>n</sup>* represents the full configuration space. We define *c* ∗ as the most expensive configuration where all agents use the largest model *mk*, and a configuration is *accurate* if it achieves equivalent accuracy to *c* ∗ for a given input. Following standard practice [\[35,](#page-13-1) [41,](#page-13-2) [46\]](#page-13-8), we employ learned routers to predict accurate configurations, where each router uses a two-layer architecture: an embedding model encodes the input, and is then followed by a classifier. Routers are trained offline on a labeled dataset in which, for each sample, we execute all configurations and label those matching the accuracy of *c* <sup>∗</sup> positively.
+
+Routing strategy. The key question is how to design routers (and the routing approach) such that accuracy is preserved but overheads are bounded, e.g., with a limit on the number of model parameters used for routing. This leads to a challenging space of options to consider. At one extreme, a single large router evaluates all |*M* | *n* configurations simultaneously; at the other, |*M* | *n* small binary routers each eval-
+
+<span id="page-4-1"></span>![](_page_4_Figure_5.jpeg)
+
+Figure 6: Overall routing accuracy drops as each router's configuration space increases. Binary routers achieve the best precision and recall for a given parameter budget.
+
+uate one configuration independently. Navigating this space is non-trivial: larger routers are more capable, but each must consider more configurations making its task more difficult and the accuracy-compute tradeoff unclear.
+
+To systematically explore this space, we use three representative workflows to evaluate how overall routing accuracy scales with the number of configurations per router under a fixed total router parameter budget. For each workflow, we consider a space of 16 randomly-selected configurations of Qwen model options (7-32B) and evaluate three partitioning schemes: 16 routers each handling 1 configuration (binary routing), 4 routers each handling 4 configurations, and 1 router handling all 16 configurations, with all routers using the same train-test split. For the single-router case, we use the router described in [§5.1.](#page-8-0) As the number of routers increases, we scale down each router's width proportionally to maintain a constant total parameter budget.
+
+Figure [6](#page-4-1) shows the overall routing accuracy results. Despite allocating the same total parameters across all approaches, the overall accuracy degrades with increasing subset size. Binary routers excel in both recall (i.e., finding more viable configurations for runtime scheduling), and even more importantly, precision (i.e., picking fewer inaccurate configurations). Specifically, binary routers achieve 94–96% precision and 71–77% recall, while a single router (handling 16 configurations) achieves only 31–40% precision and 18- 21% recall. Building on this, Aragog adopts binary routers to maximize routing accuracy and focuses on enabling efficient inference of those (many) routers via two core techniques, described in turn.
+
+Pruning router inferences. With the trained binary routers, our goal is for routing to complete during queuing for the first stage of a given request, i.e., to avoid added end-to-end serving latency from configuration adaptation. However, naively running all routers can inflate end-to-end request latency by up to 15.4% across our workloads.
+
+Our strategy to address this is rooted in a key empirical observation: the accuracy of a workflow exhibits nearmonotonicity under model upgrades, where replacing any agent's model with a more capable one (i.e., one with more parameters) maintains or improves end-to-end accuracy in the vast majority of cases. Figure 7 validates this property experimentally across all configurations of a self-refine workflow used for code generation, where green arrows indicate accuracy-preserving upgrades and red arrows indicate rare violations (only 8 out of 288 upgrade cases, with accuracy drops capped at 1.5%); note that we observe a similar trend across all other workloads in our evaluation.
+
+Aragog exploits this observation to carefully prune the configuration search space. Intuitively, if we run a router on a configuration and it deems a configuration accurate enough, then any configuration that upgrades one or more agents to more capable models is expected to be accurate. Conversely, if a configuration is deemed inaccurate, downgrading any agent will likely remain inaccurate. Crucially, Aragog leverages this non-guaranteed property solely to prune the set of configurations, *i.e.*, it affects search efficiency, not accuracy; all selected configurations still run through their corresponding routers before being considered during serving with Aragog. Thus, violations of this property can only result in reduced configuration flexibility by missing accurate configurations.
+
+More specifically, Aragog applies this pruning strategy through a binary search. We first structure the search space into monotonic configuration chains, each starting from the base configuration where all agents use  $m_1$ . These chains are built via depth-first search (DFS) by individually upgrading each agent's model while keeping the others fixed. Then, along each chain, we use binary search to locate the transition boundary between inaccurate and accurate configurations. At each step in the search, we evaluate the selected configuration by running its binary router. Again, after the binary search completes, Aragog verifies all remaining configurations by running their routers and retains only those predicted to be accurate for our final candidate set.
+
+Efficient router inference. While pruning reduces the number of routers to evaluate, executing them efficiently requires further optimization. The core issue is that the specialized classifiers from different routers cannot be batched like the shared embedding model—each classifier is router-specific, resulting in sequential execution. Worse, these classifiers are lightweight, leading to underutilized GPU resources. To address this, Aragog fuses the classifiers layer by layer via custom kernels to maximize the parallelism.
+
+Figure 8 shows the cumulative impact of our optimizations on average per-input routing latency for two represen-
+
+<span id="page-5-1"></span>![](_page_5_Figure_6.jpeg)
+
+Figure 7: Workflow accuracy is largely monotonic under model upgrades. Green: valid monotonic upgrades; Red: rare violations (8 out of 288 model upgrades, with mild accuracy drops < 1.5%). The trend holds for other workflows.
+
+<span id="page-5-2"></span>![](_page_5_Figure_8.jpeg)
+
+Figure 8: Reduction in average per-input routing latency from cumulative optimizations.
+
+tative workflows. Starting from naive exhaustive evaluation of  $|\mathcal{M}|^n$  routers with embedding batching enabled (baseline), Aragog's configuration pruning optimization reduces routing overheads by 30.0–47.6%. Kernel fusion for router classifiers further reduces latency by 33.1–56.3%. Together, these optimizations reduce average per-input routing latency from 90.9–196.2 ms to 42.6–44.9 ms per request; we show in §5.3 that the resultant overheads sufficiently ensure that routing minimally affects end-to-end response times.
+
+Overall operation. When deployed online, Aragog adapts configuration search to the time budget – i.e., the configuration search for a request must complete before its first stage can be executed. Specifically, Aragog estimates request queuing delays via exponential moving averages of observed per-stage queue times across all requests. Based on this estimate, Aragog adjusts the embedding model batch size and classifier fusion degree to maximize router inference efficiency while meeting the deadline. If configuration search is incomplete when a request must execute, Aragog uses the verified configurations found so far, or defaults to the most expensive configuration if none exist.
+
+# <span id="page-5-0"></span>3.2 Runtime Configuration Selection and Scheduling
+
+Given the set of viable configurations per request (§3.1) and serving engines with provisioned resources to manage all
+
+model options, Aragog's goal is to maximize overall serving capacity. Key to this is ensuring that stage-wise configuration decisions factor in the latest information about resource availability and also jointly optimize across all concurrent requests.
+
+To realize this, Aragog's scheduler works as follows. It periodically polls each engine's current load and estimates available capacity relative to offline-profiled saturation points, i.e., the batch size for that model and serving engine beyond which throughput no longer improves. When any engine has available capacity, the scheduler triggers a scheduling round. All requests awaiting scheduling are held in a meta-queue organized in FIFO order (as in existing systems [44]), with each request being tagged with both its (remaining) viable configurations and its current workflow stage. With this fresh view of system state and configuration options, each scheduling round involves (1) jointly selecting requests from the queue and assigning them models to use for their current stages, and (2) dispatching those stage-wise inference jobs to the corresponding serving engines which each manage their own queues and execution logic (e.g., chunked prefill decisions). Once dispatched, requests remain in the meta-queue as pending rather than re-entering upon stage completion to preserve FIFO ordering.
+
+**Joint optimization across requests and time.** Aragog's runtime scheduler operates using the following inputs for each scheduling round: (i)  $Q = \{r_1, r_2, ..., r_n\}$ , the request queue in FIFO order where each  $r_i$  is at a specific workflow stage; (ii)  $C(r_i)$ , the set of viable configurations for request  $r_i$ ; and (iii)  $S_m(t)$ , the available slots for model m's engine at time t (considering current batch occupancy and maximum batch size, as per the offline profiles). In selecting request stages to schedule (and the models to use for each), Aragog strives to maximize overall serving throughput.
+
+This involves not only maximizing current utilization across all serving engines, but also preserving future scheduling flexibility. The reason is that each scheduling round's configuration assignment has two effects: it determines resource utilization in the current round, and it potentially prunes the set of viable configurations for future stages of the considered requests. Put differently, a model selection for a given stage can render previously viable configuration options invalid (if they conflict at that stage), thereby limiting future adaptation flexibility and (potentially) compromising future resource utilization. Aragog must therefore jointly optimize across requests and time. However, the assignment space is prohibitively large – exponential in the number of requests and the size of their configuration sets – making exhaustive search impractical for real-time scheduling.
+
+To handle this, our key insight is that FIFO ordering and shrinking configuration sets together narrow the assignment space for efficient exploration. First, FIFO ordering prioritizes earlier requests in the queue, and their assignments constrain the available options for later requests due to shared
+
+<span id="page-6-0"></span>![](_page_6_Figure_5.jpeg)
+
+Figure 9: Beam search efficiently navigates the exponential configuration space by iteratively scheduling requests in FIFO order. Given current engine status, at each step it explores configuration options to extend the partial assignment, ranks them by utilization improvement (U) and flexibility preservation (F), and retains only the top-B (B=2 here) for further exploration.
+
+<span id="page-6-1"></span>![](_page_6_Figure_7.jpeg)
+
+Figure 10: Comparing scheduling algorithms in Aragog: beam search achieves near-optimal resource utilization (current engine utilization) and flexibility preservation (future configuration options) comparable to brute-force, with greedy-level efficiency. Bars show averages with min-max error bars.
+
+resources. Moreover, earlier requests in the queue are typically at later workflow stages with already-pruned configuration sets, leaving them with few viable options. Together, these two factors create a narrow search space: earlier requests have limited options, and once assigned, they further restrict later requests. This makes *beam search* ideal – it avoids both the intractability of exhaustive search and the myopia of greedy assignment by iteratively extending a small set of promising partial assignments in FIFO order.
+
+Aragog uses beam search to efficiently navigate the exponential configuration space (Figure 9). Aragog maintains only the top-*B* (B is set to 4 by default, but we evaluate different values in §5.3) most promising partial assignments at each step, where each partial assignment represents a subset of scheduled requests with their configuration assignments. Partial assignments are ranked by two criteria: (1) utilization improvement, i.e., the total forecasted throughput improvement from the assignment, estimated using offline-profiled throughput-load curves for each model engine. This metric
+
+accounts for both each engine's inherent throughput characteristics and its current utilization. For example, the scheduler prefers assignments that distribute load across a lightlyloaded 32B engine and a 7B engine with high marginal throughput gains, rather than assignments that further saturate an already near-capacity 7B engine, and *(2) flexibility preservation* as a tiebreaker, i.e., the average percentage of configuration options preserved across requests for future stages. This balances immediate resource utilization with flexibility preservation for downstream scheduling.
+
+At each step, the scheduler expands partial assignments in FIFO order by considering all valid configuration assignments for the next unscheduled request in the queue. To avoid blocking, we employ a look-ahead mechanism (that still respects FIFO priorities): when a request cannot be scheduled due to resource constraints, the scheduler skips it and proceeds to the next request in the queue. This is critical for heterogeneous workflows where requests require different models; strict FIFO would block subsequent requests with flexible configurations behind a constrained request waiting for an overloaded model. Our relaxation preserves FIFO fairness because: (1) skipped requests add no additional delay, i.e., they remain blocked regardless of whether subsequent requests are scheduled, and (2) Aragog still iterates through requests in FIFO order in future rounds, ensuring skipped requests are never overtaken by later joint requests requiring the same models.
+
+By retaining only top *B* partial assignments throughout the search, Aragog makes joint optimization tractable while finding high-quality assignments. The search terminates when all feasible requests are assigned or no available serving resources remain. To evaluate the performance of beam search in Aragog, we take periodic snapshots of our evaluation workloads during serving. Figure [10](#page-6-1) shows that beam search achieves near-optimal assignment quality (measured by resource utilization and flexibility preservation) that is comparable to exhaustive search while maintaining efficiency close to greedy approaches, i.e., orders of magnitude faster than brute-force search.
+
+Supporting complex workflows. Thus far, we have assumed sequential workflows. However, agentic workflows extend beyond sequential workflows, often containing parallel branches and complex dependencies. Aragog leverages topological sorting to ensure correct execution order while maximizing parallelism. Before execution, Aragog performs a topological sort [\[27,](#page-13-10) [44\]](#page-13-9) on the workflow DAG and precomputes each agent's depth, i.e., the longest path from that agent to any leaf node. During execution, Aragog follows a two-level priority scheme: *(1) inter-request*: FIFO ordering prioritizes earlier requests over later ones, and *(2) intrarequest*: agents are prioritized by depth in descending order to schedule critical-path agents first. For example, given two requests *R*<sup>1</sup> (arrived first) and *R*<sup>2</sup> (arrived second), where *R*<sup>1</sup> has ready agents *A* (depth=4) and *B* (depth=3), and *R*<sup>2</sup> has
+
+```
+class Workflow(ABC):
+@abstractmethod
+def extract_workflow_graph(
+   self, dspy_program: dspy.Module
+) :
+   """Extract workflow DAG from DSPy
+       program."""
+   pass
+@abstractmethod
+async def execute_stage(
+   self,
+   stage: int,
+   model_idx: int,
+   lm: dspy.LM,
+   request_state: RequestState
+):
+   """Execute a stage with the specified
+       model."""
+   pass
+```
+
+Figure 11: Aragog's DSPy wrapper abstraction for enabling graph structure extraction and stage-wise scheduling.
+
+ready agent *C* (depth=5). Agent *A* from *R*<sup>1</sup> (highest depth in earlier request) will be scheduled earlier than agent *C*, despite agent *C* having the globally highest depth. With this ordering, Aragog's optimization applies seamlessly to complex workflows.
+
+# 4 Implementation
+
+We implement Aragog as an orchestration layer in 6.8K lines of Python and Triton code that sits between agentic workflow frontends and LLM serving engines, without modifying either.
+
+Frontend and Workflow Specification. As shown in Figure [11,](#page-7-0) Aragog converts any DSPy program into its internal workflow representation, enabling runtime model reconfiguration and asynchronous stage-wise execution. We choose DSPy for its lightweight design and ease of use, making it popular for building agentic workflows. However. Aragog can support other frameworks by implementing frameworkspecific workflow graph extraction.
+
+Router Inference. We implement dynamic batching for shared embedding model serving. To accelerate router classifier inference, we develop custom Triton kernels that fuse classifiers layer by layer. We leverage CUDA graphs to further reduce the kernel launching overheads.
+
+Runtime Scheduler. The scheduler runs asynchronously with workflow execution. It maintains: (1) FIFO queues with look-ahead scheduling, (2) model engine states tracking occupancy, (3) configuration caches mapping requests to viable sets, and (4) exponential moving averages of queue metrics. Beam search uses priority queues, where each state encodes partial assignments as bit vectors for efficient manipulation.
+
+Serving Backend Integration. Aragog uses SGLang [\[62\]](#page-14-6), a widely used LLM serving engine as our serving backend. However, Aragog supports any serving backends (vLLM [\[21\]](#page-12-15), TensorRT-LLM [\[11\]](#page-12-16) and HuggingFace TGI [\[19\]](#page-12-17)) that provide OpenAI-compatible APIs needed for agentic workflow frontends.
+
+# 5 Evaluation
+
+We evaluated Aragog across a wide range of agentic workloads, model families, and varying request rates. Our key findings are:
+
+- Aragog improves maximum serving throughput by 42.8– 76.3% and 78.1–217.0% over per-input and per-workflow optimizations, respectively.
+- Aragog maintains lower latency under increasing load. Under the highest load for all workloads, Aragog reduces P25, median, and P95 end-to-end latency by 23.6–60.1%, 32.5–71.1%, and 46.2–76.2% over per-input optimization and 58.4–82.8%, 60.0–86.1%, and 63.2–89.0% over perworkflow optimization, respectively.
+- Aragog preserves accuracy compared to always using the largest model, with maximum degradation of 2%.
+- Aragog demonstrates robust improvements over baselines across mixed model families, router architectures, configuration space sizes, and GPU allocation schemes.
+
+#### <span id="page-8-0"></span>5.1 Experimental Setup
+
+Models. We use the Qwen-2.5 (7B, 14B, 32B) [\[37\]](#page-13-3) and Llama 3 (3B, 8B, 70B) [\[1\]](#page-12-7) model families. This provides a diverse range of capability-cost tradeoffs for each agent in the workflows. We use Snowflake Arctic-Embed-L-v2.0 [\[55\]](#page-14-7) as the router's embedding model, which has a small number of parameters while providing high-quality embeddings and supporting relatively long context lengths. The router's classifier is an MLP with 6 hidden layers that maps embeddings to configuration predictions. Additionally, we explore heterogeneous model options across different families, and different embedding models in [§5.3.](#page-10-0)
+
+Testbed. We conduct our experiments on an H100 GPU node, which contains 8 NVIDIA H100 80GB GPUs interconnected via NVLink and a 96-core Intel Sapphire Rapids CPU. We use SGLang as our model serving engine. For models larger than 7B, we enable tensor parallelism with a degree of 2 for 14B models and 4 for 32B and larger models, following standard practice. We dedicate the remaining GPU to router inference. For baselines without routing components, this GPU instead serves an additional 7B model to ensure fair resource allocation. We also explore different initial GPU allocation configurations in [§5.3.](#page-10-0) As in prior work [\[21,](#page-12-15)[30,](#page-13-11)[62\]](#page-14-6), we simulate request arrivals using a Poisson process with varying arrival rates to capture different load conditions.
+
+Workflows and datasets. We evaluate Aragog across diverse workflow patterns (Figure [1\)](#page-1-0) and datasets.
+
+- *Self-refine for coding* on HumanEval [\[10\]](#page-12-12) (164 programming problems), using a three-agent workflow with generation, critique, and refinement agents.
+- *Self-refine for QA* on SQuAD v2.0 [\[38\]](#page-13-12) (1000 sampled questions), following the same three-stage pattern.
+- *Text-to-SQL* on Bird-SQL [\[25\]](#page-12-13) (780 samples), where query generation is decomposed into keyword extraction, column selection, SQL generation, and refinement stages.
+- *Voting* (four voters and one aggregator) on MMLU-Pro [\[48\]](#page-13-13) (1500 sampled questions), where multiple reasoning paths are generated in parallel and aggregated.
+- *Task decomposition* on StrategyQA [\[15\]](#page-12-14) (1500 sampled questions), where problems first pass through the decomposer, then invoke sub-task solvers in parallel, and finally the answer aggregator.
+
+Baselines. We compare Aragog against two baselines that represent optimal performance for each category: (1) Perworkflow optimization: selects the cheapest configuration among all configurations that match the most expensive configuration's accuracy, the configuration stays fixed for all requests; and (2) Per-input optimization: performs routerbased selection for each request. Both baselines are given an oracle with perfect accuracy knowledge for selecting their best configurations, representing the performance upper bound of each approach. Additionally, we remove the router inference overhead for the per-input baseline. Moreover, all baselines incorporate the same state-of-the-art graph-aware scheduling for agentic workflows as Aragog ([§3.2\)](#page-5-0).
+
+Metrics. We measure serving capacity (maximal throughput), latency (Average/P25/P50/P90) under varying request rates, and accuracy preservation relative to the most expensive configuration (using the largest model for all agents).
+
+#### <span id="page-8-1"></span>5.2 End-to-End Performance
+
+Figures [12–](#page-9-0)[14](#page-10-1) compare Aragog with two baselines across five agentic workloads and two model families. Overall, Aragog significantly improves the maximal serving capacity and lowers latencies, while matching the accuracy when always using the largest model.
+
+Serving capacity improvement. Figure [12](#page-9-0) shows throughput-latency curves under varying request rates across workloads and model families. For each workload, we sweep the request rate from low to high and measure the achieved throughput and average latency at each rate, shown as individual points on the curves. Across both Llama and Qwen model families, Aragog consistently achieves the highest throughput and lowest average latency under varying request rates. Specifically, Aragog improves maximum serving throughput by 42.8–76.3% over per-input optimization and 78.1–217.0% over per-workflow optimization. Additionally, Aragog reduces average latency under the highest request rates by 25.4–69.4% and 60.0–85.3% over per-input and per-workflow optimization, respectively.
+
+<span id="page-9-0"></span>![](_page_9_Figure_0.jpeg)
+
+Figure 12: Average latency and throughput comparison under varying request rates and across five workflow dataset pairs and two model families. Each dot represents the average latency and throughput under a specific request rate.
+
+<span id="page-9-1"></span>![](_page_9_Figure_2.jpeg)
+
+Figure 13: Median latency for workloads and model families at varying loads. Error bars show P25 and P95.
+
+These results show that Aragog both scales efficiently under high load and its optimization generalizes across agentic workloads and model families.
+
+We observe several important trends across both model families. First, compared to per-input optimization, Aragog's capacity improvements grow with workflow complexity. The throughput improvement increases from 42.8-50.1% for self-refine workflows to 54.0-76.3% for more complex workflows with longer sequential chains (text-to-sql) or parallel branches (task decomposition and voting). This is because workflows with more stages exacerbate the limitations of per-input optimization's static, upfront configuration. Configuration staleness increases with workflow complexity, leading to increasingly suboptimal configuration decisions. In contrast, Aragog exploits runtime reconfiguration and flexible request scheduling to maximize resource utilization across stages, yielding higher throughput gains. Second, compared to per-workflow, Aragog's capacity improvements are more pronounced for simpler workflows (100.2–217.0%) than complex ones (78.1–142.4%). This is because complex workflows offer fewer opportunities for requests to exploit cheaper configurations, as tasks are harder. Similarly, the gap between per-workflow and per-input optimization narrows as workflow complexity increases.
+
+Latency reduction. Figure 13 presents latency distributions across workloads and model families under the same request rates from Figure 12. At low request rates where systems are underutilized, all approaches achieve comparable latency, as expected. However, as load increases, Aragog's latency reductions become increasingly pronounced. Under the highest load across all workloads, Aragog reduces P25, median, and P95 end-to-end latency by 23.6–60.1%, 32.5–71.1%, and 46.2–76.2% over per-input optimization and 58.4–82.8%, 60.0–86.1%, and 63.2–89.0% over perworkflow optimization. The improvements are most pronounced at P95, where Aragog achieves up to 89.0% reductions. This is because through flexible runtime reconfiguration, Aragog avoids excessive queuing at individual models, reducing tail latency compared to static baselines.
+
+Accuracy preservation. Figure 14 shows that Aragog maintains accuracy across all five workloads and two model families while achieving significant throughput and latency improvements. Aragog's accuracy matches the most expensive configuration, with differences of at most 2%. This demonstrates that Aragog's configuration predictor maintains high
+
+<span id="page-10-1"></span>![](_page_10_Figure_0.jpeg)
+
+Figure 14: Evaluating Aragog's end-to-end accuracy against the case when always using the largest model.
+
+<span id="page-10-2"></span>![](_page_10_Figure_2.jpeg)
+
+Figure 15: Ratio of average routing latency to total end-to-end latency across workloads and request rates.
+
+prediction accuracy while providing configuration flexibility for runtime scheduling.
+
+#### <span id="page-10-0"></span>5.3 Microbenchmarks
+
+Results here use two representative workflows: self-refine on HumanEval and voting on MMLU-Pro, using models from the Qwen family; the observed trends hold for all our workloads. Unless otherwise specified, all other experimental settings remain the same as described in §5.1.
+
+Routing overheads. Figure 15 shows the ratio of average routing latency to total end-to-end latency for different request rates. Routing overhead remains minimal, accounting for at most 3.5% of total latency at low request rates and <1% at high request rates (when queueing delays are high). However, these percentages reflect absolute overheads; with Aragog, routing does not impose any additional delay on end-to-end latencies for requests. Indeed, at the highest request rates, routing completes 100% of the time during queuing of each request's first stage; at the lowest request rates, Aragog's budget-based routing (§3.1) does rarely terminate routing early, but even in such cases, 90% (on average) of routing work completes to ensure sufficient flexibility.
+
+**Beam search with different beam sizes.** Figure 16 shows the impact of beam size on Aragog's wins. For self-refine on HumanEval, throughput improvement over per-input optimization grows from 16.3% to 51.2% as beam size increases from 1 to 8, while improvements over per-workflow optimization increase from 82.2% to 217.1%. Similarly, for voting on MMLU-Pro, gains rise from 19.2% to 61.7% over perinput and 73.4% to 130.4% over per-workflow. Performance gains plateau with increasing beam size, as beam search finds
+
+<span id="page-10-3"></span>![](_page_10_Figure_9.jpeg)
+
+<span id="page-10-4"></span>Figure 16: Impact of beam size on throughput improvement.
+
+--- Per Input
+
+Aragog
+
+Per Workflow
+
+![](_page_10_Figure_11.jpeg)
+
+Figure 17: Average latency and throughput comparison under varying request rates using a mixed model family (Llama 8B, Phi 14B, and Qwen 32B). Each dot represents the average latency and throughput under a request rate.
+
+better configuration assignments than greedy search (beam size 1) but with diminishing returns.
+
+**Mixture of Model Family.** Figure 17 shows Aragog's generality to heterogeneous model families by using models from mixed model families: Llama3 8B, Phi4 14B, and Qwen2.5 32B. While maintaining the accuracy as the most expensive configuration, Aragog improves serving throughput by 33.7–68.5% over per-input baseline and 109.5–111.4% over per-workflow baseline. Additionally, Aragog reduces average latency under the highest request rates by 37.9–45.4% and 63.1–63.6% over per-input and per-workflow optimization, respectively.
+
+Impact of router architectures. Table 1a compares two embedding models for the router: Arctic-Embed-L-v2.0 (our default) and Google's EmbeddingGemma [45]. Both have similar parameter counts and deliver comparable throughput performance (within 1.9%). The negligible performance differences show that Aragog's routing mechanism is robust to the choice of embedding model, provided that it can capture semantic similarity between workflow requests.
+
+Impact of different GPU allocation schemes. We evaluate Aragog's robustness to resource constraints by reducing GPU allocation from 8 to 4 H100 GPUs. With fewer GPUs, we reduce tensor parallelism accordingly: Qwen 32B from TP=4 to TP=2, Qwen 14B from TP=2 to TP=1, while Qwen 7B remains on a single GPU. This scenario favors the perinput baseline, which prioritizes smaller models based on static costs, while Aragog's advantage comes from runtime reconfiguration that shifts load from overloaded small mod-
+
+<span id="page-11-1"></span>Table 1: Throughput improvement under different router embedding models, GPU allocations, and configuration space sizes (a) Impact of router embedding models
+
+|                     | Self-refine |        | Voting |        |
+|---------------------|-------------|--------|--------|--------|
+| Router's Embedder   | vs PI       | vs PW  | vs PI  | vs PW  |
+| Arctic-Embed-L-v2.0 | 50.0%       | 217.0% | 60.0%  | 128.6% |
+| EmbeddingGemma      | 50.3%       | 216.8% | 58.3%  | 126.7% |
+
+#### (b) Impact of GPU allocation schemes
+
+|                     | Self-refine |        | Voting |        |
+|---------------------|-------------|--------|--------|--------|
+| Resource Allocation | vs PI       | vs PW  | vs PI  | vs PW  |
+| 8 H100 GPUs         | 50.0%       | 217.0% | 60.0%  | 128.6% |
+| 4 H100 GPUs         | 28.3%       | 205.2% | 32.1%  | 117.4% |
+
+#### (c) Impact of configuration space sizes
+
+|                     | Self-refine |        | Voting |        |
+|---------------------|-------------|--------|--------|--------|
+| Configuration Space | vs PI       | vs PW  | vs PI  | vs PW  |
+| Full Space          | 50.0%       | 217.0% | 60.0%  | 128.6% |
+| Constrained Space   | 34.2%       | 164.6% | 52.1%  | 106.5% |
+
+All improvements measured at the highest request rate from the main evaluation ([§5.2\)](#page-8-1). PI = per-input baseline, PW = per-workflow baseline. All experiments maintain the same or better accuracy as the main evaluation.
+
+els to underutilized larger models. With 4 GPUs, limited capacity for larger models restricts such reconfiguration opportunities. Table [1b](#page-11-1) shows that Aragog still achieves significant throughput improvements over the per-input baseline with 4 GPUs: 28.3% for self-refine and 32.1% for voting, compared to 50.0% and 60.0% with 8 GPUs. Gains over per-workflow optimization remain stable across both workloads (205.2% and 117.4% with 4 GPUs vs. 217.0% and 128.6% with 8 GPUs), as it selects a fixed configuration with large models to meet worst-case accuracy requirements, making it similarly resource-constrained.
+
+Impact of the size of configuration space. Aragog by default explores the full configuration space given a workflow and model candidates. Table [1c](#page-11-1) investigates performance under a constrained space with additional restrictions: for selfrefine workflows, the critic and refine agents must use the same model; for voting workflows, all voters must use the same model. With the constrained space, Aragog achieves 34.2% and 52.1% throughput improvements over per-input optimization for self-refine and voting, respectively, versus 50.0% and 60.0% with the full space. Gains over perworkflow optimization decrease from 217.0% and 128.6% to 164.6% and 106.5% for the two workloads. Despite reduced configuration flexibility, Aragog maintains significant advantages through joint scheduling that leverages each request's available flexibility. This also demonstrates that Aragog allows users to configure the configuration space size, which can be useful for managing complexity in larger workflows with more agents.
+
+# <span id="page-11-0"></span>6 Additional Related Work
+
+LLM serving optimizations. The rapid deployment of large language models has driven significant innovations in serving optimizations. Some focus on application level compression that craft lightweight variants for efficient inference [\[13,](#page-12-18) [23,](#page-12-19) [28,](#page-13-15) [31\]](#page-13-16). Some employ compiler techniques to optimize execution for low latency [\[33,](#page-13-17)[49\]](#page-14-8). Other works focus on system perspectives like request scheduling [\[14,](#page-12-20) [54\]](#page-14-5), KV cache memory management [\[21,](#page-12-15) [58\]](#page-14-9), parallelism [\[26,](#page-13-18) [64,](#page-14-10) [65\]](#page-14-11), efficient kernels [\[12,](#page-12-21)[53\]](#page-14-12), and resource allocation [\[42,](#page-13-19)[56,](#page-14-13)[63\]](#page-14-14). Aragog operates as an orchestration layer between LLM serving engines and the agentic workflow layer. As such, these optimizations are orthogonal to Aragog and can be incorporated into the underlying serving engines.
+
+Agent serving optimizations. The rise of LLM-powered agents introduces new challenges for LLM serving, as agent execution involves an input-dependent and varying number of interceptions (e.g., tool calls) and LLM calls. Recent research has focused on addressing these agent-specific inefficiencies [\[3,](#page-12-22) [16,](#page-12-23) [29,](#page-13-20) [30,](#page-13-11) [61\]](#page-14-15). For instance, InferCept [\[3\]](#page-12-22) reduces GPU resource waste arising from frequent LLM interceptions, while Autellix [\[30\]](#page-13-11) mitigates head-of-line blocking caused by the variable number of LLM calls per agent by prioritizing requests based on cumulative service time. These techniques are complementary to Aragog, which orchestrates execution at the workflow level (across a graph of agents) and can leverage agent-serving optimizations within each agent within the graph.
+
+Agentic workflow serving optimizations. Agentic workflows orchestrate multiple agents as a graph, introducing dependencies across agents. Recent systems exploit graph-level knowledge for scheduling and resource management [\[7,](#page-12-24) [27,](#page-13-10) [40,](#page-13-21) [44\]](#page-13-9). For instance, Parrot [\[27\]](#page-13-10) introduces graph-aware batching and KV cache sharing, while Ayo [\[44\]](#page-13-9) rearranges the execution graph for efficient execution and scheduling. These systems optimize for a fixed configuration; Aragog complements them by dynamically adapting configurations at runtime. Other work automates workflow graph design [\[34,](#page-13-22) [59\]](#page-14-16); Aragog is agnostic to graph structure and can serve automatically-generated workflows.
+
+# 7 Conclusion
+
+We present Aragog, an efficient agentic workflow serving system that progressively adapts a request's configuration to runtime dynamics. Aragog's core insight is to decouple accuracy and cost based configuration selection. The expensive accuracy-based configuration prediction happens once and before execution, while the lightweight cost-based configuration selection runs frequently throughout execution. Aragog makes runtime reconfiguration efficient with novel acceleration strategies. Across diverse agentic workflows and model families, Aragog achieves 42.8–217.0% higher serving capacity than baselines while maintaining the accuracy of the most expensive configuration. Aragog delivers lower serving latency under different request loads. Under peak load, it delivers 32.5–86.1% and 46.8–89.0% lower median and P95 latency, respectively.
+
+# References
+
+- <span id="page-12-7"></span>[1] The llama 3 herd of models, 2024.
+- <span id="page-12-8"></span>[2] M. Abdin, J. Aneja, H. Behl, S. Bubeck, R. Eldan, S. Gunasekar, M. Harrison, R. J. Hewett, M. Javaheripi, P. Kauffmann, J. R. Lee, Y. T. Lee, Y. Li, W. Liu, C. C. T. Mendes, A. Nguyen, E. Price, G. de Rosa, O. Saarikivi, A. Salim, S. Shah, X. Wang, R. Ward, Y. Wu, D. Yu, C. Zhang, and Y. Zhang. Phi-4 technical report, 2024.
+- <span id="page-12-22"></span>[3] R. Abhyankar, Z. He, V. Srivatsa, H. Zhang, and Y. Zhang. Infercept: Efficient intercept support for augmented large language model inference, 2024.
+- <span id="page-12-10"></span>[4] Y. Bai et al. Constitutional ai: Harmlessness from ai feedback. *arXiv preprint arXiv:2306.04751*, 2023.
+- <span id="page-12-0"></span>[5] M. Cemri, M. Z. Pan, S. Yang, L. A. Agrawal, B. Chopra, R. Tiwari, K. Keutzer, A. Parameswaran, D. Klein, K. Ramchandran, M. Zaharia, J. E. Gonzalez, and I. Stoica. Why do multi-agent llm systems fail?, 2025.
+- <span id="page-12-4"></span>[6] G. I. Chaudhry, E. Choukse, H. Qiu, ´Inigo Goiri, ˜ R. Fonseca, A. Belay, and R. Bianchini. Murakkab: Resource-efficient agentic workflow orchestration in cloud platforms, 2025.
+- <span id="page-12-24"></span>[7] J. Chen, J. Shi, Q. Chen, and M. Guo. Kairos: Lowlatency multi-agent serving with shared llms and excessive loads in the public cloud, 2025.
+- <span id="page-12-9"></span>[8] L. Chen, J. Davis, B. Hanin, P. Bailis, I. Stoica, M. Zaharia, and J. Zou. Are more llm calls all you need? towards the scaling properties of compound ai systems. In A. Globerson, L. Mackey, D. Belgrave, A. Fan, U. Paquet, J. Tomczak, and C. Zhang, editors, *Advances in Neural Information Processing Systems*, volume 37, pages 45767–45790. Curran Associates, Inc., 2024.
+- <span id="page-12-5"></span>[9] L. Chen, J. Q. Davis, B. Hanin, P. Bailis, M. Zaharia, J. Zou, and I. Stoica. Optimizing model selection for compound ai systems, 2025.
+- <span id="page-12-12"></span>[10] M. Chen, J. Tworek, H. Jun, Q. Yuan, H. P. de Oliveira Pinto, J. Kaplan, H. Edwards, Y. Burda, N. Joseph, G. Brockman, A. Ray, R. Puri, G. Krueger, M. Petrov, H. Khlaaf, G. Sastry, P. Mishkin, B. Chan, S. Gray, N. Ryder, M. Pavlov, A. Power, L. Kaiser, M. Bavarian, C. Winter, P. Tillet, F. P. Such, D. Cummings, M. Plappert, F. Chantzis, E. Barnes, A. Herbert-Voss, W. H. Guss, A. Nichol, A. Paino, N. Tezak, J. Tang, I. Babuschkin, S. Balaji, S. Jain, W. Saunders, C. Hesse, A. N. Carr, J. Leike, J. Achiam, V. Misra, E. Morikawa, A. Radford, M. Knight, M. Brundage, M. Murati, K. Mayer, P. Welinder,
+
+- B. McGrew, D. Amodei, S. McCandlish, I. Sutskever, and W. Zaremba. Evaluating large language models trained on code. 2021.
+- <span id="page-12-16"></span>[11] N. Corporation. Tensorrt-llm: An open-source library to accelerate inference of large language models on nvidia gpus. [https://github.com/NVIDIA/TensorRT](https://github.com/NVIDIA/TensorRT-LLM) [-LLM,](https://github.com/NVIDIA/TensorRT-LLM) 2023. Library: TensorRT-LLM.
+- <span id="page-12-21"></span>[12] T. Dao, D. Y. Fu, S. Ermon, A. Rudra, and C. Re.´ Flashattention: Fast and memory-efficient exact attention with io-awareness, 2022.
+- <span id="page-12-18"></span>[13] E. Frantar, S. Ashkboos, T. Hoefler, and D. Alistarh. Gptq: Accurate post-training quantization for generative pre-trained transformers, 2023.
+- <span id="page-12-20"></span>[14] Y. Fu, S. Zhu, R. Su, A. Qiao, I. Stoica, and H. Zhang. Efficient llm scheduling by learning to rank, 2024.
+- <span id="page-12-14"></span>[15] M. Geva, D. Khashabi, E. Segal, T. Khot, D. Roth, and J. Berant. Did aristotle use a laptop? a question answering benchmark with implicit reasoning strategies, 2021.
+- <span id="page-12-23"></span>[16] I. Gim, S. seob Lee, and L. Zhong. Asynchronous llm function calling, 2024.
+- <span id="page-12-6"></span>[17] Z. He, R. Abhyankar, V. Srivatsa, and Y. Zhang. Cognify: Supercharging gen-ai workflows with hierarchical autotuning, 2025.
+- <span id="page-12-1"></span>[18] S. Hong, M. Zhuge, J. Chen, X. Zheng, Y. Cheng, C. Zhang, J. Wang, Z. Wang, S. K. S. Yau, Z. Lin, L. Zhou, C. Ran, L. Xiao, C. Wu, and J. Schmidhuber. Metagpt: Meta programming for a multi-agent collaborative framework, 2024.
+- <span id="page-12-17"></span>[19] I. Hugging Face. Text generation inference (tgi): A toolkit for deploying and serving large language models. [https://github.com/huggingface/text-generatio](https://github.com/huggingface/text-generation-inference) [n-inference,](https://github.com/huggingface/text-generation-inference) 2024. Toolkit: Text Generation Inference (TGI).
+- <span id="page-12-2"></span>[20] O. Khattab, A. Singhvi, P. Maheshwari, Z. Zhang, K. Santhanam, S. Vardhamanan, S. Haq, A. Sharma, T. T. Joshi, H. Moazam, H. Miller, M. Zaharia, and C. Potts. Dspy: Compiling declarative language model calls into self-improving pipelines. 2024.
+- <span id="page-12-15"></span>[21] W. Kwon, Z. Li, S. Zhuang, Y. Sheng, L. Zheng, C. H. Yu, J. E. Gonzalez, H. Zhang, and I. Stoica. Efficient memory management for large language model serving with pagedattention. In *Proceedings of the ACM SIGOPS 29th Symposium on Operating Systems Principles*, 2023.
+- <span id="page-12-3"></span>[22] LangChain developers. Langchain. [https://www.lang](https://www.langchain.com/) [chain.com/,](https://www.langchain.com/) 2025.
+- <span id="page-12-19"></span>[23] Y. Leviathan, M. Kalman, and Y. Matias. Fast inference from transformers via speculative decoding, 2023.
+- <span id="page-12-11"></span>[24] P. Lewis et al. Retrieval-augmented generation for knowledge-intensive nlp tasks. In *Advances in Neural Information Processing Systems (NeurIPS)*, 2020.
+- <span id="page-12-13"></span>[25] J. Li, B. Hui, G. Qu, J. Yang, B. Li, B. Li, B. Wang, B. Qin, R. Geng, N. Huo, et al. Can llm already serve
+
+- as a database interface? a big bench for large-scale database grounded text-to-sqls. *Advances in Neural Information Processing Systems*, 36, 2024.
+- <span id="page-13-18"></span>[26] Z. Li, L. Zheng, Y. Zhong, V. Liu, Y. Sheng, X. Jin, Y. Huang, Z. Chen, H. Zhang, J. E. Gonzalez, and I. Stoica. Alpaserve: Statistical multiplexing with model parallelism for deep learning serving, 2023.
+- <span id="page-13-10"></span>[27] C. Lin, Z. Han, C. Zhang, Y. Yang, F. Yang, C. Chen, and L. Qiu. Parrot: Efficient serving of LLM-based applications with semantic variable. In *18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24)*, pages 929–945, Santa Clara, CA, July 2024. USENIX Association.
+- <span id="page-13-15"></span>[28] J. Lin, J. Tang, H. Tang, S. Yang, W.-M. Chen, W.-C. Wang, G. Xiao, X. Dang, C. Gan, and S. Han. Awq: Activation-aware weight quantization for llm compression and acceleration, 2024.
+- <span id="page-13-20"></span>[29] Y. Liu, Z. Gan, Z. Gan, W. Wang, C. Chen, Y. Shan, X. Chen, Z. Han, Y. Zhu, S. Sun, and M. Guo. Efficient serving of llm applications with probabilistic demand modeling, 2025.
+- <span id="page-13-11"></span>[30] M. Luo, X. Shi, C. Cai, T. Zhang, J. Wong, Y. Wang, C. Wang, Y. Huang, Z. Chen, J. E. Gonzalez, and I. Stoica. Autellix: An efficient serving engine for llm agents as general programs, 2025.
+- <span id="page-13-16"></span>[31] X. Ma, G. Fang, and X. Wang. Llm-pruner: On the structural pruning of large language models, 2023.
+- <span id="page-13-4"></span>[32] A. Madaan, N. Tandon, P. Gupta, S. Hallinan, L. Gao, S. Wiegreffe, U. Alon, N. Dziri, S. Prabhumoye, Y. Yang, S. Gupta, B. P. Majumder, K. Hermann, S. Welleck, A. Yazdanbakhsh, and P. Clark. Self-refine: Iterative refinement with self-feedback, 2023.
+- <span id="page-13-17"></span>[33] MLC team. MLC-LLM, 2023-2025.
+- <span id="page-13-22"></span>[34] B. Niu, Y. Song, K. Lian, Y. Shen, Y. Yao, K. Zhang, and T. Liu. Flow: Modularized agentic workflow automation, 2025.
+- <span id="page-13-1"></span>[35] I. Ong, A. Almahairi, V. Wu, W.-L. Chiang, T. Wu, J. E. Gonzalez, M. W. Kadous, and I. Stoica. Routellm: Learning to route llms with preference data, 2025.
+- <span id="page-13-5"></span>[36] Y. Peng, Y. Jiang, C. Wang, and B. Yuan. Hexgentext2sql: Optimizing llm inference request scheduling for agentic text-to-sql workflow, 2025.
+- <span id="page-13-3"></span>[37] Qwen, :, A. Yang, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Li, D. Liu, F. Huang, H. Wei, H. Lin, J. Yang, J. Tu, J. Zhang, J. Yang, J. Yang, J. Zhou, J. Lin, K. Dang, K. Lu, K. Bao, K. Yang, L. Yu, M. Li, M. Xue, P. Zhang, Q. Zhu, R. Men, R. Lin, T. Li, T. Tang, T. Xia, X. Ren, X. Ren, Y. Fan, Y. Su, Y. Zhang, Y. Wan, Y. Liu, Z. Cui, Z. Zhang, and Z. Qiu. Qwen2.5 technical report, 2025.
+- <span id="page-13-12"></span>[38] P. Rajpurkar, J. Zhang, K. Lopyrev, and P. Liang. Squad: 100,000+ questions for machine comprehension of text, 2016.
+- <span id="page-13-0"></span>[39] N. Sehrawat. Snowflake cortex analyst: Behind the
+
+- scenes. [https://www.snowflake.com/en/engineerin](https://www.snowflake.com/en/engineering-blog/snowflake-cortex-analyst-behind-the-scenes/) [g-blog/snowflake-cortex-analyst-behind-the-scenes/,](https://www.snowflake.com/en/engineering-blog/snowflake-cortex-analyst-behind-the-scenes/) Aug. 14 2024. Engineering Blog, Snowflake.
+- <span id="page-13-21"></span>[40] J. Shen, N. Wadlom, and Y. Lu. Batch query processing and optimization for agentic workflows, 2025.
+- <span id="page-13-2"></span>[41] J. Su, Y. Xia, Q. Lan, X. Song, C. Chen, Y. Jingsong, L. He, and T. Shi. Difficulty-aware agent orchestration in llm-powered workflows, 2025.
+- <span id="page-13-19"></span>[42] B. Sun, Z. Huang, H. Zhao, W. Xiao, X. Zhang, Y. Li, and W. Lin. Llumnix: Dynamic scheduling for large language model serving. In *18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24)*, pages 173–191, Santa Clara, CA, July 2024. USENIX Association.
+- <span id="page-13-6"></span>[43] S. Talaei, M. Pourreza, Y.-C. Chang, A. Mirhoseini, and A. Saberi. Chess: Contextual harnessing for efficient sql synthesis, 2024.
+- <span id="page-13-9"></span>[44] X. Tan, Y. Jiang, Y. Yang, and H. Xu. *Towards Endto-End Optimization of LLM-based Applications with Ayo*, page 1302–1316. Association for Computing Machinery, New York, NY, USA, 2025.
+- <span id="page-13-14"></span>[45] H. S. Vera, S. Dua, B. Zhang, D. Salz, R. Mullins, S. R. Panyam, S. Smoot, I. Naim, J. Zou, F. Chen, D. Cer, A. Lisak, M. Choi, L. Gonzalez, O. Sanseviero, G. Cameron, I. Ballantyne, K. Black, K. Chen, W. Wang, Z. Li, G. Martins, J. Lee, M. Sherwood, J. Ji, R. Wu, J. Zheng, J. Singh, A. Sharma, D. Sreepathihalli, A. Jain, A. Elarabawy, A. Co, A. Doumanoglou, B. Samari, B. Hora, B. Potetz, D. Kim, E. Alfonseca, F. Moiseev, F. Han, F. P. Gomez, G. H. Abrego, H. Zhang, H. Hui, J. Han, K. Gill, K. Chen, ´ K. Chen, M. Shanbhogue, M. Boratko, P. Suganthan, S. M. K. Duddu, S. Mariserla, S. Ariafar, S. Zhang, S. Zhang, S. Baumgartner, S. Goenka, S. Qiu, T. Dabral, T. Walker, V. Rao, W. Khawaja, W. Zhou, X. Ren, Y. Xia, Y. Chen, Y.-T. Chen, Z. Dong, Z. Ding, F. Visin, G. Liu, J. Zhang, K. Kenealy, M. Casbon, R. Kumar, T. Mesnard, Z. Gleicher, C. Brick, O. Lacombe, A. Roberts, Q. Yin, Y. Sung, R. Hoffmann, T. Warkentin, A. Joulin, T. Duerig, and M. Seyedhosseini. Embeddinggemma: Powerful and lightweight text representations, 2025.
+- <span id="page-13-8"></span>[46] X. Wang, Y. Liu, W. Cheng, X. Zhao, Z. Chen, W. Yu, Y. Fu, and H. Chen. Mixllm: Dynamic routing in mixed large language models, 2025.
+- <span id="page-13-7"></span>[47] X. Wang, J. Wei, D. Schuurmans, Q. Le, E. Chi, S. Narang, A. Chowdhery, and D. Zhou. Selfconsistency improves chain of thought reasoning in language models, 2023.
+- <span id="page-13-13"></span>[48] Y. Wang, X. Ma, G. Zhang, Y. Ni, A. Chandra, S. Guo, W. Ren, A. Arulraj, X. He, Z. Jiang, T. Li, M. Ku, K. Wang, A. Zhuang, R. Fan, X. Yue, and W. Chen. Mmlu-pro: A more robust and challenging multi-task language understanding benchmark, 2024.
+
+- <span id="page-14-8"></span>[49] M. Wu, X. Cheng, S. Liu, C. Shi, J. Ji, K. Ao, P. Velliengiri, X. Miao, O. Padon, and Z. Jia. Mirage: A multi-level superoptimizer for tensor programs. In *19th USENIX Symposium on Operating Systems Design and Implementation (OSDI 25)*, Boston, MA, July 2025. USENIX Association.
+- <span id="page-14-1"></span>[50] Q. Wu, G. Bansal, J. Zhang, Y. Wu, B. Li, E. Zhu, L. Jiang, X. Zhang, S. Zhang, J. Liu, A. H. Awadallah, R. W. White, D. Burger, and C. Wang. Autogen: Enabling next-gen llm applications via multi-agent conversation, 2023.
+- <span id="page-14-3"></span>[51] S. Xue, Z. Huang, J. Liu, X. Lin, Y. Ning, B. Jin, X. Li, and Q. Liu. Decompose, analyze and rethink: Solving intricate problems with human-like reasoning cycle. In *The Thirty-eighth Annual Conference on Neural Information Processing Systems*, 2024.
+- <span id="page-14-0"></span>[52] J. Yang, C. E. Jimenez, A. Wettig, K. Lieret, S. Yao, K. Narasimhan, and O. Press. Swe-agent: Agentcomputer interfaces enable automated software engineering. *Advances in Neural Information Processing Systems*, 37:50528–50652, 2024.
+- <span id="page-14-12"></span>[53] Z. Ye, L. Chen, R. Lai, W. Lin, Y. Zhang, S. Wang, T. Chen, B. Kasikci, V. Grover, A. Krishnamurthy, and L. Ceze. Flashinfer: Efficient and customizable attention engine for llm inference serving, 2025.
+- <span id="page-14-5"></span>[54] G.-I. Yu, J. S. Jeong, G.-W. Kim, S. Kim, and B.-G. Chun. Orca: A distributed serving system for Transformer-Based generative models. In *16th USENIX Symposium on Operating Systems Design and Implementation (OSDI 22)*, pages 521–538, Carlsbad, CA, July 2022. USENIX Association.
+- <span id="page-14-7"></span>[55] P. Yu, L. Merrick, G. Nuti, and D. Campos. Arcticembed 2.0: Multilingual retrieval without compromise, 2024.
+- <span id="page-14-13"></span>[56] S. Yu, J. Xing, Y. Qiao, M. Ma, Y. Li, Y. Wang, S. Yang, Z. Xie, S. Cao, K. Bao, I. Stoica, H. Xu, and Y. Sheng. Prism: Unleashing gpu sharing for cost-efficient multi-
+
+- llm serving, 2025.
+- <span id="page-14-2"></span>[57] Y. Yue, G. Zhang, B. Liu, G. Wan, K. Wang, D. Cheng, and Y. Qi. Masrouter: Learning to route llms for multiagent systems, 2025.
+- <span id="page-14-9"></span>[58] C. Zhang, K. Du, S. Liu, W. Kwon, X. Mo, Y. Wang, X. Liu, K. You, Z. Li, M. Long, J. Zhai, J. Gonzalez, and I. Stoica. Jenga: Effective memory management for serving llm with heterogeneity, 2025.
+- <span id="page-14-16"></span>[59] J. Zhang, J. Xiang, Z. Yu, F. Teng, X. Chen, J. Chen, M. Zhuge, X. Cheng, S. Hong, J. Wang, B. Zheng, B. Liu, Y. Luo, and C. Wu. Aflow: Automating agentic workflow generation, 2025.
+- <span id="page-14-4"></span>[60] S. Zhang et al. Language agents with reasoning and acting. *ICLR*, 2023.
+- <span id="page-14-15"></span>[61] W. Zhang, Z. Wu, Y. Mu, B. Liu, M. Lee, and F. Lai. Tempo: Application-aware llm serving with mixed slo requirements, 2025.
+- <span id="page-14-6"></span>[62] L. Zheng, L. Yin, Z. Xie, C. Sun, J. Huang, C. H. Yu, S. Cao, C. Kozyrakis, I. Stoica, J. E. Gonzalez, C. Barrett, and Y. Sheng. Sglang: Efficient execution of structured language model programs, 2024.
+- <span id="page-14-14"></span>[63] Y. Zhong, S. Liu, J. Chen, J. Hu, Y. Zhu, X. Liu, X. Jin, and H. Zhang. Distserve: Disaggregating prefill and decoding for goodput-optimized large language model serving, 2024.
+- <span id="page-14-10"></span>[64] K. Zhu, Y. Gao, Y. Zhao, L. Zhao, G. Zuo, Y. Gu, D. Xie, T. Tang, Q. Xu, Z. Ye, K. Kamahori, C.-Y. Lin, Z. Wang, S. Wang, A. Krishnamurthy, and B. Kasikci. Nanoflow: Towards optimal large language model serving throughput, 2025.
+- <span id="page-14-11"></span>[65] R. Zhu, Z. Jiang, C. Jin, P. Wu, C. A. Stuardo, D. Wang, X. Zhang, H. Zhou, H. Wei, Y. Cheng, J. Xiao, X. Zhang, L. Liu, H. Lin, L.-W. Chang, J. Ye, X. Yu, X. Liu, X. Jin, and X. Liu. Megascale-infer: Serving mixture-of-experts at scale with disaggregated expert parallelism, 2025.

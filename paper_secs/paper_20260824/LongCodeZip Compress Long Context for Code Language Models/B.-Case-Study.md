@@ -1,0 +1,6 @@
+# *B. Case Study*
+
+We illustrate the effectiveness of LongCodeZip through a case study in Figure [4,](#page-9-0) focusing on the fine-grained compression stage (coarse-grained design choice is discussed in Section [II\)](#page-1-1). Our method identifies semantic boundaries at positions where a line's perplexity sharply increases relative to its neighbors. The method tends to separate out major, independent functional modules, and also naturally groups together smaller, closely related segments. Some of our detected boundaries align with double newlines, which is consistent with common programming practices in codes with good code smell. The resulting compressed blocks, highlighted by boxes in the right panel, preserve the key information need for completion. The preserved blocks closely matches the code to be completed. This shows our approach effectively compresses code while retaining relevant and useful content to the task.
+
+In our experiments, we have also observed some common failure modes. In particular, when the context either lacks information relevant to the task instruction or when it is difficult to align an ambiguous instruction with any segment of the context, our method may struggle to identify and preserve useful blocks.
+

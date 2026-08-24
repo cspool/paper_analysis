@@ -1,0 +1,55 @@
+# **References**
+
+- <span id="page-9-6"></span>[1] Pranjal Aggarwal and Sean Welleck. L1: Controlling how long a reasoning model thinks with reinforcement learning. arXiv preprint arXiv:2503.04697, 2025.
+- <span id="page-9-4"></span>[2] ByteDance Seed Team. Seed-oss open-source models. <https://github.com/ByteDance-Seed/seed-oss>, 2025.
+- <span id="page-9-15"></span>[3] Luoxin Chen, Jinming Gu, Liankai Huang, et al. Seed-prover: Deep and broad reasoning for automated theorem proving. arXiv preprint arXiv:2507.23726, 2025.
+- <span id="page-9-8"></span>[4] Rewon Child, Scott Gray, Alec Radford, and Ilya Sutskever. Generating long sequences with sparse transformers. arXiv preprint arXiv:1904.10509, 2019.
+- <span id="page-9-10"></span>[5] Ganqu Cui, Yuchen Zhang, Jiacheng Chen, Lifan Yuan, Zhi Wang, Yuxin Zuo, Haozhan Li, Yuchen Fan, Huayu Chen, Weize Chen, et al. The entropy mechanism of reinforcement learning for reasoning language models. arXiv preprint arXiv:2505.22617, 2025.
+- <span id="page-9-14"></span>[6] Ganqu Cui et al. Process reinforcement through implicit rewards. arXiv preprint arXiv:2502.01456, 2025.
+- <span id="page-9-2"></span>[7] DeepSeek-AI. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948, 2025.
+- <span id="page-9-9"></span>[8] Aniket Anand Deshmukh, Urun Dogan, and Clayton Scott. Multi-task learning for contextual bandits. In NeurIPS, 2017.
+- <span id="page-9-7"></span>[9] John C. Duchi, Peter L. Bartlett, and Martin J. Wainwright. Randomized smoothing for stochastic optimization. SIAM Journal on Optimization, 22(2):674–701, 2012.
+- <span id="page-9-13"></span>[10] Google DeepMind. Alphacode 2 technical report. Google DeepMind Blog, December 2023.
+- <span id="page-9-3"></span>[11] Google DeepMind. Gemini 2.5: Deep think is now rolling out. Google Blog, August 2025.
+- <span id="page-9-0"></span>[12] Jordan Hoffmann, Sebastian Borgeaud, Arthur Mensch, et al. Training compute-optimal large language models. In NeurIPS, 2022.
+- <span id="page-9-5"></span>[13] Jian Hu, Xibin Wu, Weixun Wang, Xianyu, Dehao Zhang, and Yu Cao. Openrlhf: An easy-to-use, scalable and high-performance rlhf framework. arXiv preprint arXiv:2405.11143, 2024.
+- <span id="page-9-11"></span>[14] Jian Hu, Jason Klein Liu, Haotian Xu, and Wei Shen. Reinforce++: A simple and efficient approach for aligning large language models. arXiv preprint arXiv:2501.03262, 2025.
+- <span id="page-9-12"></span>[15] Thomas Hubert, Rishi Mehta, Laurent Sartran, et al. Olympiad-level formal mathematical reasoning with reinforcement learning. Nature, 2025.
+- <span id="page-9-1"></span>[16] Jared Kaplan, Sam McCandlish, Tom Henighan, et al. Scaling laws for neural language models. arXiv preprint arXiv:2001.08361, 2020.
+
+- <span id="page-10-9"></span>[17] Angelos Katharopoulos, Apoorv Vyas, Nikolaos Pappas, and François Fleuret. Transformers are rnns: Fast autoregressive transformers with linear attention. In International conference on machine learning, pages 5156– 5165. PMLR, 2020.
+- <span id="page-10-16"></span>[18] Kimi Team. Kimi k1.5: Scaling reinforcement learning with llms. arXiv preprint arXiv:2501.12599, 2025.
+- <span id="page-10-20"></span>[19] Aviral Kumar, Vincent Zhuang, Rishabh Agarwal, Yi Su, Mitchell Wortsman, Samy Bengio, Mohammad Norouzi, et al. Training language models to self-correct via reinforcement learning. ICLR, 2025.
+- <span id="page-10-11"></span>[20] Joel Lehman, Jonathan Gordon, Shawn Jain, Kamal Ndousse, Cathy Yeh, and Kenneth O. Stanley. Evolution through large models. In Handbook of Evolutionary Machine Learning, pages 331–366. Springer, 2024.
+- <span id="page-10-10"></span>[21] Yujia Li, David Choi, Junyoung Chung, et al. Competition-level code generation with alphacode. Science, 378 (6624):1092–1097, 2022.
+- <span id="page-10-18"></span>[22] Hunter Lightman, Vineet Kosaraju, Yura Burda, et al. Let's verify step by step. In ICLR, 2024.
+- <span id="page-10-21"></span>[23] Yong Lin, Shange Tang, Bohan Lyu, et al. Goedel-prover-v2: Scaling formal theorem proving with scaffolded data synthesis and self-correction. arXiv preprint arXiv:2508.03613, 2025.
+- <span id="page-10-5"></span>[24] Mingjie Liu, Shizhe Diao, Ximing Lu, Jian Hu, Xin Dong, Yejin Choi, Jan Kautz, and Yi Dong. Prorl: Prolonged reinforcement learning expands reasoning boundaries in large language models. arXiv preprint arXiv:2505.24864, 2025.
+- <span id="page-10-7"></span>[25] Wei Liu, Ruochen Zhou, Yiyun Deng, Yuzhen Huang, Junteng Liu, Yuntian Deng, Yizhe Zhang, and Junxian He. Learn to reason efficiently with adaptive length-based reward shaping. arXiv preprint arXiv:2505.15612, 2025.
+- <span id="page-10-17"></span>[26] Zichen Liu, Changyu Chen, Wenjun Li, et al. Understanding r1-zero-like training: A critical perspective. arXiv preprint arXiv:2503.20783, 2025.
+- <span id="page-10-8"></span>[27] Yurii Nesterov and Vladimir Spokoiny. Random gradient-free minimization of convex functions. Foundations of Computational Mathematics, 17(2):527–566, 2017.
+- <span id="page-10-12"></span>[28] Alexander Novikov, Ngan Vu, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt Wagner, et al. Alphaevolve: A coding agent for scientific and algorithmic discovery. arXiv preprint arXiv:2506.13131, 2025.
+- <span id="page-10-1"></span>[29] OpenAI. Learning to reason with llms. OpenAI Blog, September 2024.
+- <span id="page-10-19"></span>[30] Yuxiao Qu, Matthew Y. R. Yang, Amrith Setlur, Lewis Tunstall, Edward Emanuel Beeching, Ruslan Salakhutdinov, and Aviral Kumar. Optimizing test-time compute via meta reinforcement fine-tuning. arXiv preprint arXiv:2503.07572, 2025.
+- <span id="page-10-13"></span>[31] Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog, M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming Wang, Omar Fawzi, Pushmeet Kohli, and Alhussein Fawzi. Mathematical discoveries from program search with large language models. Nature, 625:468–475, 2024.
+- <span id="page-10-14"></span>[32] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347, 2017.
+- <span id="page-10-3"></span>[33] Zhihong Shao, Peiyi Wang, Qihao Zhu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300, 2024.
+- <span id="page-10-15"></span>[34] Zhihong Shao, Yuxiang Luo, Chengda Lu, et al. Deepseekmath-v2: Towards self-verifiable mathematical reasoning. arXiv preprint arXiv:2511.22570, 2025.
+- <span id="page-10-4"></span>[35] Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. arXiv preprint arXiv:2409.19256, 2024.
+- <span id="page-10-6"></span>[36] Aaditya Singh, Adam Fry, Adam Perelman, Adam Tart, Adi Ganesh, Ahmed El-Kishky, Aidan McLaughlin, Aiden Low, AJ Ostrow, Akhila Ananthram, et al. Openai gpt-5 system card. arXiv preprint arXiv:2601.03267, 2025.
+- <span id="page-10-2"></span>[37] Charlie Snell, Jaehoon Lee, Kelvin Xu, and Aviral Kumar. Scaling llm test-time compute optimally can be more effective than scaling model parameters. arXiv preprint arXiv:2408.03314, 2024.
+- <span id="page-10-0"></span>[38] Rich Sutton. The bitter lesson. <http://www.incompleteideas.net/IncIdeas/BitterLesson.html>, 2019.
+
+- <span id="page-11-11"></span>[39] Peiyi Wang, Lei Li, Zhihong Shao, Runxin Xu, Damai Dai, Yifei Li, Deli Chen, Yu Wu, and Zhifang Sui. Math-shepherd: Verify and reinforce llms step-by-step without human annotations. ACL, 2024.
+- <span id="page-11-4"></span>[40] Xuezhi Wang, Jason Wei, Dale Schuurmans, et al. Self-consistency improves chain of thought reasoning in language models. In ICLR, 2023.
+- <span id="page-11-1"></span>[41] Zihan Wang, Jiaze Chen, Zhicheng Liu, et al. Aethercode: Evaluating llms' ability to win in premier programming competitions. arXiv preprint arXiv:2508.16402, 2025.
+- <span id="page-11-0"></span>[42] Jason Wei, Xuezhi Wang, Dale Schuurmans, et al. Chain-of-thought prompting elicits reasoning in large language models. In NeurIPS, 2022.
+- <span id="page-11-5"></span>[43] Ran Xin, Chenguang Xi, Jie Yang, et al. Bfs-prover: Scalable best-first tree search for llm-based automatic theorem proving. ACL, 2025.
+- <span id="page-11-10"></span>[44] Ran Xin, Zeyu Zheng, Yanchen Nie, Kun Yuan, and Xia Xiao. Scaling up multi-turn off-policy rl and multi-agent tree search for llm step-provers. arXiv preprint arXiv:2509.06493, 2025.
+- <span id="page-11-7"></span>[45] An Yang et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388, 2025.
+- <span id="page-11-3"></span>[46] Qiying Yu, Zheng Zhang, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476, 2025.
+- <span id="page-11-8"></span>[47] Yang Yue, Zhiqi Chen, Rui Lu, Andrew Zhao, Zhaokai Wang, Yang Yue, Shiji Song, and Gao Huang. Does reinforcement learning really incentivize reasoning capacity in llms beyond the base model? arXiv preprint arXiv:2504.13837, 2025.
+- <span id="page-11-9"></span>[48] Weihao Zeng et al. Simplerl-zoo: Investigating and taming zero reinforcement learning for open base models. arXiv preprint arXiv:2503.18892, 2025.
+- <span id="page-11-6"></span>[49] Dan Zhang, Sining Zhoubian, Ziniu Hu, Yisong Yue, Yuxiao Dong, and Jie Tang. Rest-mcts\*: Llm self-training via process reward guided tree search. NeurIPS, 2024.
+- <span id="page-11-2"></span>[50] Zilin Zhu and Chengxing Xie. slime: An llm post-training framework for rl scaling. [https://github.com/THUDM/](https://github.com/THUDM/slime) [slime](https://github.com/THUDM/slime), 2025.
+

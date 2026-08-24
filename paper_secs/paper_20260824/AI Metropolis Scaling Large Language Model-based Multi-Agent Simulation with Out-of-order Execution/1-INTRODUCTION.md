@@ -1,0 +1,41 @@
+# 1 INTRODUCTION
+
+Large Language Models (LLMs) are advanced machine learning models trained on vast amounts of data, excelling in understanding and generating natural language. They have transformed natural language processing, enabling highaccuracy applications like text completion [\(Merity et al.,](#page-11-0) [2016\)](#page-11-0), summarization [\(Narayan et al.,](#page-11-0) [2018\)](#page-11-0), and reasoning [\(Cobbe et al.,](#page-10-0) [2021\)](#page-10-0). Beyond simple queries and chatbot interactions [\(OpenAI,](#page-11-0) [2024a\)](#page-11-0), there is growing interest in using LLMs to create self-planning, decision-making, problem-solving, and reasoning engines [\(Wang et al.,](#page-11-0) [2024\)](#page-11-0). These advancements aim to develop human-like agents [\(Xi](#page-11-0) [et al.,](#page-11-0) [2023\)](#page-11-0) capable of performing complex tasks, interacting with environments and other agents, and making informed decisions based on context.
+
+This interest is particularly pronounced in developing LLMpowered agents within simulated environments, where two unique opportunities arise. First, simulation environments provide an efficient platform for testing and tuning LLM agents [\(Dubois et al.,](#page-10-0) [2024;](#page-10-0) [Liu et al.,](#page-11-0) [2023;](#page-11-0) [Wang et al.,](#page-11-0) [2023b\)](#page-11-0), with potential applications extending to real-world settings or virtual environments like gaming. Second, the enhanced natural language understanding and reasoning capabilities of LLMs have sparked a trend of examining emergent social behaviors of these agents in game-like simulations [\(Park et al.,](#page-11-0) [2023;](#page-11-0) [Altera.AL et al.,](#page-10-0) [2024\)](#page-10-0). Such studies
+
+can serve as predictive models, forecasting real-world human behaviors, which is highly valuable for social science research [\(Ziems et al.,](#page-12-0) [2023;](#page-12-0) [Grossmann et al.,](#page-10-0) [2023\)](#page-10-0).
+
+Despite the significance of simulation environments for LLM agents, the efficiency of managing simulation states and scheduling LLM requests in simulations are often overlooked, leading to slow and inefficient simulation processes. Recent research work commonly implements their LLM agents simulation [\(Park et al.,](#page-11-0) [2023;](#page-11-0) [Gong et al.,](#page-10-0) [2023\)](#page-10-0) directly adhering to a paradigm borrowed from reinforcement learning agent training and traditional multi-agent simulation [\(Emau et al.,](#page-10-0) [2011\)](#page-10-0), where simulation time is discretized into time steps and a *step* (or similar) function is invoked to apply agents' actions, synchronize the environment, and coordinate agents at each interval. This pattern, illustrated in Algorithm [1,](#page-1-0) is prevalent in prominent reinforcement learning frameworks such as OpenAI Gym [\(Brockman et al.,](#page-10-0) [2016\)](#page-10-0), Meta Pearl [\(Zhu et al.,](#page-12-0) [2024\)](#page-12-0), and TensorFlow Agents [\(Guadarrama et al.,](#page-10-0) [2018\)](#page-10-0). The rationale behind this design is that global synchronization, enforced through the *step* function, easily maintains *temporal causality* within the simulation by serializing tasks along the simulation time axis.
+
+While this design suits the needs of reinforcement learning and traditional multi-agent simulations, we found it inefficient for LLM agents due to their unique performance characteristics, necessitating a new scheduling approach. Simulations involving LLM agents, like other LLM-powered applications, are heavily dominated by inference time. Taking the pioneering work on generative agents [\(Park,](#page-11-0) [2024\)](#page-11-0)
+
+<sup>1</sup> Stanford University <sup>2</sup>Georgia Institute of Technology. Correspondence to: Zhiqiang Xie <xiezhq@cs.stanford.edu>.
+
+<span id="page-1-0"></span>(GenAgent) as an example, our trace analysis reveals that approximately 95% of the simulation time is dedicated to LLM inference. Consequently, inference throughput becomes crucial, as higher throughput directly translates to shorter completion times and lower costs. Furthermore, recent studies on LLM serving engines [\(Kwon et al.,](#page-11-0) [2023;](#page-11-0) [Zheng et al.,](#page-11-0) [2024\)](#page-11-0) indicate that large batch sizes are essential for achieving high inference throughput. Unfortunately, the traditional approach, which enforces step-wise temporal causality across simulation steps, introduces excessive synchronization that significantly reduces parallelism, thereby reducing achievable batch sizes and leading to low throughput. This reduction in parallelism occurs because the execution times of LLM queries from different agents within a simulation step can vary significantly due to two main reasons: (1) variations in the input and output lengths of queries, and (2) differing numbers of queries sent by different agents. As a result, enforcing global synchronization causes many agents to wait unnecessarily for each step to complete, limiting concurrent LLM queries and further reducing throughput. This reduction in parallelism also hampers scalability, as adding more resources fails to meaningfully decrease the overall simulation completion time.
+
+Our key observation is that temporal causality in simulations can be maintained without the costly global step-wise synchronization in the simulation. Intuitively, if two agents are far apart in a simulated world, the actions of one agent will not be immediately visible to the other. This means that it is often unnecessary for all agents to wait for each step to finish before proceeding, revealing a false dependency that can be removed to improve efficiency in the simulation.
+
+To address the aforementioned challenge, in this paper, we present AI Metropolis, a multi-agent simulation engine for LLM-powered agents that introduces the concept of outof-order execution to simulation scheduling. By carefully tracking real dependencies between agents during runtime, we can effectively eliminate most false dependencies. This approach allows certain agents to advance in simulation time ahead of others without affecting the simulation's outcome, which significantly enhances parallelism and thus better utilizes hardware with larger inference batch sizes. Dependency tracking is achieved by analyzing the temporalspatial relationships between agents, where the number of steps an agent can advance is determined by its distance from other agents. Similar to the scoreboard in out-of-order execution algorithms, AI Metropolis maintains a specialized dependency graph to efficiently track these relationships.
+
+AI Metropolis provides LLM agent developers with interfaces similar to OpenAI Gym [\(Brockman et al.,](#page-10-0) [2016\)](#page-10-0), while seamlessly managing simulation state updates, database I/O, scheduling, and LLM inference processes. We evaluated AI Metropolis by replaying traces collected from instrumenting
+
+the original GenAgent implementation [\(Park,](#page-11-0) [2024\)](#page-11-0) across different models, GPUs, and simulation scales. The results demonstrate that AI Metropolis outperforms the standard approach of parallel simulation with global step synchronization, achieving speedups from 1.3× to 4.15×, and approaching an order of magnitude improvement over the original GenAgent implementation. As the number of agents increases, AI Metropolis rapidly nears optimal performance, demonstrating its scalability and effective dependency management. We plan to open-source AI Metropolis to accelerate research in large-scale LLM agent simulation and release the collected traces to fill a critical gap in LLM serving benchmarks, particularly given the unique and complex dependency patterns among LLM calls.
+
+#### Algorithm 1 Traditional Simulation Scheduling
+
+```
+1: Input: target step, agents, world
+ 2: Initialize: step ← 0
+ 3: while step < target step do
+ 4: actions ← [ ]
+ 5: for all agent in agents do
+ 6: actions.append(agent.proceed(world)) a
+ 7: end for
+ 8: world.step(actions)
+ 9: step ← step + 1
+10: end while
+```
+
+*<sup>a</sup>*The *proceed* function involves LLM calls to process tasks.
+

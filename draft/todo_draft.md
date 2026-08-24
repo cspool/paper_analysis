@@ -156,3 +156,15 @@ agent映射白名单：
 
   Decision 的交互格式已经可以基本冻结。下一步最需要讨论的是 Worker 和 Reviewer 的输出方式：是直接返回内容 JSON，还是由工具
   写入 Script 预分配的结果文件，然后 Agent 只返回一个简短完成协议。
+
+
+
+
+  https://github.com/UbiquitousLearning/mllm
+  https://github.com/wqzustc/High-Performance-Tensor-Processing-Engines
+  结合agentix的4090部署。
+
+  https://github.com/HazyResearch/Megakernels
+  https://github.com/HazyResearch/ThunderKittens/tree/664c108d16f12707a73d3072ab525f26fb2b4f62
+  https://github.com/tile-ai/tilert
+  结合多卡tileRT低延迟高吞吐折衷的部署。

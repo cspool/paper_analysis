@@ -1,0 +1,8 @@
+# <span id="page-0-0"></span>Efficient Dynamic Clustering-Based Document Compression for Retrieval-Augmented-Generation
+
+Weitao Li<sup>1</sup>,2\*, Xiangyu Zhang<sup>1</sup> , Kaiming Liu<sup>1</sup>,<sup>2</sup> , Xuanyu Lei<sup>1</sup>,<sup>2</sup> , Weizhi Ma<sup>2</sup>,† , Yang Liu<sup>1</sup>,2,† <sup>1</sup> Dept. of Comp. Sci. & Tech., Institute for AI, Tsinghua University, Beijing, China 2 Institute for AI Industry Research (AIR), Tsinghua University, Beijing, China
+
+### Abstract
+
+Retrieval-Augmented Generation (RAG) has emerged as a widely adopted approach for knowledge injection during large language model (LLM) inference in recent years. However, due to their limited ability to exploit fine-grained inter-document relationships, current RAG implementations face challenges in effectively addressing the retrieved noise and redundancy content, which may cause error in the generation results. To address these limitations, we propose an Efficient Dynamic Clustering-based document Compression framework (EDC<sup>2</sup> -RAG) that utilizes latent inter-document relationships while simultaneously removing irrelevant information and redundant content. We validate our approach, built upon GPT-3.5- Turbo and GPT-4o-mini, on widely used knowledge-QA and Hallucination-Detection datasets. Experimental results show that our method achieves consistent performance improvements across various scenarios and experimental settings, demonstrating strong robustness and applicability. Our code and datasets are available at [https://github.com/](https://github.com/Tsinghua-dhy/EDC-2-RAG) [Tsinghua-dhy/EDC-2-RAG](https://github.com/Tsinghua-dhy/EDC-2-RAG).
+

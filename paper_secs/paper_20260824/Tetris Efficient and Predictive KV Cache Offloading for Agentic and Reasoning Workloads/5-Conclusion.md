@@ -1,0 +1,4 @@
+# 5 Conclusion
+
+We present the design of Tetris, a predictive KV cache offloading framework for agentic and reasoning workloads. We identify the problem of cascading preemption during long output decoding tasks, which arises from uninformed victim selection under tight GPU memory budgets. Tetris addresses this through three elements: (1) online per-token sequence-length prediction with a small MLP-based model, (2) an analytic rule that chooses between recomputation and offloading based on a closed-form break-even length, and (3) layerwise, asynchronous KV cache transfer that overlaps device–host I/O with compute. Across agentic traces and synthetic long-output workloads, Tetris reduces the frequency of preemptions and improves P99 time-per-output-token under memory pressure, while maintaining throughput.
+

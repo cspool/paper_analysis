@@ -1,0 +1,6 @@
+# <span id="page-4-0"></span>4 Integrated Acceleration Overview
+
+While cooperative embodied autonomous agent systems offer significant potential, they face challenges of long task latencies, inefficient collaboration, limited scalability, and sensitivity in low-level planning (Sec. [3\)](#page-3-0). Addressing its inefficiencies is critical for achieving real-time and scalable deployment and ensuring long-term development.
+
+To this end, we introduce ReCA, an integrated acceleration framework designed to enable real-time and efficient cooperative embodied autonomous agent systems (Fig. [6\)](#page-5-0). At the algorithm level, local LLM model processing and planningguided multi-step reduce the planning and communication latency (Sec. [5.1,](#page-5-1) Sec. [5.4\)](#page-7-1). At the system level, the hybrid dual-memory structure (Sec. [5.2\)](#page-5-2) and hierarchical centralized/decentralized cooperative planning (Sec. [5.3\)](#page-6-0) enhance cooperative efficiency and system scalability. At the hardware level, the A-star processing unit interacting with the GPU subsystem improves low-level planning and execution efficiency (Sec. [6\)](#page-7-0). ReCA consistently demonstrates improvements in performance, efficiency, and scalability across cooperative embodied systems (Sec. [7\)](#page-10-0).
+

@@ -1,0 +1,3 @@
+# K Limitations
+
+This work focuses exclusively on losslessly compressing BFloat16 weights. We do not consider other formats such as FP32, FP16, or FP8, which may require different compression strategies. While DF11 improves memory efficiency, it introduces a small but non-zero latency overhead due to decompression. This overhead is amortized at larger batch sizes but may impact latency-sensitive applications with small batches. Our evaluation is limited to GPUs. We do not assess performance on other hardware such as CPUs, TPUs, or custom accelerators, which may require platform-specific optimizations.

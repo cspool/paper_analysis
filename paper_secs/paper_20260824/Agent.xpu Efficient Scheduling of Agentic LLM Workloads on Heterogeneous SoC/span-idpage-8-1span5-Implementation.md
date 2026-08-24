@@ -1,0 +1,6 @@
+# <span id="page-8-1"></span>5 Implementation
+
+Agent.xpu exposes a RESTful API frontend (2.3K lines of Python code) for prioritized query submission in a serverclient manner. The LLM backend is written in 6K lines of C++ with custom abstractions for tensors, compute graphs, and model loading, eschewing third-party dependencies (e.g., PyTorch [\[49\]](#page-15-12), GGML [\[21\]](#page-13-16)). This lightweight design allows Agent.xpu to natively embed the scheduling mechanisms introduced in §[4,](#page-5-3) while keeping kernel interfaces modular to accommodate diverse SoC platforms.
+
+Our prototype targets Intel Core Ultra SoCs [\[12\]](#page-13-4), implementing NPU and iGPU kernels using the low-level APIs of OpenVINO 2025.2 [\[48\]](#page-15-2). Request- and kernel-level scheduling is based on two-tier asynchronous interfaces: 1) *Inter-op parallelism* leverages thread-level prefill and decode event loops, coordinated via thread-safe task queues; 2) *Intra-op parallelism* exploits elastic NPU-iGPU tensor partitioning, fulfilled by the XPU coordinator with hardware-specific coroutines (start\_async/wait in OpenVINO). The offline HEG and online scheduler jointly enable seamless adaptation to different LLM models, agent workflows, and SoC platforms.
+

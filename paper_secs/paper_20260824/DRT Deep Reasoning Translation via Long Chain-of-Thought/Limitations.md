@@ -1,0 +1,4 @@
+# Limitations
+
+While we show the effectiveness of long thought in MT, there are some limitations worth noting: (1) We focus on English-to-Chinese translation in this work, and future work could extend the data and the method to other translation directions. (2) There is still a lack of accurate automatic evaluation metrics for literary translation. Previous literature translation work typically relies on human evaluation [\(Fonteyne et al.,](#page-8-9) [2020;](#page-8-9) [Karpinska](#page-8-5) [and Iyyer,](#page-8-5) [2023\)](#page-8-5), and points out that BLEU and Comet might not be suitable for evaluating literature translation [\(Karpinska and Iyyer,](#page-8-5) [2023\)](#page-8-5). This is because literary translations carry the responsibility of both semantic and critical interpretation, as they must address the challenge of achieving equivalence that often extends beyond the level of individual words [\(Thai et al.,](#page-9-14) [2022\)](#page-9-14).
+

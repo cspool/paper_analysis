@@ -1,0 +1,479 @@
+# **Astraea: A State-Aware Scheduling Engine for LLM-Powered Agents**
+
+Hongqiu Ni University of Science and Technology of China China
+
+Zilong Wang University of Science and Technology of China China
+
+Jiabao Zhang University of Science and Technology of China China
+
+Ruiqi Wu University of Science and Technology of China China
+
+Haisheng Tan† University of Science and Technology of China China
+
+Guopeng Li University of Science and Technology of China China
+
+Chi Zhang∗ Hefei University of Technology China
+
+# **Abstract**
+
+Large Language Models (LLMs) are increasingly being deployed as intelligent agents. Their multi-stage workflows, which alternate between local computation and calls to external network services like Web APIs, introduce a mismatch in their execution pattern and the scheduling granularity of existing inference systems such as vLLM. Existing systems typically focus on per-segment optimization which prevents them from minimizing the end-to-end latency of the complete agentic workflow, i.e., the global Job Completion Time (JCT) over the entire request lifecycle. To address this limitation, we propose Astraea, a service engine designed to shift the optimization from local segments to the global request lifecycle. Astraea employs a state-aware, hierarchical scheduling algorithm that integrates a request's historical state with future predictions. It dynamically classifies requests by their I/O and computeintensive nature and uses an enhanced HRRN policy to balance efficiency and fairness. Astraea also implements an adaptive KV cache manager that intelligently handles the agent state during I/O waits based on the system memory pressure. Extensive experiments show that Astraea reduces average JCT by up to 25.5% compared to baseline methods. Moreover, our approach demonstrates strong robustness and stability under high load across various model scales.
+
+# **Keywords**
+
+LLM Serving Systems, LLM Inference Engine, Agentic workflows, Latency Optimization
+
+# **1 Introduction**
+
+The widespread deployment of Large Language Models (LLMs) as cloud services, accessed via Web APIs, has catalyzed a new generation of powerful web applications. Meanwhile, LLMs are gradually evolving from language processors into intelligent agents (LLM Agents) capable of autonomous planning and task execution.
+
+<span id="page-0-0"></span>> **[图片提取文字 (无描述)]:**
+> Make a travel plan to Hawaii in June. Prefill Decode API Call Query tourist attractions Query the weather sunny. Remember to The weather in Hawaii Volcanoes protect yourself from the Hawaii in June is National Park sun. Scenic spots include
+![](_page_0_Picture_17.jpeg)
+
+**Figure 1: An example of an agentic inference workflow.**
+
+These agents leverage external tools [\[10,](#page-9-0) [24](#page-9-1), [29](#page-9-2)] by programmatically issuing a series of **API calls** to web services and other resources, enabling them to accomplish more complex tasks, such as autonomously browsing the web [\[11,](#page-9-3) [46](#page-10-0), [51](#page-10-1)], solving issues on GitHub [\[16,](#page-9-4) [39,](#page-9-5) [44\]](#page-9-6), and proving challenging mathematical problems [\[9,](#page-9-7) [19](#page-9-8)].
+
+The execution of these agentic tasks introduces a multi-stage inference workflow, which is structurally different from the process of traditional LLMs. A standard inference process involves two distinct stages: a compute-intensive **Prefill** stage that processes the input context in parallel, followed by a memory-bound **Decode** stage that generates tokens autoregressively. Throughout this process, the **key-value (KV) cache** is employed to store intermediate states, thereby accelerating the generation of subsequent tokens. However, an agent executes a more complex **agentic workflow** composed of multiple such inference processes, as illustrated in the example in Figure [1.](#page-0-0) When a user issues a request (e.g., "Make a travel plan to Hawaii in June."), the system executes the first inference process, which continues until the agent generates a special token to trigger an API call to query the weather. At this point, the LLM computation pauses, and the system enters an I/O wait state. Once the API returns a result (e.g.,"(The weather is) sunny."), this new information is appended to the context, and the process resumes with another Prefill and Decode cycle. This evolution from a single computational task into a dynamic, multi-stage workflow of alternating computation and external API calls introduces unprecedented challenges for the underlying service infrastructure, demanding a rethinking of how to schedule requests and manage resources for these advanced systems.
+
+<sup>∗</sup>Corresponding author.
+
+<sup>†</sup>Corresponding author.
+
+This new agentic workflow exposes two flaws in existing LLM serving systems. First, current schedulers [\[22,](#page-9-9) [27\]](#page-9-10) are largely unaware to the duration of API calls, leading to severe Head-of-Line (HoL) blocking. These systems only focus on modeling the computation stages, for instance, 3 [[17](#page-9-11)] predicts decode length to improve GPU utilization and accelerate inference. However, in LLM Agent scenarios, decode time is often a negligible fraction of the request's total lifecycle. For example, an API call to SerpAPI for web search can last several seconds, while the decode phase is mere milliseconds. A scheduler which ignores dominant API duration cannot make effective resource allocation or scheduling decisions. Second, current systems like vLLM treat each segment of agentic workflow as an independent task. This approach optimizes for a local metric—the response time of the current segment—but fails to optimize the end-to-end Job Completion Time (JCT) for the entire multi-stage request. These dual shortcomings reveal a critical research gap and we need overcome two challenges to design a new paradigm filling this gap:
+
+**Challenge 1:The High-Stakes Trade-off in State Management.** Agentic workflows introduce long I/O wait periods where the large KV cache remains idle on the GPU. This presents a critical resource management dilemma: preserving the cache in GPU memory reduces system throughput by occupying scarce resources, while discarding it incurs significant recomputation latency upon resumption. This creates an inherent trade-off between the single-request latency and system-wide throughput.
+
+**Challenge 2: Lifecycle-Aware Scheduling for Global Optimization.**The local properties of a segment are severely decoupled from its global impact on the end-to-end JCT, as the latter is determined by future I/O phases. This disconnection introduces the risk of HoL blocking, where a decision to prioritize a seemingly optimal segment can starve other requests during a long API call duration, leading to disastrous global consequences.
+
+To address the above challenges, we propose a novel scheduling paradigm, to unify a request's historical state with the prediction of its future behavior, and present Astraea, a lifecycle-centric inference service engine for LLM agentic workflows, which is to optimize the global Job Completion Time (JCT) rather than myopic per-segment metrics. Our main contributions are summarized as:
+
+- We formalize the scheduling problem for LLM agent workflows and prove it to be NP-hard, providing a theoretical foundation for heuristic algorithm design (Sec. [3.1\)](#page-3-0).
+- We design a novel state-aware hierarchical preemptive scheduling mechanism, named Astraea, which unifies historical workflow behavior and future predictions. At the macro level, requests are dynamically classified according to their computing and I/O characteristics; at the micro level, scheduling order is determined by a combination of the waiting time and predicted service duration, balancing efficiency and fairness (Sec. [4](#page-3-1)).
+- We implement a prototype of Astraea based on the mainstream vLLM framework and experimentally demonstrate that, under heterogeneous workloads with mixed computing and I/O characteristics, Astraea reduces the average
+
+job completion time (JCT) by up to 25.5% compared to baseline methods, significantly improving the quality of experience (QoE) for latency-sensitive interactive applications . Additionally, it exhibits superior robustness, with its performance degrading 3.2x less than baselines as system load increases (Sec. [5\)](#page-5-0).
+
+# **2 Background and Motivation**
+
+The rise of LLMs as autonomous agents represents a paradigm shift in computational workloads, moving from one-shot inference to dynamic, multi-stage workflows that interleave computation with external tool use. This new paradigm exposes critical bottlenecks in existing LLM serving systems, which are architected for oneshot queries. This section establishes the necessary background by contextualizing this evolution, characterizing the inference workflow, and demonstrating through concrete examples why a new scheduling-centric approach is essential for agentic efficiency.
+
+# **2.1 Background**
+
+### 2.1.1 *Evolution from Basic LLMs to LLM-Powered Agents*. Early LLMs excelled in in-context learning (ICL) but essentially operated as standalone text generators, lacking mechanisms for interacting with external environments or dynamically verifying generated knowledge. A pivotal advancement was the emergence of structured reasoning frameworks, such as Chain-of-Thought(CoT) [\[41](#page-9-12)]. This transformed the inference workload from a single queryresponse transaction into a longer, sequential reasoning process, implicitly introducing early workflow semantics.
+
+Building upon this, frameworks like ReAct[[47](#page-10-2)] formally integrated reasoning with external tool use, establishing the core agentic loop of interleaved local computation and remote I/O. This shift in capability corresponds directly to a shift in system demands: the workload is no longer a monolithic computation, but a dynamic graph of dependent segments with heterogeneous resource requirements (compute, memory, I/O).
+
+These agentic capabilities are typically realized through various modes of API calls, which can be categorized into three primary types: integrating non-LLM tools (e.g., translators, retrieval systems), iterative self-calls for complex problem-solving, and multicomponent collaboration (e.g., LLMs orchestrating other models). This paradigm has enabled sophisticated frameworks like Lang-Chain[[21\]](#page-9-13) and AgentGraph [\[6\]](#page-9-14), which support complex, multiagent workflows and present unprecedented challenges for resource management and scheduling in the serving infrastructure.
+
+Based on this, frameworks such as ReAct [\[47\]](#page-10-2) integrate reasoning with external actions, allowing models to leverage tools and ground their internal reasoning in real-world observations. From a systems perspective, this integration transforms the workload from continuous computation into a loop between local inference and remote I/O, which characterizes agentic workflows.
+
+The "action" capability of agents is realized through various modes, which can broadly be seen as API calls. Depending on the interaction targets, they can be categorized into three main types: **(1) Integrating non-LLM tools**, where external dedicated APIs are called to compensate for an LLM's shortcomings, such as using
+
+a translator or an information retrieval system; **(2) Iterative selfcalls**, where the LLM calls itself multiple times to decompose tasks and maintain a reasoning history; and **(3) Multi-component collaboration**, which combines multiple models and tools into a collaborative system orchestrated by a core planner LLM.
+
+This paradigm gave rise to frameworks such as LangChain[[21\]](#page-9-13) and AgentGraph [\[6\]](#page-9-14), thereby enabling complex multi-agent collaborative workflows.
+
+2.1.2 *LLM Inference Workflow*. LLMs drive various chatbot and AI applications, primarily utilizing Transformer-based models such as GPT [\[30](#page-9-15)], Claude [\[4\]](#page-9-16), and LLaMA[[38](#page-9-17)]. The LLM inference process generally consists of two main stages: Prefill and Decode.
+
+In the prefill stage, the system processes the input prompt, converting it into an intermediate token state through a single forward pass. This stage is computation-intensive as it requires processing the entire input to generate the initial KV cache, which stores intermediate state information needed for the model's generation process, speeding up subsequent token generation.
+
+Next, in the decode stage, the model generates new tokens one by one in an autoregressive manner, relying on previously generated tokens. This process is memory-bandwidth intensive, as the model frequently accesses the previously generated tokens and KV cache to generate the next tokens. Through this mechanism, the model can generate coherent outputs without recalculating all previous tokens, significantly improving efficiency.
+
+However, in the case of LLM agent inference, the system may need to make external tool calls (e.g., querying a database, performing complex calculations, or accessing external APIs). These external calls interrupt the inference process, causing the system to enter a waiting state until the external tool returns its result. API call times are highly unpredictable, ranging from sub-millisecond API calls to human responses taking several minutes. At this point, the system must choose how to manage the interrupted KV cache sequence. Common strategies involve a trade-off between latency and memory overhead. The **Preserve** strategy keeps the KV cache fully in GPU memory, which improves resumption latency but increases memory pressure and reduces system throughput. At the other extreme, the **Discard** strategy releases all KV cache and reexecutes the prefill stage once the tool returns; this simplifies state management but leads to redundant computation. A hybrid approach is the **Swap** strategy, which migrates the KV cache to CPU memory during the interruption and moves it back afterward, balancing memory pressure and computational efficiency at the cost of I/O transfer delays.
+
+After the API call ends, its response is treated as an additional token sequence, appended to the original input sequence. The model only needs to perform a forward pass on the newly added part and append the generated key-value cache to the original cache.
+
+# **2.2 Motivation**
+
+Although often designed to minimize end-to-end latency, traditional schedulers prove counterproductive in agentic workflows. By treating each computational segment as an independent task, they adopt a myopic perspective. While this may optimize local performance, it neglects the chained dependencies inherent in a
+
+request's lifecycle, leading to suboptimal global performance and a decrease in overall system efficiency.
+
+<span id="page-2-0"></span>> **[图片提取文字 (无描述)]:**
+> JCT, JCT, AVG JCT BI A2 **A3** B<sub>2</sub> **B3** 16 15.0 (a) FCFS A3 B1 B<sub>2</sub> A2 **B3 Policies** 9 16 12.5 (b) SJF(segment request length) B1 B<sub>2</sub> **B3** A3 A2 16 13 14.5 (c) LAS BI B<sub>2</sub> **B3** Al A2 **A3** 16 11.5 (d) SJF(total request length) 0 9 16 14
+![](_page_2_Figure_11.jpeg)
+
+**Figure 2: Gantt charts visualizing the execution timelines for the two requests under the four scheduling policies.**
+
+To illustrate this limitation, we present a motivating example with two concurrent requests, A and B, whose segment execution times are detailed in Figure [2.](#page-2-0) Request A consists of three segments, each requiring 3 time units to process. Request B is composed of three segments with processing times of 4, 1, and 2 time units, respectively. We compare the performance of four scheduling policies in this scenario:
+
+- **First-Come-First-Served (FCFS):** A baseline policy that executes segments strictly by their arrival order. In this example, its arbitrary initial choice (prioritizing A1 over B1) creates a cascading delay for B's subsequent segments due to the chained dependencies of agentic workflow, resulting in a poor average JCT of 15.0.
+- **Shortest-Job-First (SJF) at the segment level:** A myopic policy that always selects the ready segment with the shortest processing time. While this strategy rapidly completes all of Request A's short segments, achieving an excellent local JCT of 9.0 for A, it completely starves the longer Request B until A finishes, resulting in a bad JCT of 16.0 for B and a mediocre average JCT of 12.5.
+- **Least-Attained-Service (LAS):** A fairness-oriented policy that prioritizes the request which has received the least cumulative service. It interleaves A and B, but fails to recognize that prioritizing B's short final segments (B2, B3) would be more globally efficient, resulting in a high average JCT of 14.5.
+- **Shortest-Job-First (SJF) at the request level:** An oracle policy that prioritizes the request with the shortest total service time, representing the optimum. It intelligently prioritizes the completion of the shorter Request B first, thereby minimizing the average JCT to 11.5.
+
+The analysis reveals that while traditional scheduling policies possess distinct merits, such as the simplicity and starvation-free guarantee of FCFS, the inter-request fairness of LAS and the proven effectiveness of segment-level SJF's greedy optimization in oneshot inference, their shared inability to model the multi-stage leads to severe cascading delays or HoL blocking. In this work, we propose Astraea, a state-aware scheduling engine designed to transcend these limitations. By unifying historical context with predictive forecasting, Astraea approximates the benefits of a global, lifecycle-oriented perspective in an online setting.
+
+### 3 System Model and Problem Formalization
+
+To address the scheduling challenges of alternating "compute-I/O" execution in LLM agent inference, this section will first formally models the agentic execution workflow and then defines the scheduling objectives.
+
+#### <span id="page-3-0"></span>3.1 Problem Formalization
+
+LLM agents accomplish complex tasks through using external tools, making their execution inherently multi-stage. We define an end-to-end inference task initiated by a user as a *parent request* (or complete request), denoted as  $R_i$ . Its execution process is not a single computational process but a dynamic, multi-stage workflow composed of several segments. We formally represent the lifecycle of  $R_i$  as an ordered sequence of segmented requests:
+
+$$R_i = \langle S_i^1, S_i^2, \dots, S_i^k \rangle$$
+
+where  $k_i$  is the total number of segments in request  $R_i$ , which is unknown upon the request's initial arrival.
+
+The internal execution flow of each segmented request  $S_i^J$  can be further abstracted into three ordered stages with distinct resource consumption characteristics:
+
+- Prefill Stage: This stage is responsible for a parallel Attention computation on the current context to generate the initial KV cache. Its execution speed is primarily limited by the GPU's floating-point operations per second (FLOPS). Therefore, we classify this stage as Compute-bound.
+- Decoding Stage: This stage generates tokens one by one in an autoregressive manner. Its execution speed is mainly limited by the GPU's memory bandwidth. We classify this stage as Memory-bound.
+- API Call Stage: This stage involves interaction with external network services, during which local compute and memory resources remain idle. We classify this stage as I/O-bound.
+
+To formally model the segmented request  $S_i^l$ , we represent it as a triplet, where each element represents the expected service time cost of the corresponding stage:
+
+$$S_i^j = (T(P_i^j), T(D_i^j), T(A_i^j)).$$
+
+The alternating presence of different resource bottlenecks within a request's lifecycle is the core challenge of this scheduling problem. Traditional schedulers typically treat each ready computational task (i.e., segment  $S_i^j$ ) as an independent, stateless scheduling unit, which systematically penalizes requests with multiple I/O interruptions.
+
+The core scheduling objective of this research is defined as minimizing the average end-to-end Job Completion Time (JCT) for all requests. We define the JCT of a complete request  $R_i$  as the total duration from its arrival time,  $t_{\rm arrival}(R_i)$ , to the completion of its final segment's computation,  $t_{\rm finish}(R_i)$ . This duration is composed of the actual processing time of all its segments and the waiting time in the ready queue. Let  $C(S_i^j)$  be the completion time of segment  $S_i^j$ , then  $t_{\rm finish}(R_i) = C(S_i^k)$ . The completion time of a segment can be recursively defined as:
+
+$$C(S_i^j) = \begin{cases} t_{\text{arrival}}(R_i) + W(S_i^1) + T_{\text{comp}}(S_i^1) & \text{if } j = 1\\ C(S_i^{j-1}) + T(A_i^{j-1}) + W(S_i^j) + T_{\text{comp}}(S_i^j) & \text{if } j > 1 \end{cases}, (1)$$
+
+where  $T_{\text{comp}}(S_i^J)$  and  $T(A_i^J)$  represent the actual time spent in the computation stages (prefill and decoding) and the API call stage of segment  $S_i^J$ , respectively.  $W(S_i^J)$  is the waiting time of the segment in the ready queue before being scheduled for execution. Thus, the JCT of request  $R_i$  can be expressed as:
+
+$$JCT(R_i) = C(S_i^k) - t_{\text{arrival}}(R_i) = \sum_{j=1}^k \left( W(S_i^j) + T_{\text{comp}}(S_i^j) \right) + \sum_{j=1}^{k-1} T(A_i^j),$$
+(2)
+
+the problem's optimization objective can be formally defined as:
+
+Minimize 
+$$\frac{1}{|\mathcal{R}|} \sum_{R_i \in \mathcal{R}} \text{JCT}(R_i),$$
+ (3)
+
+where  $\mathcal{R}$  represents the set of all requests processed by the system.
+
+### 3.2 Problem Complexity
+
+We prove that the scheduling problem defined in Section 3.1 is NP-hard.
+
+**Theorem 3.1.** The LLM agent scheduling problem is NP-hard.
+
+PROOF. The detailed proof by reduction from the classic  $1|prec|\sum C_i$  problem is provided in Appendix A.
+
+# <span id="page-3-1"></span>4 Scheduling Mechanism Design
+
+#### 4.1 Overall Architecture
+
+<span id="page-3-2"></span>> **[图片提取文字 (无描述)]:**
+> Scheduler Segment Request Request Ready (Section 4.3) (first segment) Stateful-MLFQ Segments Pool User Predicted o Predictor Time (Section 4.2) (3) Batch segments LLM Inference Engine External Final Response 4.2)API API Services KV Cache Manager Call (Section 4.4)
+![](_page_3_Figure_27.jpeg)
+
+Figure 3: The overall architecture of Astraea.
+
+To address the complexities of agentic workflows, we have designed a scheduling system named Astraea. Its architecture, illustrated in Figure 3, is composed of several key components designed to work in concert: a unified Request Pool, a **Service Time Predictor**, a state-aware **Scheduler**, an LLM Inference Engine, and an adaptive **KV Cache Manager**. The three core components are overviewed below to illustrate their primary functions.
+
+- Service Time Predictor (Sec. 4.2): This component annotates request segments with estimated computation time and API duration. It combines offline profiling for prefill latency, a segment-level generation length oracle, and category-based API latency statistics to provide essential metadata for scheduling decisions.
+- Stateful-MLFQ Scheduler (Sec. 4.3): As the system's core decision-maker, this scheduler implements a multi-level feedback queue algorithm that dynamically classifies requests
+
+based on compute and I/O behavior. It uses token cost thresholds for priority migration and an enhanced HRRN policy for intra-queue ordering to balance efficiency and fairness.
+
+ KV Cache Manager (Sec. 4.4): This manager handles the latency-throughput tradeoff during I/O waits by dynamically selecting strategy based on GPU memory pressure to minimizes memory waste.
+
+These components operate in a coordinated, cyclic workflow: After ready segments are collected in the Request Pool, they are annotated by the Predictor with crucial metadata, including estimated computation times and API call durations. The Scheduler then prioritizes and batches them for execution by the Inference Engine. Once a segment triggers an external API call, its state is managed by the KV Cache Manager during the wait. This orchestrated workflow enables global optimization across the entire request lifecycle.
+
+# <span id="page-4-0"></span>4.2 Service Time Predictor Design
+
+The efficacy of our scheduling decisions hinges on accurate service time predictions for each stage of a request. The design of the predictor and the scheduling algorithm are orthogonal problems. To rigorously evaluate our scheduler's performance, isolated from potential prediction inaccuracies, we employ an idealized yet practical prediction methodology.
+
+Compute Time Prediction. The total computation time,  $T_{\rm comp}(S_i^j)$ , is composed of prefill and decoding time. For the prefill stage, which is a deterministic function of input length, we build a data-driven performance model by offline-profiling the target hardware with various sequence lengths. For the decoding stage, predicting the generation length is a known challenge. Prior work has demonstrated high-accuracy predictors are feasible. Based on this, we adopt a **segment-level oracle** for the number of generated tokens  $(n_{\rm gen})$ , using the ground-truth value from our dataset. It is critical to note this oracle has no knowledge of future segments, thus preserving the online nature of the scheduling problem. The total predicted computation time is then:  $T_{\rm comp}(S_i^j) = f_{\rm prefill}(n_{\rm in}) + n_{\rm gen} \cdot {\rm avg\_decode\_latency\_per\_token}$ .
+
+API Latency Prediction. API call durations are highly variable and depend on external factors. Static analysis is often intractable. However, we observe that APIs within the same functional category exhibit stable latency distributions. For example, math-related API calls average 9e-5 seconds, while image generation and chatbot APIs can take tens of seconds (e.g., means of 20.03s and 28.6s respectively). Leveraging this, we build a statistical model based on these categories. During scheduling, we extract the API category from the prompt and use the category's mean latency as the predicted value  $T_A(S_i^j)$ .
+
+### <span id="page-4-1"></span>4.3 Stateful-MLFQ Scheduling Algorithm
+
+4.3.1 Algorithm Design Overview. To operationalize the global optimization objective defined in Section 3.1, we design a state-aware multi-level feedback queue scheduling algorithm (Stateful-MLFQ), with its full logic presented in Algorithm 1. The core of this algorithm lies in its "Stateful" nature: it not only evaluates a segment's current characteristics (e.g., estimated service time) but also unifies the parent request's historical behavior (e.g., accumulated wait
+
+time, past compute and I/O patterns) with future predictions into a single decision-making framework. It is a hierarchical, preemptive scheduling algorithm that aims to strike a balance between efficiency and fairness through macro and micro-level controls.
+
+4.3.2 Macro-level Control: Event-driven Priority Migration. The algorithm's macro-level framework is built upon a multi-level feedback queue (MLFQ) structure, consisting of m queues  $Q_0, ..., Q_{m-1}$  with strict priorities.
+
+We adopt Token Cost instead of a time slice as the migration threshold because the time slice is an unstable metric heavily influenced by batch composition in continuous batching. In contrast, Token Cost is a deterministic, intrinsic metric that solely measures the computational work a request has received. This stability makes priority migration decisions fairer and more robust.
+
+The migration of requests between queues is event-driven, as defined in the event-handling functions of Algorithm 1.
+
+- (1) **On Request Arrival:** All new requests are placed into the highest-priority queue  $Q_0$  to ensure a fast response.
+- (2) On Segment Completion: After a segment finishes execution, the system dynamically adjusts its parent request's priority based on its behavior.
+  - Demotion: If a segment's computational cost exceeds its queue's threshold, the parent request is identified as compute-intensive and demoted to the next lowerpriority queue.
+  - **Promotion:** If a segment yields to an API call before exhausting its token cost quota, the parent request is identified as I/O-intensive and is promoted to a higher-priority queue. This policy aims to prioritize I/O-bound requests to minimize their impact on the total JCT.
+
+4.3.3 Scheduling Cycle: Batch Building and Intra-Queue Sorting. In each scheduling cycle, our core scheduling function, BuildNextBatch, is invoked to determine the next batch of requests to execute.
+
+The function's first step is to handle starvation (lines 1-6). It inspects all requests in the lowest-priority queue,  $Q_{m-1}$ , and if a request's response ratio exceeds a predefined aging threshold, it is preemptively promoted to the highest-priority queue,  $Q_0$ .
+
+After handling starvation, the scheduler iterates from the highest-priority queue  $Q_0$  downwards (line 8) to find the first non-empty queue,  $Q_k$ . For all ready segments within this queue, the scheduler performs micro-level, intra-queue sorting (lines 11-14). We employ the Highest Response Ratio Next (HRRN) policy to calculate a score for each segment:
+
+$$Score_{HRRN}(S_i^j) = \frac{W(R_i) + T_{\text{proc}}(S_i^j)}{T_{\text{proc}}(S_i^j)},$$
+(4)
+
+where  $W(R_i)$  is the accumulated waiting time of its parent request and  $T_{\mathrm{proc}}(S_i^j)$  is the estimated service time of the current segment. This mechanism behaves like Shortest Remaining Processing Time (SRPT) when waiting times are comparable, enhancing efficiency. As the waiting time of a long job accumulates, its score increases, ensuring intra-queue fairness.
+
+Finally, after sorting candidate segments by their HRRN score, the scheduler packs them sequentially into the next batch until GPU memory capacity is reached (lines 15-20).
+
+```
+Input :: Number of queues; : Priority queues;  :
+         Token thresholds; : Aging threshold.
+ Output:The next execution batch .
+1 function BuildNextBatch(,  , ):
+     // 1. Starvation Prevention (Aging)
+2 foreach request  ∈ −1 do
+3 if
+```
+
+**Algorithm 1:** Stateful-MLFQ Scheduling
+
+```
+(.  + . )/.  >
+       then
+4 0 ← 0 ∪ {};
+5 −1 ← −1 ∖ {};
+   // 2. Batch Construction
+6  ← ∅;
+7 for  ← 0 to  − 1 do
+8 if 
+         is not empty then
+9  ← GetAllReadySegments(
+                          );
+        // 3. Intra-queue sorting using HRRN
+10 foreach segment  ∈  do
+11 .    ←
+           (. +. )/. ;
+12  ← SortByHRRNScore(, DESC);
+        // 4. Pack batch respecting memory
+          constraints
+13 foreach segment  ∈  do
+14 if CanFitInMemory( ∪ {}) then
+15  ←  ∪ {};
+16 return ;
+```
+
+<span id="page-5-2"></span>4.3.4 Preemption Granularity. It is important to note that our algorithm's preemption occurs at the segment level. Once a batch of tasks begins execution, it runs to completion (i.e., until all segments in the batch either trigger an API call or generate a final response) without being interrupted at the iteration level. Preemption is realized in each new scheduling cycle: a newly arrived or promoted high-priority request can "preempt" the execution opportunity of a lower-priority request when the next batch is being constructed. This design avoids the prohibitive overhead of finegrained preemption and its associated KV cache swapping costs.
+
+# <span id="page-5-1"></span>**4.4 KV Cache Management**
+
+**<sup>17</sup> return** ;
+
+The preemptive nature of our scheduling mechanism necessitates the preservation of intermediate states (KV cache) for all preempted yet incomplete requests. Without an effective management policy, GPU memory would become a critical bottleneck, limiting the scheduler's efficacy and potentially reintroducing the HoL blocking we aim to solve. To address this, Astraea integrates an adaptive KV cache management policy designed to dynamically balance single-request latency with overall system throughput. The
+
+policy is governed by a high-watermark threshold for GPU memory usage, creating two distinct operational modes. In low-load scenarios (i.e., below the threshold), the system defaults to a **Preserve** policy for all I/O-bound requests to prioritize low latency.
+
+Conversely, when memory pressure is high, the objective shifts to maximizing resource utilization by minimizing memory-time waste. The system evaluates the potential waste for three candidate policies: **Preserve**, **Discard**, and **Swap**, choosing the one with the minimum cost. Following the model proposed by Infercept [1], the waste () for each policy is estimated as:
+
+$$W_{\text{preserve}} = T_{\text{api}} \cdot C_{\text{self}} \cdot M, \tag{5}$$
+
+$$W_{\text{discard}} = T_{\text{recompute}} \cdot C_{\text{batch}} \cdot M, \tag{6}$$
+
+$$W_{\text{swap}} = 2 \cdot T_{\text{swap}} \cdot C_{\text{batch}} \cdot M. \tag{7}$$
+
+Here, api, , and are the predicted durations for the API call, KV cache recomputation, and swap I/O, respectively. is the token count of the request's own cache, ℎ is the total token count of other requests that could be batched if memory were freed, and is the memory required per token's KV cache.
+
+The system then selects the optimal strategy that results in the least memory waste:
+
+$$Strategy = \underset{s \in \{Preserve, Discard, Swap\}}{arg min} W_s.$$
+ (8)
+
+This adaptive policy ensures high resource utilization under contentious loads while maintaining responsiveness in uncongested scenarios.
+
+# <span id="page-5-0"></span>**5 Experimental Evaluation**
+
+# **5.1 Experimental Setup**
+
+*Testbed Implementation.* We implemented the Astraea system on top of vLLM, retaining its high-efficiency inference architecture while improving upon its original KV Cache management. Astraea introduces a dynamic scheduling policy based on GPU memory utilization. When memory availability is sufficient, the system prioritizes reducing request latency by enforcing the "Preserve" policy to ensure a fast response. Conversely, when memory resources become scarce, the system automatically adjusts its policy to prioritize maximizing overall resource utilization, employing the "Discard" and "Swap" strategies to balance memory occupation and system throughput. Our improvements in memory management and scheduling are highly modular, allowing for seamless integration with other non-interfering LLM optimization methods.
+
+*Environment.* The experiments were conducted on a machine equipped with two NVIDIA A100 80GB GPUs connected via NVLink, a 28-core Intel Xeon Gold 6330 CPU at 2.0GHz, and 503GB of RAM. To evaluate the generality and robustness of the proposed algorithm across different model scales, we conducted experiments on two open-source large models: the 6B-parameter GPT-J [\[40\]](#page-9-18) and Vicuna-13B[[49\]](#page-10-4). GPT-J was run on a single A100, suitable for medium inference load scenarios, while Vicuna-13B was run in a multi-GPU environment with two A100s to create higher memory pressure scenarios, testing the policy's performance under complex resource contention conditions.
+
+Dataset. We used the dataset released by Infercept for our experiments. This dataset comprises six sub-tasks:
+
+- Arithmetic Operations: Based on the GSM8K-XL dataset [13], covering math problems that require multi-step reasoning.
+- Knowledge Question Answering: Based on the Multi-Hop QA dataset [45], representing knowledge base retrieval requests.
+- Virtual Environment: Based on the ALFWorld dataset [35], simulating an LLM controlling entities in a virtual environment to complete tasks.
+- Multi-turn Dialogue: Based on the ShareGPT dataset [5], simulating multi-turn human interactions.
+- Image Generation: Using ChatGPT [42] to automatically generate prompt sequences that trigger calls to the Stable Diffusion model [31].
+- **Text-to-Speech:** Using ChatGPT to generate prompt sequences that trigger calls to the Bark TTS model [3].
+
+The original dataset was uniformly sampled from these six task types. However, to better highlight the performance differences among various scheduling and memory policies, we artificially increased the sampling proportion of long-latency API requests in our experiments to construct a more challenging system load.
+
+Baseline Methods. Our experiments will compare Astraea with the following four different policies: (1) vLLM with FCFS (First-Come-First-Served) scheduling; (2) vLLM with SJF (Shortest Job First) scheduling; (3) vLLM with LAS (Least Attained Service) scheduling, which is the core scheduling idea adopted by Autellix [25]; and (4) Infercept (with its default FCFS policy).
+
+Metrics. Our primary evaluation metric is the average Job Completion Time (JCT), which measures the end-to-end latency from request submission to final completion. Unlike intermediate metrics like Time-To-First-Token (TTFT) or Time-Per-Output-Token (TPOT), JCT provides a holistic measure of system performance and user experience for multi-stage agentic workflows.
+
+#### 5.2 End-to-End Performance Analysis
+
+We conducted a series of experiments on both the 6B-parameter GPT-J model and the larger 13B-parameter Vicuna model. To evaluate performance under varying system load and memory pressure, we measured the average JCT across a range of Queries Per Second (QPS) at four distinct GPU memory availability levels: 30%, 50%, 70%, and 90%. The results for both models are presented in Figure 4 and Figure 5.
+
+On the GPT-J model (Figures 4), Astraea outperforms all baseline methods. The performance advantage is most pronounced under high memory pressure (30% and 50% availability). In the most contentious scenario with 30% memory availability, the JCT of all baseline methods rises sharply with increasing QPS, indicating severe performance degradation. In contrast, Astraea's performance curve remains flatter, demonstrating its superior stability. For example, at QPS=5, Astraea's JCT is 122.88s, which is 19.1% lower than Infercept and 25.5% lower than vLLM-FCFS.
+
+This performance advantage is even more critical on the larger Vicuna-13B model, where the higher memory footprint of the model
+
+<span id="page-6-0"></span>> **[图片提取文字 (无描述)]:**
+> Astraca Astraca - Infercept Infercept 170 VLLM FCFS VLLM FCFS ★ vLLM LAS vLLM LAS 160 · vLLM SJF -- vLLM\_SJF 130 © 150 140 © 125 D 120 130 115 120 110 110 105 2.0 2.5 3.0 3.5 4.0 4.5 1.5 2.0 2.5 3.0 3.5 1.5 4.0 QPS(req/s) QPS(req/s) (a) 30% memory availability (b) 50% memory availability 140 140 Astraca - Infercent - Infercept · vLLM FCFS VLLM FCFS ★ VLLM LAS ★ VLLM\_LAS 130 vLLM SJF → vLLM SJF (S) 125) © 125 LO 120 115 115 110 110 105 105 3.0 3.5 2.5 3.0 3.5 1.5 2.0 2.5 4.0 4.5 1.5 2.0 4.0 4.5 5.0 QPS(req/s) QPS(reg/s) (c) 70% memory availability (d) 90% memory availability
+![](_page_6_Figure_15.jpeg)
+
+Figure 4: Comparison of average JCT of various scheduling policies on the GPT-J model.
+
+<span id="page-6-1"></span>> **[图片提取文字 (无描述)]:**
+> Astraca 170 Infercent Infercept VLLM FCFS VLLM FCFS VLLM LAS - vLLM LAS 160 → vLLM SJF -- vLLM SJF 150 (S) 150 E) 140 JCT(s) 140 130 130 120 120 3.0 3.5 2.5 3.0 3.5 1.5 2.0 2.5 4.0 4.5 1.5 2.0 4.0 4.5 QPS(req/s) QPS(req/s) (a) 30% memory availability (b) 50% memory availability 160 Astraca - Infercept VLLM FCFS → vLLM LAS 150 -- vLLM SJF 150 JCT(s) JCT(s) 140 Astraca 130 130 Infercept VLLM FCFS VLLM\_LAS 120 120 vLLM SJF 1.5 2.0 2.5 3.0 3.5 4.0 4.5 5.0 1.5 2.0 2.5 3.0 3.5 4.0 4.5 5.0 QPS(req/s) QPS(req/s) (c) 70% memory availability (d) 90% memory availability
+![](_page_6_Figure_17.jpeg)
+
+Figure 5: Comparison of average JCT of various scheduling policies on the Vicuna-13B model.
+
+itself intensifies resource contention. As shown in Figures 5, the performance degradation of baseline methods under memory pressure is more severe. At 30% memory availability and a high load of QPS=5, Astraea achieves a JCT of 140.02s. This is a significant improvement over vLLM-SJF (171.16s) and vLLM-LAS (153.96s), showcasing Astraea's robustness when scheduling for larger models. Even in the high-availability 90% memory scenario, Astraea's JCT at QPS=5 (132.53s) is 13.4% and 16.0% lower than Infercept and vLLM-FCFS, respectively.
+
+In summary, the results across both models validate our state-aware scheduling and adaptive cache management are effective. The benefits of Astraea are particularly magnified in challenging, resource-constrained environments and on larger-scale models, which are representative of real-world production scenarios.
+
+### 5.3 Ablation Study
+
+To further dissect the sources of Astraea's performance advantages, we designed an ablation study to isolate the contribution of our core Stateful-MLFQ scheduling algorithm from the adaptive KV cache management policy. To achieve this, we deployed Stateful-MLFQ and all baseline scheduling algorithms on top of the native vLLM framework, which uses a PagedAttention memory manager without cache swapping or discarding.
+
+<span id="page-7-0"></span>> **[图片提取文字 (无描述)]:**
+> 170.5 170 30% GPU memory availability 50% GPU memory availability 160 70% GPU memory availability 90% GPU memory availability 150 140.8 140 137.7 136.7 132.7 131.1 130.5 130.6 130 128.8 128.0 128.0 126.8 125.1 123.5 120 116.5 Stateful MLFQ **FCFS** LAS SJF Algorithms (a) GPT-J model 30% GPU memory availability 165 164.4 50% GPU memory availability 70% GPU memory availability 160 158.7 90% GPU memory availability 156.1 156.6 154.7 155 153.9 152.1 150.0\_150.7 150.9 150.0 149.9 150 146.2146.2 145 Stateful MLFQ **FCFS** LAS SJF Algorithms
+![](_page_7_Figure_3.jpeg)
+
+Figure 6: Ablation study comparing the performance of different scheduling algorithms on the (a) GPT-J and (b) Vicuna-13B models at a fixed load of OPS=3.
+
+(b) Vicuna-13B model
+
+The results at a fixed system load of QPS=3 are shown in Figure 6. On the GPT-J model (Figure 6a), Stateful-MLFQ demonstrates the best performance across all memory configurations. Its advantage is particularly evident under high memory pressure. For instance, at 30% memory availability, Stateful-MLFQ's JCT of 137.66s is 2.3% lower than FCFS, and a significant 19.3% lower than SJF. This shows that even without our adaptive cache manager, the lifecycle-aware scheduling logic can effectively mitigate queuing delay and head-of-line blocking.
+
+We further validated the algorithm's effectiveness on the larger Vicuna-13B model (Figure 6b). In the most memory-constrained (30%) scenario, Stateful-MLFQ's average JCT was 146.24s, yielding performance improvements of 2.5%, 3.8%, and 11.0% compared to FCFS, LAS, and SJF, respectively. This result confirms the robust advantage of our state-aware scheduling policy under high memory pressure on large-scale models. In summary, the ablation study proves that Stateful-MLFQ is a potent scheduling algorithm in its own right, exhibiting good generality and stability across different models and resource configurations.
+
+### 5.4 Sensitivity, Overhead, and Stability
+
+We conducted further analyses to evaluate the robustness of our hyperparameter choices and the practical overhead of our system. A parameter sensitivity study confirmed that our default-chosen thresholds for both the aging mechanism and the MLFQ token costs are effective and near-optimal. Furthermore, we quantified the computational overhead of the Astraea scheduler, finding it to be negligible, accounting for only 0.0006% of the average JCT in a high-load scenario.
+
+We also analyzed system stability by measuring the degradation of JCT as QPS increases. Under high memory pressure (30% availability), the JCT of baseline methods like vLLM-SJF increased by as much as 51.9% when moving from low to high load, whereas Astraea's JCT increased by only 16.2%. This demonstrates Astraea's superior stability and robustness in contentious environments. The detailed results and corresponding figures for these analyses are provided in Appendix B and C.
+
+### 6 Related Work
+
+The optimization of LLM inference serving is a rapidly evolving field. Our work is positioned within the emerging domain of advanced scheduling for multi-stage agentic workflows, establishing a distinct research direction that differs from prior work in memory and batching optimizations and scheduling for one-shot queries.
+
+Memory and Batching Optimizations. A lot of research aims to mitigate the large KV cache overhead to improve GPU throughput. Innovations in memory management, such as vLLM's PagedAttention [20], LightLLM's token-level management [26], and S3's pre-allocation scheme [18], focus on finer-grained control. Other approaches include OLLA [36], which optimizes array lifetime and location to cut memory usage without model changes, and FlashAttention [8], an IO-aware exact attention algorithm that reduces memory reads/writes for faster training and longer sequences. Concurrently, advanced batching techniques like ORCA's continuous batching [48] and the split-and-merge in Sarathi [2] and DeepSpeed-FastGen [14] optimize request grouping. Batching innovations also cover DVABatch [7], introducing diversity-aware multi-entry multiexit batching for DNN serving, and FlexGen [34], enabling highthroughput LLM inference on a single GPU via memory aggregation and compression. While foundational, these methods mainly optimize individual computational segments and not the inter segment scheduling in agentic workflows with long I/O phases.
+
+Scheduling Policies. Another line of work focuses on scheduling policies. For single-request optimization, FastServe [43] uses job-level preemption to prioritize short queries. REEF [12] achieves microsecond-scale preemption for low-latency GPU-accelerated DNN inference. In multi-tenant scenarios, VTC [33] employs a cost function to ensure fairness. Other directions include disaggregation, with systems like Splitwise [28], TetriInfer [15], and Dist-Serve [50] separating prefill and decode stages for better load balancing. Model parallelism is leveraged by AlpaServe [23] for statistical multiplexing, improving latency under bursty workloads. Llumnix [37] introduces dynamic scheduling to handle heterogeneous requests and tail latencies. However, these schedulers target traditional, one-shot LLM queries. Infercept [1] and LAMPS [32]
+
+pioneer offloading KV cache during I/O waits to improve memory utilization. Autellix[[25\]](#page-9-26) first proposed a request-level scheduling policy (LAS) for agentic tasks. In contrast to Autellix's retrospective policy, Astraea is the first to introduce proactive scheduling that leverages predictions of both compute and I/O durations to optimize for the global JCT.
+
+# **7 Conclusion**
+
+This paper focuses on the efficiency challenges posed by agentic workflows emerging from tool-augmented large language models (LLMs). Such workflows often involve frequent external API calls, particularly Web-based retrieval and service access. In these scenarios, the alternating pattern of computation and I/O commonly leads to significant end-to-end latency. To address this, we model the request lifecycle with the global objective of minimizing average job completion time, and prove that the scheduling problem is NP-hard. Building on this, we propose Astraea, an inference serving engine tailored for agentic workflows. At its core lies a stateaware multi-level feedback queue (Stateful-MLFQ) scheduling algorithm that dynamically adjusts priorities and extends optimization from individual segments to the entire lifecycle. Experiments across diverse workloads and models demonstrate that Astraea substantially reduces average JCT, validating its effectiveness and robustness in Web-augmented inference scenarios.
+
+# **References**
+
+- <span id="page-9-43"></span>[1] Reyna Abhyankar, Zijian He, Vikranth Srivatsa, Hao Zhang, and Yiying Zhang. Infercept: efficient intercept support for augmented large language model inference. In *Proceedings of the 41st International Conference on Machine Learning*, pages 81–95, 2024.
+- <span id="page-9-32"></span>[2] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav Gulavani, Alexey Tumanov, and Ramachandran Ramjee. Taming {Throughput-Latency} tradeoff in {LLM} inference with {Sarathi-Serve}. In *18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24)*, pages 117–134, 2024.
+- <span id="page-9-25"></span>[3] Suno AI. Bark: text-to-speech model, 2023. [Accessed: Sep. 28, 2025].
+- <span id="page-9-16"></span>[4] Yuntao Bai, Saurav Kadavath, Sandipan Kundu, Amanda Askell, Jackson Kernion, Andy Jones, Anna Chen, Anna Goldie, Azalia Mirhoseini, Cameron McKinnon, et al. Constitutional ai: Harmlessness from ai feedback. *arXiv preprint arXiv:2212.08073*, 2022.
+- <span id="page-9-22"></span>[5] Lin Chen, Jinsong Li, Xiaoyi Dong, Pan Zhang, Conghui He, Jiaqi Wang, Feng Zhao, and Dahua Lin. Sharegpt4v: Improving large multi-modal models with better captions. In *European Conference on Computer Vision*, pages 370–387. Springer, 2024.
+- <span id="page-9-14"></span>[6] Lu Chen, Zhi Chen, Bowen Tan, Sishan Long, Milica Gašić, and Kai Yu. Agentgraph: Toward universal dialogue management with structured deep reinforcement learning. *IEEE/ACM Transactions on Audio, Speech, and Language Processing*, 27(9):1378–1391, 2019.
+- <span id="page-9-34"></span>[7] Weihao Cui, Han Zhao, Quan Chen, Hao Wei, Zirui Li, Deze Zeng, Chao Li, and Minyi Guo. {DVABatch}: Diversity-aware {Multi-Entry}{Multi-Exit} batching for efficient processing of {DNN} services on {GPUs}. In *2022 USENIX Annual Technical Conference (USENIX ATC 22)*, pages 183–198, 2022.
+- <span id="page-9-31"></span>[8] Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Ré. Flashattention: Fast and memory-efficient exact attention with io-awareness. *Advances in neural information processing systems*, 35:16344–16359, 2022.
+- <span id="page-9-7"></span>[9] Google DeepMind. Ai achieves silver-medal standard solving international mathematical olympiad problems, 2024. [Accessed: Nov. 18, 2024].
+- <span id="page-9-0"></span>[10] Luyu Gao, Aman Madaan, Shuyan Zhou, Uri Alon, Pengfei Liu, Yiming Yang, Jamie Callan, and Graham Neubig. Pal: Program-aided language models. In *International Conference on Machine Learning*, pages 10764–10799. PMLR, 2023.
+- <span id="page-9-3"></span>[11] Izzeddin Gur, Hiroki Furuta, Austin V Huang, Mustafa Safdari, Yutaka Matsuo, Douglas Eck, and Aleksandra Faust. A real-world webagent with planning, long context understanding, and program synthesis. In *The Twelfth International Conference on Learning Representations*, 2024.
+- <span id="page-9-37"></span>[12] Mingcong Han, Hanze Zhang, Rong Chen, and Haibo Chen. Microsecond-scale preemption for concurrent {GPU-accelerated}{DNN} inferences. In *16th USENIX Symposium on Operating Systems Design and Implementation (OSDI 22)*, pages 539–558, 2022.
+- <span id="page-9-19"></span>[13] Shibo Hao, Tianyang Liu, Zhen Wang, and Zhiting Hu. Toolkengpt: Augmenting frozen language models with massive tools via tool embeddings. *Advances in neural information processing systems*, 36:45870–45894, 2023.
+- <span id="page-9-33"></span>[14] Connor Holmes, Masahiro Tanaka, Michael Wyatt, Ammar Ahmad Awan, Jeff Rasley, Samyam Rajbhandari, Reza Yazdani Aminabadi, Heyang Qin, Arash Bakhtiari, Lev Kurilenko, et al. Deepspeed-fastgen: High-throughput text generation for llms via mii and deepspeed-inference. *arXiv preprint arXiv:2401.08671*, 2024.
+- <span id="page-9-40"></span>[15] Cunchen Hu, Heyang Huang, Liangliang Xu, Xusheng Chen, Jiang Xu, Shuang Chen, Hao Feng, Chenxi Wang, Sa Wang, Yungang Bao, et al. Inference without interference: Disaggregate llm inference for mixed downstream workloads. *arXiv preprint arXiv:2401.11181*, 2024.
+- <span id="page-9-4"></span>[16] Carlos E Jimenez, John Yang, Alexander Wettig, Shunyu Yao, Kexin Pei, Ofir Press, and Karthik Narasimhan. Swe-bench: Can language models resolve realworld github issues? In *12th International Conference on Learning Representations, ICLR 2024*, 2024.
+- <span id="page-9-11"></span>[17] Yunho Jin, Chun-Feng Wu, David Brooks, and Gu-Yeon Wei. ^3: Increasing gpu utilization during generative inference for higher throughput. *Advances in Neural Information Processing Systems*, 36:18015–18027, 2023.
+- <span id="page-9-29"></span>[18] Yunho Jin, Chun-Feng Wu, David Brooks, and Gu-Yeon Wei. ^3: Increasing gpu utilization during generative inference for higher throughput. *Advances in Neural Information Processing Systems*, 36:18015–18027, 2023.
+- <span id="page-9-8"></span>[19] Adarsh Kumarappan, Mo Tiwari, Peiyang Song, Robert Joseph George, Chaowei Xiao, and Anima Anandkumar. Leanagent: Lifelong learning for formal theorem proving. In *The Thirteenth International Conference on Learning Representations*, 2025.
+- <span id="page-9-27"></span>[20] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention. In *Proceedings of the 29th symposium on operating systems principles*, pages 611–626, 2023.
+- <span id="page-9-13"></span>[21] LangChain. Langchain, 2023. [Accessed: Sep. 28, 2025].
+- <span id="page-9-9"></span>[22] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng, Xin Jin, Yanping Huang, Zhifeng Chen, Hao Zhang, Joseph E Gonzalez, et al. {AlpaServe}: Statistical multiplexing with model parallelism for deep learning
+
+- serving. In *17th USENIX Symposium on Operating Systems Design and Implementation (OSDI 23)*, pages 663–679, 2023.
+- <span id="page-9-41"></span>[23] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng, Xin Jin, Yanping Huang, Zhifeng Chen, Hao Zhang, Joseph E Gonzalez, et al. {AlpaServe}: Statistical multiplexing with model parallelism for deep learning serving. In *17th USENIX Symposium on Operating Systems Design and Implementation (OSDI 23)*, pages 663–679, 2023.
+- <span id="page-9-1"></span>[24] Ruibo Liu, Jason Wei, Shixiang Shane Gu, Te-Yen Wu, Soroush Vosoughi, Claire Cui, Denny Zhou, and Andrew M Dai. Mind's eye: Grounded language model reasoning through simulation. *arXiv preprint arXiv:2210.05359*, 2022.
+- <span id="page-9-26"></span>[25] Michael Luo, Xiaoxiang Shi, Colin Cai, Tianjun Zhang, Justin Wong, Yichuan Wang, Chi Wang, Yanping Huang, Zhifeng Chen, Joseph E Gonzalez, et al. Autellix: An efficient serving engine for llm agents as general programs. *arXiv preprint arXiv:2502.13965*, 2025.
+- <span id="page-9-28"></span>[26] ModelTC. Lightllm, 2024. [Accessed: Sep. 28, 2025].
+- <span id="page-9-10"></span>[27] NVIDIA. Fastertransformer, 2023. [Accessed: Sep. 28, 2025].
+- <span id="page-9-39"></span>[28] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo Goiri, Saeed Maleki, and Ricardo Bianchini. Splitwise: Efficient generative llm inference using phase splitting. In *2024 ACM/IEEE 51st Annual International Symposium on Computer Architecture (ISCA)*, pages 118–132. IEEE, 2024.
+- <span id="page-9-2"></span>[29] Ofir Press, Muru Zhang, Sewon Min, Ludwig Schmidt, Noah A Smith, and Mike Lewis. Measuring and narrowing the compositionality gap in language models. *arXiv preprint arXiv:2210.03350*, 2022.
+- <span id="page-9-15"></span>[30] Alec Radford, Karthik Narasimhan, Tim Salimans, Ilya Sutskever, et al. Improving language understanding by generative pre-training. Technical report, OpenAI, 2018.
+- <span id="page-9-24"></span>[31] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Björn Ommer. High-resolution image synthesis with latent diffusion models. In *Proceedings of the IEEE/CVF conference on computer vision and pattern recognition*, pages 10684–10695, 2022.
+- <span id="page-9-44"></span>[32] Rana Shahout, Cong Liang, Shiji Xin, Qianru Lao, Yong Cui, Minlan Yu, and Michael Mitzenmacher. Fast inference for augmented large language models. *arXiv preprint arXiv:2410.18248*, 2024.
+- <span id="page-9-38"></span>[33] Ying Sheng, Shiyi Cao, Dacheng Li, Banghua Zhu, Zhuohan Li, Danyang Zhuo, Joseph E Gonzalez, and Ion Stoica. Fairness in serving large language models. In *18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24)*, pages 965–988, 2024.
+- <span id="page-9-35"></span>[34] Ying Sheng, Lianmin Zheng, Binhang Yuan, Zhuohan Li, Max Ryabinin, Beidi Chen, Percy Liang, Christopher Ré, Ion Stoica, and Ce Zhang. Flexgen: Highthroughput generative inference of large language models with a single gpu. In *International Conference on Machine Learning*, pages 31094–31116. PMLR, 2023.
+- <span id="page-9-21"></span>[35] Mohit Shridhar, Xingdi Yuan, Marc-Alexandre Cote, Yonatan Bisk, Adam Trischler, and Matthew Hausknecht. Alfworld: Aligning text and embodied environments for interactive learning. In *International Conference on Learning Representations*, 2018.
+- <span id="page-9-30"></span>[36] Benoit Steiner, Mostafa Elhoushi, Jacob Kahn, and James Hegarty. Olla: Optimizing the lifetime and location of arrays to reduce the memory usage of neural networks. *arXiv preprint arXiv:2210.12924*, 2022.
+- <span id="page-9-42"></span>[37] Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang, Yong Li, and Wei Lin. Llumnix: Dynamic scheduling for large language model serving. In *18th USENIX symposium on operating systems design and implementation (OSDI 24)*, pages 173–191, 2024.
+- <span id="page-9-17"></span>[38] Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric Hambro, Faisal Azhar, et al. Llama: Open and efficient foundation language models. *arXiv preprint arXiv:2302.13971*, 2023.
+- <span id="page-9-5"></span>[39] Xingyao Wang, Boxuan Li, Yufan Song, Frank F Xu, Xiangru Tang, Mingchen Zhuge, Jiayi Pan, Yueqi Song, Bowen Li, Jaskirat Singh, et al. Openhands: An open platform for ai software developers as generalist agents. In *The Thirteenth International Conference on Learning Representations*, 2025.
+- <span id="page-9-18"></span>[40] Komatsuzaki A Wang B. Gpt-j-6b: a 6 billion parameter autoregressive language model, 2021. [Accessed: Sep. 28, 2025].
+- <span id="page-9-12"></span>[41] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, et al. Chain-of-thought prompting elicits reasoning in large language models. *Advances in neural information processing systems*, 35:24824–24837, 2022.
+- <span id="page-9-23"></span>[42] Philip Welsby and Bernard MY Cheung. Chatgpt, 2023.
+- <span id="page-9-36"></span>[43] Bingyang Wu, Yinmin Zhong, Zili Zhang, Shengyu Liu, Fangyue Liu, Yuanhang Sun, Gang Huang, Xuanzhe Liu, and Xin Jin. Fast distributed inference serving for large language models. *arXiv preprint arXiv:2305.05920*, 2023.
+- <span id="page-9-6"></span>[44] John Yang, Carlos E Jimenez, Alexander Wettig, Kilian Lieret, Shunyu Yao, Karthik Narasimhan, and Ofir Press. Swe-agent: Agent-computer interfaces enable automated software engineering. *Advances in Neural Information Processing Systems*, 37:50528–50652, 2024.
+- <span id="page-9-20"></span>[45] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William Cohen, Ruslan Salakhutdinov, and Christopher D Manning. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. In *Proceedings of the 2018 Conference*
+
+- <span id="page-10-0"></span> on Empirical Methods in Natural Language Processing, pages 2369–2380, 2018.
+   [46] Shunyu Yao, Howard Chen, John Yang, and Karthik Narasimhan. Webshop: Towards scalable real-world web interaction with grounded language agents. Advances in Neural Information Processing Systems, 35:20744–20757, 2022.
+- <span id="page-10-2"></span>[47] Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan, and Yuan Cao. React: Synergizing reasoning and acting in language models. In International Conference on Learning Representations (ICLR), 2023.
+- <span id="page-10-5"></span>[48] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. Orca: A distributed serving system for {Transformer-Based} generative models. In 16th USENIX Symposium on Operating Systems Design and Implementation (OSDI 22), pages 521–538, 2022.
+- <span id="page-10-4"></span>[49] Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric Xing, et al. Judging Ilmas-a-judge with mt-bench and chatbot arena. Advances in neural information processing systems, 36:46595–46623, 2023.
+- <span id="page-10-6"></span>[50] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xuanzhe Liu, Xin Jin, and Hao Zhang. {DistServe}: Disaggregating prefill and decoding for goodput-optimized large language model serving. In 18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24), pages 193–210, 2024.
+- <span id="page-10-1"></span>[51] Shuyan Zhou, Frank F Xu, Hao Zhu, Xuhui Zhou, Robert Lo, Abishek Sridhar, Xianyi Cheng, Tianyue Ou, Yonatan Bisk, Daniel Fried, et al. Webarena: A realistic web environment for building autonomous agents. In *The Twelfth International* Conference on Learning Representations, 2024.
+
+### <span id="page-10-3"></span>A Problem Complexity
+
+We prove that the scheduling problem is NP-hard by reduction from the classic NP-hard problem of minimizing the total completion time on a single machine with precedence constraints, denoted as  $1|prec|\sum C_i$ .
+
+PROOF. An instance of  $1|prec|\sum C_j$  consists of a set of jobs  $J = \{J_1, J_2, ..., J_n\}$ , where each job  $J_k$  has a processing time  $p_k$ , and a precedence relation prec.
+
+Given an arbitrary instance of  $1|prec|\sum C_j$ , we construct an instance of our LLM agent scheduling problem as follows. We consider a simplified version of our problem where the batch size is one, meaning the GPU can only process one computational segment at a time.
+
+- (1) **Decomposition**: First, we decompose the precedence graph of jobs into a set of disjoint chains (e.g.,  $J_a \rightarrow J_b \rightarrow J_c$ ) and isolated jobs (e.g.,  $J_d$ ).
+- (2) Mapping Construction:
+  - For each chain of jobs, like J<sub>a</sub> → J<sub>b</sub> → J<sub>c</sub>, we create
+    a single parent request R<sub>i</sub> composed of a sequence of
+    segments ⟨S<sub>i</sub><sup>1</sup>, S<sub>i</sub><sup>2</sup>, S<sub>i</sub><sup>3</sup>⟩.
+  - For each isolated job  $J_d$ , we create a single-segment request  $R_i = \langle S_i^1 \rangle$ .
+- (3) Service Time Assignment: The processing time p<sub>k</sub> of each job J<sub>k</sub> is mapped to the computational service time of its corresponding segment S<sub>k</sub>. For the purpose of this reduction, we assume the API call time for all constructed segments is zero. Specifically:
+  - For the request  $R_i$  derived from the chain  $J_a \to J_b \to J_c$ , we set:  $T_{comp}(S_i^1) = p_a$  and  $T(A_i^1) = 0$ ;  $T_{comp}(S_i^2) = p_b$  and  $T(A_i^2) = 0$ ; and so on.
+  - For the request  $R_j$  derived from the isolated job  $J_d$ , we set  $T_{comp}(S_j^1) = p_d$  and  $T(A_j^1) = 0$ .
+
+This construction is completed in polynomial time. By setting the API call times to zero, the dependency between segments  $S_i^j$  and  $S_i^{j+1}$  becomes an immediate precedence constraint that perfectly mimics the  $J_k \to J_l$  relationship in the original problem. A
+
+valid schedule for the constructed requests is thus a permutation of the computational tasks  $\{T_{comp}(S_1), ..., T_{comp}(S_n)\}$  that respects the intra-request ordering, which directly corresponds to a valid schedule for the jobs  $\{J_1, ..., J_n\}$ .
+
+The completion time of a job  $J_k$  ( $C_k$ ) is equivalent to the completion time of the computational part of its corresponding segment  $S_k$ . Therefore, minimizing the sum of job completion times  $\sum C_k$  is equivalent to minimizing the sum of segment completion times. As minimizing the total (or average) Job Completion Time (JCT) of all requests requires minimizing the sum of its underlying segment completion times, a solution to our problem provides a solution to the  $1|prec|\sum C_i$  problem.
+
+Since an arbitrary instance of the NP-hard problem  $1|prec|\sum C_j$  can be reduced in polynomial time to a special case of our LLM agent scheduling problem (where batch size is 1 and API times are 0), our general problem is also NP-hard.
+
+### **B** Parameter Sensitivity Analysis
+
+To validate the rationality and robustness of the key hyperparameter choices in our proposed method, this section conducts a sensitivity analysis on the aging threshold and the queue cost thresholds. All experiments were performed on the GPT-J model with 50% memory availability.
+
+### **B.1** Analysis of Aging Threshold
+
+The aging mechanism is key to ensuring fairness in the Stateful-MLFQ algorithm. To investigate the impact of its core parameter, the aging threshold, we conducted a series of sensitivity experiments, setting the threshold (response ratio) to its default value of 5, a halved value of 2.5, a doubled value of 10, and infinity (disabling the mechanism). The results in Figure 7 show that disabling the aging mechanism performed the worst at all tested QPS loads, with its JCT being up to 7% higher than the default configuration. This confirms the critical role of the anti-starvation mechanism. Furthermore, the results show that halving or doubling the threshold from the default value both led to an increase in average JCT, proving that an optimal parameter range exists.
+
+<span id="page-10-7"></span>> **[图片提取文字 (无描述)]:**
+> default\_aging 130 half\_aging double\_aging 125 infinite\_aging (S) 120-115 110 105 5.0 1.0 1.5 2.0 2.5 3.0 3.5 4.0 4.5 QPS(req/s)
+![](_page_10_Figure_26.jpeg)
+
+Figure 7: Impact of the aging threshold on performance under different system loads.
+
+### **B.2** Analysis of Queue Cost Thresholds
+
+In the Stateful-MLFQ algorithm, queue migration thresholds are determined by the computational cost (token count) of a segment. The default thresholds for the six queues were set to [128, 256,
+
+384, 512, 640]. To examine the sensitivity of this parameter, we halved and doubled the thresholds while keeping other configurations constant. The results in Figure 8 show that the default configuration maintained optimal performance across all loads. Setting the thresholds too low caused medium-length segments to be demoted prematurely, while setting them too high weakened the protection for I/O-intensive requests.
+
+<span id="page-11-0"></span>> **[图片提取文字 (无描述)]:**
+> default token half token 125 double\_token 120 JCT(s) 115 110 105 3.0 QPS(req/s) 1.5 5.0 2.0 2.5 3.5 4.0 4.5 1.0
+![](_page_11_Figure_2.jpeg)
+
+Figure 8: Impact of queue cost thresholds on performance under different system loads.
+
+### C System Overhead and Stability Analysis
+
+To quantify the computational overhead of the Stateful-MLFQ scheduling logic itself, we tested the duration of a single scheduling decision. Under a typical high-load scenario (GPT-J 6B model, 50%
+
+memory availability, QPS=5), the average single scheduling decision time for Astraea was 0.132 milliseconds. Given that a complete request in the workload averages 5.17 segments, the total scheduling overhead for a full request lifecycle is approximately 0.68 milliseconds. Compared to the average JCT of 123.6 seconds in this scenario, the total computational overhead of the scheduler itself is negligible, accounting for only 0.0006%.
+
+The stability of Astraea is best demonstrated by its performance under high-load and memory-constrained conditions, as shown in the performance evaluation (Figure 4). Stability can be measured by the steepness of the JCT curve as QPS increases. In the most contentious scenarios (e.g., 30% memory availability on GPT-J, Figure 4a), baseline methods exhibit high instability. For instance, the JCT of vLLM-SJF skyrockets from 116.05s at QPS=1 to 176.34s at QPS=5, a 51.9% increase, indicating severe performance degradation under load. In contrast, Astraea's JCT curve remains significantly flatter, rising from 105.77s to only 122.88s, an increase of just 16.2%. This demonstrates that Astraea possesses superior load adaptability and scheduling stability. By effectively mitigating resource contention and head-of-line blocking through its state-aware policies, it maintains a predictable and robust performance profile, which is a critical requirement for deploying LLM agent services in production environments with fluctuating loads and stringent resource constraints.

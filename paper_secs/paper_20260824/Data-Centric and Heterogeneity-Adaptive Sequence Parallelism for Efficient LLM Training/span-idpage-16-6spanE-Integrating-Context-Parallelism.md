@@ -1,0 +1,3 @@
+# <span id="page-16-6"></span>E Integrating Context Parallelism
+
+Context parallelism [6, 24, 27, 29] is also an important technique for long context training, as illustrated in §2.1.3. As a different paradigm to scatter sequences across devices, CP is orthogonal to our work, and can be integrated into FlexSP. Specifically, similar to FlexSP utilizing ZeRO and flexible SP, we can employ TP, ZeRO and CP, fix the parallelism degree of TP, and employ the flexible sequence parallelism strategy of FlexSP to achieve flexible CP, which adaptively adjusts the CP group size according to the varied-length sequences. We'll integrate CP into our system as the future work.

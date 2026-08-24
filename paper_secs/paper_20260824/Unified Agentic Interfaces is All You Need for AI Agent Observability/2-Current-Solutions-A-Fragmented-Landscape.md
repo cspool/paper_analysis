@@ -1,0 +1,45 @@
+# 2 Current Solutions: A Fragmented Landscape
+
+Having established the unique challenges of agent observability, we now survey existing solutions. Our analysis reveals a maturing ecosystem converging toward OpenTelemetry standards [\[9,](#page-4-14) [23\]](#page-4-15), yet fundamentally limited by reliance on application-layer instrumentation that cannot address the instrumentation and semantic gaps.
+
+#### 2.1 Methodology: Ecosystem Survey
+
+We surveyed agentic observability tooling as of early 2025, examining both industrial deployments and academic research. Our analysis covers two areas: (1) Industrial tools, which are productionready solutions providing SDKs, proxies, or specifications for agent framework integration (Table 2), and (2) Academic research, which includes foundational work on agent monitoring, interpretability, and evaluation that informs current tooling design.
+
+#### 2.2 Key Findings: The Limits of Current Approaches
+
+Industrial Tools. Analysis of 18 production systems (Table 2) reveals critical limitations: all tools require application-level instrumentation, creating maintenance burden and tampering vulnerabilities; despite OpenTelemetry adoption by five tools [\[23\]](#page-4-15), agentspecific attributes remain unstandardized; while tools like TruLens and Arize Phoenix provide LLM-powered evaluation, none explain why decisions were made through reasoning trace reconstruction; and no tool observes kernel syscalls, TLS payloads, or subprocess execution directly.
+
+Academic Research. Four research threads address complementary aspects: agent monitoring frameworks [\[12,](#page-4-16) [32\]](#page-4-17) focus on trajectory logging but assume instrumented runtimes; mechanistic interpretability [\[19\]](#page-4-18) reveals model internal reasoning through attention analysis; evaluation methodologies [\[27\]](#page-4-19) develop semantic correctness metrics but operate on logged outputs rather than system-boundary telemetry; and system-level observability [\[41\]](#page-4-20) using eBPF to capture kernel events and TLS payloads, though this approach only observes post-hoc without real-time intervention, lacks standardized schemas for multi-agent coordination, and cannot observe ML inference stack internals.
+
+These findings reflect a deeper problem: existing approaches inherit design assumptions from two incompatible paradigms, neither suited for production agentic systems.
+
+### 2.3 Redefining Agent Observability for Production Systems
+
+Current approaches define observability narrowly, missing critical production requirements. Academic definitions focus on individual agent internal consistency (beliefs, intentions, actions) but ignore
+
+| #  | Tool / SDK (year)                  | Integration path                                          | What it provides                                                             | License / model    | Notes                                            |
+|----|------------------------------------|-----------------------------------------------------------|------------------------------------------------------------------------------|--------------------|--------------------------------------------------|
+| 1  | LangSmith [20] (2023)              | Add import<br>langsmith<br>to LangChain/LangGraph<br>apps | Request/response traces, prompt<br>& token stats, evaluations                | SaaS, free tier    | Tight LangChain integration;<br>OTel export beta |
+| 2  | Helicone [17] (2023)               | Reverse-proxy<br>or<br>Python/JS SDK                      | Logs OpenAI-style calls, cost/la<br>tency dashboards                         | OSS (MIT) + hosted | Proxy model requires no code<br>changes          |
+| 3  | Traceloop [34] (2024)              | One-line SDK import âĘŠ<br>OTel                           | OTel spans for prompts, tools,<br>sub-calls                                  | SaaS, free tier    | Standard OTel data compati<br>bility             |
+| 4  | Arize Phoenix [3] (2024)           | pip install, OpenInfer<br>ence tracer                     | Local UI + vector store for traces,<br>automatic evals                       | Apache-2.0         | Includes open-source UI for<br>debugging         |
+| 5  | Langfuse [21] (2024)               | SDK or OTel OTLP                                          | Nested<br>traces,<br>cost<br>metrics,<br>prompt management                   | OSS (MIT) + cloud  | Popular for RAG/multi-agent<br>projects          |
+| 6  | WhyLabs LangKit [38]<br>(2023)     | Text metrics wrapper                                      | Drift, toxicity, sentiment, PII de<br>tection                                | Apache-2.0 core    | Focuses on text-quality met<br>rics              |
+| 7  | PromptLayer [31] (2022)            | Decorator or proxy                                        | Prompt chain timeline, diff & re<br>play                                     | SaaS               | Early solution, minimal code<br>changes          |
+| 8  | Literal AI [4] (2024)              | Python SDK + UI                                           | RAG-aware traces, eval experi<br>ments                                       | OSS + SaaS         | Targets<br>chatbot<br>product<br>teams           |
+| 9  | W&B Weave/Traces [7]<br>(2024)     | import weave or SDK                                       | Links to W&B projects, captures<br>code/IO                                   | SaaS               | Integrates<br>with<br>existing<br>W&B workflows  |
+| 10 | Honeycomb<br>Gen<br>AI [18] (2024) | Send OTel spans                                           | Heat-maps on prompt spans, la<br>tency                                       | SaaS               | Built on mature trace store                      |
+| 11 | OTel GenAI Conv. [9]<br>(2024)     | Spec + Python lib                                         | Standard span names for model<br>s/agents                                    | Apache-2.0         | Provides semantic conven<br>tions                |
+| 12 | OpenInference<br>[2]<br>(2023)     | Tracer wrapper                                            | JSON schema for traces                                                       | Apache-2.0         | Specification (not hosted ser<br>vice)           |
+| 13 | AgentOps [1] (2024)                | Proxy injection into LLM<br>calls                         | Time-travel debugging, multi<br>framework<br>support<br>(CrewAI,<br>AutoGen) | OSS                | Session replay across agent<br>frameworks        |
+| 14 | TruLens [36] (2024)                | Wrapper (TruLlama) or<br>SDK                              | Multi-turn session tracking, cus<br>tom feedback functions                   | OSS + hosted       | Evaluation-focused<br>with<br>feedback loops     |
+| 15 | Phospho [30] (2024)                | Log ingestion API                                         | Clustering/labeling of LLM out<br>puts, anomaly detection                    | OSS                | Post-hoc NLP analytics on<br>collected data      |
+| 16 | MLflow [11] (2024)                 | mlflow.autolog()<br>for<br>LLMs                           | Experiment tracking, artifact log<br>ging (prompts/outputs)                  | Apache-2.0         | General MLOps extended to<br>generative AI       |
+| 17 | Maxim AI [26] (2024)               | One-line SDK integration                                  | Agent trajectory visualization,<br>cost/latency analytics                    | SaaS               | Polished dashboard for pro<br>duction monitoring |
+| 18 | Guardrails.AI<br>[15]<br>(2023)    | Input/output validators                                   | Real-time safety checks (toxicity,<br>PII), auto-retry on violations         | OSS (Apache-2.0)   | Observability through safety<br>enforcement      |
+
+system-level concerns like multi-layer costs and multi-agent coordination. Industrial tools provide model-centric input/output analysis, capturing inference-level telemetry but missing tool execution, inter-agent communication, and cross-layer causality. Production deployment demands system-level, multi-agent observability addressing cost transparency across all layers, tamper-resistant audit trails, multi-agent coordination visibility, and unified causal graphs linking intent to execution. This reveals why current solutions are inadequate: they optimize for single-agent, single-layer monitoring while production requires multi-agent, multi-layer, system-centric observability.
+
+The Path Forward. Achieving production-grade agentic observability demands resolving two architectural tensions: (1) Where to capture telemetry? Application instrumentation is semantically rich but fragile and tamperable; system boundaries are stable and tamper-resistant but semantically opaque. (2) Who analyzes telemetry? Human operators understand intent but cannot scale to millions of events; rule-based systems scale but cannot interpret semantic failures. A complete solution must bridge both gaps simultaneously: capturing at stable interfaces while analyzing with autonomous intelligence. We now present a vision for such an architecture.
+

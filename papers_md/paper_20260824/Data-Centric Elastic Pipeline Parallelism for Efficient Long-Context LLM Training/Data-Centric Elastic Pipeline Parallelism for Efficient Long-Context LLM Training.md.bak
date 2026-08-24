@@ -1,0 +1,476 @@
+# InfiniPipe: Elastic Pipeline Parallelism for Efficient Variable-Length Long-Context LLM Training
+
+Shiju Wang<sup>1</sup> , Yujie Wang<sup>2</sup> , Fangcheng Fu<sup>3</sup> , Ao Sun<sup>4</sup> , Yinxiao Feng<sup>1</sup> , Zijian Zhu<sup>1</sup> , Bin Cui<sup>2</sup> , Xu Han<sup>1</sup> , Kaisheng Ma<sup>1</sup> <sup>1</sup>Tsinghua University, <sup>2</sup>Peking University, <sup>3</sup>Shanghai Jiao Tong University, <sup>4</sup>Beijing University of Posts and Telecommunications {wangsj25, fyx20, zhuzj23, han-xu, kaisheng}@tsinghua.edu.cn
+
+> alfredwang@pku.edu.cn, bin.cui@pku.edu.cn ccchengff@sjtu.edu.cn maydomine@bupt.edu.cn
+
+*Abstract*—Long context training is crucial for LLM's context extension. Existing schemes, such as sequence parallelism, incur substantial communication overhead. Pipeline parallelism (PP) reduces this cost, but its effectiveness hinges on partitioning granularity. Batch-level PP employing sequence packing exhibits high memory consumption in long-context scenarios, whereas token-level PP splitting sequences into slices alleviates memory overhead but may incur hardware under-utilization. Moreover, the skewed distribution of sequence length in real-world datasets renders monolithic and static granularity PP's sub-optimal performance. In this paper, we propose 1) *Elastic Pipeline Parallelism* (EPP) that orchestrates token-level PP and batch-level PP to adapt to resource and workload heterogeneity, and 2) *Stage-Aware Chunk-Level Adaptive Checkpointing* that efficiently integrates gradient checkpointing with EPP. Comprehensive experiments demonstrate that InfiniPipe achieves a 1.69× speedup over stateof-the-art systems. Our code is open-sourced at [https://github.](https://github.com/wsjdsg/InfiniPipe-code.git) [com/wsjdsg/InfiniPipe-code.git.](https://github.com/wsjdsg/InfiniPipe-code.git)
+
+# I. INTRODUCTION
+
+Large language models (LLMs) [\[3\]](#page-11-0), [\[4\]](#page-11-1), [\[8\]](#page-11-2), [\[11\]](#page-11-3), [\[24\]](#page-11-4), [\[34\]](#page-12-0) have achieved remarkable progress and have transformed a wide range of applications. Recent frontier models increasingly support longer contexts, drawing growing attention to efficient long-context training.
+
+Current long-context training techniques, such as Sequence Parallelism (SP) [\[7\]](#page-11-5), [\[17\]](#page-11-6), [\[21\]](#page-11-7), [\[25\]](#page-11-8) and Token-Level Pipeline Parallelism (token-level PP), employ *sequence splitting* to reduce the substantial activation memory overhead. Specifically, SP distributes a sequence spatially and incurs communication at each layer, whereas token-level PP schedules sequence slices' execution temporally, introducing negligible communication overhead. Modern clusters exhibit *bandwidth heterogeneity*: intra-node bandwidth is substantially higher than that of inter-node. As a result, SP is often bottlenecked by inefficient inter-node communication (see § [II-A\)](#page-1-0), and token-level PP could be utilized to optimize communication overhead.
+
+However, how to efficiently unleash the potential of PP is a non-trivial problem, and is highly *workload-related*. On the one hand, the trade-off between memory footprint and computation efficiency needs to be balanced, as shown in Fig. [1](#page-1-1) (a). Batch-level PP (e.g., DAPPLE [\[13\]](#page-11-9)) employs *sequence packing* to batch short sequences into a micro-batch. Yet for long sequences, enlarged micro-batch granularity magnifies stage-wise memory imbalance, frequently leading to out-ofmemory errors (OOM). Token-level PP, such as Seq1F1B [\[31\]](#page-12-1), mitigates memory imbalance by *sequence splitting*, but its finer-grained micro-batches reduce computational intensity and lead to performance degradation. On the other hand, a low bubble ratio, indicating high device occupancy, is crucial for PP's efficiency. The *sequence splitting* technique can be leveraged to increase the number of micro-batches and reduce the bubble ratio when there are few micro-batches. However, though sequences are evenly split, the workload between slices is not balanced due to the quadratic computation complexity of self-attention, which also harms efficiency.
+
+Moreover, the skewed distribution of sequence lengths further exposes the limitation of monolithic and static PP granularity. As shown in Fig. [1](#page-1-1) (b), real-world datasets such as *GitHub* contain highly skewed input sequences: the majority of sequences are under 16K in length, with less than 0.6% exceeding 64K. Recent LLMs [\[12\]](#page-11-10), [\[20\]](#page-11-11), [\[37\]](#page-12-2) explicitly adopt mixtures of short and long sequences. LLaMA3 [\[12\]](#page-11-10) indicates that mixing 0.1% of long-context data with short-context data optimizes performance across both short-context and longcontext benchmarks. This *long-tail* nature of sequence lengths reveals the dynamic characteristic of workload, motivating an *adaptive* and *hybrid* PP granularity: use *sequence packing* for short sequences while adaptively adjusting the granularity of *sequence splitting* for long sequences to tackle the complex trade-off among memory footprint, hardware utilization, and pipeline bubbles.
+
+Although orchestrating sequence packing and sequence splitting provides a promising path to adapt PP to heterogeneous workloads, it remains underexplored. Existing systems either ignore the skewed length distribution, relying on expertlevel manual tuning to determine a static splitting granularity [\[23\]](#page-11-12), [\[31\]](#page-12-1), or consider only sequence packing and overlook sequence splitting [\[14\]](#page-11-13), [\[36\]](#page-12-3), suffering from severe memory overhead. The methodologies above fail to generalize, lead to sub-optimal performance, and exhibit limited applicability in long-context training scenarios.
+
+In this paper, we propose *Elastic Pipeline Parallelism* (EPP) that features: 1) workload-balanced and adaptive sequence
+
+<span id="page-1-1"></span>![](_page_1_Figure_0.jpeg)
+
+Fig. 1: (a) Impact of *sequence splitting* on memory footprint and computation efficiency, where performance degradation is presented. (b) Length distribution of real-world datasets.
+
+splitting and packing, which is fully *automatic*, eliminating the need of manually tuning, 2) *heterogeneous* micro-batch (*Sequence Chunk* in Fig. 4) different from *homogeneous* micro-batch of monolithic PP (as shown in Fig. 2), and 3) *dynamic pipeline schedule*, which is necessitated by heterogeneous micro-batches of EPP. To the best of our knowledge, this is the **first** work that optimizes scheduling for adaptive and hybrid granularity PP, which is successfully employed in varied-length long-context training workloads.
+
+However, there are **four primary challenges** to fully unleash its potential:
+
+- Precise Cost Estimation. The workload balance of Sequence Chunks is crucial for lowering the pipeline bubble ratio, requiring a precise cost estimation on computation and communication. Moreover, PP's imbalanced memory footprint across stages, as well as the variable-length chunks, pose a risk of OOM errors and GPU memory fragmentation, requiring a fine-grained GPU memory management. Current cost models [35] for varied-length workloads do not consider sequence splitting and PP's stage-wise memory footprint imbalance.
+- Workload-Balance of Heterogeneous Micro-Batches. Micro-batches generated from sequence splitting and sequence packing should reach similar workloads. However, prior works either only consider workload balance of sequence splitting for homogeneous sequences, ignoring workload heterogeneity [23], [31], or focus on balance of sequence packing [14], [35] and do not consider sequence splitting.
+- Dynamic Pipeline Schedule. The hybrid granularity, as well as the dynamic workload, render monolithic granularity PP's static pipeline schedule ineffective. Token-level PP introduces inter-micro-batch dependencies (§II-A), and the data-centric PP granularity further increases scheduling complexity. Suboptimal pipeline schedules either fail to identify that dependency or suffer from severe pipeline bubbles and low device occupancy.
+- Efficient Gradient Checkpointing. The variety of sequence length makes uniform gradient checkpointing schemes inefficient. Naively disabling or applying full checkpointing
+
+<span id="page-1-2"></span>![](_page_1_Figure_8.jpeg)
+
+Fig. 2: Illustration of DAPPLE  $(N_{split}=1)$  and Seq1F1B's  $(N_{split}>1)$  schedule, where sequences are divided uniformly into  $N_{split}$  slices, forming *homogeneous* micro-batches.
+
+degrades computation efficacy. Approaches [5], [16], [18], [32] employing a uniform configuration assume a homogeneous sequence length and ignore workload heterogeneity.
+
+To tackle these challenges, we build InfiniPipe, a distributed training system that integrates three novel techniques:
+
+- An Effective Cost Model (§ III-A). We establish a sophisticated and effective cost model that estimates: 1) the computation and communication overhead of the heterogeneous micro-batch, 2) the stage-wise memory footprint of EPP, 3) the impact of gradient checkpointing on the time and memory overhead, with an error rate of less than 5%.
+- A Workload-Balanced and Resource-Aware Sequence Processor (§ III-B). Leveraging the cost model, we devise a sequence chunking algorithm that generates workloadbalanced heterogeneous micro-batches.
+- A Chunk Scheduler that Co-Optimizes Pipeline Schedule
+  with Gradient Checkpointing (§ III-C). A co-optimization
+  methodology is devised to tackle the challenges of pipeline
+  scheduling and gradient checkpointing. Notably, we propose
+  a new checkpointing mechanism called <u>Stage-Aware Chunk-Level Adaptive Checkpointing</u> tailored for EPP. InfiniPipe
+  automatically derives the optimal pipeline schedule and
+  checkpointing configuration, introducing minimum recomputation overhead and bubble ratio.
+
+Extensive experiments conducted on various workloads demonstrate that InfiniPipe achieves a speedup of up to 1.69× compared to existing SOTA work. The key contributions of this work can be summarized as follows:
+
+- We identify the limitations of existing long-context training approaches and propose *Elastic Pipeline Parallelism* as a solution.
+- We firstly co-optimize the pipeline schedule with checkpointing and propose a new mechanism named Stage-Aware Chunk-Level Adaptive Checkpointing.
+- We develop InfiniPipe, a brand new distributed LLM training system for varied-length corpora.
+- We comprehensively evaluate InfiniPipe to indicate that InfiniPipe has state-of-the-art performance.
+
+# II. PRELIMINARIES
+
+<span id="page-1-0"></span>A. Parallelism Strategies of Distributed LLM Training
+
+**Sequence Parallelism.** Sequence Parallelism (SP) partitions sequences into multiple slices, introducing communication
+
+<span id="page-2-2"></span>![](_page_2_Figure_0.jpeg)
+
+Fig. 3: Communication Overhead of SP. The left presents the total time (solid) and proportion of all-to-all communication (dashed) of USP under different context lengths and parallel degrees  $(d_s)$ . The right indicates the time of flash-attn and NCCL's P2P kernels.
+
+for self-attention operations, based on which SP is typically categorized into two variants: Ulysses-style SP (USP) and Ring-style SP (RSP). USP [17] introduces four all-to-all communications to transform query, key, value, and all-to-all communications are costly, accounting for a large portion of end-to-end time (Fig. 3,  $d_s > 8$ ). In contrast, RSP [7], [21], [25] performs a multi-step online self-attention, where the keys and values of different slices are exchanged via point-to-point (p2p) communication, which is overlapped with the attention operation. However, the overlapping is only achievable for sequences longer than 48K (Fig. 3), which is minor in real-world datasets (Fig. 1 (b)).
+
+Pipeline Parallelism. Pipeline Parallelism (PP) horizontally partitions a model into several stages that execute sequentially, requiring transmission of activation between two neighboring parts. This transmission introduces negligible communication overhead as it occurs only once. To enhance device occupancy, PP partitions training inputs into micro-batches, which categorizes PP into two variants: 1) batch-level PP [2], [13], [22], [27] that divides input samples, and 2) token-level PP [23], [31] that further splits a sequence into slices. Various batch-level pipeline schedules [2], [13], [22], [27] have been proposed. Fig. 2 illustrates DAPPLE and Seq1F1B's schedule consisting of three distinct stages: warmup, steady, and cooldown. For the token-level PP's schedule, it's worth noting that an inter-micro-batch schedule dependency is introduced: for each slice, the forward pass must be scheduled after its preceding slices, while the backward pass must be scheduled after its subsequent slices. This is because the query of a token accesses only preceding tokens' keys and values in the forward pass. Consequently, gradients of key and value of a token rely on those of subsequent tokens in the backward pass. Token-level PP exhibits a lower memory footprint compared to batch-level PP but may introduce a performance degradation, as shown in Fig. 1(a).
+
+**Fully Sharded Data Parallelism.** Fully sharded data parallelism (FSDP) partitions model states to alleviate the overhead of duplicate model states of traditional data parallelism. Accordingly, gather and scatter communications are introduced to obtain complete parameters required for LLM's execution and reduce gradients, respectively. The gather and scatter
+
+<span id="page-2-0"></span>![](_page_2_Figure_5.jpeg)
+
+Fig. 4: InfiniPipe System Overview.
+
+communications in SDP can overlap with computation.
+
+#### B. Sequence Packing
+
+Techniques such as *padding* or *packing* are used to deal with sequences of varying lengths. Padding pads or truncates sequences to the same length, employing an activation layout of [B, max(S), D], introducing unnecessary computation overhead. In contrast, sequence packing [19], which concatenates multiple input sequences into a single sequence and adopts a [sum(S), D] layout, effectively eliminates redundant computation overhead.
+
+#### C. Gradient Checkpointing
+
+Gradient checkpointing trades computation for activation memory footprint reduction through freeing intermediate activations after the forward pass and recomputing them in the backward pass for gradient computation.
+
+#### D. Gradient Accumulation
+
+Gradient accumulation updates parameters once using the accumulated gradients from multiple micro-batches, yielding the same optimization trajectory as training at a large batch size under limited memory capacity.
+
+# III. INFINIPIPE
+
+Fig. 4 illustrates the overview of InfiniPipe, which adopts an  $\underline{disaggregated}$  architecture, where the solver solves the schedule plan on CPUs, and the executor carries out training on GPUs. The current batch's training process **overlaps** with the next iteration's schedule solving, eliminating the solver's overhead. Sequences sampled from the variable-length dataset are first processed by the solver's sequence processor (§ III-B) into three types of chunks (micro-batch of EPP) in a workload-balanced manner. Afterward, the chunk scheduler (§ III-C) schedules the chunks into pipelines and solves the optimal gradient checkpointing plan for each chunk and each pipeline stage. The tuned optimal execution plan is finally carried out by the executor to conduct LLM training. InfiniPipe employs a parallelism strategy of SP (equipped with ZeRO-3, degree  $d_s$ ) and PP (degree  $d_p$ ), with cluster size N equals  $d_s \times d_p$ .
+
+#### <span id="page-2-1"></span>A. Cost Model
+
+In this section, we present the fundamental cost model employed by InfiniPipe to depict the behavior of EPP, which is built at a theoretical standpoint, and is verified and refined via offline profiling and regression fitting.
+
+*1) Definition of Chunk:* We firstly introduce *Chunk*, a key concept in InfiniPipe.
+
+As illustrated in Fig. [4,](#page-2-0) *Chunk* can be categorized into three types: 1) Batched Chunk. Short sequences are batched together, resulting in a chunk formulated as S, a set containing multiple slices. 2) Split Chunk. A long sequence is split into multiple slices with the last one referred to as *tail slice*. Due to the causal mask of self-attention, a split chunk's computation relies on keys and values of preceding slices. We formulate a split chunk with its length s and context length C. 3) Hybrid Chunk. Short sequences can be packed with a *tail slice* s<sup>0</sup> for the sake of workload balance, formulated as a context C for s<sup>0</sup> and a set of slices S (s<sup>0</sup> included). Notably, *packing of two tail slices is avoided* as it forces co-scheduling of two long sequences[1](#page-3-0) , increasing memory overhead. In summary, all three types of chunks can be expressed using a uniform representation {C, S}, where C denotes the context length (0 for batched chunk) and S is the set containing the lengths of slices in the chunk.
+
+Estimations on computation and communication overhead as well as memory footprint, are then introduced based on the concept of *Chunk*.
+
+*2) Computation and Communication Analysis:* As for computation, we assume a quadratic time complexity with respect to sequence length due to the self-attention operation. Therefore, the computation time for processing chunk {Ck, Sk} during both forward and backward passes is modeled as:
+
+$$T_{comp}(C_k, S_k) = \frac{1}{N} (\alpha_1 ((C_k + s_0)^2 - C_k^2) + \alpha_2 s_0 + \sum_{s \in (S_k - \{s_0\})} (\alpha_1 s^2 + \alpha_2 s)) + \frac{\beta_1}{d_p}$$
+(1)
+
+As for communication, V (communication volume), Bcomm (bandwidth), βcomm (latency) and f (frequency) are utilized to model the overhead:
+
+$$T_{comm}(V, f) = \left(\frac{V}{B_{comm}} + \beta_{comm}\right) \cdot f, \tag{2}$$
+
+Specifically, Ulysses-style SP requires four All-to-All communications in each layer, resulting in the following overhead:
+
+$$T_{all2all}(S_k) = \left(\frac{e(D + D_{kv}) \sum_{s \in S_k} s}{d_s B_{all2all}(d_s)} + 2 \cdot \beta_{all2all}(d_s)\right) \frac{2L}{d_p}$$
+(3)
+
+where D, Dkv, and L indicate the model's hidden dimension, kv dimension, and number of layers, respectively. The total execution time for a chunk comprises both computation and communication components:
+
+<span id="page-3-1"></span>
+$$T_{tot}(C_k, S_k) = T_{comp}(C_k, S_k) + T_{all2all}(S_k), \tag{4}$$
+
+which is applicable in both forward and backward passes.
+
+<span id="page-3-0"></span><sup>1</sup>For instance, tail slice A<sup>3</sup> of sequence A is packed with B<sup>2</sup> of sequence B to AB. As a result, A1, A<sup>2</sup> and B<sup>1</sup> must be scheduled before AB, introducing activation overhead of both A and B.
+
+*3) Stage-Aware Memory Footprint Analysis:* We begin by analyzing the activation memory footprint of a chunk. The activation memory footprint is proportional to the number of tokens after employing flash-attn [\[9\]](#page-11-21), [\[10\]](#page-11-22), which eliminates the need to materialize attention scores with O(S 2 ) space complexity. Notably, Mdkv representing the overhead of keys and values' gradients for *split chunk* is included in our estimation based on two observations of TPP: 1) chunks of a sequence execute backward *reversely* with the last chunk executing backward first (see Fig. [2\)](#page-1-2); 2) gradients for keys and values of all chunks are materialized *simultaneously* during the backward pass of the last chunk, while freed *asynchronously until* the completion of its own backward pass. Moreover, as current LLMs typically adopt a tokenizer with a large vocab size (≥ 128K), the memory overhead for logits is non-negligible. Consequently, the overall activation memory footprint is modeled as:
+
+$$M_{act}(p, S_k) = Act(p, S_k) + M_{dkv}(S_k),$$
+
+$$Act(p, S_k) = \left(\frac{M_{token}}{N} + \frac{M_{logits}}{d_s}[p = d_p]\right) \sum_{s \in S_k} s,$$
+
+$$M_{dkv}(S_k) = (1 - I_k) \frac{2eLD_{kv}}{N} \sum_{s \in S_k} s,$$
+(5)
+
+where Mtoken, Mlogits are model-specific constants representing the activation and logits memory overhead per token, respectively. I<sup>k</sup> denotes whether the k th chunk is a *split chunk*.
+
+The total memory footprint for the p th pipeline stage comprises the memory allocated for fixed model states Mms(p) and the ever-changing activation memory Mact(p, t):
+
+$$M_{tot}(p,t) = M_{ms}(p) + M_{act}(p,t)$$
+(6)
+
+The peak memory of the 1F1B pipeline occurs during the steady phase, where each pipeline stage p maintains a *constant* number of chunks that have not finished their backward passes, as shown in Fig. [2.](#page-1-2) Let Wp(t), called the *chunks window*, denote the set of these chunks at time t, satisfying:
+
+<span id="page-3-2"></span>
+$$|W_p(t)| = d_p - p + N_{split} \tag{7}$$
+
+which is equivalent to the number of micro-batches in the warmup phase. As activations of all chunks within Wp(t) must be accommodated, the total memory footprint is modeled as:
+
+<span id="page-3-3"></span>
+$$M_{tot}(p,t) = M_{ms}(p) + M_{act}(p, W_p(t))$$
+
+$$= M_{ms}(p) + \sum_{k \in W_p(t)} M_{act}(p, S_k)$$
+(8)
+
+*4) Combining Gradient Checkpointing Together:* Gradient checkpointing affects estimation for both memory footprint and time cost. Same as common practice in Megatron-LM [\[28\]](#page-11-23), InfiniPipe applies checkpointing at layer granularity and let lckpt denote the checkpointed layers.
+
+We first analyze how checkpointing affects memory footprint estimation. The *split chunk* exhibits a different behavior than other chunks: although gradient checkpointing is applied, its keys and values can not be released, as they are needed by the subsequent slices to perform the self-attention operation. However, the other activations of a checkpointed layer can be ignored. The phenomenon drives us to deal with keys and values individually in cost estimation. Specifically, we include not only the checkpointed layer's input but also keys and values in checkpointing memory overhead  $M_{ckpt}$ :
+
+<span id="page-4-3"></span>
+$$M_{ckpt}(S_k) = \frac{e(D + 2(1 - I_k)D_{kv}) \cdot l_{ckpt}}{d_s} \sum_{s \in S_k} s$$
+ (9)
+
+Moreover, checkpointing has no impact on  $M_{dkv}$ , and a chunk's activation footprint is further reformulated as:
+
+<span id="page-4-4"></span>
+$$M_{act}(p, S_k) = M_{dkv}(S_k) + M_{ckpt}(S_k) + \left(\frac{L - l_{ckpt} \cdot d_p}{L} \cdot \frac{M_{token}}{N} + \frac{M_{logits}}{d_s}[p = d_p]\right) \sum_{s \in S_k} s, \tag{10}$$
+
+As for time cost estimation, checkpointing only affects the backward pass with a recomputation cost:
+
+$$T_{ckpt}(C_k, S_k) = \frac{l_{ckpt}}{L \cdot d_s} \cdot T_{tot}(C_k, S_k)._{fwd}$$
+ (11)
+
+# <span id="page-4-0"></span>B. Sequence Processor
+
+The sequence processor ingests original, varied-length sequences sampled from the dataset and then organizes them into *chunks*. There are two crucial issues to be addressed when designing the processing algorithm: 1) ensuring workload balance across chunks to avoid pipeline bubbles and 2) determining the proper granularity of a chunk that maximizes utilization while adhering to memory limits. This section introduces a sketch of our resource-aware and workload-balanced chunking algorithm outlined in Alg. 1.
+
+The algorithm depicts the processor's operation consisting of two steps: splitting long sequences to generate *split chunks* and packing short sequences to form *batched chunks* and *hybrid chunks*. It takes the following inputs: the cost model  $\mathcal{M}$ ; token capacity  $\mathcal{C}$ , i.e., maximum number of tokens the cluster can accommodate; sequence lengths S, i,e., the lengths of sequences sampled from dataset; and slice number K that denotes the number of slices to split the longest sequence into, which is a hyper-parameter automatically tuned within the range  $[1, d_p + 4]$  to obtain the optimal solution.
+
+To begin with, a mesh is obtained by splitting the ingested longest sequence into K workload-balanced slices (Line 1), which is based on  $\mathcal{M}$ 's time cost estimation  $T_{tot}$  (Eq. 4) for the backward pass. Then, long sequences are sharded by the mesh into multiple workload-balanced slices and a *tail slice* with less overhead (Line 2). For instance, with a mesh  $\{8K,4K,2K\}$ , sequences with more than 12K tokens will be split into an 8K and 4K slice, followed by a variable-length remainder.
+
+Afterward, a Best-Fit-Decreasing (BFD) algorithm is employed to pack the tail slices and short sequences that are not sharded by the mesh, resulting in *batched chunk* and *hybrid chunk* (Lines 3-15). To balance the time cost of each chunk, a time threshold  $\mathcal{T}_t$  indicating the maximum time cost of a chunk is set, initially equivalent to the workload of a slice of the mesh. Notably, a token threshold  $\mathcal{T}_m$  indicating the maximum number of tokens in a bucket is also set to balance memory footprint (determined according to  $\mathcal{C}$  and  $\mathcal{T}_t$ ,
+
+# Algorithm 1: Workload-Balanced Sequence Chunking
+
+```
+Input: Cost model \mathcal{M}, token capacity \mathcal{C}, sequence lengths
+             S, slice number K.
+    Output: Chunks \{(C_k, S_k) \mid k \le n\}, where n is the
+                number of chunks.
+ 1 mesh, \mathcal{T}_t, \mathcal{T}_m \leftarrow \mathcal{M}.split(\max(S), K);
+ split\_chunks, tail\_slices, short_seqs \leftarrow split(S, mesh);
+    // a sorted_list with metric \frac{tot\_time}{tot\_tokens}
+ 3 \mathcal{B} \leftarrow \text{initialize\_buckets(tail\_slices)};
+ 4 M.descend_sort_by_time(short_seqs);
+ 5 while \neg short\_seqs.is\_empty() do
+         short\_seq, flag \leftarrow short\_seqs.pop(0), False;
+         if \min_{b \in \mathcal{B}} b.tot\_tokens + short\_seq.tokens > \mathcal{T}_m then
+             B.create_new_bucket(short_seq);continue;
+ 8
+ 9
+         for bucket \in \mathcal{B} do
+              if bucket.tot_time + short_seq.time \leq \mathcal{T}_t &
+10
+                bucket.tot\_tokens + short\_seq.tokens \leq \mathcal{T}_m then
+11
+                    bucket.combine(short_seq);flag \leftarrow True;
+         if \neg flag then
+13
+             \mathcal{T}_t \leftarrow \min_{b \in \mathcal{B}} b.\text{tot\_time} + \text{short\_seq.time}; \textbf{goto} 9;
+15 batched\_chunks, hybrid\_chunks \leftarrow transform(\mathcal{B});
+16 return split\_chunks \cup batched\_chunks \cup hybrid\_chunks
+```
+
+concrete expression omitted). To co-optimize the balance of time cost and chunk length, we prioritize putting the longest short sequence into the bucket with the minimum  $\frac{tot\_time}{tot\_tokens}$  (Line 3, 9-12), where the metric indicates the proportion of long sequences in the bucket.  $\mathcal{T}_t$  is loosened when  $\mathcal{T}_m$  can not be met in the BFD process (Line 14).
+
+The sequence processor demonstrates a time complexity of  $O(n^2|S|^2)$ , introducing negligible overhead.
+
+#### <span id="page-4-1"></span>C. Chunk Scheduler
+
+In this section, we first define our scheduling space through careful trade-off discussions and then present our two-level approach that jointly optimizes pipeline schedule (via *sequence grouping*, § III-C2) and checkpointing configuration (via *stage-aware chunk-level adaptive checkpointing*, § III-C3).
+
+1) Solving Space Definition: It's non-trivial to solve a sophisticated schedule plan due to the vast optimization space:
+
+1) There exist numerous basic scheduling patterns [2], [13], [22], [29] with each exhibiting distinct memory footprint and bubble characteristics. 2) The execution order of varied-length sequences needs to be determined. 3) A checkpointing mechanism tailored for EPP is required to efficiently integrate checkpointing. We begin by introducing some key insights, based on which the solving space is then confined.
+
+To begin with, *1F1B* is taken as the basic schedule pattern. GPipe [2] features forward-then-backward schedule, which is not memory efficient because it needs to accommodate all micro-batches. Chimera [22] proposes bidirectional PP while it duplicates model states and needs synchronization of gradients. Other 1F1B schedule patterns [23], [27], [29], [31] are also proposed. However, most improvements in these works stem from reducing the bubble of warmup and cooldown
+
+<span id="page-5-1"></span>![](_page_5_Figure_0.jpeg)
+
+Fig. 5: Illustration of pipeline scheduling space. (a) Explanation of sequences' execution order in a 1F1B pipeline. (b) To avoid OOM error, multiple 1F1B pipelines are scheduled, with each introducing an identical warmup-cooldown overhead  $\delta$ .
+
+phases. As the number of micro-batches increases, the benefits diminish because the steady phase with negligible bubbles dominates the total execution. Most importantly, the number of micro-batches can be adjusted by controlling the splitting granularity of the sequence processor (hyper-parameter K of Alg. 1), which is optimized in the solving process. To this end, 1F1B schedule [31] is taken as our basic schedule pattern as we focus on training throughput.
+
+Moreover, it's feasible to schedule one or multiple 1F1B pipelines, within which longer sequences are prioritized to execute. To begin with, the longest sequences should be scheduled first within a 1F1B pipeline. As illustrated in Fig. 5(a), sequence A with one chunk is scheduled before sequence B with three chunks. We observe that the steady phase is interrupted due to the unavailability of a backward schedule, introducing severe penalty bubbles. To address this, we prioritize longer sequences in a 1F1B pipeline and enforce this as a fundamental scheduling rule. Moreover, scheduling of multiple 1F1B pipelines is necessary when sequences cannot be scheduled in a single 1F1B pipeline altogether. As shown in Fig. 5(b), sequences B and C cannot be co-scheduled with sequence A due to the limited memory capacity, forcing a new pipeline to be scheduled. Gradient accumulation is enabled among these 1F1B pipelines to ensure optimization consistency. We do not exploit pipeline bubbles to overlap these 1F1B pipelines, as typically no more than two 1F1B pipelines are scheduled by our solver, offering marginal benefits but complicating the solving process.
+
+Furthermore, *employing stage-aware chunk-level adaptive checkpointing*. Firstly, naively disabling checkpointing causes performance degradation: 1) for long sequences, the extreme sequence sharding granularity required to alleviate the memory overhead harms hardware utilization, and 2) a number of 1F1B pipelines have to be scheduled for multiple such sequences, leading to prohibitive warmup-cooldown overhead. However, directly applying full checkpointing introduces unnecessary recomputation overhead. Furthermore, the memory footprint disparity across chunks and pipeline stages renders suboptimal performance of a uniform and static checkpointing strategy. Specifically, different pipeline stages have varying
+
+requirements for checkpointing, and applying checkpointing on longer chunks reduces more activation footprint at the same recomputation cost if chunks are workload-balanced. The trade-offs above inspire us to employ a *stage-aware adaptive* checkpointing strategy at chunk granularity.
+
+In summary, we define our solving space as follows: for pipeline schedule, we group sequences and assign sequences of each group to a distinct 1F1B pipeline P, formulating a set  $\mathcal{P}$ ; for checkpointing, we apply a customized checkpointing layer ckpt(p,k) for each chunk  $\{C_k,S_k\}$  at each pipeline stage p. Let  $\mathcal{S}[i]$  represents the set of sequences divided into i chunks, the problem can be formulated as:
+
+<span id="page-5-2"></span>minimize 
+$$\sum_{P \in \mathcal{P}} T(P)$$
+  
+s.t.  $\bigcup_{P \in \mathcal{P}} \mathcal{S}_P = \mathcal{S}[:],$  (12)
+
+where  $\mathcal{S}_P$  represents the sequences scheduled in P and T(P) denotes the total execution time of P. Thanks to the workload-balanced manner InfiniPipe processes sequences, we ignore the pipeline bubbles in the steady phase and simplify Eq. 12 as a summation of recomputation cost  $T_{ckpt}(P)$  and warmup-cooldown overhead  $\delta$ :
+
+<span id="page-5-3"></span>
+$$minimize \sum_{P \in \mathcal{P}} \delta + T_{ckpt}(P),$$
+ (13)
+
+where  $\delta$  is a constant approximated as  $(d_p - 1) \cdot avg(T_{tot})$ . The optimal pipeline schedule  $\mathcal{P}_0$  along with checkpointing configuration  $ckpt_0(p,k)$ , is co-optimized, with detailed methodology provided in § III-C2 and § III-C3, respectively.
+
+<span id="page-5-0"></span>2) Sequence Grouping: An interference of pipeline schedule and gradient checkpointing is observed in Fig. 6(a). Indicated by Eqs. 7,8, the pipeline's memory footprint is related to  $N_{split}$ , i.e., the number of chunks the longest sequence in a sequence group is split into. Accordingly, when short sequences B and C are grouped with long sequence A, they are forced to apply a tighter checkpointing setup than they are scheduled separately due to the enlarged  $N_{split}$ , introducing more recomputation overhead. Therefore, 1) sequences of similar lengths should be grouped together 2) scheduling more 1F1B pipelines is potential to reduce recomputation cost  $\sum_{P\in\mathcal{P}}T_{ckpt}(P)$  of Eq. 13 at the cost of severer warmupcooldown overhead  $\delta \cdot |\mathcal{P}|$ , forming the trade-off when optimizing sequence grouping strategy.
+
+We employ a dynamic programming method to resolve the optimal sequence grouping strategy. Let dp[i] represent the minimum cost to schedule sequences with at most i chunks. The state transition equation can be deduced as:
+
+$$dp[i+1] = \min_{0 \le k \le i} \{ dp[k] + \delta + T_{ckpt}(P) \}, \tag{14}$$
+
+where sequences in S[k+1:i+1] is scheduled by pipeline P and  $T_{ckpt}(P)$  is obtained by applying stage-aware chunk-level adaptive checkpointing (§ III-C3) on P. By tracking state transitions to dp[N], we derive both the sequence grouping and its corresponding checkpointing configuration.
+
+<span id="page-6-1"></span>![](_page_6_Figure_0.jpeg)
+
+Fig. 6: Illustrations of insights about co-optimizing checkpointing with pipeline schedule. (a) Checkpointing configuration is coupled with the grouping strategy. (b) Checkpointing setups of different pipeline stages have dependencies.
+
+<span id="page-6-0"></span>3) Stage-Aware Chunk-Level Adaptive Checkpointing: In this section, we elaborate on how we apply optimal checkpointing configuration for a given 1F1B pipeline P assigned n chunks.
+
+To begin with, we analyze the impact of checkpointing on PP and introduce a constraint on ckpt(p,k). As illustrated in Fig. 6(b), full checkpointing is applied to  $B_1$  of the second stage. We observe that checkpointing affects not only the second stage, introducing propagated bubbles of identical size in all the other stages. A key insight is that applying full checkpointing to the marked chunks  $B_2$ ,  $A_1$ , and  $C_2$  exploits the propagated bubble and maintains the total execution time unchanged. Let ckpt'(p,k) represent the number of checkpointed layers for the chunk executing the  $k^{th}$  backward pass in the  $p^{th}$  pipeline stage (the execution order differs between forward and backward passes). Based on this insight, we yield the following constraint:
+
+$$ckpt'(p,k) = ckpt'(p+i,k+i) = \mathcal{C}[k+d_p-p], \tag{15}$$
+
+where C is a set containing  $d_p - 1 + n$  independent integer variables. Let f2b[k] map the forward execution order to the backward execution order, we have:
+
+<span id="page-6-4"></span>
+$$ckpt(p,k) = ckpt'(p, f2b[k]) = \mathcal{C}[f2b[k] + d_p - p]$$
+ (16)
+
+This formulation reduces the number of optimization variables from  $n \cdot d_p$  of ckpt(p,k) to  $d_p-1+n$  of  $\mathcal{C}$ , significantly reducing solving overhead.
+
+Afterward, a solution based on ILP is introduced, as outlined in Alg. 2. Fig. 6(b) reveals that recomputation cost  $T_{ckpt}(P)$  is related to  $\mathcal C$  with:
+
+<span id="page-6-3"></span>
+$$T_{ckpt}(P) = \hat{F} \cdot \sum_{c \in C} c, \tag{17}$$
+
+where  $\hat{F}$  denotes the estimated forward execution time of a model layer. The optimal checkpointing strategy aims to minimize the recomputation cost  $T_{ckpt}(P)$  (Eq. 17) with peak
+
+**Algorithm 2:** Stage-Aware Chunk-Level Adaptive Checkpointing Solving Based on ILP
+
+<span id="page-6-2"></span>**Input:** Chunks  $\{S_k|k\leq n\}$ , GPU memory capacity  $\mathcal{G}$ , chunks windows  $W_p(t)$ 
+
+Output: Checkpointing configuration  $\mathcal{C}$  and minimum recomputation cost  $T_{ckpt}$ 
+
+$$\begin{array}{ll} \textbf{1 for } k \leq n \ \textbf{do} \\ \textbf{2} &$$
+
+12 return  $C, T_{ckpt}$ 
+
+memory  $M_{tot}(p,t)$  (Eq. 8) not exceeding hardware capacity limit  $\mathcal{G}$ , formulated as:
+
+<span id="page-6-5"></span>s.t. 
+$$M_{ms}(p) + \sum_{k \in W_p(t)} M_{act}(p, S_k) \leq \mathcal{G} \quad \forall (p, t), p \leq d_p$$
+
+$$c \leq \frac{L}{d_p}, \forall c \in \mathcal{C}$$
+
+$$(18)$$
+
+Combining Eqs. 9,10,16, we derive a linearity:
+
+$$M_{act}(p, S_k) = \mathcal{I}_p[k] - \mathcal{F}[k] \cdot \mathcal{C}_{p,k}, \tag{19}$$
+
+where the coefficients  $(\mathcal{I}_p[k], \mathcal{F}[k])$  and  $\mathcal{C}_{p,k}$  are defined explicitly in Alg. 2. To this end, constraint 18 is further reformulated as a system of linear inequalities in terms of  $\mathcal{C}$  and the ILP is finally expressed as:
+
+$$\underset{\mathcal{C} \in \mathbb{N}^{n+d_p-1}}{\arg \min} \sum_{c \in \mathcal{C}} c$$
+s.t. 
+$$\sum_{k \in W_p(t)} \mathcal{I}_p[k] - \mathcal{F}[k] \cdot \mathcal{C}_{p,k} \leq \mathcal{G} - M_{ms}(p) \quad \forall (p,t), p \leq d_p$$
+
+$$c \leq \frac{L}{d_p}, \forall c \in \mathcal{C}$$
+(20)
+
+After optimizing C and  $T_{ckpt}$ , the optimal checkpointing configuration  $ckpt_0(p,k)$  can be obtained by Eq. 16.
+
+#### IV. IMPLEMENTATION
+
+We implement InfiniPipe in approximately 5K lines of code using Python, CUDA, and Triton [33]. The SCIP [6] library is leveraged to solve the ILP problems. Built on PyTorch, InfiniPipe integrates the flash-attn [9], [10] library for variable-length sequence packing and adopts NCCL [1] as the communication backend. Additionally, several key points in our implementation are highlighted as follows.
+
+*Tailored FSDP for Elastic Pipeline Parallelism.* FSDP operates orthogonally to SP and is commonly combined with SP to reduce model state memory overhead. Although PyTorch FSDP [\[38\]](#page-12-7) serves as the most widely-used implementation, its native version is not compatible with pipeline parallelism with gradient accumulation. InfiniPipe's runtime engine seamlessly integrates PyTorch FSDP with EPP, allowing ZeRO communication to be overlapped with computation when a dynamic pipeline schedule of EPP is adopted.
+
+*Fused In-Place Cross-Entropy.* The peak memory usage during LLM training typically occurs at the beginning of the backward pass, i.e., when the cross-entropy loss starts its backward computation, where the logits' gradients as well as some intermediate tensors are materialized, introducing non-negligible estimation bias on peak memory. We adopt Megatron-LM [\[30\]](#page-12-8)'s fused in-place cross-entropy operator to eliminate the materialization of other tensors, aligning the peak memory usage with our cost model.
+
+## V. EXPERIMENTS
+
+## *A. Experiment Setup*
+
+*Environments:* Our testbed consists of four GPU servers, each equipped with 8 NVIDIA A800-80GB GPUs interconnected via NVLink (400 GB/s bandwidth). Inter-node communication is handled by a 400 Gb/s InfiniBand network. The software stack includes PyTorch 2.9.0 and CUDA 12.8.
+
+*Baseline Systems:* We compare InfiniPipe against four stateof-the-art distributed training systems: Megatron-LM, Deep-Speed, FlexSP [\[35\]](#page-12-4), and Seq1F1B [\[31\]](#page-12-1). Megatron-LM is the current general-purpose SOTA featuring 4D parallelism comprising TP (equipped with Megatron-style SP), DP (ZeRO-1), CP, and PP. DeepSpeed integrates ZeRO of three stages and Ulysses-style SP. Seq1F1B, featuring the 1F1B pipeline schedule, is included as a token-level PP baseline. The original approach of Seq1F1B divides sequences into a uniform number of chunks, which is not compatible and efficient in varied-length corpora. For fair comparison, Seq1F1B denotes splitting and packing sequences into fixed-sized chunks as well as employing a static checkpointing strategy. FlexSP extends DeepSpeed, representing the previous SOTA training system on varied-length corpora.
+
+*Workloads:* We evaluate InfiniPipe to train LLaMA-series models (7B, 13B, 30B) on two famous real-world datasets: *CommonCrawl* and *GitHub*. The sequence length and token distribution of these two datasets are presented in Fig. [1](#page-1-1) (b). Excessively long sequences that exceed the context length are truncated.
+
+*Protocols:* InfiniPipe and Seq1F1B employs Ulysses-style SP intra-node and PP inter-node. For Megatron-LM and DeepSpeed, we manually tune the best parallelism strategies according to specific workload requirements: 1) for Megatron-LM, the TP degree is fixed to 8 and the CP degree is set to 2 for the 7B model, while 4 for the others; 2) for DeepSpeed, SP degree is set to 16 for the 7B model and 32 for the others. All systems use activation checkpointing configurations optimized for a 96K context length: 1) for Megatron-LM, we checkpoint 10, 20, 55 layers for 7B, 13B, and 30B models, respectively; 2) for DeepSpeed and FlexSP, we checkpoint 36 layers for 30B model and none for the other model sizes. Evaluation metrics such as iteration time and token throughput are averaged during 20 training iterations. Global batch size refers to the number of sequences in a training iteration.
+
+## *B. End-to-End Performance*
+
+We evaluate the performance of InfiniPipe by measuring the average end-to-end time of a training iteration with global batch size fixed to 512, as shown in Fig. [7.](#page-8-0) Experiments are conducted across various datasets, model sizes, and context lengths. Comprehensive results demonstrate that InfiniPipe consistently outperforms baselines, achieving a maximum speedup of 1.69× compared to FlexSP, 2.07× compared to DeepSpeed, and 2.60× compared to Megatron-LM.
+
+The performance gains of InfiniPipe on baseline systems except Seq1F1B primarily stem from the high communication efficiency of EPP. Specifically, DeepSpeed and FlexSP adopt Ulysses-style SP, where FSDP (ZeRO-3) is required to be applied on the whole cluster to shard the parameters and reduce gradients, resulting in frequent inter-node gather and scatter communications. Moreover, the sequence parallelism pattern of DeepSpeed and Megatron-LM introduces costly inter-node communication overhead and harms training efficiency, which has been discussed in § [II-A.](#page-1-0) In contrast, InfiniPipe restricts SP and FSDP communication intra-node by applying PP inter-node, significantly reducing the inter-node communication overhead.
+
+FlexSP leverages heterogeneous sequence parallel groups to reduce the communication overhead of static Ulysses-style SP, where shorter sequences are scheduled with smaller SP groups with efficient intra-node communication. To this end, FlexSP accelerates DeepSpeed and Megatron-LM up to 1.33× and 1.66× respectively. However, this approach introduces workload unbalance across SP groups, and a longer sequence also necessitates being processed by a larger SP group, where the introduced inter-node communication overhead can not be ignored. This drawback is exacerbated when training larger models with limited resources. Correspondingly, the speedup of InfiniPipe compared to FlexSP increases as model size scales, ranging from 1.31× to 1.69× on *CommonCrawl* dataset with context length of 48K.
+
+Seq1F1B suffers from pipeline bubbles resulting from workload unbalance across chunks. As context length scales, the unbalance of workload becomes more pronounced due to the enlarged variance of sequence lengths. As a result, InfiniPipe achieves a maximum speedup of 1.27× and 1.40× at a context length of 48K and 96K, respectively. Moreover, Seq1F1B adopts a non-optimal and uniform checkpointing configuration to accommodate the longest sequence, introducing more unnecessary computation when handling relatively small models. The adaptive chunk-level checkpointing pattern of InfiniPipe reduces unnecessary recomputation overhead and further enhances training efficiency.
+
+<span id="page-8-0"></span>![](_page_8_Figure_0.jpeg)
+
+Fig. 7: Average end-to-end time of a training iteration under different settings of model sizes, context lengths, and datasets with speedup ratio of InfiniPipe compared to baselines presented.
+
+<span id="page-8-1"></span>![](_page_8_Figure_2.jpeg)
+
+Fig. 8: Case Study. End-to-end time breakdown of an iteration to train the 13B model with a fixed batch size of 512. The relative time and corresponding speedup of each component are indicated.
+
+#### C. Case Study
+
+To better understand InfiniPipe's performance advantages more in depth, we breakdown the end-to-end training time into several components: "ZeRO" (gather and scatter communications of ZeRO-3 that are not overlapped), "A2A" (All-to-All communication in Ulysses-style SP), "Bubble & P2P" (time for PP's p2p communication and idle time of devices resulted from pipeline bubbles) and "Others" (computation, optimizer step and e.t.c). The profiled time cost of each component is shown in Fig. 8.
+
+To begin with, InfiniPipe exhibits a similar performance in computation against DeepSpeed with a 1.11× improvement but outperforms FlexSP from 1.33× to 1.46× which is attributed to the unbalanced workload introduced by heterogeneous SP groups in FlexSP. Furthermore, "ZeRO" and "A2A" overhead are the main bottlenecks of baselines. However, these overheads account only for 17% of the total end-to-end training time of InfiniPipe. By employing efficient intra-node communication, InfiniPipe reduces these overheads significantly by up to 3.2× compared to FlexSP and 5.7× compared to DeepSpeed. Last but not least, the bubble ratio is maintained at a relatively low level, less than 20%, thanks to the workload-balanced chunking method and efficient pipeline schedule of InfiniPipe.
+
+<span id="page-8-2"></span>![](_page_8_Figure_7.jpeg)
+
+Fig. 9: Scalability study. Token throughput to train a 13B model under different context lengths and global batch sizes. Indicated improvements are normalized to DeepSpeed.
+
+The advantages above lead to overall speedup of 1.52× and 1.71× compared to FlexSP and DeepSpeed, respectively.
+
+### D. Scalability Study
+
+As shown in Fig. 9, token throughput under different settings of context length and batch size is measured to assess the scalability of InfiniPipe.
+
+Scalability w.r.t. context length: InfiniPipe consistently achieves superior performance against baseline systems when context length is extended from 64K to 192K, achieving a speedup from 1.30× to 1.37× compared to FlexSP and from 1.23× to 1.63× compared to Seq1F1B. As context length scales, the throughput of all systems tends to decrease, attributed to the increased computation overhead per token. Megatron-LM exhibits the least degradation because the quadratic complexity self-attention operator is overlapped in CP's P2P kernel, resulting in similar processing time per token. On the contrary, Seq1F1B appears to be the most sensitive to context length as the increasing variance of sequence lengths results in a more pronounced unbalance of workload across chunks, leading to severe pipeline bubbles.
+
+Scalability w.r.t. global batch size: As global batch size ranges from 128 to 512, InfiniPipe consistently outperforms baselines and its performance exhibits a growing trend with throughput improved by up to 1.18×. In contrast, the through-
+
+<span id="page-9-0"></span>![](_page_9_Figure_0.jpeg)
+
+Fig. 10: Ablation study. End-to-end time and bubble overhead to train a 13B model with a 64K context length. The times presented are all normalized to the end-to-end time of FlexSP.
+
+put of baseline systems remains almost the same due to a similar computation overhead per token. Benefited from the lowered bubble ratio with more sequences, InfiniPipe delivers a 1.33× and 1.49× throughput improvement compared to FlexSP and DeepSpeed, respectively.
+
+#### E. Ablation Study
+
+To validate the effectiveness of InfiniPipe's key components, i.e., workload-balanced chunking and the co-optimization approach of pipeline schedule and checkpointing, we compared InfiniPipe with three ablated versions. Specifically, "w/o wbc" denotes evenly splitting long sequences and packing short sequences into fixed-length chunks, "w/o ckpt" refers to disabling gradient checkpointing, and "full ckpt" represents applying full checkpointing.
+
+As shown in Fig. 10, the variants exhibit distinct computation and pipeline bubble overhead. Despite introducing no recomputation overhead, "w/o ckpt" brings limited computational benefits compared to InfiniPipe due to the degradation of hardware utilization resulting from the finer granularity of a micro-batch. Moreover, the bubble ratios of all methods except "w/o ckpt" decrease as the global batch size scales. This occurs as an increasing number of excessively long sequences forces scheduling of more 1F1B units, introducing severe warmup-cooldown overhead. "w/o wbc" suffers from bubble overhead caused by workload unbalance while "full ckpt" incurs higher computation overhead due to suboptimal checkpointing configuration. Thanks to the co-optimization approach (§ III-C), InfiniPipe consistently outperforms these variants with relatively low bubble ratio and computation overhead.
+
+#### F. Solver Accuracy and Scalability
+
+We train a 13B model under a 64K context length to verify the solver's accuracy and light overhead.
+
+Accuracy of Cost Model: The deviations between the cost model's simulation and real profiled statistics are assessed under various settings of model sizes, context length, PP stages, and degrees. As shown in Fig. 11, the error rates on both time cost and memory footprint are typically below 5%, verifying the effectiveness of our cost model (§ III-A).
+
+Overhead and Scalability of Solver: We evaluate the average time of a training iteration and the solver's solving within an optimality gap of 2% for the ILP problem (configurable in SCIP [6]), and present the statistics in Fig. 12. The amortized
+
+<span id="page-9-1"></span>![](_page_9_Figure_10.jpeg)
+
+Fig. 11: Accuracy of Cost Model. The upper indicates the error rate of estimation on end-to-end time, while the bottom presents the error rate on the memory footprint of each pipeline stage. Experiments conducted on a fixed cluster size of 32, i.e,  $d_s \times d_p$ .
+
+<span id="page-9-2"></span>![](_page_9_Figure_12.jpeg)
+
+Fig. 12: The actual training time, solving time, and amortized solving time, i.e., solving time / (#GPU / 8), under various cluster scales, hardware memory capacities ( $\mathcal{G}$ ), and PP degrees ( $d_p$ ).
+
+solving time is also included due to the increased available CPU resources when deployed on larger-scale clusters. The global batch size scales proportionally to cluster size, i.e., #GPU, and is set to 512 initially for a cluster containing 32 GPUs. The results demonstrate that the solver's ability to scale to larger clusters and its overhead can be fully **overlapped** with the training process.
+
+### G. Training Convergence
+
+We randomly sampled 25,600 sequences from the *GitHub* dataset and trained a 1B-parameter model from scratch using an AdamW optimizer. The *per-token loss* of InfiniPipe compared with the reference implementation, Megatron-LM, with respect to iteration and GPU hours is presented in Fig. 13. The results demonstrate that InfiniPipe follows the same optimization trajectory as Megatron-LM while achieving a 3.86× reduction in GPU hours.
+
+<span id="page-9-3"></span>![](_page_9_Figure_17.jpeg)
+
+Fig. 13: The training loss of InfiniPipe and Megatron-LM.
+
+# VI. RELATED WORK
+
+*Long Context Training:* Many sequence parallelism patterns for long context training have been proposed [\[7\]](#page-11-5), [\[21\]](#page-11-7), [\[25\]](#page-11-8), which can be used to replace Ulysses-style SP and are orthogonal to our method. Other works [\[15\]](#page-11-27), [\[35\]](#page-12-4) observe the skewness distribution of sequence length and aim to address workload heterogeneity. These works are orthogonal because optimization for PP and checkpointing are not considered.
+
+*Pipeline Parallelism Optimization:* Recent works like AdaPipe [\[32\]](#page-12-5), Mario [\[26\]](#page-11-28) have explored checkpointing and offloading optimizations with PP. However, these works assume homogeneous workloads, but we focus on heterogeneous workloads with varied-length input. ByteScale [\[14\]](#page-11-13) and WLB-LLM [\[36\]](#page-12-3) optimize workload balance of batch-level PP for heterogeneous workload, ignoring the optimization opportunity of sequence splitting, restricting its applicability in longcontext training scenario.
+
+# VII. CONCLUSION
+
+In this paper, we propose EPP and build InfiniPipe, a novel LLM distributed training system that efficiently applies pipeline parallelism in long-context training scenario with varied-length corpus. Comprehensive evaluations on various workloads demonstrate that InfiniPipe significantly reduces communication overhead and improves training throughput up to 1.69× compared to existing SOTA systems.
+
+## REFERENCES
+
+- <span id="page-11-26"></span>[1] "Nvidia collective communications library (nccl)," [https://developer.](https://developer.nvidia.com/nccl) [nvidia.com/nccl,](https://developer.nvidia.com/nccl) 2021.
+- <span id="page-11-17"></span>[2] "Pytorch gpipe," [https://pytorch.org/docs/stable/pipeline.html,](https://pytorch.org/docs/stable/pipeline.html) 2021.
+- <span id="page-11-0"></span>[3] "Introducing meta llama 3: The most capable openly available llm to date," [https://ai.meta.com/blog/meta-llama-3/,](https://ai.meta.com/blog/meta-llama-3/) 2024.
+- <span id="page-11-1"></span>[4] J. Achiam, S. Adler, S. Agarwal, L. Ahmad, I. Akkaya, F. L. Aleman, D. Almeida, J. Altenschmidt, S. Altman, S. Anadkat *et al.*, "Gpt-4 technical report," *arXiv preprint arXiv:2303.08774*, 2023. [Online]. Available:<https://doi.org/10.48550/arXiv.2303.08774>
+- <span id="page-11-14"></span>[5] O. Beaumont, L. Eyraud-Dubois, and A. Shilova, "Efficient combination of rematerialization and offloading for training dnns," *Advances in Neural Information Processing Systems*, vol. 34, pp. 23 844–23 857, 2021. [Online]. Available:<https://dl.acm.org/doi/10.5555/3540261.3542087>
+- <span id="page-11-25"></span>[6] S. Bolusani, M. Besanc¸on, K. Bestuzheva, A. Chmiela, J. Dion´ısio, T. Donkiewicz, J. van Doornmalen, L. Eifler, M. Ghannam, A. Gleixner, C. Graczyk, K. Halbig, I. Hedtke, A. Hoen, C. Hojny, R. van der Hulst, D. Kamp, T. Koch, K. Kofler, J. Lentz, J. Manns, G. Mexi, E. Muhmer, ¨ M. E. Pfetsch, F. Schlosser, F. Serrano, Y. Shinano, M. Turner, ¨ S. Vigerske, D. Weninger, and L. Xu, "The SCIP Optimization Suite 9.0," Optimization Online, Technical Report, February 2024. [Online]. Available: [https://optimization-online.org/2024/02/the-scip](https://optimization-online.org/2024/02/the-scip-optimization-suite-9-0/)[optimization-suite-9-0/](https://optimization-online.org/2024/02/the-scip-optimization-suite-9-0/)
+- <span id="page-11-5"></span>[7] W. Brandon, A. Nrusimha, K. Qian, Z. Ankner, T. Jin, Z. Song, and J. Ragan-Kelley, "Striped attention: Faster ring attention for causal transformers," *CoRR*, vol. abs/2311.09431, 2023. [Online]. Available: <https://doi.org/10.48550/arXiv.2311.09431>
+- <span id="page-11-2"></span>[8] T. B. Brown, B. Mann, N. Ryder, M. Subbiah, J. Kaplan, P. Dhariwal, A. Neelakantan, P. Shyam, G. Sastry, A. Askell, S. Agarwal, A. Herbert-Voss, G. Krueger, T. Henighan, R. Child, A. Ramesh, D. M. Ziegler, J. Wu, C. Winter, C. Hesse, M. Chen, E. Sigler, M. Litwin, S. Gray, B. Chess, J. Clark, C. Berner, S. McCandlish, A. Radford, I. Sutskever, and D. Amodei, "Language models are few-shot learners," in *NeurIPS*, 2020. [Online]. Available: <https://dl.acm.org/doi/abs/10.5555/3495724.3495883>
+- <span id="page-11-21"></span>[9] T. Dao, "Flashattention-2: Faster attention with better parallelism and work partitioning," *CoRR*, vol. abs/2307.08691, 2023. [Online]. Available:<https://doi.org/10.48550/arXiv.2307.08691>
+- <span id="page-11-22"></span>[10] T. Dao, D. Y. Fu, S. Ermon, A. Rudra, and C. Re, "Flashattention: Fast ´ and memory-efficient exact attention with io-awareness," in *Advances in Neural Information Processing Systems 35: Annual Conference on Neural Information Processing Systems 2022, NeurIPS 2022, New Orleans, LA, USA, November 28 - December 9, 2022*, S. Koyejo, S. Mohamed, A. Agarwal, D. Belgrave, K. Cho, and A. Oh, Eds., 2022. [Online]. Available:<https://dl.acm.org/doi/10.5555/3600270.3601459>
+- <span id="page-11-3"></span>[11] DeepSeek-AI, A. Liu, B. Feng, B. Wang, B. Wang, B. Liu, C. Zhao, C. Dengr, C. Ruan, D. Dai, D. Guo, D. Yang, D. Chen, D. Ji, E. Li, F. Lin, F. Luo, G. Hao, G. Chen, G. Li, H. Zhang, H. Xu, H. Yang, H. Zhang, H. Ding, H. Xin, H. Gao, H. Li, H. Qu, J. L. Cai, J. Liang, J. Guo, J. Ni, J. Li, J. Chen, J. Yuan, J. Qiu, J. Song, K. Dong, K. Gao, K. Guan, L. Wang, L. Zhang, L. Xu, L. Xia, L. Zhao, L. Zhang, M. Li, M. Wang, M. Zhang, M. Zhang, M. Tang, M. Li, N. Tian, P. Huang, P. Wang, P. Zhang, Q. Zhu, Q. Chen, Q. Du, R. J. Chen, R. L. Jin, R. Ge, R. Pan, R. Xu, R. Chen, S. S. Li, S. Lu, S. Zhou, S. Chen, S. Wu, S. Ye, S. Ma, S. Wang, S. Zhou, S. Yu, S. Zhou, S. Zheng, T. Wang, T. Pei, T. Yuan, T. Sun, W. L. Xiao, W. Zeng, W. An, W. Liu, W. Liang, W. Gao, W. Zhang, X. Q. Li, X. Jin, X. Wang, X. Bi, X. Liu, X. Wang, X. Shen, X. Chen, X. Chen, X. Nie, X. Sun, X. Wang, X. Liu, X. Xie, X. Yu, X. Song, X. Zhou, X. Yang, X. Lu, X. Su, Y. Wu, Y. K. Li, Y. X. Wei, Y. X. Zhu, Y. Xu, Y. Huang, Y. Li, Y. Zhao, Y. Sun, Y. Li, Y. Wang, Y. Zheng, Y. Zhang, Y. Xiong, Y. Zhao, Y. He, Y. Tang, Y. Piao, Y. Dong, Y. Tan, Y. Liu, Y. Wang, Y. Guo, Y. Zhu, Y. Wang, Y. Zou, Y. Zha, Y. Ma, Y. Yan, Y. You, Y. Liu, Z. Z. Ren, Z. Ren, Z. Sha, Z. Fu, Z. Huang, Z. Zhang, Z. Xie, Z. Hao, Z. Shao, Z. Wen, Z. Xu, Z. Zhang, Z. Li, Z. Wang, Z. Gu, Z. Li, and Z. Xie, "Deepseek-v2: A strong, economical, and efficient mixture-of-experts language model," 2024. [Online]. Available: <https://doi.org/10.48550/arXiv.2405.04434>
+- <span id="page-11-10"></span>[12] A. Dubey, A. Jauhri, A. Pandey, A. Kadian, A. Al-Dahle, A. Letman, A. Mathur, A. Schelten, A. Yang, A. Fan *et al.*, "The llama 3 herd of models," *arXiv preprint arXiv:2407.21783*, 2024. [Online]. Available: <https://doi.org/10.48550/arXiv.2407.21783>
+
+- <span id="page-11-9"></span>[13] S. Fan, Y. Rong, C. Meng *et al.*, "DAPPLE: a pipelined data parallel approach for training large models," in *PPoPP*. ACM, 2021, pp. 431–445. [Online]. Available: [https://dl.acm.org/doi/10.1145/3437801.](https://dl.acm.org/doi/10.1145/3437801.3441593) [3441593](https://dl.acm.org/doi/10.1145/3437801.3441593)
+- <span id="page-11-13"></span>[14] H. Ge, J. Feng, Q. Huang, F. Fu, X. Nie, L. Zuo, H. Lin, B. Cui, and X. Liu, "Bytescale: Efficient scaling of llm training with a 2048k context length on more than 12,000 gpus," *arXiv preprint arXiv:2502.21231*, 2025. [Online]. Available:<https://doi.org/10.48550/arXiv.2502.21231>
+- <span id="page-11-27"></span>[15] H. Ge, F. Fu, H. Li, X. Wang, S. Lin, Y. Wang, X. Nie, H. Zhang, X. Miao, and B. Cui, "Enabling parallelism hot switching for efficient training of large language models," in *Proceedings of the ACM SIGOPS 30th Symposium on Operating Systems Principles*, 2024, pp. 178–194. [Online]. Available:<https://dl.acm.org/doi/10.1145/3694715.3695969>
+- <span id="page-11-15"></span>[16] J. Herrmann, O. Beaumont, L. Eyraud-Dubois, J. Hermann, A. Joly, and A. Shilova, "Optimal checkpointing for heterogeneous chains: how to train deep neural networks with limited memory," *arXiv preprint arXiv:1911.13214*, 2019. [Online]. Available: [https://doi.org/10.48550/](https://doi.org/10.48550/arXiv.1911.13214) [arXiv.1911.13214](https://doi.org/10.48550/arXiv.1911.13214)
+- <span id="page-11-6"></span>[17] S. A. Jacobs, M. Tanaka, C. Zhang, M. Zhang, S. L. Song, S. Rajbhandari, and Y. He, "Deepspeed ulysses: System optimizations for enabling training of extreme long sequence transformer models," *CoRR*, vol. abs/2309.14509, 2023. [Online]. Available: [https://doi.org/](https://doi.org/10.48550/arXiv.2309.14509) [10.48550/arXiv.2309.14509](https://doi.org/10.48550/arXiv.2309.14509)
+- <span id="page-11-16"></span>[18] V. Korthikanti, J. Casper, S. Lym, L. McAfee, M. Andersch, M. Shoeybi, and B. Catanzaro, "Reducing activation recomputation in large transformer models, 2022," *arXiv preprint arXiv:2205.05198*. [Online]. Available:<https://doi.org/10.48550/arXiv.2205.05198>
+- <span id="page-11-20"></span>[19] M. M. Krell, M. Kosec, S. P. Perez, and A. Fitzgibbon, "Efficient sequence packing without cross-contamination: Accelerating large language models without impacting performance," *arXiv preprint arXiv:2107.02027*, 2021. [Online]. Available: [https://doi.org/10.48550/](https://doi.org/10.48550/arXiv.2107.02027) [arXiv.2107.02027](https://doi.org/10.48550/arXiv.2107.02027)
+- <span id="page-11-11"></span>[20] A. Li, B. Gong, B. Yang, B. Shan, C. Liu, C. Zhu, C. Zhang, C. Guo, D. Chen, D. Li *et al.*, "Minimax-01: Scaling foundation models with lightning attention," *arXiv preprint arXiv:2501.08313*, 2025. [Online]. Available:<https://doi.org/10.48550/arXiv.2501.08313>
+- <span id="page-11-7"></span>[21] D. Li, R. Shao, A. Xie, E. P. Xing, J. E. Gonzalez, I. Stoica, X. Ma, and H. Zhang, "Lightseq: Sequence level parallelism for distributed training of long context transformers," *CoRR*, vol. abs/2310.03294, 2023. [Online]. Available:<https://doi.org/10.48550/arXiv.2310.03294>
+- <span id="page-11-18"></span>[22] S. Li and T. Hoefler, "Chimera: efficiently training large-scale neural networks with bidirectional pipelines," in *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis*, 2021, pp. 1–14. [Online]. Available: <https://dl.acm.org/doi/10.1145/3458817.3476145>
+- <span id="page-11-12"></span>[23] Z. Li, S. Zhuang, S. Guo, D. Zhuo, H. Zhang, D. Song, and I. Stoica, "Terapipe: Token-level pipeline parallelism for training large-scale language models," in *International Conference on Machine Learning*. PMLR, 2021, pp. 6543–6552. [Online]. Available: [https:](https://proceedings.mlr.press/v139/li21y.html) [//proceedings.mlr.press/v139/li21y.html](https://proceedings.mlr.press/v139/li21y.html)
+- <span id="page-11-4"></span>[24] A. Liu, B. Feng, B. Xue, B. Wang, B. Wu, C. Lu, C. Zhao, C. Deng, C. Zhang, C. Ruan *et al.*, "Deepseek-v3 technical report," *arXiv preprint arXiv:2412.19437*, 2024. [Online]. Available: <https://doi.org/10.48550/arXiv.2412.19437>
+- <span id="page-11-8"></span>[25] H. Liu, M. Zaharia, and P. Abbeel, "Ring attention with blockwise transformers for near-infinite context," *CoRR*, vol. abs/2310.01889, 2023. [Online]. Available:<https://doi.org/10.48550/arXiv.2310.01889>
+- <span id="page-11-28"></span>[26] W. Liu, M. Li, G. Tan, and W. Jia, "Mario: Near zero-cost activation checkpointing in pipeline parallelism," in *Proceedings of the 30th ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel Programming*, 2025, pp. 197–211. [Online]. Available: <https://dl.acm.org/doi/10.1145/3710848.3710878>
+- <span id="page-11-19"></span>[27] Z. Liu, S. Cheng, H. Zhou, and Y. You, "Hanayo: Harnessing wave-like pipeline parallelism for enhanced large model training efficiency," in *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis*, 2023, pp. 1–13. [Online]. Available:<https://dl.acm.org/doi/10.1145/3581784.3607073>
+- <span id="page-11-23"></span>[28] D. Narayanan, M. Shoeybi, J. Casper *et al.*, "Efficient large-scale language model training on gpu clusters using megatron-lm," in *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis*, 2021, pp. 1–15. [Online]. Available:<https://dl.acm.org/doi/10.1145/3458817.3476209>
+- <span id="page-11-24"></span>[29] P. Qi, X. Wan, G. Huang, and M. Lin, "Zero bubble pipeline parallelism,"
+
+- *arXiv preprint arXiv:2401.10241*, 2023. [Online]. Available: [https:](https://doi.org/10.48550/arXiv.2401.10241) [//doi.org/10.48550/arXiv.2401.10241](https://doi.org/10.48550/arXiv.2401.10241)
+- <span id="page-12-8"></span>[30] M. Shoeybi, M. Patwary, R. Puri, P. LeGresley, J. Casper, and B. Catanzaro, "Megatron-lm: Training multi-billion parameter language models using model parallelism," *arXiv preprint arXiv:1909.08053*, 2019. [Online]. Available:<https://doi.org/10.48550/arXiv.1909.08053>
+- <span id="page-12-1"></span>[31] A. Sun, W. Zhao, X. Han, C. Yang, X. Zhang, Z. Liu, C. Shi, and M. Sun, "Seq1f1b: Efficient sequence-level pipeline parallelism for large language model training," *arXiv preprint arXiv:2406.03488*, 2024. [Online]. Available:<https://doi.org/10.48550/arXiv.2406.03488>
+- <span id="page-12-5"></span>[32] Z. Sun, H. Cao, Y. Wang, G. Feng, S. Chen, H. Wang, and W. Chen, "Adapipe: Optimizing pipeline parallelism with adaptive recomputation and partitioning," in *Proceedings of the 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3*, 2024, pp. 86–100. [Online]. Available: <https://dl.acm.org/doi/10.1145/3620666.3651359>
+- <span id="page-12-6"></span>[33] P. Tillet, H.-T. Kung, and D. Cox, "Triton: an intermediate language and compiler for tiled neural network computations," in *Proceedings of the 3rd ACM SIGPLAN International Workshop on Machine Learning and Programming Languages*, 2019, pp. 10–19. [Online]. Available: <https://dl.acm.org/doi/10.1145/3315508.3329973>
+- <span id="page-12-0"></span>[34] H. Touvron, L. Martin, K. Stone, P. Albert, A. Almahairi, Y. Babaei, N. Bashlykov, S. Batra, P. Bhargava, S. Bhosale, D. Bikel, L. Blecher, C. Canton-Ferrer, M. Chen, G. Cucurull, D. Esiobu, J. Fernandes, J. Fu, W. Fu, B. Fuller, C. Gao, V. Goswami, N. Goyal, A. Hartshorn, S. Hosseini, R. Hou, H. Inan, M. Kardas, V. Kerkez, M. Khabsa, I. Kloumann, A. Korenev, P. S. Koura, M. Lachaux, T. Lavril, J. Lee, D. Liskovich, Y. Lu, Y. Mao, X. Martinet, T. Mihaylov, P. Mishra, I. Molybog, Y. Nie, A. Poulton, J. Reizenstein, R. Rungta, K. Saladi, A. Schelten, R. Silva, E. M. Smith, R. Subramanian, X. E. Tan, B. Tang, R. Taylor, A. Williams, J. X. Kuan, P. Xu, Z. Yan, I. Zarov, Y. Zhang, A. Fan, M. Kambadur, S. Narang, A. Rodriguez, R. Stojnic, S. Edunov, and T. Scialom, "Llama 2: Open foundation and fine-tuned chat models," *CoRR*, vol. abs/2307.09288, 2023. [Online]. Available: <https://doi.org/10.48550/arXiv.2307.09288>
+- <span id="page-12-4"></span>[35] Y. Wang, S. Wang, S. Zhu, F. Fu, X. Liu, X. Xiao, H. Li, J. Li, F. Wu, and B. Cui, "Flexsp: Accelerating large language model training via flexible sequence parallelism," in *Proceedings of the 30th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2*, 2025, pp. 421–436. [Online]. Available:<https://dl.acm.org/doi/10.1145/3676641.3715998>
+- <span id="page-12-3"></span>[36] Z. Wang, A. Cai, X. Xie, Z. Pan, Y. Guan, W. Chu, J. Wang, S. Li, J. Huang, C. Cai *et al.*, "Wlb-llm: Workload-balanced 4d parallelism for large language model training," *arXiv preprint arXiv:2503.17924*, 2025. [Online]. Available:<https://doi.org/10.48550/arXiv.2503.17924>
+- <span id="page-12-2"></span>[37] A. Yang, A. Li, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Gao, C. Huang, C. Lv *et al.*, "Qwen3 technical report," *arXiv preprint arXiv:2505.09388*, 2025. [Online]. Available: <https://doi.org/10.48550/arXiv.2505.09388>
+- <span id="page-12-7"></span>[38] Y. Zhao, A. Gu, R. Varma, L. Luo, C. Huang, M. Xu, L. Wright, H. Shojanazeri, M. Ott, S. Shleifer, A. Desmaison, C. Balioglu, P. Damania, B. Nguyen, G. Chauhan, Y. Hao, A. Mathews, and S. Li, "Pytorch FSDP: experiences on scaling fully sharded data parallel," *Proc. VLDB Endow.*, vol. 16, no. 12, pp. 3848–3860, 2023. [Online]. Available:<https://www.vldb.org/pvldb/vol16/p3848-huang.pdf>

@@ -1,0 +1,33 @@
+# 6 CONCLUSION
+
+We introduced a curriculum learning framework for efficient reasoning in large language models, where token budgets decay over training time rather than remain fixed. Based on Group Relative Policy Optimization (GRPO), our approach combines three reward signals: correctness, length efficiency, and formatting structure to guide learning under progressively tighter constraints.
+
+Our experiments show that curriculum-based training consistently improves both accuracy and token usage over fixed-budget baselines across multiple reasoning benchmarks. These gains hold whether training on simple arithmetic tasks (GSM8K) or competition-level mathematics (MATH500), and extend to adversarial and out-of-distribution evaluations.
+
+We also show that the shape of the curriculum, that is, the rate and schedule of budget decay, significantly affects the final performance. Smoother decay paths encourage better compression without hurting accuracy, particularly on tasks requiring deeper reasoning. Finally, we show that reward composition (correctness vs. length emphasis) enables controllable trade-offs between solution quality and inference cost.
+
+Together, these results suggest that curriculum-driven compression is a powerful and generalizable approach for training efficient reasoning models. We hope our open-source implementation and findings serve as a foundation for future work on budget-aware, verifiable, and scalable language model reasoning.
+
+## REFERENCES
+
+- <span id="page-12-9"></span>Pranjal Aggarwal and Sean Welleck. L1: Controlling how long a reasoning model thinks with reinforcement learning, 2025. URL <https://arxiv.org/abs/2503.04697>.
+- <span id="page-12-3"></span>Anonymous. Stop overthinking: A survey on efficient reasoning for large language models. *TMLR*, 2025. URL <https://openreview.net/forum?id=HvoG8SxggZ>. Under review.
+- <span id="page-12-5"></span>Daman Arora and Andrea Zanette. Training language models to reason efficiently. *arXiv preprint arXiv:2502.04463*, 2025.
+- <span id="page-12-4"></span>Bradley Butcher, Michael O'Keefe, and James Titchener. Precise length control for large language models. *Natural Language Processing Journal*, 11:100143, 2025.
+- <span id="page-12-8"></span>Razvan-Gabriel Dumitru, Darius Peteleaza, Vikas Yadav, and Liangming Pan. Conciserl: Conciseness-guided reinforcement learning for efficient reasoning models. *arXiv preprint arXiv:2505.17250*, 2025.
+- <span id="page-12-7"></span>Gongfan Fang, Xinyin Ma, and Xinchao Wang. Thinkless: Llm learns when to think. *arXiv preprint arXiv:2505.13379*, 2025.
+- <span id="page-12-2"></span>Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. *arXiv preprint arXiv:2501.12948*, 2025.
+- <span id="page-12-1"></span>Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richardson, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander Madry, Alex Beutel, Alex Carney, et al. Openai o1 system card. *arXiv preprint arXiv:2412.16720*, 2024.
+- <span id="page-12-6"></span>Yu Kang, Xianghui Sun, Liangyu Chen, and Wei Zou. C3ot: Generating shorter chain-of-thought without compromising effectiveness. In *AAAI*, volume 39, pp. 24312–24320, 2025.
+- <span id="page-12-0"></span>Aman Madaan, Niket Tandon, Prakhar Gupta, Skyler Hallinan, Luyu Gao, Sarah Wiegreffe, Uri Alon, Nouha Dziri, Shrimai Prabhumoye, Yiming Yang, Shashank Gupta, Bodhisattwa Prasad Majumder, Katherine Hermann, Sean Welleck, Amir Yazdanbakhsh, and Peter Clark. Self-refine: Iterative refinement with self-feedback. In *NeurIPS*, 2023. URL [https://openreview.](https://openreview.net/forum?id=S37hOerQLB) [net/forum?id=S37hOerQLB](https://openreview.net/forum?id=S37hOerQLB).
+
+- <span id="page-13-6"></span>Niklas Muennighoff, Zitong Yang, Weijia Shi, Xiang Lisa Li, Li Fei-Fei, Hannaneh Hajishirzi, Luke Zettlemoyer, Percy Liang, Emmanuel Candes, and Tatsunori Hashimoto. s1: Simple test-time ` scaling, 2025. URL <https://arxiv.org/abs/2501.19393>.
+- <span id="page-13-0"></span>Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc V Le, Ed H. Chi, Sharan Narang, Aakanksha Chowdhery, and Denny Zhou. Self-consistency improves chain of thought reasoning in language models. In *ICLR*, 2023. URL <https://openreview.net/forum?id=1PL1NIMMrw>.
+- <span id="page-13-2"></span>Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, brian ichter, Fei Xia, Ed H. Chi, Quoc V Le, and Denny Zhou. Chain of thought prompting elicits reasoning in large language models. In Alice H. Oh, Alekh Agarwal, Danielle Belgrave, and Kyunghyun Cho (eds.), *NeurIPS*, 2022. URL [https://openreview.net/forum?id=\\_VjQlMeSB\\_J](https://openreview.net/forum?id=_VjQlMeSB_J).
+- <span id="page-13-4"></span>Sean Welleck, Amanda Bertsch, Matthew Finlayson, Hailey Schoelkopf, Alex Xie, Graham Neubig, Ilia Kulikov, and Zaid Harchaoui. From decoding to meta-generation: Inference-time algorithms for large language models. *TMLR*, 2024. ISSN 2835-8856. URL [https://openreview.](https://openreview.net/forum?id=eskQMcIbMS) [net/forum?id=eskQMcIbMS](https://openreview.net/forum?id=eskQMcIbMS). Survey Certification.
+- <span id="page-13-1"></span>Yangzhen Wu, Zhiqing Sun, Shanda Li, Sean Welleck, and Yiming Yang. Inference scaling laws: An empirical analysis of compute-optimal inference for LLM problem-solving. In *ICLR*, 2025a. URL <https://openreview.net/forum?id=VNckp7JEHn>.
+- <span id="page-13-9"></span>Yuyang Wu, Yifei Wang, Ziyu Ye, Tianqi Du, Stefanie Jegelka, and Yisen Wang. When more is less: Understanding chain-of-thought length in llms. *arXiv preprint arXiv:2502.07266*, 2025b.
+- <span id="page-13-7"></span>Heming Xia, Chak Tou Leong, Wenjie Wang, Yongqi Li, and Wenjie Li. Tokenskip: Controllable chain-of-thought compression in llms. *arXiv preprint arXiv:2502.12067*, 2025.
+- <span id="page-13-8"></span>Silei Xu, Wenhao Xie, Lingxiao Zhao, and Pengcheng He. Chain of draft: Thinking faster by writing less. *arXiv preprint arXiv:2502.18600*, 2025.
+- <span id="page-13-3"></span>Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Thomas L. Griffiths, Yuan Cao, and Karthik R Narasimhan. Tree of thoughts: Deliberate problem solving with large language models. In *NeurIPS*, 2023. URL <https://openreview.net/forum?id=5Xc1ecxO1h>.
+- <span id="page-13-5"></span>Weizhe Yuan, Ilia Kulikov, Ping Yu, Kyunghyun Cho, Sainbayar Sukhbaatar, Jason Weston, and Jing Xu. Following length constraints in instructions. *arXiv preprint arXiv:2406.17744*, 2024.

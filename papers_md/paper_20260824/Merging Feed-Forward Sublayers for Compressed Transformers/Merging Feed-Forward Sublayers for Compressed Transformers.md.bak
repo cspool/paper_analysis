@@ -1,0 +1,522 @@
+# Merging Feed-Forward Sublayers for Compressed Transformers
+
+Neha Verma<sup>1</sup> Kenton Murray<sup>1</sup>,<sup>2</sup> Kevin Duh<sup>1</sup>,<sup>2</sup> <sup>1</sup>Center for Language and Speech Processing <sup>2</sup>Human Language Technology Center of Excellence Johns Hopkins University {nverma7, kenton}@jhu.edu, kevinduh@cs.jhu.edu
+
+## Abstract
+
+With the ubiquity of large deep learning models and their growing number of use cases, the need for high-quality compression techniques is growing in order to deploy these models widely across diverse hardware and memory settings. In this work, we present a novel approach to model compression by *merging* parameter groups within a model, rather than pruning away less important parameters. Specifically, we select, align, and merge separate feed-forward sublayers in Transformer models, and test our method on language modeling, image classification, and machine translation. With our method, we demonstrate performance comparable to the original models while combining more than a third of model feedforward sublayers, and demonstrate improved performance over a strong layer-pruning baseline. For instance, we can remove over 21% of total parameters from a vision transformer, while maintaining 99% of its original performance. Additionally, we observe that some groups of feed-forward sublayers exhibit high activation similarity, which may help explain their surprising mergeability.
+
+# 1 Introduction
+
+Recent advances in deep learning have been marked by large, pre-trained models in order to achieve state-of-the-art performance. As these models deploy across a wider range of settings, compression techniques that balance efficiency and performance are increasingly important. These techniques help facilitate model use across a variety of inference settings and hardware availability.
+
+Much of the prior work in model compression has built upon on pruning, quantization, and distillation techniques [\(LeCun et al.,](#page-9-0) [1989;](#page-9-0) [Fiesler et al.,](#page-8-0) [1990;](#page-8-0) [Hinton et al.,](#page-8-1) [2015\)](#page-8-1). Prior work on pruning has introduced many techniques identifying regions of model parameters that can be removed without drastically changing performance. These
+
+techniques target individual weights, neurons, or general regions of a model—like attention heads, parameter chunks, or even entire layers. [\(Voita](#page-10-0) [et al.,](#page-10-0) [2019;](#page-10-0) [Lagunas et al.,](#page-9-1) [2021;](#page-9-1) [Sajjad et al.,](#page-10-1) [2023\)](#page-10-1). However, while "unimportant" features are targeted for pruning techniques, we can also target "redundant" features for compression. There has been far less focus on compression methods that target redundancy within a model.
+
+In targeting redundant features for compression, we can *merge* sets of similar parameters rather than prune them. Relatedly, the field of model merging has explored merging parameters from multiple models to combine their functionalities into one model [\(Goddard et al.,](#page-8-2) [2024;](#page-8-2) [Yang et al.,](#page-10-2) [2024a\)](#page-10-2). We instead extend parameter merging to *sublayers* within one model, rather than just separate models.
+
+To this end, we propose a novel compression method that aligns, merges, and ties separate feedforward (FF) sublayers within Transformers to achieve a reduced parameter model with reduced memory use [\(Vaswani et al.,](#page-10-3) [2017\)](#page-10-3). We target FF sublayers in particular due to their large parameter count and easy mergeability. Through our testing, we find that these groups of FF sublayers are notably compressible via merging, giving rise to a simple and surprisingly effective framework applicable to a variety of existing pre-trained models.
+
+We highlight the contributions of our work:
+
+- We propose a novel model compression method inspired by recent work in model merging. This approach is orthogonal to compression methods like quantization.
+- Across three different Transformer-based models, namely GPT-2, ViT, and a machine translation model, we show that merging over one-third of FF sublayers and fine-tuning the resulting model can achieve performance comparable to the original models. We also combine our method with QLoRA to help
+
+![](_page_1_Figure_0.jpeg)
+
+Figure 1: Overview of the feed-forward alignment and merging algorithm used to compress models in an example three layers of a Transformer. Multi-headed attention is abbreviated to MHA, feed-forward sublayers are depicted with  $W^{\rm in}$  and  $W^{\rm out}$  weights, and Add&Norm operations are depicted with  $\bigoplus$ , connected by arrows indicating residual connections. Permutation transformation matrices are shown as  $P_i$ . Our method includes a permutation finding step, applying the transformations, merging transformed parameters, and finally tying the merged parameters. By merging and tying k feed-forwards, we can reduce the model size by k-1 feed-forward sublayers.
+
+facilitate even smaller fine-tuning settings (Dettmers et al., 2023).
+
+- To explore the surprising effectiveness of merging, we compare different FF outputs from the same model, and find regions with highly similar activations. These same patterns do not occur in attention outputs.
+- We release an easily extensible toolkit for our method: ? nverma1/merging-ffs-compression
+
+#### 2 Related Work
+
+In this section, we review prior work related to weight tying and redundancies in Transformers.
+
+Weight tying for smaller models Prior work on weight tying has focused on training models from scratch with specific tying schemes. Tying input and output embedding layers helps cap total parameter count, but more importantly introduces important gradient sharing for better generalization in language generation tasks (Press and Wolf, 2017; Inan et al., 2017). For non-embedding layers in Transformers, prior work has explored numerous weight tying patterns for pre-training new, efficient models (Dehghani et al., 2019; Lan et al., 2020; Reid et al., 2021; Takase and Kiyono, 2023). Liu et al. (2024) use heavy weight tying between Transformer lay-
+
+ers at initialization to achieve state-of-the-art subbillion parameter language models. Pires et al. (2023) tie widened FF sublayers at initialization and train machine translation (MT) models that outperform standard Transformer MT models. In our work, we instead start from a pre-trained model, and then use weight sharing as a *post-training* tool to reduce overall parameter count.
+
+**Redundancies in Transformers** Prior work has demonstrated signs of redundancy in Transformer computations, and suggested techniques to reduce this phenomenon. Dalvi et al. (2020) use centered kernel alignment (CKA) to show high layer similarity in BERT and XLNet, and use correlation clustering to find and remove redundant neurons. Men et al. (2024); Gromov et al. (2024) propose removing Transformer layers in deep, decoderonly language models to achieve faster inference at a small performance drop. Li et al. (2024) propose a compression method for sparsely-activated mixture-of-expert (SMoE) models that draws from model merging to compress experts in SMoE models. Our method extends a similar approach to a much wider set of models.
+
+## 3 Merging Feed-Forward Sublayers
+
+In this section, we discuss FF sublayers as a merging target, explain permutation-based neuron align-
+
+<span id="page-1-0"></span><sup>&</sup>lt;sup>1</sup>This diagram shows a Post-LN Transformer, but our method easily applies to Pre-LN Transformers as well.
+
+ment, and describe our compression method.
+
+## 3.1 Targeting feed-forward sublayers
+
+We focus our interest on Transformer FF sublayers for several reasons. Firstly, these sublayers constitute around two-thirds of non-embedding parameters in Transformer encoder or decoder models. Compressing these parameters results in substantial overall savings in a model. Secondly, the parameterization of FF sublayers, including variations, is straightforward, making it a good candidate for merging-based compression approaches.
+
+Beyond these practical considerations, prior work establishes several properties of Transformer FF sublayers that make them good candidates for compression via merging. [Li et al.](#page-9-9) [\(2023\)](#page-9-9) show that they can be very sparsely activated, where non-zero FF activations can be as low as 3-5%. Other work has demonstrated evidence that adjacent LayerNorm and FF blocks, in both Postand Pre-LN architectures, results in weakening of the contextualization effects of FF sublayers [\(Kobayashi et al.,](#page-9-10) [2024\)](#page-9-10). The authors allude to redundancy in Transformer FF processing due to this interaction. Finally, [Pires et al.](#page-9-6) [\(2023\)](#page-9-6) train performant Transformer-based translation models with only one widened and tied encoder FF block, demonstrating useful sharing, but from scratch.
+
+# <span id="page-2-1"></span>3.2 Background on permutation-based neuron alignment
+
+We propose a merging technique that combines several similar sublayers into a single parameter set. Our merging technique is inspired by prior work in permutation symmetries of neurons [\(Li et al.,](#page-9-11) [2015\)](#page-9-11). This technique has been used in studying models' convergent learning, as well as merging two or more separate models [\(Tatro et al.,](#page-10-6) [2020;](#page-10-6) [Entezari et al.,](#page-8-7) [2022;](#page-8-7) [Ainsworth et al.,](#page-8-8) [2023\)](#page-8-8).
+
+Permutation-based alignment techniques seek to find an optimal reordering of neurons in one layer that more closely matches ordering of neurons from another layer, without changing the output. Given two layers to align, we compute only forward passes through both using exemplar data to collect activations. These layers are generally corresponding from different models. This results in two activation sets Xα, X<sup>β</sup> ∈ R n×d , where n is the number of example data points, and d is the model dimension.
+
+To determine corresponding neurons from the activations, we compute cross-correlation C, in line with prior work [\(Li et al.,](#page-9-11) [2015\)](#page-9-11). µ represents mean vectors, and σ standard deviation vectors.
+
+$$C = \frac{\mathbb{E}\left[ (X_{\alpha} - \mu(X_{\alpha}))^{T} (X_{\beta} - \mu(X_{\beta})) \right]}{\sigma(X_{\alpha})\sigma(X_{\beta})}$$
+(1)
+
+The resulting matrix C ∈ R d×d reflects how each neuron j in X<sup>α</sup> correlates with each neuron k in Xβ. To find the neuron alignment that maximizes total correlation, we solve the following optimization problem, where Π<sup>d</sup> is the space of all permutations of length d [\(Li et al.,](#page-9-11) [2015;](#page-9-11) [Tatro et al.,](#page-10-6) [2020\)](#page-10-6):
+
+$$\pi^* = \max_{\pi \in \Pi_d} \sum_{j=1}^d C(j, \pi(j))$$
+ (2)
+
+This problem is a case of the Linear Assignment Problem, and we solve for π <sup>∗</sup> using the Jonker-Volgenant algorithm implementation provided by scipy [\(Crouse,](#page-8-9) [2016\)](#page-8-9).
+
+## <span id="page-2-2"></span>3.3 Combining feed-forward sublayers
+
+Now, with the appropriate background, we describe our compression method. For our method, we assume we have some predetermined number of FF sublayers k to merge. This number can be inferred given a desired parameter reduction ratio, or set otherwise.
+
+Given a window of k adjacent FF sublayers, we compute a forward pass using a subset of data in order to compute features for each sublayer. In other words, for Transformer FF sublayer x out = Woutϕ(Winx in + b in) + b out, we obtain features just before the ϕ activation. We consider only the neurons just *after* Win because prior work has shown that to reorder the input to Win and output of Wout requires permuting many additional weights due to the residual connections in order to maintain functional equivalence [\(Verma and Elbayad,](#page-10-7) [2024\)](#page-10-7). For each of the k feed-forward sublayers, we collect features X<sup>i</sup> ∈ R n×d , i ∈ [0, k − 1], where d is the feed-forward dimension.[2](#page-2-0)
+
+We designate the first FF sublayer of the set to be an "anchor", and compute the permutation-finding algorithm on each pair of features where one index is always the anchor. In other words, for each sublayer i ∈ [1, k − 1], we find π<sup>i</sup> between X<sup>0</sup> and X<sup>i</sup> using the assignment method from Section [3.2.](#page-2-1)
+
+After converting function π<sup>i</sup> to its corresponding permutation matrix P<sup>i</sup> , we transform the k − 1
+
+<span id="page-2-0"></span><sup>2</sup>The layer indices reflect local index within the set of k versus global layer index.
+
+non-anchor FF sublayers. We then average these k FF sublayers, and replace each of them with their average, as in Equations [3](#page-3-0)[–6.](#page-3-1) [3](#page-3-2) Finally, we tie these weights so that in memory they appear as just one sublayer, effectively removing the parameters from k − 1 FF sublayers.
+
+$$W^{\text{in}*} = \frac{1}{k} \left( W_0^{\text{in}} + \sum_{i=1}^{k-1} P_i W_i^{\text{in}} \right)$$
+ (3)
+
+$$b^{\text{in}*} = \frac{1}{k} \left( b_0^{\text{in}} + \sum_{i=1}^{k-1} P_i b_i^{\text{in}} \right)$$
+ (4)
+
+$$W^{\text{out*}} = \frac{1}{k} \left( W_0^{\text{out}} + \sum_{i=1}^{k-1} W_i^{\text{out}} P_i^T \right)$$
+ (5)
+
+$$b^{\text{out}} = \frac{1}{k} \left( \sum_{i=0}^{k-1} b_i^{\text{out}} \right) \tag{6}$$
+
+Practical implications The consequences of tying these weights and reducing model size are 1) the model occupies less space on disk or on GPU when fine-tuning (as well as its gradients), making it easier to use smaller hardware and 2) if some optimizations are made, inference speed and throughput can be improved. While naively our method does not target inference speed, we discuss ways this could be achieved. For example, if larger batch sizes are used given the model memory savings, this can result in increased throughput on the same hardware. Additionally, specific efficient GPU+CPU execution techniques like layer-to-layer that involve on- and off-loading parameters may also benefit from this sharing scheme by reducing the number and size of data transfers [\(Pudipeddi](#page-9-12) [et al.,](#page-9-12) [2020;](#page-9-12) [Aminabadi et al.,](#page-8-10) [2022\)](#page-8-10).
+
+#### <span id="page-3-4"></span>3.4 Selecting sublayers to merge
+
+In selecting the k adjacent feed-forward sublayers to merge, we take a sliding window approach. For all starting layer indices from 0 to (Nlayers −1)−k, we apply the method outlined in Section [3](#page-2-2).3, and evaluate the resulting model on a validation set.
+
+Although we propose to test each potential window, in reality, the cost of computing permutations and parameter arithmetic is low, and it scales only linearly with the number of layers. The largest costs in each iteration is computing features and testing candidates. However, we can compute features only *once* despite testing Nlayers − k models, because one forward pass through the exemplar data is sufficient for creating all necessary correlation matrices. The best candidate is the one with the highest post-merge evaluation score. We note that there may be other possible selection heuristics.
+
+<span id="page-3-0"></span>Finally, we follow our merging procedure with a short recovery fine-tuning to quickly heal performance on the downstream task.[4](#page-3-3)
+
+# 4 Experimental Setup
+
+<span id="page-3-1"></span>To test its extensibility, we apply our compression method to a diverse set of Transformer-based models. Specifically, we use GPT-2 [\(Radford et al.,](#page-9-13) [2019\)](#page-9-13), a vision transformer (ViT) [\(Dosovitskiy](#page-8-11) [et al.,](#page-8-11) [2020\)](#page-8-11), and a Transformer-based MT model from OPUS-MT [\(Tiedemann and Thottingal,](#page-10-9) [2020\)](#page-10-9). We select these models in order to cover a diversity of Transformer model types (decoder-only, encoder, encoder-decoder) and different modalities. We additionally include experiments on OLMo-7B using QLoRA [\(Groeneveld et al.,](#page-8-12) [2024\)](#page-8-12).
+
+For each main setting, we list the model used, the example data for computing alignments, and finally the data used for recovery fine-tuning and evaluation. Additional hyperparameters are included in Appendix [C,](#page-11-1) and dataset details in Appendix [D.](#page-12-0)
+
+#### 4.1 Language modeling
+
+For our experiments, we use GPT-2 Large which was trained on extensive English text [\(Radford](#page-9-13) [et al.,](#page-9-13) [2019\)](#page-9-13). For computing example activations, we use ~10k tokens from the validation set of the Wikitext103 dataset [\(Merity et al.,](#page-9-14) [2017\)](#page-9-14). Finally, we use the train and test sets from the Wikitext103 for fine-tuning and evaluation, respectively.
+
+Because we use Wikitext103 for recovery finetuning, we also fine-tune the uncompressed GPT-2 baseline model for fair comparison. Because we have access to the training data for our machine translation and ViT models, we do not provide a fine-tuned baseline for those as the data we use already appears in their original training data.
+
+We fine-tune our GPT-2 models for up to 100k steps with batches of 2048 tokens. We select the best model based on validation perplexity and report average test perplexity with a sliding window of 512 tokens.
+
+<span id="page-3-2"></span><sup>3</sup> For an extension of this method to SwiGLU [\(Shazeer,](#page-10-8) [2020\)](#page-10-8), see Appendix [A.](#page-11-0)
+
+<span id="page-3-3"></span><sup>4</sup>An algorithm summarizing our selection method can be found in Appendix [B.](#page-11-2)
+
+## 4.2 Image classification with ViT
+
+We use a vision transformer (ViT) for our image classification experiments, with resolution of 224x224, and patch size of 16x16 [\(Dosovitskiy](#page-8-11) [et al.,](#page-8-11) [2020\)](#page-8-11). ViT is a 12-layer Transformer encoder model pre-trained on ImageNet-21k, and subsequently fine-tuned on ImageNet-1k. ImageNet-1k is a classification task where images belong to one of 1000 categories [\(Russakovsky et al.,](#page-10-10) [2015\)](#page-10-10). For computing activations, we use ~10k patches from the ImageNet-1k validation set. Evaluation results are computed on original validation labels.
+
+We fine-tune our ViT models on ImageNet-1k for up to 50k steps with a batch size of 128, and report accuracy.
+
+#### 4.3 Machine translation
+
+For our experiments on machine translation, we use a 12-layer Chinese-English Transformer-based translation model from an OPUS-MT release [\(Tiedemann and Thottingal,](#page-10-9) [2020\)](#page-10-9). For computing activations, we use ~10k tokens from the Tatoeba validation set[5](#page-4-0) [\(Tiedemann,](#page-10-11) [2020\)](#page-10-11). For fine-tuning, we use the original training data released by the Tatoeba translation challenge, sourced from OPUS [\(Tiedemann,](#page-10-12) [2012\)](#page-10-12).
+
+We apply our method to both the encoder and decoder separately, constituting two anchors. However, we search windows in sync, meaning that the same window from the encoder and decoder are merged, but separately.
+
+We fine-tune our translation models for up to 100k steps with a batch size of 64 sentences. We use sacrebleu to compute BLEU scores for evaluation [\(Papineni et al.,](#page-9-15) [2002;](#page-9-15) [Post,](#page-9-16) [2018\)](#page-9-16), and pymarian to compute COMET scores[6](#page-4-1) [\(Rei et al.,](#page-9-17) [2022;](#page-9-17) [Gowda et al.,](#page-8-13) [2024\)](#page-8-13).
+
+#### 4.4 Layer pruning baseline
+
+Recent work on the structured pruning of Transformers has seen many methods that remove full layers from a model and then optionally fine-tune the compressed model [\(Ma et al.,](#page-9-18) [2023;](#page-9-18) [Men et al.,](#page-9-7) [2024;](#page-9-7) [Gromov et al.,](#page-8-6) [2024;](#page-8-6) [Yang et al.,](#page-10-13) [2024b\)](#page-10-13). We focus on a structured pruning baseline as many unstructured pruning methods do not realize memory savings unless they achieve 1) high sparsity ratios and 2) use specialized sparse libraries to store
+
+sparse weights. On the other hand, our method easily realizes compression due to weight tying.
+
+We implement layer-pruning as a baseline; many layer-pruning methods rely on similarity measures to choose a set of adjacent layers to prune. However, we avoid any specific similarity techniques and instead choose the best subset after evaluation much like our own technique, via a sliding window and testing on validation data. After selecting the best pruned model, we then fine-tune the model with the same specifications as our method. In all, this encapsulates a strong, structured pruning baseline that generalizes many layer-pruning based techniques.
+
+#### 4.5 OLMo-7B QLoRA Extension
+
+We additionally apply our method alongsize 4-bit QLoRA to OLMo-7B for a downstream summarization task, namely SamSum [\(Groeneveld et al.,](#page-8-12) [2024;](#page-8-12) [Gliwa et al.,](#page-8-14) [2019\)](#page-8-14). SamSum is an English dialogue summarization dataset, and OLMo-7B is a 32-layer English language model trained on the open Dolma dataset [\(Soldaini et al.,](#page-10-14) [2024\)](#page-10-14). This model uses SwiGLU FFs; we discuss extending our method to this variation in Appendix [A.](#page-11-0) We compute features on ~10k tokens from Dolma, and select the best pre-tune model using Wikitext-103. We report results on SamSum using ROUGE-1, ROUGE-2, and ROUGE-Lsum [\(Lin,](#page-9-19) [2004\)](#page-9-19).
+
+# 5 Results
+
+# 5.1 Merging feed-forward sublayers across compression ratios
+
+We evaluate our compression method on image classification using ViT, language modeling using GPT-2, and machine translation using an OPUS-MT zh-en model, and report our results in Figure [2.](#page-5-0) We report results at 1/3, 1/2 and (n − 1)/n feedforward sublayers removed, in order to test our method at different overall compression ratios.[7](#page-4-2) We also report results from our compression method without the permutation step, labeled as "Vanilla."
+
+From our results, we see that even up to 1/2 of FF sublayer parameters removed, which is over 30% in parameter reduction for ViT and GPT-2,[8](#page-4-3) our method can retain high performance. At 1/3 of FF sublayers removed, performance is almost
+
+<span id="page-4-0"></span><sup>5</sup>Tokens are counted on the source side.
+
+<span id="page-4-1"></span><sup>6</sup>We use the wmt-22-da model.
+
+<span id="page-4-2"></span><sup>7</sup>Compression ratios for OPUS-MT differ due to the encdec architecture.
+
+<span id="page-4-3"></span><sup>8</sup>We include embedding parameters in all % parameter reduction and compression ratio calculations.
+
+<span id="page-5-0"></span>![](_page_5_Figure_0.jpeg)
+
+Figure 2: Results across all three tasks depicting compression versus performance results. We include results from our main method, labeled as Permute FF Merge, as well as our method without permutation alignment, depicted as Vanilla FF Merge. We note that our method retains almost complete performance at one-third of feed-forward sublayers removed, across all tasks, and continues to retain high performance at one-half of FF sublayers removed.
+
+identical to the original model, resulting in only a 1% accuracy drop in ViT, 1 PPL increase in GPT-2, and 2 BLEU drop in the translation model. Full numerical results can be found in Appendix E.
+
+Our findings also hold across all three of our tasks tested, suggesting that our method generalizes to different types of models. Additionally, we can notice that permutation-based compression is consistently better compared to no-permute vanilla baselines, demonstrating the effectiveness of aligning features before merging. This effectiveness is more pronounced at larger numbers of FF sublayers removed. In summary, our results show that 1) post-training weight tying is a simple and effective compression method and 2) permutation-based alignment of these shared weights can improve final compression performance.
+
+In Figure 3, we compare our method at 1/3 and 1/2 FFs removed to our layer-pruning baseline. 9 We drop layers to attempt to match the reduction ratios of our own methods, constituting 1/6 and 1/3 of layers dropped for all three models. However, since we cannot match exact ratios due to the granularity of the methods, we plot the exact parameter reduction ratios and performance, and compare. As seen in the figure, our method consistently matches or outperforms the layer-dropping method. This comparison confirms that merging is a competitive alternative to strong pruning-based methods for model compression.
+
+#### 5.2 Choice of merged sublayers
+
+In our merging algorithm, we choose which layers to merge by computing performance over sliding windows of k indices. For each of our model/task
+
+pairs, we plot the pre-tuning performance of the merging algorithm on 1/3 of FF sublayers dropped across all windows, to observe their differences. Results are shown in Figure 4. Before tuning, it appears that the choice of layers seems to be important, resulting in different performance. However, these differences reduce once recovery fine-tuning is performed. To see this, we randomly select 3 sets of k consecutive layers for each of our tasks, and apply recovery fine-tuning to these compressed models. In Table 1, we observe that all models achieve similar performance after fine-tuning.
+
+This suggests that the aligning, tying, and tuning portions of our method drive much of the performance improvement. Nevertheless, the choice of layers might be more important in other models; this is potential future work.
+
+<span id="page-5-2"></span>
+
+|               | ViT           | GPT-2 | OPUS-MT |
+|---------------|---------------|-------|---------|
+|               | Accuracy(%) ↑ | PPL↓  | BLEU↑   |
+| Best pre-tune | 79.2          | 17.3  | 33.5    |
+| Random 1      | 79.5          | 18.3  | 33.9    |
+| Random 2      | 78.5          | 17.1  | 33.8    |
+| Random 3      | 78.9          | 17.3  | 33.1    |
+
+Table 1: Results comparing our compression method at 1/3 of feed-forward sublayers removed with different sublayer groups. We include three random consecutive selections of sublayers, excluding the original selection.
+
+#### 5.3 Choice of anchor layer
+
+We also examine the sensitivity of our method to the choice of anchor layer in our alignment step. In section 3.3, we choose the first FF sublayer in the sequence to serve as the anchor, and compute permutations aligning the remaining sublayers to the anchor. Here, we also consider using either the
+
+<span id="page-5-1"></span><sup>&</sup>lt;sup>9</sup>These reduction ratios reflect common ratios found in layer-pruning literature.
+
+<span id="page-6-0"></span>![](_page_6_Figure_0.jpeg)
+
+Figure 3: Results across all three tasks depicting compression versus performance for our method and a strong layer-dropping baseline method. We perform layer dropping for 1/6 and 1/3 of layers dropped, and fine-tune the best pre-tuned set of dropped layers for all sliding windows. Across the parameter reduction range shown, our merging-based compression method outperforms or matches layer-dropping across the three tasks.
+
+<span id="page-6-1"></span>![](_page_6_Figure_2.jpeg)
+
+Figure 4: Performance curves over different ranges of merged feed-forward sublayers representing 1/3 FFs removed. Across all three tasks, there are clear ranges of merged sublayers that retain more performance when merged.<sup>10</sup>
+
+*last* FF or the *middle* FF of the sequence, and report results in our 1/3 FF merge setting in Table 2.
+
+<span id="page-6-3"></span>
+
+|                | ViT<br>Accuracy(%) ↑ | GPT-2<br>PPL↓ | OPUS-MT<br>BLEU↑ |
+|----------------|----------------------|---------------|------------------|
+| Anchor: First  | 79.2                 | 17.3          | 33.5             |
+| Anchor: Middle | 79.5                 | 17.4          | 33.4             |
+| Anchor: Last   | 79.0                 | 17.4          | 33.5             |
+
+Table 2: Results comparing our compression method with 1/3 of feed-forward sublayers removed, but with different anchor locations.
+
+Given the similar results across settings, our merging approach is robust to the choice of reference or anchor layer, enhancing the reliability of our permutation-based alignment method to find corresponding features for a useful merge.
+
+## 5.4 Additional compression via quantization
+
+While our compression method reduces model size via weight tying, quantization also reduces the overall storage needed for a model via reducing parameter precision. If our method performs orthogonally to state-of-the-art quantization, both methods may
+
+be used together for additional memory savings. We experiment with the LLM.int8() quantization method due to its effectiveness and widespread adoption (Dettmers et al., 2022).
+
+We quantize our models after removing 1/3 of FF sublayers, and report results in Table 3. Combining our method with quantization provides even smaller compression ratios, while retaining high performance. This coupling helps to realize compression ratios like 20% when considering total model storage complexity.
+
+#### 5.5 QLoRA Extension on OLMo-7B
+
+In combining our method with QLoRA, we are able to reduce the size of the base model further before quantizing and fine-tuning on SamSum. We report results on the base model, layer pruning, and our method at 1/3 FFs merged in Table 4.
+
+While our method slightly underperforms the base setting, we slightly improve over the Drop baseline setting and maintain high downstream performance. We note that for both the layer pruning baseline as well as our method, the base model is unchanged after compressing, which demonstrates that our method holds up to this aspect of LoRA
+
+<span id="page-6-2"></span><sup>&</sup>lt;sup>10</sup>We display loss on Wikitext-103 for visibility.
+
+<span id="page-7-0"></span>
+
+|         |                 | Our M       | lethod      | +LLM.       | int8()      |
+|---------|-----------------|-------------|-------------|-------------|-------------|
+| Model   | Metric          | Compression | Performance | Compression | Performance |
+| ViT     | Accuracy(%) ↑   | 78%         | 79.2        | 20%         | 79.2        |
+| GPT-2   | $PPL\downarrow$ | 80%         | 17.3        | 22%         | 17.3        |
+| OPUS-MT | BLEU↑           | 89%         | 33.5        | 51%         | 33.5        |
+
+Table 3: Compression results across three tasks, before and after additional compression via quantization. In this case, compression is measured in terms of total model storage complexity (disk space) instead of parameter count.
+
+<span id="page-7-2"></span>![](_page_7_Figure_2.jpeg)
+
+Figure 5: CKA plots of feed-forward sublayer hidden states across three different models. In all three settings, we see clear regions of high similarity between different FF layers.
+
+<span id="page-7-1"></span>
+
+|        | Layers | ROUGE-1 | ROUGE-2 | ROUGE-Lsum |
+|--------|--------|---------|---------|------------|
+| QLoRA  | -      | 53.68   | 29.34   | 49.83      |
+| +Drop  | 10-16  | 50.95   | 26.82   | 47.28      |
+| +Merge | 9-20   | 51.61   | 26.95   | 47.41      |
+
+Table 4: Summarization results reported in ROUGE scores for the SamSum dataset. Our merging method can help reduce the base model further while still allowing for high downstream summarization performance.
+
+(Hu et al., 2022), and can aid in settings where base models need to be reduced further before tuning.
+
+# 5.6 Similarity trends across feed-forward sublayers
+
+Given the success of simply aligning and merging adjacent feed-forward sublayers for compression, we look further into possible signs of redundancy in their representations, as alluded to in previous work (Pires et al., 2023; Kobayashi et al., 2024).
+
+To this end, we compare outputs between FF sublayers within the same models. Across our three tasks, we use 10k tokens or patches from task validation sets to compute output states from all feedforward sublayers. Then, we use Centered Kernel Alignment (CKA) to compute their similarity (Kornblith et al., 2019). We plot CKA values for all pairwise interactions between FF sublayers in all three of our model types, shown in Figure 5.
+
+We notice that across all three model/task pairs,
+
+clear regions of high similarity between FF outputs can be observed, despite FF sublayers being interleaved with multi-headed attention sublayers. We note that similar behavior is not seen in attention sublayers, as seen in Appendix G. While prior work has shown high similarity between the outputs of adjacent *full* Transformer layers, that result can be explained in part by the residual computations that add prior sublayer outputs to current sublayer outputs (Kornblith et al., 2019; Dalvi et al., 2020). However, here we isolate the FF outputs from the stream of residual computations, before this output is added back in, making the observed similarity more surprising due to the greater independence between FF computations.
+
+#### 6 Conclusion
+
+In this work, we propose a novel compression method for Transformer models via merging and tying adjacent sets of FF sublayers. Our method explores an alternative to existing compression approaches, and opens possibilities of future methods that use parameter merging and tying as a post-training compression technique. We demonstrate our method's extensibility across diverse tasks, and show that it helps retain high performance even after removing 1/3 of FF sublayers, and outperforms a strong layer pruning baseline. Our method can be combined with quantization and QLoRA to achieve
+
+even smaller compression ratios, which can help open opportunities for model use across more hardware. Finally, we find that several FF sublayers activate very similarly despite being separated by attention sublayers, which may be related to their surprising mergeability.
+
+## 7 Limitations
+
+This merging-based compression method sits between many unstructured pruning methods and structured pruning methods, where the former generally does not result in speed-up or easily realized compression, but the latter can more easily lead to both speed-up and easily realized compression. This work leads to easily realizable compression on disk or GPU, and indirect speed-ups given batch size increases or other optimizations related to parameter on- or off-loading. However, as we do not focus on achieving inference speed-up, this is a limitation of our work.
+
+Additionally, our method is designed and tested on models that use a Transformer-based architecture. While weight-tying and neuron alignment may apply straightforwardly to other architectures, we do not test this, which constitutes another limitation of this work.
+
+# References
+
+- <span id="page-8-8"></span>Samuel Ainsworth, Jonathan Hayase, and Siddhartha Srinivasa. 2023. Git re-basin: Merging models modulo permutation symmetries. In *The Eleventh International Conference on Learning Representations*.
+- <span id="page-8-10"></span>Reza Yazdani Aminabadi, Samyam Rajbhandari, Ammar Ahmad Awan, Cheng Li, Du Li, Elton Zheng, Olatunji Ruwase, Shaden Smith, Minjia Zhang, Jeff Rasley, et al. 2022. Deepspeed-inference: enabling efficient inference of transformer models at unprecedented scale. In *SC22: International Conference for High Performance Computing, Networking, Storage and Analysis*, pages 1–15. IEEE.
+- <span id="page-8-9"></span>David F. Crouse. 2016. [On implementing 2d rectan](https://doi.org/10.1109/TAES.2016.140952)[gular assignment algorithms.](https://doi.org/10.1109/TAES.2016.140952) *IEEE Transactions on Aerospace and Electronic Systems*, 52(4):1679–1696.
+- <span id="page-8-5"></span>Fahim Dalvi, Hassan Sajjad, Nadir Durrani, and Yonatan Belinkov. 2020. [Analyzing redundancy in](https://doi.org/10.18653/v1/2020.emnlp-main.398) [pretrained transformer models.](https://doi.org/10.18653/v1/2020.emnlp-main.398) In *Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing (EMNLP)*, pages 4908–4926, Online. Association for Computational Linguistics.
+- <span id="page-8-4"></span>Mostafa Dehghani, Stephan Gouws, Oriol Vinyals, Jakob Uszkoreit, and Lukasz Kaiser. 2019. Universal transformers. In *International Conference on Learning Representations*.
+
+- <span id="page-8-15"></span>Tim Dettmers, Mike Lewis, Younes Belkada, and Luke Zettlemoyer. 2022. Gllm.int8 (): 8-bit matrix multiplication for transformers at scale. *Advances in Neural Information Processing Systems*, 35:30318– 30332.
+- <span id="page-8-3"></span>Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer. 2023. Qlora: Efficient finetuning of quantized llms. *Advances in neural information processing systems*, 36:10088–10115.
+- <span id="page-8-11"></span>Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov, Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner, Mostafa Dehghani, Matthias Minderer, Georg Heigold, Sylvain Gelly, et al. 2020. An image is worth 16x16 words: Transformers for image recognition at scale. In *International Conference on Learning Representations*.
+- <span id="page-8-7"></span>Rahim Entezari, Hanie Sedghi, Olga Saukh, and Behnam Neyshabur. 2022. The role of permutation invariance in linear mode connectivity of neural networks. In *International Conference on Learning Representations*.
+- <span id="page-8-0"></span>Emile Fiesler, Amar Choudry, and H John Caulfield. 1990. Weight discretization paradigm for optical neural networks. In *Optical interconnections and networks*, volume 1281, pages 164–173. SPIE.
+- <span id="page-8-14"></span>Bogdan Gliwa, Iwona Mochol, Maciej Biesek, and Aleksander Wawer. 2019. [SAMSum corpus: A human](https://doi.org/10.18653/v1/D19-5409)[annotated dialogue dataset for abstractive summa](https://doi.org/10.18653/v1/D19-5409)[rization.](https://doi.org/10.18653/v1/D19-5409) In *Proceedings of the 2nd Workshop on New Frontiers in Summarization*, pages 70–79, Hong Kong, China. Association for Computational Linguistics.
+- <span id="page-8-2"></span>Charles Goddard, Shamane Siriwardhana, Malikeh Ehghaghi, Luke Meyers, Vlad Karpukhin, Brian Benedict, Mark McQuade, and Jacob Solawetz. 2024. Arcee's mergekit: A toolkit for merging large language models. *arXiv preprint arXiv:2403.13257*.
+- <span id="page-8-13"></span>Thamme Gowda, Roman Grundkiewicz, Elijah Rippeth, Matt Post, and Marcin Junczys-Dowmunt. 2024. Pymarian: Fast neural machine translation and evaluation in python. *arXiv preprint arXiv:2408.11853*.
+- <span id="page-8-12"></span>Dirk Groeneveld, Iz Beltagy, Pete Walsh, Akshita Bhagia, Rodney Kinney, Oyvind Tafjord, Ananya Harsh Jha, Hamish Ivison, Ian Magnusson, Yizhong Wang, et al. 2024. Olmo: Accelerating the science of language models. *arXiv preprint arXiv:2402.00838*.
+- <span id="page-8-6"></span>Andrey Gromov, Kushal Tirumala, Hassan Shapourian, Paolo Glorioso, and Daniel A Roberts. 2024. The unreasonable ineffectiveness of the deeper layers. *arXiv preprint arXiv:2403.17887*.
+- <span id="page-8-1"></span>Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. 2015. Distilling the knowledge in a neural network. *stat*, 1050:9.
+
+- <span id="page-9-20"></span>Edward J Hu, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, Weizhu Chen, et al. 2022. Lora: Low-rank adaptation of large language models. In *International Conference on Learning Representations*.
+- <span id="page-9-3"></span>Hakan Inan, Khashayar Khosravi, and Richard Socher. 2017. Tying word vectors and word classifiers: A loss framework for language modeling. In *International Conference on Learning Representations*.
+- <span id="page-9-10"></span>Goro Kobayashi, Tatsuki Kuribayashi, Sho Yokoi, and Kentaro Inui. 2024. Analyzing feed-forward blocks in transformers through the lens of attention maps. In *The Twelfth International Conference on Learning Representations*.
+- <span id="page-9-21"></span>Simon Kornblith, Mohammad Norouzi, Honglak Lee, and Geoffrey Hinton. 2019. Similarity of neural network representations revisited. In *International conference on machine learning*, pages 3519–3529. PMLR.
+- <span id="page-9-1"></span>François Lagunas, Ella Charlaix, Victor Sanh, and Alexander M Rush. 2021. Block pruning for faster transformers. In *Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing*, pages 10619–10629.
+- <span id="page-9-4"></span>Zhenzhong Lan, Mingda Chen, Sebastian Goodman, Kevin Gimpel, Piyush Sharma, and Radu Soricut. 2020. [Albert: A lite bert for self-supervised learning](https://openreview.net/forum?id=H1eA7AEtvS) [of language representations.](https://openreview.net/forum?id=H1eA7AEtvS) In *International Conference on Learning Representations*.
+- <span id="page-9-0"></span>Yann LeCun, John Denker, and Sara Solla. 1989. Optimal brain damage. *Advances in neural information processing systems*, 2.
+- <span id="page-9-8"></span>Pingzhi Li, Zhenyu Zhang, Prateek Yadav, Yi-Lin Sung, Yu Cheng, Mohit Bansal, and Tianlong Chen. 2024. Merge, then compress: Demystify efficient smoe with hints from its routing policy. In *The Twelfth International Conference on Learning Representations*.
+- <span id="page-9-11"></span>Yixuan Li, Jason Yosinski, Jeff Clune, Hod Lipson, and John Hopcroft. 2015. [Convergent learning: Do differ](https://proceedings.mlr.press/v44/li15convergent.html)[ent neural networks learn the same representations?](https://proceedings.mlr.press/v44/li15convergent.html) In *Proceedings of the 1st International Workshop on Feature Extraction: Modern Questions and Challenges at NIPS 2015*, volume 44 of *Proceedings of Machine Learning Research*, pages 196–212, Montreal, Canada. PMLR.
+- <span id="page-9-9"></span>Zonglin Li, Chong You, Srinadh Bhojanapalli, Daliang Li, Ankit Singh Rawat, Sashank J Reddi, Ke Ye, Felix Chern, Felix Yu, Ruiqi Guo, et al. 2023. The lazy neuron phenomenon: On emergence of activation sparsity in transformers. In *The Eleventh International Conference on Learning Representations*.
+- <span id="page-9-19"></span>Chin-Yew Lin. 2004. [ROUGE: A package for auto](https://aclanthology.org/W04-1013/)[matic evaluation of summaries.](https://aclanthology.org/W04-1013/) In *Text Summarization Branches Out*, pages 74–81, Barcelona, Spain. Association for Computational Linguistics.
+
+- <span id="page-9-5"></span>Zechun Liu, Changsheng Zhao, Forrest Iandola, Chen Lai, Yuandong Tian, Igor Fedorov, Yunyang Xiong, Ernie Chang, Yangyang Shi, Raghuraman Krishnamoorthi, et al. 2024. Mobilellm: Optimizing subbillion parameter language models for on-device use cases. In *Forty-first International Conference on Machine Learning*.
+- <span id="page-9-18"></span>Xinyin Ma, Gongfan Fang, and Xinchao Wang. 2023. Llm-pruner: On the structural pruning of large language models. *Advances in neural information processing systems*, 36:21702–21720.
+- <span id="page-9-7"></span>Xin Men, Mingyu Xu, Qingyu Zhang, Bingning Wang, Hongyu Lin, Yaojie Lu, Xianpei Han, and Weipeng Chen. 2024. [Shortgpt: Layers in large language mod](https://arxiv.org/abs/2403.03853)[els are more redundant than you expect.](https://arxiv.org/abs/2403.03853) *Preprint*, arXiv:2403.03853.
+- <span id="page-9-14"></span>Stephen Merity, Caiming Xiong, James Bradbury, and Richard Socher. 2017. Pointer sentinel mixture models. In *International Conference on Learning Representations*.
+- <span id="page-9-15"></span>Kishore Papineni, Salim Roukos, Todd Ward, and Wei-Jing Zhu. 2002. [Bleu: a method for automatic evalu](https://doi.org/10.3115/1073083.1073135)[ation of machine translation.](https://doi.org/10.3115/1073083.1073135) In *Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics*, pages 311–318, Philadelphia, Pennsylvania, USA. Association for Computational Linguistics.
+- <span id="page-9-6"></span>Telmo Pires, António Vilarinho Lopes, Yannick Assogba, and Hendra Setiawan. 2023. [One wide feed](https://doi.org/10.18653/v1/2023.wmt-1.98)[forward is all you need.](https://doi.org/10.18653/v1/2023.wmt-1.98) In *Proceedings of the Eighth Conference on Machine Translation*, pages 1031– 1044, Singapore. Association for Computational Linguistics.
+- <span id="page-9-16"></span>Matt Post. 2018. [A call for clarity in reporting BLEU](https://doi.org/10.18653/v1/W18-6319) [scores.](https://doi.org/10.18653/v1/W18-6319) In *Proceedings of the Third Conference on Machine Translation: Research Papers*, pages 186– 191, Brussels, Belgium. Association for Computational Linguistics.
+- <span id="page-9-2"></span>Ofir Press and Lior Wolf. 2017. Using the output embedding to improve language models. In *Proceedings of the 15th Conference of the European Chapter of the Association for Computational Linguistics: Volume 2, Short Papers*, pages 157–163.
+- <span id="page-9-12"></span>Bharadwaj Pudipeddi, Maral Mesmakhosroshahi, Jinwen Xi, and Sujeeth Bharadwaj. 2020. Training large neural networks with constant memory using a new execution algorithm. *arXiv preprint arXiv:2002.05645*.
+- <span id="page-9-13"></span>Alec Radford, Jeff Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. 2019. Language models are unsupervised multitask learners.
+- <span id="page-9-17"></span>Ricardo Rei, José G. C. de Souza, Duarte Alves, Chrysoula Zerva, Ana C Farinha, Taisiya Glushkova, Alon Lavie, Luisa Coheur, and André F. T. Martins. 2022. [COMET-22: Unbabel-IST 2022 submission](https://aclanthology.org/2022.wmt-1.52/) [for the metrics shared task.](https://aclanthology.org/2022.wmt-1.52/) In *Proceedings of the*
+
+- *Seventh Conference on Machine Translation (WMT)*, pages 578–585, Abu Dhabi, United Arab Emirates (Hybrid). Association for Computational Linguistics.
+- <span id="page-10-4"></span>Machel Reid, Edison Marrese-Taylor, and Yutaka Matsuo. 2021. [Subformer: Exploring weight sharing](https://doi.org/10.18653/v1/2021.findings-emnlp.344) [for parameter efficiency in generative transformers.](https://doi.org/10.18653/v1/2021.findings-emnlp.344) In *Findings of the Association for Computational Linguistics: EMNLP 2021*, pages 4081–4090, Punta Cana, Dominican Republic. Association for Computational Linguistics.
+- <span id="page-10-10"></span>Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, Sanjeev Satheesh, Sean Ma, Zhiheng Huang, Andrej Karpathy, Aditya Khosla, Michael Bernstein, Alexander C. Berg, and Li Fei-Fei. 2015. [ImageNet Large](https://doi.org/10.1007/s11263-015-0816-y) [Scale Visual Recognition Challenge.](https://doi.org/10.1007/s11263-015-0816-y) *International Journal of Computer Vision (IJCV)*, 115(3):211–252.
+- <span id="page-10-1"></span>Hassan Sajjad, Fahim Dalvi, Nadir Durrani, and Preslav Nakov. 2023. On the effect of dropping layers of pre-trained transformer models. *Computer Speech & Language*, 77:101429.
+- <span id="page-10-8"></span>Noam Shazeer. 2020. Glu variants improve transformer. *arXiv preprint arXiv:2002.05202*.
+- <span id="page-10-14"></span>Luca Soldaini, Rodney Kinney, Akshita Bhagia, Dustin Schwenk, David Atkinson, Russell Authur, Ben Bogin, Khyathi Chandu, Jennifer Dumas, Yanai Elazar, Valentin Hofmann, Ananya Jha, Sachin Kumar, Li Lucy, Xinxi Lyu, Nathan Lambert, Ian Magnusson, Jacob Morrison, Niklas Muennighoff, Aakanksha Naik, Crystal Nam, Matthew Peters, Abhilasha Ravichander, Kyle Richardson, Zejiang Shen, Emma Strubell, Nishant Subramani, Oyvind Tafjord, Evan Walsh, Luke Zettlemoyer, Noah Smith, Hannaneh Hajishirzi, Iz Beltagy, Dirk Groeneveld, Jesse Dodge, and Kyle Lo. 2024. [Dolma: an open corpus](https://doi.org/10.18653/v1/2024.acl-long.840) [of three trillion tokens for language model pretraining](https://doi.org/10.18653/v1/2024.acl-long.840) [research.](https://doi.org/10.18653/v1/2024.acl-long.840) In *Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)*, pages 15725–15788, Bangkok, Thailand. Association for Computational Linguistics.
+- <span id="page-10-5"></span>Sho Takase and Shun Kiyono. 2023. [Lessons on pa](https://doi.org/10.18653/v1/2023.sustainlp-1.5)[rameter sharing across layers in transformers.](https://doi.org/10.18653/v1/2023.sustainlp-1.5) In *Proceedings of The Fourth Workshop on Simple and Efficient Natural Language Processing (SustaiNLP)*, pages 78–90, Toronto, Canada (Hybrid). Association for Computational Linguistics.
+- <span id="page-10-6"></span>Norman Tatro, Pin-Yu Chen, Payel Das, Igor Melnyk, Prasanna Sattigeri, and Rongjie Lai. 2020. Optimizing mode connectivity via neuron alignment. *Advances in Neural Information Processing Systems*, 33:15300–15311.
+- <span id="page-10-12"></span>Jörg Tiedemann. 2012. [Parallel data, tools and inter](http://www.lrec-conf.org/proceedings/lrec2012/pdf/463_Paper.pdf)[faces in OPUS.](http://www.lrec-conf.org/proceedings/lrec2012/pdf/463_Paper.pdf) In *Proceedings of the Eighth International Conference on Language Resources and Evaluation (LREC'12)*, pages 2214–2218, Istanbul, Turkey. European Language Resources Association (ELRA).
+
+- <span id="page-10-11"></span>Jörg Tiedemann. 2020. [The Tatoeba Translation Chal](https://www.aclweb.org/anthology/2020.wmt-1.139)[lenge – Realistic data sets for low resource and mul](https://www.aclweb.org/anthology/2020.wmt-1.139)[tilingual MT.](https://www.aclweb.org/anthology/2020.wmt-1.139) In *Proceedings of the Fifth Conference on Machine Translation*, pages 1174–1182, Online. Association for Computational Linguistics.
+- <span id="page-10-9"></span>Jörg Tiedemann and Santhosh Thottingal. 2020. [OPUS-](https://aclanthology.org/2020.eamt-1.61)[MT – building open translation services for the world.](https://aclanthology.org/2020.eamt-1.61) In *Proceedings of the 22nd Annual Conference of the European Association for Machine Translation*, pages 479–480, Lisboa, Portugal. European Association for Machine Translation.
+- <span id="page-10-3"></span>Ashish Vaswani, Noam M. Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. 2017. [Attention is all](https://api.semanticscholar.org/CorpusID:13756489) [you need.](https://api.semanticscholar.org/CorpusID:13756489) In *Neural Information Processing Systems*.
+- <span id="page-10-7"></span>Neha Verma and Maha Elbayad. 2024. [Merging text](https://arxiv.org/abs/2403.00986) [transformer models from different initializations.](https://arxiv.org/abs/2403.00986) *Preprint*, arXiv:2403.00986.
+- <span id="page-10-0"></span>Elena Voita, David Talbot, Fedor Moiseev, Rico Sennrich, and Ivan Titov. 2019. [Analyzing multi-head](https://doi.org/10.18653/v1/P19-1580) [self-attention: Specialized heads do the heavy lift](https://doi.org/10.18653/v1/P19-1580)[ing, the rest can be pruned.](https://doi.org/10.18653/v1/P19-1580) In *Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics*, pages 5797–5808, Florence, Italy. Association for Computational Linguistics.
+- <span id="page-10-2"></span>Enneng Yang, Li Shen, Guibing Guo, Xingwei Wang, Xiaochun Cao, Jie Zhang, and Dacheng Tao. 2024a. [Model merging in llms, mllms, and beyond: Methods,](https://arxiv.org/abs/2408.07666) [theories, applications and opportunities.](https://arxiv.org/abs/2408.07666) *Preprint*, arXiv:2408.07666.
+- <span id="page-10-13"></span>Yifei Yang, Zouying Cao, and Hai Zhao. 2024b. Laco: Large language model pruning via layer collapse. *arXiv preprint arXiv:2402.11187*.
+
+# <span id="page-11-0"></span>A Combining SwiGLU Feed-Forward Layers
+
+The SwiGLU variation of the Transformer FF layer is used across numerous current language models, including OLMo (Groeneveld et al., 2024). The SwiGLU FFN is:
+
+$$FF_{SwiGLU} = W^{down}(Swish_1(W^{up}x) \otimes V^{gate}x)$$
+(7)
+
+where  $\otimes$  is the component-wise product. We exclude biases here for simplicty and lack of inclusion in OLMo. For more details, we refer the reader to Shazeer (2020). In applying our method to SwiGLU FFs, we note three things: 1) the location of our feature collection is the output of the component-wise product in order to find the best permutation for both  $W^{\rm up}$  and  $V^{\rm gate}$ , and 2) the new merged parameters are computed as:
+
+$$W^{\text{up*}} = \frac{1}{k} \left( W_0^{\text{in}} + \sum_{i=1}^{k-1} P_i W_i^{\text{in}} \right)$$
+ (8)
+
+$$V^{\text{gate}*} = \frac{1}{k} \left( V_0^{\text{gate}} + \sum_{i=1}^{k-1} P_i V_i^{\text{gate}} \right) \tag{9}$$
+
+$$W^{\text{down}*} = \frac{1}{k} \left( W_0^{\text{down}} + \sum_{i=1}^{k-1} W_i^{\text{down}} P_i^T \right) \quad (10)$$
+
+#### <span id="page-11-2"></span>**B** Layer Selection Algorithm
+
+We summarize our layer selection + fine-tuning algorithm from Section 3.4 in Algorithm 1.
+
+#### <span id="page-11-3"></span>Algorithm 1 Feed-Forward Sublayer Merge
+
+```
+Input: Model parameters \theta_{\rm in}, collected features \{X_i\}_{i=0}^{N_{\rm layers}-1}, batched fine-tuning data D_{\rm ft}
+Input constants: k, N_{\rm layers}, MAXUPDATES
+Initialize: \theta_{\rm selected}, BESTSCORE \leftarrow 0
+for i=0 to (N_{\rm layers}-1)-k do
+\theta_{\rm merged} \leftarrow {\rm CoMPRESS}(\theta_{\rm in},\{X_i\}_{i=0}^{N_{\rm layers}-1},k)\nif EVAL(\theta_{\rm merged}) > BESTSCORE then
+\theta_{\rm selected} \leftarrow \theta_{\rm merged}\nend if\nend for
+for i=0 to MAXUPDATES do
+\theta_{\rm selected} \leftarrow {\rm UPDATE}(\theta_{\rm selected},D_{\rm ft}(i))\nend for
+```
+
+Output:  $\theta_{\text{selected}}$ 
+
+# <span id="page-11-1"></span>C Fine-tuning details
+
+#### **C.1 GPT-2**
+
+| Hyperparameter | Value    |
+|----------------|----------|
+| Start LR       | 5e-5     |
+| LR Schedule    | inv_sqrt |
+| fp16           | True     |
+| batch size     | 2        |
+| n_steps        | 100K     |
+
+Table 5: Hyperparameters used for GPT-2 fine-tuning
+
+#### C.2 ViT
+
+| Hyperparameter | Value              |  |  |
+|----------------|--------------------|--|--|
+| Start LR       | 5e-5               |  |  |
+| LR Schedule    | lin_decay with min |  |  |
+| decay_steps    | 20K                |  |  |
+| Min LR         | 1e-6               |  |  |
+| fp16           | True               |  |  |
+| batch size     | 128                |  |  |
+| n_steps        | 50K                |  |  |
+
+Table 6: Hyperparameters used for ViT fine-tuning
+
+#### **C.3** Machine Translation
+
+We select our best model using validation BLEU, computed on a 2000 instance subset of the full Tatoeba validation set.
+
+| Hyperparameter | Value    |
+|----------------|----------|
+| Start LR       | 5e-5     |
+| LR Schedule    | inv_sqrt |
+| fp16           | True     |
+| batch size     | 64       |
+| n_steps        | 100K     |
+
+Table 7: Hyperparameters used for OPUS-MT fine-tuning
+
+#### C.4 OLMo-7B QLoRA
+
+We select our best model using validation loss.
+
+| Hyperparameter | Value      |
+|----------------|------------|
+| Start LR       | 5e-4       |
+| LR Schedule    | inv_sqrt   |
+| warmup ratio   | 0.01       |
+| fp16           | True       |
+| batch size     | 8          |
+| n_steps        | 3000       |
+| weight decay   | 0.01       |
+| LoRA rank      | 8          |
+| LoRA α         | 16         |
+| LoRA modules   | all linear |
+| LoRA dropout   | 0.2        |
+|                |            |
+
+Table 8: Hyperparameters used for OLMo-7B QLoRA fine-tuning
+
+## <span id="page-12-0"></span>D Dataset details
+
+We report the dataset statistics for our evaluations and training data used in this work in Table [9.](#page-12-3) For fine-tuning data, we note that updates reported in Appendix [C](#page-11-1) give a representation of data usage rather than the training counts provided here.
+
+<span id="page-12-3"></span>
+
+| Dataset      | Train      | Validation | Test   |
+|--------------|------------|------------|--------|
+| ImageNet-1k  | 12,281,167 | 50,000     | -      |
+| Wikitext-103 | 1,801,350  | 3,760      | 4,358  |
+| OPUS/Tatoeba | 41,649,946 | 43,074     | 10,389 |
+| SamSum       | 14,732     | 818        | 819    |
+
+Table 9: The number of instances used in each finetuning and evaluation datasets. Instances are image for ImageNet, lines of text for Wikitext-103, bitext pairs for OPUS/Tatoeba, and dialogue/summary pairs for Sam-Sum.
+
+# <span id="page-12-1"></span>E Full Results at varying compression ratios
+
+We report our full results across compression ratios in Table [10.](#page-13-0)
+
+## F COMET evaluation of MT experiments
+
+We report the COMET scores of our main experiments, split by section, in Table [11.](#page-13-1)
+
+# <span id="page-12-2"></span>G Attention Layer Similarity
+
+We compute CKA similarity between all attention sublayer pairs, using the same 10k tokens or patches from our CKA results on FF sublayers. The features are from the output of the linear layer just
+
+after the dot-product attention computation. Results appear in Figure [6.](#page-13-2)
+
+<span id="page-13-0"></span>
+
+| Model   | Metric         | Merged Indices | FFs Removed | Vanilla | Permute |
+|---------|----------------|----------------|-------------|---------|---------|
+|         |                | _              | 0/12        | 80.3    | 80.3    |
+| V:T     | A (07) A       | 3-7            | 4/12        | 77.8    | 79.2    |
+| ViT     | Accuracy (%) ↑ | 4-10           | 6/12        | 75.3    | 76.3    |
+|         |                | 0-11           | 11/12       | 39.0    | 58.1    |
+|         | PPL↓           | _              | 0/36        | 16.16   | 16.16   |
+| CDT 2   |                | 22-34          | 12/36       | 17.39   | 17.27   |
+| GPT-2   |                | 16-34          | 18/36       | 19.01   | 18.66   |
+|         |                | 0-35           | 35/36       | 23.02   | 21.31   |
+| OPUS-MT | BLEU↑          | _              | 0/12        | 35.8    | 35.8    |
+|         |                | 2-4/2-4        | 4/12        | 33.3    | 33.5    |
+|         |                | 0-3/0-3        | 6/12        | 32.8    | 33.2    |
+|         |                | 0-5/0-5        | 11/12       | 29.3    | 30.1    |
+
+Table 10: Full numerical results on compression results at 1/3 FF sublayers removed, 1/2 FF sublayers removed, and (n-1)/n FF sublayers removed. Original, uncompressed models are included in the first row of results for each model, indicated by 0 FFs removed and no merged indices.
+
+<span id="page-13-1"></span>
+
+| Experiment    | Merged Indices | Anchor  | FFs Removed | Vanilla | Permute |
+|---------------|----------------|---------|-------------|---------|---------|
+|               | _              | First   | 0/12        | 86.8    | 86.8    |
+| Main          | First          | 2-4/2-4 | 4/12        | 85.7    | 85.7    |
+| Main          | First          | 0-3/0-3 | 6/12        | 85.2    | 85.4    |
+|               | First          | 0-5/0-5 | 11/12       | 83.1    | 83.5    |
+|               | First          | 0/2-0/2 | 4/12        | _       | 85.8    |
+| Layer choice  | First          | 1-3/1-3 | 4/12        | -       | 85.8    |
+|               | First          | 3-5/3-5 | 4/12        | -       | 85.6    |
+| Anchor choice | Middle         | 2-4/2-4 | 4/12        | -       | 85.8    |
+|               | Last           | 2-4/2-4 | 4/12        | -       | 85.7    |
+| +Quantization | First          | 2-4/2-4 | 4/12        | -       | 85.8    |
+
+Table 11: Comet scores corresponding to BLEU scores in each table. The first section corresponds to Table E, the second Table 1, the third Table 2, and the last Table 3.
+
+<span id="page-13-2"></span>![](_page_13_Figure_4.jpeg)
+
+Figure 6: CKA plots of multi-headed self-attention sublayer activations across three different trained models. Attention activations are largely dissimilar from each other across model types. We do not compare between encoder and decoder attention sublayers in the translation model due the differences in token inputs.

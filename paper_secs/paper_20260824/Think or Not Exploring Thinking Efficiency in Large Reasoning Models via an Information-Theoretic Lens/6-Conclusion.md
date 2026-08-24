@@ -1,0 +1,4 @@
+# 6 Conclusion
+
+This paper revisits inefficient reasoning in LRMs through an information-theoretic lens. While extended reasoning chains are often used to improve accuracy, we find that longer outputs often lead to higher bias and semantic redundancy. By introducing InfoBias and InfoGain, we reveal that excessive reasoning often introduces semantic redundancy with limited benefit. Building on these insights, we introduce an entropy-based Adaptive Think strategy that dynamically halts reasoning once confidence is sufficiently high, enabling models to allocate effort based on task complexity while maintaining competitive accuracy. Experiments across diverse tasks and models show that Adaptive Think offers a promising trade-off between efficiency and performance, allowing models to reason selectively—thinking more when necessary, and less when intuition suffices.
+

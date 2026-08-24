@@ -1,0 +1,4 @@
+# <span id="page-16-5"></span>**D** Performance Analysis of SOTA Systems
+
+Here we analyze the performance of SOTA systems, i.e., DeepSpeed and Megatron-LM. As shown in Fig. 4, in most cases, DeepSpeed has similar or better performance than Megatron-LM. This is attributed to the different mechanism of CP in Megatron-LM and SP in DeepSpeed, as well as the skewness of datasets. CP usually has much more communication volumn than the All-to-All in SP. Although CP leverages the overlap between attention computation and KV transmission to hide the communication overhead, in scenarios with limited inter-node bandwidth and a majority of short sequences in datasets, the attention computation often fails to hide the communication. Therefore, Megatron-LM's performance is usually constrained by its higher communication volume compared to DeepSpeed and FlexSP.
+

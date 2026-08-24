@@ -1,0 +1,4 @@
+# <span id="page-10-0"></span>E Details of the effective lengths of models in Table 2 and 3
+
+Not all models are capable of processing infinite text lengths. Therefore, we provide a clear explanation of the effective input length for each method in Table 2 and Table 3. Specifically: (i) For models with a finite context length, we truncate the inputs by only preserving the system prompts and the tail of inputs to simulate real-world applications with streaming inputs like (Xiao et al., 2024). For instance, in Table 2, these models include Original (4K), LChat (32K), Vic-16K (16K), Yarn (128K), PI (128K), and NTK (128K). (ii) For other models, including StreamingLLM, InfLLM, LongLlama, CEPE, Activation Beacon, and our FocusLLM, the input can theoretically be of any length. So we input the entire sequence on the two benchmarks.
+

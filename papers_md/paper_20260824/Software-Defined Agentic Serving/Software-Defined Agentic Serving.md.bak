@@ -1,0 +1,266 @@
+# Software-Defined Agentic Serving
+
+Saurabh Agarwal University of Texas-Austin
+
+Marco Laju University of Texas-Austin Jayanth Srinivasa Cisco-Research
+
+Myungjin Lee
+
+## Cisco-Research
+
+As multi-agent LLM pipelines grow in complexity, existing serving paradigms fail to adapt to the dynamic serving conditions. We argue that agentic serving systems should be programmable and system-aware, unlike existing serving which statically encode the parameters. In this work, we propose a new SDN-inspired agentic serving framework that helps control the key attributes of communication based on runtime state. This architecture enables serving-efficient, responsive agent systems and paves the way for high-level intent-driven agentic serving.
+
+## 1 INTRODUCTION
+
+ABSTRACT
+
+The rise of Large Language Models (LLMs) has catalyzed a growing ecosystem of intelligent LLM-powered agents—each acting as a specialized model for tasks such as code generation, testing, retrieval, and planning. To accomplish these complex tasks, these agents need to routinely invoke APIs, tools, and other models in "agentic pipelines" [\[11,](#page-6-0) [14\]](#page-6-1).
+
+Consider an agentic software development pipeline illustrated in Figure [1.](#page-1-0) The workflow involves communication between two agents: a "developer" agent that emits functions, and a "tester" agent that provides feedback. There are several possible communication strategies between the agents: (a) Batching all functions in one call, which can reduce overhead and improves throughput. (b) Function-by-function pipelining, which enables early feedback and concurrency. (c) Tokenlevel streaming, which minimizes latency for interactive responsiveness. In this example, the "best" strategy depends as much on the application needs as on the current system state. For example, batching may preserve throughput under high load and reduce backlogs; streaming improves app responsiveness under low load. More crucially, the agnetic serving decisions— regarding batch size, routing, communication granularity—both influence and are influenced by runtime system factors, e.g., load, queue lengths, model latency, token generation rates, user responsiveness goals, SLOs, etc. ([§2\)](#page-1-1). Ideally, the decisions should thus be dynamic and adaptive to serving-system state.
+
+Unfortunately, today's agentic serving architectures make optimal strategy selection difficult, especially as system dynamics change. This is due to three fundamental drawbacks
+
+## Aditya Akella University of Texas-Austin
+
+in existing agentic serving designs. First, agentic communication protocols today, such as Anthropic's Model Context Protocol (MCP) [\[3\]](#page-6-2), Google's Agent2Agent (A2A) [\[4\]](#page-6-3), IBM's Agent Connection Protocol (ACP) [\[6\]](#page-6-4), and others [\[2\]](#page-6-5), require developers to early bind to a strategy at design time such as choosing batching, streaming, or pipelined sends. Second, serving parameters like batch size, communication frequency, routing strategy, model selection are unaware of serving-layer parameters like – model latency, queue times, cost per inference, or cross-agent resource contention – on which performance critically depends. Finally, today's communication architectures lack interfaces for cross-agent and pipeline-wide optimization, e.g., for prioritization at downstream agents, or balancing user experience with end-to-end system throughput.
+
+Taken together, these attributes make agentic serving architectures both a burden on developers of agentic pipelines– it is difficult to ensure and control performance–and a source of serious run-time inefficiency.
+
+We advocate for a new agentic serving architecture where the agent communication is dynamically controllable and strongly coupled with the serving system. Specifically, inspired by SDN, we argue for a programmable agentic substrate. However, distinct from SDN, we require the substrate to go beyond communication and also interface directly with applications to enable better control over serving, ensuring efficiency and performance.
+
+We envision a "software-defined agentic serving stack" with three components:
+
+- A data plane that supports fine-grained, dynamically adjustable agentic message granularities spanning token-level streaming to batched contexts.
+- A metrics plane which provides low-overhead access to metrics via a simple, cross-agent/tool uniform data collection interface.
+- A control plane that leverages metrics to dynamically govern inter-agent communication strategies, batch size, routing, and model selection across agent pipelines. It systematically evolves system-wide state to a target that meets operator-specified goals. Control decisions account for both system- and applicationlevel metrics.
+
+1
+
+<span id="page-1-0"></span>![](_page_1_Figure_1.jpeg)
+
+Figure 1: Agentic Software Developer: The above highlights a software agent workflow where the developer agent is responsible for generating functions and the testing agent generates testing code.
+
+![](_page_1_Figure_3.jpeg)
+
+Figure 2: Communication Pattern: The above schematic provides an approximate timeline for the communication pattern for a possible different communication pattern.
+
+![](_page_1_Figure_5.jpeg)
+
+Figure 3: Serving throughput using A2A: We serve two agents using three different communication mechanisms under varying load. No one configuration consistently outperforms another.
+
+We envision such a stack to support high-level declarative languages for agent communication and serving policy. These languages could allow infrastructure engineers to express goals—such as "minimize end-to-end latency," "batch unless load is low," or "stream only for interactive or high-priority tasks"—without needing to manage the low-level implementation details. The control plane translates these intents into real-time decisions based on the current serving state. The architecture frees agentic workflow developers from implementing bespoke approaches for controlling application performance; instead, agentic pipelines simply offer the control plane the appropriate hints.
+
+We discuss challenges arising from tool/agent heterogeneity and churn in realizing the above vision. We present simple unified interfaces and design ideas for the three planes that can enable effective control despite these attributes.
+
+Our preliminary prototype shows that our architecture can improve agentic serving throughput by up to  $3.6\times$  by fine-grained control of the communication granularity. Further, when additional control is exercised over the serving system, the serving throughput improves by another  $2.3\times$ .
+
+More than a specific proposal, the main aim of our work is to kickstart a discussion around addressing fundamental issues in emerging agentic architectures. We present a framework inspired by SDN, along with APIs that integrate with current and future tools and agents, to overcome these issues. But we recognize that these are mere starting points in an interesting design space. We conclude by identifying key future directions in §5.
+
+#### <span id="page-1-1"></span>2 AGENTIC SERVING
+
+LLMs are rapidly evolving beyond their basic use as chatbots, increasingly serving as full-scale digital assistants. In particular, LLMs are being given access to additional tools [12, 13, 17] (*e.g.*, calculators, web search engines, databases, file
+
+```
+1# Client initialization and capability determination
+2 with httpx.client() as httpx_client:
+      developer_agent = A2AClient.get_client_from_agent_card_url(
+      httpx client. "http://localhost:6069
+5)
+      testing agent = A2AClient.get client from agent card url(
+      httpx_client, "http://localhost:6070
+9)
+      prompt = "Write_three_functions_to_creating_an_entry,
+      update_it_and_delete_it
+12
+13
+      send_message_payload = message{
+           role':
+14
+          'parts': [{'type': 'text', 'text': prompt}],
+15
+17
+      streaming_request = SendStreamingMessageRequest(
+18
+19
+                  params=MessageSendParams(**send_message_payload)
+21
+          # perform streaming message
+      stream_response = developer_agent.send_message_streaming(
+22
+23
+          streaming_request)
+24
+            waiting for streaming response
+25
+      async for chunk in stream_response:
+26
+27
+          # stream to testing agent
+           testing request =SendStreamingMessageRequest(
+28
+                  params=MessageSendParams(**chunk)
+          test_funtion = testing_agent.send_message_streaming(chunk)
+          await asyncio.sleep(0.1)
+```
+
+Figure 4: A code snippet illustrating an agentic application written using A2A.
+
+systems, to name a few) and being treated as autonomous agents cooperating with other agents to fulfill complex tasks (e.g., software development [5] and problem solving [15]). Such workflows necessitate LLMs communicating with other tools and LLMs.
+
+Unfortunately, today's *agentic serving systems* have fundamental limitations. We start by describing how these systems work.
+
+#### 2.1 Agentic Workflows
+
+Constructing multi-agent LLM workflows today requires developers to manually orchestrate communication across tools and models. Developers curate a list of callable agents, handling authentication, and managing communication modes
+
+for each endpoint—often via heterogeneous mechanisms such as REST, RPC, or streaming APIs. To manage this complexity, recent efforts have introduced protocol-based abstractions. Examples include Google's A2A [\[4\]](#page-6-3), Anthropic's MCP [\[3\]](#page-6-2), and IBM's ACP [\[6\]](#page-6-4). These protocols provide common interfaces for agent discovery and message exchange, aiming to standardize agentic workflows. Figure [4](#page-1-2) shows an example using A2A to connect a "developer" agent with a "testing" agent. The workflow obtains agent cards (Lines 3 and 7), sends a streaming message to the developer agent (Line 21), and forwards the response to the tester agent (Line 24). Infrastructure engineers deploy these workflows and manually tune the communication, batch size, routing scheme, and other parameters to achieve the desired performance.
+
+#### 2.2 Limitations today
+
+Early binding. While protocols like A2A simplify agent wiring, they require early binding of the communication strategy. Developers must decide at design time whether agents will interact via batching, streaming, or synchronous calls. These decisions (e.g., Lines 22 and 28 in Figure [4\)](#page-1-2) are hardcoded into the application, even though the ideal communication mode may vary with runtime conditions. As shown in Figure [3,](#page-1-0) a suboptimal strategy can degrade performance by up to 3.6×.
+
+Lack of global visibility. Existing agentic serving systems provide no mechanism for agentic communication to have visibility into the global serving system state. For example, say there are two instances of an agent, and there is an excessive queue buildup at one instance. Today, it is not possible to inform other upstream agents in the workflow of the existence of such a queue buildup to enable rerouting or changing the communication strategy.
+
+Limited end-to-end control. As illustrated in Figure [4,](#page-1-2) there is little end-to-end control over runtime communication and serving behavior. Current abstractions like A2A expose low-level message operations but lack hooks for highlevel coordination or optimization across an entire agentic pipeline. For example, it is not possible to express scheduling policies that enable pipeline-wide prioritization of interactive or latency-sensitive requests. Nor is it possible to inject speculative calls or hints [\[1\]](#page-6-11) (e.g., ahead-of-time movement of KV caches to minimize runtime overhead) to guide workflow execution.
+
+In essence, the protocols and agentic serving systems today ease the construction of simple pipelines but inhibit adaptation and optimization — especially in dynamic, highthroughput, and low-latency serving environments.
+
+<span id="page-2-0"></span>![](_page_2_Figure_7.jpeg)
+
+Figure 5: Our proposal: The control plane orchestrates both data plane and agent/tool actions based on global telemetry.
+
+#### 2.3 Improving Agentic Serving
+
+We believe that improving the serving of agentic pipelines requires rethinking the agentic serving architecture from the ground up: with dynamic control over agentic communication based on the current agent- and system-state to optimize operational goals. Realizing this requires the introduction of new agentic communication management building blocks, and new interfaces for tools, LLM agents, and serving systems to enable systematic integration with the building blocks.
+
+## 3 A SOFTWARE-DEFINED APPROACH
+
+The above need is likely familiar to the reader – it is reminiscent of how SDN opened control interfaces to otherwise black-box routers/switches, enabling tighter, network-wide optimization and management. We seek a similar transformation of agentic serving. Specifically, we propose building a software-defined agentic serving stack (Figure [5\)](#page-2-0).
+
+We propose three components for efficient agentic inference. A centralized control plane, which makes data driven decision to control communication and other serving characteristics of each agent. Second, a metrics plane for collecting data and making it available to the controller to make informed decisions. Finally, a data plane substrate that allows for controller to perform fine-grained control.
+
+#### <span id="page-2-1"></span>3.1 Agent-Serving Control Plane
+
+Drawing inspiration from SDN, the control plane is responsible for interpreting high-level operator goals and enforcing runtime decisions over agentic serving.
+
+Goals. We design the control plane to meet three key requirements: (1) System-wide visibility. The control plane must have access to all telemetry data exposed by the metrics plane (§3.2)—including system-level load, application-level performance, and request metadata. This opens the room for fine-grained control and end-to-end optimization. (2)
+
+<span id="page-3-0"></span>Table 1: API Interface required by the controller
+
+| API     | Parameters            | Description                    |
+|---------|-----------------------|--------------------------------|
+| set()   | parameter name, value | Set parameter to value         |
+| reset() | parameter name        | Set parameter to default value |
+
+Rich control surface. Beyond managing the data plane (§3.2), the control plane, realized as a logically central controller, should have hooks into the agent or tool implementations themselves. This enables a broader space of runtime adaptations to improve overall performance and efficiency, such as rescheduling, priority assignment, speculative execution, or cross-node state transfers. (3) Intent-driven control. Infrastructure engineers managing the agentic serving platform should be able to specify high-level goals (e.g., "maximize throughput under latency bounds"), and the control plane should compile these into concrete policy rules that evolve the system state toward the goal.
+
+To illustrate the need for a rich control surface with deep agent-level control, consider a scenario where an agent instance becomes overloaded. The controller may choose to reroute a request to another instance. However, if the request relies on key-value (KV) cache state held by the original agent, naive rerouting would require costly recomputation and increase latency. With runtime hooks into the agent, the controller can transfer the relevant state during the handoff—saving compute and improving responsiveness.
+
+A rich control surface is valuable but challenging—it requires integrating with numerous agents and tools, each with unique APIs. This often demands bespoke control plane APIs, making it difficult to build control programs and requiring frequent changes to the controller. Ideally, the control plane should simplify integration through a unified yet effective interface.
+
+Design. We propose a control plane design with the following salient attributes:
+
+(1) Data plane control. Each node runs a configurable shim (as described in [§3.3\)](#page-4-0) that can receive and execute control rules from a controller. Rather than micromanaging individual messages, the controller installs rules. These are of two kinds: (a) Agent-level rules govern the default communication mode for an agent pipeline (e.g., batch vs. stream, admit only high-priority requests under load). (b) Request-level rules provide fine-grained control over the routing of a request to agent instances (e.g., dynamically switch the agent instance that handles a request; or, when an agent sends a speculative request, block it until resources are free).
+
+(2) Agent/tool hooks. Each agent/tool exposes a registration interface during launch, advertising supported control APIs and parameters (e.g., pause, throttle, transfer state, reprioritize). These APIs allow the controller to take targeted runtime actions that go beyond the communication substrate. However, as discussed earlier, integrating with each tool/agent's unique API can be tedious. In order to overcome this challenge, we argue for the standardized API described in Table [1](#page-3-0) which every tool and agent needs to support. Our proposed API includes just two functions, a "set" and "reset". At registration time, each agent exposes the various control and API knobs they have. To utilize these knobs, the controller directly calls the "set" function with parameter name and value. The agent or tool on receiving the "set" is required to update the value and automatically determine the function to call.
+
+Let's take an example of setting the maximum batch size to 4 for an agent in an agentic pipeline; the parameter for this in the case of vLLM is 'max\_num\_seqs'. Here, our controller would call the set function on the relevant agent, "set('max\_num\_seqs', 4)". The agent is responsible for implementing a shim layer to transform the "set" statement parameter to the relevant internal API and update the batch size. This separation of concerns enables the controller to scale and evolve easily, while agentic workflow developers only need to implement the specific shim layer once.
+
+(3) Intent-driven control as state management. As the controller polls data ([§3.2\)](#page-3-1), it populates a logical state store. Control logic—written by an operator and executed on top of the controller—is provided with the relevant view of state from the store. Akin to intent-driven network management in SDN [\[7\]](#page-6-12), we anticipate control logic to implement algorithms to control dataplane communication such that the observed state is eventually transformed to a target state that aligns with the operator's intended objectives. For example, an objective such as "ensure the end-to-end latency of 90% of interactive requests is within a specified SLO" could translate to the controller polling the latencies of such requests, and, further, the control logic determining to (a) demote background agents to synchronous mode, (b) reallocate GPU slots, and (c) transfer session context for critical requests, until the requests' SLO is met.
+
+#### <span id="page-3-1"></span>3.2 Metrics Plane
+
+Effective control requires visibility. To guide runtime communication behavior, the control plane must observe both system-level and application-level dynamics. Unlike traditional networking, where switch-local metrics (e.g., queue depth, flow rates) often suffice, agent serving demands richer telemetry that includes system-level data like memory and compute utilization, as well as application-level metrics like query completion times and agent dependencies (conditional agent execution). Further, these metrics differ depending on the components of the agent pipeline, e.g., for LLM-based agent serving we need metrics like GPU utilization, time per token (TPT), and time to first token (TTFT). Meanwhile, for tools like the file system, we need access to file access latency, throughput, and disk space utilization. To contain complexity, the disparate metric collection requires a flexible yet unified metrics plane.
+
+Goals. The metrics plane should provide: (1) Low-latency, low-overhead access to critical signals like GPU/CPU utilization, memory pressure, and queue lengths at each serving node. (2) Application-aware telemetry, including per-request latency. (3) Flexible aggregation Across different metrics, agents and tools will generate different volumes of data; for example, time to next token is generated every time a token is generated, while time to first token is measured once per LLM query. The metric collection plane needs to provide a variety of aggregation functions based on the controller's requirements. (4) Semantic understanding of the metrics to enable the controller to interpret and act on them appropriately. For instance, when optimizing for higher throughput, the controller needs to recognize that high GPU utilization is desirable, while a large amount of context switching is not.
+
+Design. We propose a two-tier architecture consisting of: (1) Local metric collectors at each node gather both systemlevel (hardware, kernel, runtime) and application-level (agent tool usage, response times) telemetry. This data is stored in lightweight, shared-memory structures. And, (2) Centralized polling used by the control plane to fetch metrics on demand. This avoids constant metric streaming and allows for coordinated collection across nodes when needed. (3) Flexible Aggregation Functions. To enable aggregation of various different metrics, the metrics plane will provide the ability to write custom aggregation functions.
+
+This design allows the control plane to reason globally about the serving system—identifying both compute, memory, and communication hotspots; projecting SLO violations; and detecting opportunities for speculative execution[1](#page-4-1) . By separating metric collection from decision-making, we preserve modularity: agent developers can expose domain-specific metrics without rewriting control logic.
+
+To enable semantic understanding of the metrics, our solution is to design a limited specification language that highlights the metric behaviors. For example, an agentic workflow developer who creates a function to collect a metric could write a structured file (in JSON, or YAML) associated with that metric; the controller can read this file and use the information provided to understand the metric's significance. However, given the vast number of metrics across diverse tools and agents, it can be quite challenging to specify all possible metrics exhaustively. A solution is for users to write the significance of metrics in natural language in the signature of the function for collecting the metric; the framework can
+
+then potentially use an LLM to transform that description into a metric specification [\[18\]](#page-6-13).
+
+### <span id="page-4-0"></span>3.3 Configurable Data Plane
+
+We envision an agentic communication dataplane that decouples communication behavior from static application logic and enables runtime adaptation.
+
+Goals. The data plane substrate must support different message granularities (e.g., token-level streaming, messagelevel batching), priorities, and pacing strategies. Crucially, the dataplane must expose a simple interface for these knobs to be externally controllable by a system-wide controller ([§3.1\)](#page-2-1). For example, under high agent load, the data plane might employ message-level sends to amortize inference cost, whereas under interactive conditions, it might revert to token streaming for lower latency.
+
+Design. Rather than reinventing agent communication protocols from scratch, we argue for building compatibility into the design. Our proposed data plane acts as a shim layer between high-level agent protocols (e.g., A2A, MCP, ACP) and the underlying socket or transport layer. This preserves developers' ability to use familiar and rapidly maturing agentic APIs while exposing a new point of control: a reconfigurable shim that mediates message attributes. The data plane provides a standardized control interface, regardless of the specifics of the upper-level protocol or lower-level transport.
+
+#### 3.4 Strawman Implementation
+
+We implemented a prototype of the proposed design and experimented with a workflow built using Google A2A. In this prototype, we modified the A2A protocol to invoke our custom communication library, built on gRPC, which supports synchronous, asynchronous, and streaming communication. Our metrics plane tracks the current load on each agent/tool instance. As before, we use one developer agent and one Testing agent running the MetaGPT workload.
+
+Communication Control. The controller is designed to adapt the communication pattern dynamically based on load. As shown in Figure [6,](#page-5-1) our framework enables switching communication strategy in response to system load to quickly converge on the most effective mechanism.
+
+Extended control surface. To show the impact of giving controller access to the underlying agent serving control. We modify the underlying serving framework (vLLM [\[8\]](#page-6-14)) to provide a mechanism that allows for the transfer of KV caches from one instance of the agent to another. We launch one instance of the software engineering agent and two instances of the testing agent. We program the controller to minimize load imbalance across the test agent instances. We try two cases, one with integration, where the controller preemptively sends the testing agent a hint that a request
+
+<span id="page-4-1"></span><sup>1</sup>Controller can detect low load on a particular agent and use it to perform partial prefills or speculative execution, leading to reduced runtime.
+
+<span id="page-5-1"></span>![](_page_5_Figure_1.jpeg)
+
+![](_page_5_Figure_2.jpeg)
+
+![](_page_5_Figure_3.jpeg)
+
+Figure 7: Controller with hint Integration: We use hints to move K,V cache at the time of load balancing.
+
+will arrive, and the second where the test agent can transfer the KV cache from another instance *after* the request arrives. We observe in Figure 7 that hints perform  $1.8\times$  better than without hints. We also observe that our proposed solution performs  $2.3\times$  better than the baseline with no load balancing.
+
+#### 4 RELATED WORK
+
+Agentic LLM systems have received significant attention due to their rapid adoption. A majority of the work has focused on three broad areas: algorithms for prompting and improving the performance of agentic systems; enhancing the efficiency of agent serving; and designing protocols for agent and tool communication.
+
+**Algorithmic improvements.** Agentic LLM algorithms are still rapidly evolving. This algorithmic evolution can significantly change the compute and control flow in the agentic application pipelines. For example, the dataplane must expose a simple interface for these knobs MetaGPT [5], assigns roles like "developer", "tester", "program manager", etc., to different LLMs to generate code; meanwhile, recent work to improve code generation [16] requires access to a live environment. This algorithmic evolution significantly impacts the workload, as now different agents have to wait for the execution environment before proceeding; depending on the complexity of the code, this can take minutes. Our framework's control plane, through effective resource orchestration, can hide the complexities arising from such algorithmic evolution (e.g., share GPU with multiple concurrent requests).
+
+**System Improvement.** Prior work [9, 10] has looked at improving the efficiency of agentic systems. However, these systems typically target a specific type of agent workload and custom-developed policies for efficient serving. Our work, rooted in the SDN philosophy, applies generally to a wide range of agent workflows.
+
+**Agent Communication.** There has been significant interest in developing agentic communication protocols—ACP [6], A2A [4], and MCP [3] are notable examples—with the goal of standardizing communication across diverse agents. In our work, rather than proposing a new protocol, we demonstrate
+
+that agent serving necessitates rethinking, with clear unifying interfaces that enable effective control and management toward various system-wide goals, including efficiency.
+
+#### <span id="page-5-0"></span>5 DISCUSSION AND CONCLUSION
+
+We briefly discuss natural extensions of our proposal first, followed by interesting open questions it brings to fore.
+
+**Supporting External Agents.** Agentic workflows often span both user-managed infrastructure and external cloudhosted tools []. Our framework extends naturally to such hybrid setups. The controller can factor in latency, cost, or rate limits when invoking external services, choosing configurations that optimize for both performance and budget. Even partial integration—via standardized APIs and lightweight shim layers—can yield measurable benefits.
+
+**Online Policy Adaptation.** With global visibility into request context and system metrics, the controller can adapt policies at runtime to reduce SLO violations. For instance, if a verifier in the pipeline triggers regeneration, the controller can raise the request's priority or reroute it for faster execution. This ability to adjust on the fly is key to managing dynamic, multi-agent pipelines.
+
+Our proposal is a starting point for exercising systematic control over agentic serving systems. In addition to discussions around the interfaces and APIs we propose, our work raises new questions across language design, control-agent interfaces, and metrics infrastructure.
+
+Languages for Agentic Control. We envision declarative policy languages that let infrastructure engineers express high-level goals—e.g., "stream under 200ms latency", "avoid speculative calls under load", "transfer cache if queue depth is high". Unlike SDN, agentic systems require semantics that span task structure, latency, agent roles, and compute constraints. Key challenges include defining sufficiently expressive primitives, incorporating real-time cross-agent feedback, and reasoning about policy correctness.
+
+**Control-Agent Interfaces.** Effective runtime control demands richer interfaces between the controller and agents/tools. A general interface that provides more control than our current proposal would need more capabilities, e.g., interrupting planning loops, cloning context, or suppressing non-critical subcalls.
+
+Agents differ in structure and autonomy, so control interfaces must be both flexible and predictable. One path forward is to define capability classes (e.g., stateless tools vs. stateful planners) with standard control APIs. However, open questions currently remain around capability discovery, policy scope, and conflict resolution. Nevertheless, we believe that our proposed solution of having standard API's and letting users write a small shim layer to integrate the controller API
+
+with agent or tool internal APIs would significantly reduce the effort to introduce new agents.
+
+Metrics Infrastructure. Our design assumes timely, structured telemetry, but collecting this at scale is nontrivial. First, agent-serving spans heterogeneous backends (vLLM, Triton, custom runtimes), making consistent instrumentation difficult. Second, metrics often require causal tracking across long-lived, multi-agent pipelines. Third, control loops need low-latency access to high-volume telemetry. While our initial prototype advocate aggregation functions to manage volume, new abstractions are needed to expose relevant signals at useful fidelity to the control plane without overwhelming the system or undermining control.
+
+#### REFERENCES
+
+- <span id="page-6-11"></span>[1] Saurabh Agarwal, Anyong Mao, Aditya Akella, and Shivaram Venkataraman. Symphony: Improving memory management for llm inference workloads. arXiv preprint arXiv:2412.16434, 2024.
+- <span id="page-6-5"></span>[2] agntcy. An open source collective for inter-agent collaboration. [https:](https://agntcy.org/) [//agntcy.org/,](https://agntcy.org/) 2025. Accessed: June 22, 2025.
+- <span id="page-6-2"></span>[3] Anthropic. Model context protocol. [https://modelcontextprotocol.io,](https://modelcontextprotocol.io) 2025. Accessed: June 22, 2025.
+- <span id="page-6-3"></span>[4] Google. An open protocol enabling communication and interoperability between opaque agentic applications. [https://a2aproject.github.io/](https://a2aproject.github.io/A2A/latest/) [A2A/latest/,](https://a2aproject.github.io/A2A/latest/) 2025. Accessed: June 22, 2025.
+- <span id="page-6-9"></span>[5] Sirui Hong, Xiawu Zheng, Jonathan Chen, Yuheng Cheng, Jinlin Wang, Ceyao Zhang, Zili Wang, Steven Ka Shing Yau, Zijuan Lin, Liyang Zhou, et al. Metagpt: Meta programming for multi-agent collaborative framework. arXiv preprint arXiv:2308.00352, 3(4):6, 2023.
+- <span id="page-6-4"></span>[6] IDM. Agent communication protocol. [https://](https://agentcommunicationprotocol.dev/) [agentcommunicationprotocol.dev/,](https://agentcommunicationprotocol.dev/) 2025. Accessed: June 22, 2025.
+- <span id="page-6-12"></span>[7] Xin Jin, Jennifer Gossels, Jennifer Rexford, and David Walker. {CoVisor}: a compositional hypervisor for {software-defined} networks. In 12th USENIX Symposium on Networked Systems Design and Implementation (NSDI 15), pages 87–101, 2015.
+- <span id="page-6-14"></span>[8] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention. In Proceedings of the 29th Symposium on Operating Systems Principles, pages 611–626, 2023.
+- <span id="page-6-16"></span>[9] Michael Luo, Xiaoxiang Shi, Colin Cai, Tianjun Zhang, Justin Wong, Yichuan Wang, Chi Wang, Yanping Huang, Zhifeng Chen, Joseph E Gonzalez, et al. Autellix: An efficient serving engine for llm agents as general programs. arXiv preprint arXiv:2502.13965, 2025.
+- <span id="page-6-17"></span>[10] Kai Mei, Xi Zhu, Wujiang Xu, Wenyue Hua, Mingyu Jin, Zelong Li, Shuyuan Xu, Ruosong Ye, Yingqiang Ge, and Yongfeng Zhang. Aios: Llm agent operating system. arXiv preprint arXiv:2403.16971, 2024.
+- <span id="page-6-0"></span>[11] Joon Sung Park, Joseph O'Brien, Carrie Jun Cai, Meredith Ringel Morris, Percy Liang, and Michael S Bernstein. Generative agents: Interactive simulacra of human behavior. In Proceedings of the 36th annual acm symposium on user interface software and technology, pages 1–22, 2023.
+- <span id="page-6-6"></span>[12] Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang, Bill Qian, et al. Toolllm: Facilitating large language models to master 16000+ real-world apis. arXiv preprint arXiv:2307.16789, 2023.
+- <span id="page-6-7"></span>[13] Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta Raileanu, Maria Lomeli, Eric Hambro, Luke Zettlemoyer, Nicola Cancedda, and Thomas
+
+- Scialom. Toolformer: Language models can teach themselves to use tools. Advances in Neural Information Processing Systems, 36:68539– 68551, 2023.
+- <span id="page-6-1"></span>[14] Yashar Talebirad and Amirhossein Nadiri. Multi-agent collaboration: Harnessing the power of intelligent llm agents. arXiv preprint arXiv:2306.03314, 2023.
+- <span id="page-6-10"></span>[15] John Chong Min Tan, Prince Saroj, Bharat Runwal, Hardik Maheshwari, Brian Lim Yi Sheng, Richard Cottrill, Alankrit Chona, Ambuj Kumar, and Mehul Motani. Taskgen: A task-based, memory-infused agentic framework using strictjson. arXiv preprint arXiv:2407.15734, 2024.
+- <span id="page-6-15"></span>[16] Xingyao Wang, Yangyi Chen, Lifan Yuan, Yizhe Zhang, Yunzhu Li, Hao Peng, and Heng Ji. Executable code actions elicit better llm agents. In Forty-first International Conference on Machine Learning, 2024.
+- <span id="page-6-8"></span>[17] Rui Yang, Lin Song, Yanwei Li, Sijie Zhao, Yixiao Ge, Xiu Li, and Ying Shan. Gpt4tools: Teaching large language model to use tools via self-instruction. Advances in Neural Information Processing Systems, 36:71995–72007, 2023.
+- <span id="page-6-13"></span>[18] Xiaohu Zhu, Qian Li, Lizhen Cui, and Yongkang Liu. Large language model enhanced text-to-sql generation: A survey. arXiv preprint arXiv:2410.06011, 2024.

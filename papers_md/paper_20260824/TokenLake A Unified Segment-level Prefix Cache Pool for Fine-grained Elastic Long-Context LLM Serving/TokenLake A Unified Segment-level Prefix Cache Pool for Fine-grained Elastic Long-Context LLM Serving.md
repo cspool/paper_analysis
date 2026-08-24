@@ -1,0 +1,442 @@
+# TokenLake: A Unified Segment-level Prefix Cache Pool for Fine-grained Elastic Long-Context LLM Serving
+
+Bingyang Wu<sup>1</sup> Zili Zhang<sup>1</sup> Yinmin Zhong<sup>1</sup> Guanzhe Huang<sup>2</sup> Yibo Zhu<sup>2</sup> Xuanzhe Liu<sup>1</sup> Xin Jin<sup>1</sup> <sup>1</sup>Peking University <sup>2</sup> StepFun
+
+# Abstract
+
+Prefix caching is crucial to accelerate multi-turn interactions and requests with shared prefixes. At the cluster level, existing prefix caching systems are tightly coupled with request scheduling to optimize cache efficiency and computation performance together, leading to load imbalance, data redundancy, and memory fragmentation of caching systems across instances. To address these issues, memory pooling is promising to shield the scheduler from the underlying cache management so that it can focus on the computation optimization. However, because existing prefix caching systems only transfer increasingly longer prefix caches between instances, they cannot achieve low-latency memory pooling.
+
+To address these problems, we propose a unified segmentlevel prefix cache pool, TokenLake. It uses a declarative cache interface to expose requests' query tensors, prefix caches, and cache-aware operations to TokenLake for efficient pooling. Powered by this abstraction, TokenLake can manage prefix cache at the segment level with a heavy-hitter-aware load balancing algorithm to achieve better cache load balance, deduplication, and defragmentation. TokenLake also transparently minimizes the communication volume of query tensors and new caches. Based on TokenLake, the scheduler can schedule requests elastically by using existing techniques without considering prefix cache management. Evaluations on real-world workloads show that TokenLake can improve throughput by up to 2.6× and 2.0× and boost hit rate by 2.0× and 2.1×, compared to state-of-the-art cache-aware routing and cache-centric PD-disaggregation solutions, respectively.
+
+# 1 Introduction
+
+With the advancements of Large Language Models (LLMs), the context lengths of LLMs are becoming increasingly longer to support more sophisticated tasks [\[10,](#page-11-0) [20,](#page-11-1) [38\]](#page-11-2). This trend is reflected in increasingly longer input prompts and a growing number of multi-turn interactions with users and external tools. For example, agent application Manus reports their average input-to-output ratio is 100:1 [\[41\]](#page-12-0), and the average number of turns per session on Character.AI is 180 turns [\[13\]](#page-11-3). To reduce the computation introduced by long context, a key strategy is prefix caching, specifically reusing previously computed KV cache, for requests with the shared prefix. Evidence from CharacterAI [\[13\]](#page-11-3) and Kimi [\[50\]](#page-12-1) reveals that the hit rate can reach up to 75% to 95% in production. As the
+
+KV cache size increases linearly with the sequence length, efficiently managing such a large volume of KV cache to achieve a high cache hit rate has become a critical problem.
+
+A popular approach to maximize cache utilization is to use cache-aware routing [\[31,](#page-11-4) [44,](#page-12-2) [56,](#page-12-3) [57,](#page-12-4) [73\]](#page-13-0). The prefix cache on each instance is organized as a local prefix tree. For each request, the router dispatches it to one instance based on the per-instance hit rates and load-balancing strategy.
+
+However, it leads to the following issues. (1) For instances with high hit rates, the memory bandwidth is over-utilized, whereas for instances with low hit rates, the memory bandwidth is under-utilized, leading to the load imbalance. (2) To balance the computation across instances, requests with shared prefixes, such as system prompts and shared documents, are often replicated across instances, leading to severe redundancy. (3) Because the entire prefix requires residing in the same instance to form a prefix tree, available slots across instances cannot be used together, leading to fragmentation.
+
+Meanwhile, to avoid interference between the prefill and decoding phase, PD disaggregation [\[27,](#page-11-5) [48,](#page-12-5) [74\]](#page-13-1) has been adopted to disaggregate these two phases on different instances. This further exacerbates the above problems. Specifically, instances in different phases have different demands on memory bandwidth [\[67\]](#page-13-2), leading to the load imbalance. In multi-turn scenarios, both prefill and decode instances must store the same prefix cache to avoid re-computation or repeated transfer, causing redundancy. Similarly, the prefix cache slots on prefill and decode instances are hard to share by existing caching systems, leading to fragmentation.
+
+To fundamentally address these issues, GPU memory pooling is a promising solution. By aggregating all GPU memories into a unified pool and decoupling memory access from computation, it is possible to utilize all available GPU memory bandwidth to avoid load imbalance and all GPU memory as a single cache to eliminate redundancy and fragmentation, while supporting elastic scheduling to accommodate dynamic workloads without considering data locality.
+
+However, existing prefix caching systems [\[3,](#page-11-6) [26,](#page-11-7) [50,](#page-12-1) [56,](#page-12-3) [57\]](#page-12-4) are not efficient for GPU memory pooling. Their interface, e.g., put, get, and transfer, requires the scheduler to consider cache management and can only imperatively transfer increasingly longer prefix cache across instances for computation. This architecture suffers from high communication overhead and binds two different and sometimes conflicting concerns together, i.e., cache management for high memory
+
+efficiency and scheduling for high computation efficiency of dynamic workloads, leading to suboptimal performance.
+
+For the above problems, we propose a declarative prefix cache interface and build a unified segment-level prefix cache pool, TokenLake, to decouple prefix cache management and scheduling by exposing query tensors, prefix caches, and cache-aware operations to TokenLake. This design allows TokenLake to achieve low-latency memory pooling by transparently optimizing transmission of query tensors and prefix cache together at finer granularity, while enabling the scheduler to elastically schedule requests' cache-free operations, such as self-attention and feed-forward network module, in a stateless way for better performance.
+
+However, efficiently utilizing all GPU resources is still non-trivial. First, even if integrated query tensors and cacheaware operations into TokenLake, a simple pooling strategy does not guarantee efficient utilization of all memory bandwidth. For example, if using a strict locality-based policy that spills the prefix cache to other instances only when the local memory is insufficient, it still leads to load imbalance and frequent migration of prefix cache ([§4\)](#page-4-0). Second, finer-grained management dramatically expands the decision space of caching, making effective load balancing, duplication control, and communication optimization difficult.
+
+To address these challenges, we introduce a heavy-hitteraware segment-level load balancing algorithm to effectively utilize memory and bandwidth. We also propose a bipartite matching-based dispatching algorithm to minimize the communication volume of query tensors and newly generated KV cache under the given scheduler's decision. Finally, we implement a goodput-optimized stateless elastic scheduling algorithm by using PD disaggregation, chunked prefill, and elastic sequence parallelism together to demonstrate its expressiveness and its potential to enable fine-grained scheduling. The complexity of these algorithms is polynomial to the number of instances, making them efficient and scalable.
+
+Evaluations show that, compared to state-of-the-art cacheaware routing, SGLang-Router [\[73\]](#page-13-0) and cache-centric PDdisaggregation solutions, MoonCake [\[50\]](#page-12-1), TokenLake can improve throughput under a given SLO by up to 2.6× and 2.0×, and boost hit rate by up to 2.0× and 2.1×, respectively. In summary, our contributions are as follows:
+
+- We propose a declarative prefix cache interface to decouple prefix cache management and request scheduling to achieve efficient memory pooling.
+- We propose a heavy-hitter-aware segment-level load balancing algorithm and a bipartite matching-based dispatching algorithm to efficiently achieve load balance, lower redundancy, and less fragmentation of the prefix cache.
+- We implement a goodput-optimized stateless elastic scheduling algorithm to demonstrate the expressiveness of the interface and conduct a comprehensive evaluation to show the effectiveness of TokenLake.
+
+<span id="page-1-0"></span>> **[图片提取文字 (无描述)]:**
+> R2 t1 t2 t5 t6 R1 t2 t3 t1 t4 Cache-Aware Request Router Prefix Load **Statistics** Statistics Overload! Thrashing! Re-computation! Instance 1 Instance 2 Instance 3 Compute Load: Compute Load: Compute Load: 66% 33% 0% Actual Prefix Tree **Actual Prefix Tree** Actual Prefix Tree kv1 kv5 kv1 kv3 kv1 kv2 kv4 kv2 Fragmentation! Redundancy!
+![](_page_1_Figure_8.jpeg)
+
+Figure 1. Limitations of cache-aware routing.
+
+# <span id="page-1-1"></span>2 Background
+
+## 2.1 LLM serving systems
+
+The inference process of Large Language Models (LLMs) can be divided into two distinct phases: the prefill phase and the decoding phase. The prefill phase processes the entire input tokens in one iteration to generate the initial Key-Value (KV) cache, intermediate states for future iteration, while the decoding phase generates output tokens iteratively and stores newly generated KV cache in the prefix cache. For multi-turn sessions, they contain multiple turns of requests, each with its respective prefill and decoding phase. Especially, each turn also needs the KV cache of previous turns. In each iteration of the inference process, the prefix cache only involves the attention module. In each layer, query tensors generated from the input tokens use prefix attention and self-attention to interact with all preceding KV cache and KV cache of themselves, respectively, and then reduce the partial output tensors and normalizers to generate the final output tensors of the attention module. Therefore, except for the prefix attention, which is cache-aware, self-attention and all other operations, such as feed-forward network (FFN) and projection layer, are cache-free, i.e., computation only depends on the previous module's output and model parameters without directly using the prefix cache.
+
+To support more applications, such as analyzing large codebases and stateful multi-turn agent interactions, the context length of LLMs has been significantly increased [\[10,](#page-11-0) [20,](#page-11-1) [38\]](#page-11-2). To accelerate the input processing speed of longcontext inference, prefix caching is proposed to further share KV caches across requests with the same prefix or multiple turns in a session [\[19,](#page-11-8) [28,](#page-11-9) [47,](#page-12-6) [64,](#page-13-3) [69,](#page-13-4) [73,](#page-13-0) [76\]](#page-13-5). To quickly retrieve the relevant prefix cache, prefix caches are typically organized as a prefix tree in each LLM instance [\[73\]](#page-13-0).
+
+<span id="page-2-0"></span>> **[图片提取文字 (无描述)]:**
+> Input Output Input t1 t2 t3 t4 Prefill-Decode Disaggregation Request Router Prefix Load Idle Idle Statistics **Statistics** Interconnection Prefill Instance Decode Instance Compute Load: Compute Load: Busy 80% 15% Interconnection Actual Prefix Tree **Actual Prefix Tree** kv1 kv3 kv1 kv2 kv2 Fragmentation! Redundancy!
+![](_page_2_Figure_0.jpeg)
+
+Figure 2. Limitations of cache-centric PD disaggregation.
+
+At the same time, many scheduling algorithms have been proposed to accommodate the distinct characteristics of the prefill and decoding phases. On the instance level, chunked prefill [\[8,](#page-11-10) [24,](#page-11-11) [30\]](#page-11-12) is proposed to split the long context into smaller chunks and batch requests in two phases together to reduce the interference between them. On the cluster level, PD disaggregation [\[16,](#page-11-13) [18,](#page-11-14) [29,](#page-11-15) [49,](#page-12-7) [51,](#page-12-8) [60,](#page-12-9) [72\]](#page-13-6) is proposed to disaggregate the prefill and decoding phases into different instances to eliminate interference between the two phases. Elastic sequence parallelism (ESP) [\[62\]](#page-13-7) is further proposed to handle variable context lengths and frequent ratio changes between prefill and decoding phases by elastically setting the degree of parallelism (DoP) for requests with various context lengths in different phases.
+
+## 2.2 LLM caching systems
+
+To support prefix management on each instance and complex scheduling algorithms on the cluster level, LLM serving systems require efficient caching systems to manage the prefix cache. Existing caching systems typically expose an imperative interface, such as put, get, and transfer APIs, for LLM serving systems to imperatively cache and retrieve a prefix cache in the local prefix tree and transfer it to another instance [\[3,](#page-11-6) [26,](#page-11-7) [50,](#page-12-1) [56,](#page-12-3) [57\]](#page-12-4).
+
+Because of the imperative nature, the caching system is tightly coupled with the scheduling algorithm. The scheduler of the LLM serving system has to consider the state of the prefix cache in each instance for maximizing cache efficiency while improving requests' computation performance, such as throughput and latency. The tight coupling between schedulers and their underlying imperative caching systems has given rise to two popular policies.
+
+The first is cache-aware request routing. With the statistics collected from instances, the cache-aware router dispatches each incoming request to an instance by trading off between multiple potentially conflicting goals, such as maximizing cache hit rate and balancing computation across instances.
+
+The other is cache-centric PD disaggregation. In this policy, the user decides the number of prefill and decode instances based on the computation and cache demands of the predicted workload. A PD disaggregation router is used to dispatch requests to prefill instances first, then imperatively invokes the transfer API to transfer the generated prefix cache to decode instances for subsequent decoding.
+
+# 2.3 Motivations
+
+Limitations of existing solutions. To motivate our design, we first analyze the limitations of existing solutions.
+
+A primary limitation is the severe load imbalance inherent in the two mainstream scheduling policies. For cache-aware routing, this tight coupling makes instances with high hit rate attract more requests computation, more KV cache generation and storage on the same instance, which further increases the hit rate of the instance, while other instances are under-utilized, leading to load imbalance in terms of number of accessed prefix cache, as shown in overloaded instance 1 of Figure [1.](#page-1-0) For PD disaggregation, load imbalance is even more pronounced. As shown in Figure [2,](#page-2-0) in PD disaggregation, decode instances not only use prefix cache generated at the decoding phase, but also use prefix cache sent from the prefill phase, creating a fixed, asymmetric cache load that cannot be balanced between the two groups.
+
+The second limitation is the data redundancy, which leads to inefficient cache utilization. For cache-aware routing, load balancing policy forces the caching system to replicate shared prefix caches across multiple instances (1, 2), and may introduce re-computation overhead to generate replicated prefix (e.g., dispatch 1 to instance 3 in Figure [1\)](#page-1-0). Similarly, PD disaggregation necessitates that the prefix cache generated by prefill instances is transferred to decode instances for subsequent computation, while caching them in prefill instances for incoming turns or requests, leading to redundancy (1, 2). In both scenarios, the redundancy is inevitable for existing imperative caching systems, otherwise it causes frequent transfer for increasingly longer prefix cache as the number of turns in sessions increases.
+
+The last limitation is memory fragmentation. In the scenario depicted in Figure [1](#page-1-0) and Figure [2,](#page-2-0) the system has four free slots in aggregate, but a new request (e.g., R3) requiring this amount cannot be placed because the cache capacity on any instance is insufficient. It leads to thrashing, i.e., eviction of prefix caches that may be required in the future (5 in instance 2 of Figure [1\)](#page-1-0), introducing substantial overhead.
+
+<span id="page-3-0"></span>> **[图片提取文字 (无描述)]:**
+> Len=5k Len=20k Len=100k Len=10k Len=50k Linear Scaling ි 1.0 1.0 Normalized Iteration Time 8.0 0.8 0.6 0.6 0.4 0.4 0.2 0.2 0.0 0.0 6 6 Degree of Sequence Parallelism Degree of Sequence Parallelism (a) Prefill Phase (b) Decoding Phase
+![](_page_3_Figure_0.jpeg)
+
+Figure 3. Effectiveness of GPU pooling.
+
+**Opportunities.** Recent advancements in communication hardware and software aspects have enabled the development of declarative cache designs.
+
+- Hardware. A significant opportunity arises from the increasingly powerful interconnections and their inefficient usage. The scale-out links are narrowing the gap with PCIe [7, 43], and the scale-up links are even surpassing PCIe [46, 53], while GPUDirect RDMA is also maturing for low-latency communication. However, the bandwidth is often underutilized. For instance, in the attention module, inference traffic between instances is typically unidirectional, flowing from a prefill to a decode instance, while much of the interconnection is idle. It leaves a large optimization space to improve performance by unleashing the full potential of modern networking.
+- Software. A further opportunity exists in optimizing the communication patterns of prefix cache management. Figure 3 shows an example. Rather than adhering to transmitting only prefix cache, by combining communication with Sequence Parallelism (SP) in the prefill phase or transmitting typically smaller query tensors in the decoding phase, the performance gains from pooling GPU resources across can often outweigh the communication overhead, because they enable less communication volume and overlap communication better with computation.
+
+# 3 System Architecture
+
+#### 3.1 Overview
+
+To address these problems, as shown in Figure 4, we design and build a unified segment-level prefix cache pool, Token-Lake, across instances. Token-Lake first introduces a declarative prefix cache interface that abstracts cache-aware operations from request scheduling and exposes it to Token-Lake for better cache management (§3.2). Under the hood, prefix caches are split into segments to reduce fragmentation. Token-Lake uses a fully peer-to-peer asynchronous architecture (§3.3) to enable low-latency asynchronous communication of cache segments and query tensors (§3.4). With the global view, Token-Lake's cache manager uses a heavy-hitter-aware
+
+<span id="page-3-1"></span>> **[图片提取文字 (无描述)]:**
+> Homogeneous Instance Req SIB TokenLake Compute Model Queue Parameters Engine Global Runtime **Prefix Tree** Info TokenLake O/ Dispatch ΚV Cache Scheduler O&L Transfer Query Optimizer Manager Engine Engine ĸν Instance 1 Instance 2 Instance 3 Instance 4 Segment-level Cache Pool Compute Compute Compute Compute Cache Cache Cache Cache GPU GPU GPU GPU Segment Info -THE PERSON NAMED IN Parallel Group 2, Parallel Group 3, Parallel Group 1
+![](_page_3_Figure_8.jpeg)
+
+Figure 4. System overview.
+
+segment-level load balancing algorithm to achieve better load balance and conduct aggressive deduplication (§4) of existing prefix caches. For query tensors and newly generated prefix caches, TokenLake's dispatch optimizer minimizes their communication volume with a bipartite matching-based dispatching algorithm (§5). Finally, stateless elastic scheduling can be performed by the scheduler with minimal consideration of the underlying prefix cache (§6).
+
+#### <span id="page-3-2"></span>3.2 Interfaces
+
+Figure 5 shows the declarative interfaces of TokenLake. At the control plane, get\_prefix\_tree provides the global prefix tree to the scheduler. The Scheduler can leverage it to get caching information, e.g., hit rate of each request, slots utilization, distribution of cache segments, etc, similar to a local prefix tree in prior works [73]. get\_cache\_load provides the GPU load of TokenLake given a set of requests reqs with specified input lengths. The scheduler can use this information to avoid interference with TokenLake (§6). In each iteration, after the scheduler decides batching batches and their respective degree of parallelism DoPs, gen\_plans generates control flow query\_plans and transfer\_plans for the data plane and allocates DoP instances group to each batch for elastic parallel computing.
+
+At the data plane, the compute engine in each instance can initialize the query engine and transfer engine with init\_query and init\_transfer by respective control flows to get the shared buffers q\_buf and kv\_buf in GPU memory. During inference, the compute engine prepares the query tensor in q\_buf and invokes query to get the attention output on the global prefix cache pool. Similarly, after the compute engine prepares the layer-wise newly generated KV cache in kv\_buf, it can invoke put to store them in TokenLake asynchronously. Due to the declarative nature of these interfaces, the compute engine does not need to know how to store and query the prefix cache. TokenLake automatically optimizes the prefix cache pool and query plans to achieve high performance. At the same time, the degree of parallelism, batching of requests, and splitting input sequences are still fully controlled by the scheduler, enabling elastic scheduling.
+
+```
+# Control Plane Interfaces
+def get_prefix_tree()
+  -> tree
+def get_cache_load(reqs, tree)
+  -> load
+def gen_plans(batches, DoPs, tree)
+  -> query_plans, transfer_plans, groups
+# Data Plane Interfaces
+def init_query(batch, group, query_plan)
+  -> q_buf
+def query(q_buf)
+  -> out
+def init_transfer(batch, transfer_plan)
+  -> kv_buf
+def put(kv_buf)
+  -> None
+```
+
+Figure 5. Interfaces of TokenLake
+
+# <span id="page-4-1"></span>3.3 Fully peer-to-peer asynchronous architecture
+
+To support fine-grained co-optimization of query tensors, prefix cache segments, and prefix attention, TokenLake employs a fully peer-to-peer (P2P) asynchronous architecture. As shown in Figure 4, the two main components of TokenLake: the query engine and the transfer engine, run as independent processes, colocated on the GPU with the compute engine. Powered by NVIDIA Multi-Process Service (MPS) [4], three engines can run asynchronously and concurrently. They can even handle different tasks for different batches concurrently for better performance.
+
+Query and transfer engines themselves also support multitasking. Query engines are responsible for generating partial outputs and normalizers of the query on local prefix segments. They use multiple CUDA streams to concurrently send query tensors to other query engines and handle query tensors from other query engines concurrently. Similarly, transfer engines can concurrently transfer KV cache to or from different instances. This design maximizes the utilization of interconnect bandwidth.
+
+#### <span id="page-4-2"></span>3.4 Low-latency asynchronous communication
+
+Powered by the fully P2P asynchronous architecture, it is possible to achieve low-latency asynchronous communication for both query tensors and prefix caches.
+
+First, TokenLake enables zero-copy data transfer between engines. q\_buf and kv\_buf are shared buffers allocated with CUDA IPC [45]. As long as the compute engine generates tensors directly in these buffers, no extra GPU memory copy is needed between engines. Furthermore, these buffers are also registered with ncclCommRegister as network buffers, minimizing memory copies during network transfers.
+
+Second, communication can be overlapped with computation. As shown in Figure 6, layer-wise KV cache transfer (Put) can be overlapped with the subsequent computation of the entire layer after generation ( $P_{kv}$ ). Similarly, scattering query tensors and gathering query results, whose communication
+
+<span id="page-4-4"></span>> **[图片提取文字 (无描述)]:**
+> Instance n Layer i Layer i+1 Put Put - Query Query Self Attn & Self Attn & Compute Pkv Po PKV Po Engine Prefix Attn Prefix Attn Transfer Transfer/Store SP (DoP=2) SP (DoP=2) Engine Layer-wise KV Scatter Q Query Gather O&LSE | Engine I Instance m Self Attn & Self Attn & Compute P<sub>KV</sub> Pa PKV P. Engine Prefix Attn Prefix Attn I Instance I Transfer St St Engine Instance k Prefix Query Prefix Engine Attn Attn
+![](_page_4_Figure_9.jpeg)
+
+**Figure 6.** Interactions of instance *n* with remote engines.
+
+volume is linear to the sequence length, can be overlapped with the self-attention (*Self Attn*), which is quadratic to the sequence length.
+
+Third, the communication interference is minimized. Different engines are triggered at different times. The transfer engine is triggered after  $P_{kv}$ , while the query engine is triggered after  $P_Q$ . Furthermore, if the scheduler decides to use sequence parallelism (SP) to perform self-attention across instances, Query will use the pass-Q variant of SP [65] that swaps query tensors within the parallel group in the ring style and removes redundant transmission of query tensors for attending to the prefix cache in the SP group. Therefore, the destined instances of the query engine are different from the instances involving SP, reducing network contention.
+
+Last but not least, the communication volume is small. For example, for a Llama-7B model in its decoding phase, the KV cache transfer at each layer is only 16 KB per request. The query tensor communication volume is also small, which is approximately equal to  $2dlN_p$ , where d is hidden size, l is the sequence length, and  $N_p$  is the number of instances hosting relevant segments. Compared to the communication in large-scale Expert Parallelism (EP) [71] that possibly occurs in FFN, whose volume is equal to  $2dlN_e$ , where  $N_e$  is the number of experts, the query engine's communication volumes are often comparable (§4), representing a widely accepted trade-off in practical deployments. The analysis also aligns with the experimental results in Figure 3.
+
+# <span id="page-4-0"></span>4 Segment-based Load Balancing
+
+Because the declarative interface exposes query tensors and prefix attention to TokenLake, prefix cache segments are essentially independent of each other. Query tensors can attend to them independently, generate partial output tensors, and normalizers. The final output can be generated by combining them together [67]. Therefore, prefix cache segments can be split and distributed arbitrarily across instances in TokenLake. However, even with this flexibility, it is still challenging to efficiently utilize all GPU memories and memory bandwidth as a cache pool.
+
+<span id="page-5-0"></span>> **[图片提取文字 (无描述)]:**
+> Instance Prefill: R<sub>1</sub> Prefill: R<sub>3</sub> Decode: R<sub>3</sub> Prefill: R4 1 Prefill: R<sub>2</sub> Prefill: R<sub>3</sub> Decode: R2, R3 Decode: R<sub>2</sub> 2 Prefill: R<sub>1</sub> Decode: R<sub>1</sub>, R<sub>2</sub> Decode: R<sub>1</sub> Prefill: R4 3 Time R, R, R<sub>3</sub>
+![](_page_5_Figure_0.jpeg)
+
+Figure 7. Limitations of strict locality-based policy.
+
+#### 4.1 Strawman solution: Strict locality-based policy
+
+A straightforward solution is to maintain locality whenever possible, which we term a strict locality-based policy. It utilizes other instances only when the local cache capacity is exhausted. However, this strict locality-based policy suffers from two major drawbacks: severe load imbalance and frequent data migration.
+
+First, it ignores memory bandwidth utilization across instances, leading to load imbalance. As shown in Figure 7, it makes prefix cache segments concentrate on a few instances (e.g., instance 3 in iterations 2 and 3, and instance 2 in iteration 4) with high memory bandwidth pressure, while other instances are under-utilized. This disparity becomes more pronounced as the variation of sequence lengths grows and shared prefix lengths become longer.
+
+Second, the policy reacts poorly to the dynamic workload. Because sequence lengths and phases of requests change over time, the set of instances occupied by a request also needs to change accordingly to maximize overall performance [48, 62]. To enforce strict locality, TokenLake triggers frequent unnecessary migration to maintain locality. As shown in Figure 7, to leave computation resources for new requests (R1 and R2 in iteration 1) or to balance the computation (R1, R2, and R3 in iteration 2), segments need to be migrated frequently to keep strict locality, leading to high communication overhead.
+
+#### 4.2 Segment size tradeoff: locality vs. load balance
+
+In contrast, our key insight is that although locality is important to reduce communication volume, it is not strictly necessary for achieving high performance. As long as the segment size is larger than a certain threshold, the distributed query could achieve better performance than the local query. This is because the memory bandwidth and compute of multiple GPUs can be aggregated to process the prefix attention, and the communication overhead can be amortized over the entire segment and overlapped by local self-attention computation. Furthermore, it also avoids load imbalance and frequent data migration caused by strict locality.
+
+Consider a prefix cache of sequence length *S* partitioned across *N* instances. In each decoding iteration, a single query
+
+tensor q must attend to the entire prefix cache. The cache on each instance represents a data segment of size C, where N = S/C. The goal is that when the segment resides on a remote instance, the local computation latency saved is greater than or equal to the communication overhead incurred.
+
+The saved computation latency to process a segment of size C is bound by either compute or memory bandwidth according to the Roofline model. Let F be the floating-point operations per second (FLOPS) of a single GPU,  $B_{mem}$  be the memory bandwidth, and d be the hidden dimension. The time to process a segment of size C is:  $T_{comp}(C) = \max(\frac{4Cd}{F}, \frac{4Cd}{B_{mem}}) = k_{comp}C$ , where  $k_{comp} = \max(\frac{4d}{F}, \frac{4d}{B_{mem}})$  is a constant for a given model and hardware.
+
+The communication time consists of two phases, including sending query tensors and receiving partial output tensors and normalizers. In the whole process, the total communication latency is:  $T_{comm}(C) = 2\alpha_{net} + \frac{4d}{B_{net}}$ , where  $\alpha_{net}$  is the network latency, and  $B_{net}$  is the network bandwidth.
+
+If a segment size can make computation latency saved greater than or equal to the communication latency, then we can derive:  $C \ge \frac{2\alpha_{net}}{k_{comp}} + \frac{4d}{k_{comp}B_{net}}$ . So if we set the segment size C to be larger than this threshold, it can harvest memory bandwidth and compute on remote instances without incurring significant communication overhead. When we instantiate this threshold using parameters from our experimental setup (§ 7), C is approximately equal to 568 tokens, enabling fine-grained segment-level cache pooling possible. Furthermore, even if the communication overhead can not be completely hidden, it is still negligible compared to the overall computation time. For example, based on the above analysis, when C is 568 tokens, the communication overhead of a short request in the decoding phase with 1000 prefix tokens is only 4.66 us per layer, a negligible time in practice.
+
+## 4.3 Heavy-hitter-aware segment-level load balancing
+
+After choosing a segment size larger than the threshold, the next challenge is how to distribute them to achieve a balanced load across instances. Highly skewed and dynamic access patterns make it challenging. Because a segment is accessed only when the prefix of this segment is accessed, the access pattern is inherently skewed, concentrating on segments closer to the root of the prefix tree. Furthermore, because the workload is dynamic, the access pattern changes over time. The rapid processing speed exacerbates this issue.
+
+To address this problem, we propose a heavy-hitter-aware load-balancing algorithm that handles heavy hitters and normal segments differently. Heavy hitter is defined as frequently accessed segments. For normal segments, TokenLake employs a hash-based distribution strategy to spread them uniformly across all instances. A hash function is used to map each segment to an instance. Given that normal segments are numerous, this method typically achieves effective load balancing without migrations and aggressive deduplication.
+
+<span id="page-6-2"></span>> **[图片提取文字 (无描述)]:**
+> New KV Caches' R1 -> 11 R3 -> 13 R4 -> 13 Transfer Plans R2 -> 12  $R1_{ln}$  $R2_{ln}$  $R4_{ln}$ **Batches**  $R3_{ln}$ 3 Instance 2 Instance 3 Instance 1 R1<sub>kv</sub> R2kv R1<sub>kv</sub> R3<sub>kv</sub> R2kv R3<sub>kv</sub> Instances R4kv
+![](_page_6_Figure_0.jpeg)
+
+Figure 8. Example of dispatching problem.
+
+As for heavy hitters, TokenLake employs a selective replication strategy to maintain load balance. If an instance is overloaded, it replicates heavy hitter segments on that instance to the least-loaded instances without its copy. Because heavy hitters reside closer to the prefix tree's root, Token-Lake can find them by using a breadth-first search (BFS) without traversing the entire prefix tree. To make the replication efficiently, our approach is informed by a well-established result from early front-end caching systems [17]: if a system can effectively absorb the traffic from the top  $O(N \log N)$  heavy hitters, the load across N storage servers is guaranteed to be balanced with high probability, regardless of the query distribution or the total number of objects. Therefore, the number of heavy hitters is set to  $O(N \log N)$  for quick replication.
+
+# 4.4 Replicated segment selection and eviction
+
+For replicated segments, TokenLake uses the power-of-two-choices (PoT) policy to select a replica for matched requests. Specifically, it directs the query to the less loaded of the two randomly sampled replicas. It is a variant of the balls-into-bins problem and has been proven that it can achieve near-perfect load balancing with high probability if traffic to a segment is less than half of the total traffic [40], which always holds in TokenLake. For eviction, the global LRU policy is used by recording the last access time of replicas.
+
+#### <span id="page-6-0"></span>5 Dispatching Optimization
+
+#### 5.1 Problem formulation
+
+Although the load balancing algorithm can effectively utilize GPU memories and memory bandwidth, the communication volume of query and put operations can still change according to the dispatching of requests. Specifically, for a batch of requests provided by the scheduler, if segments required by the batch are predominantly located on an instance, or if the newly generated KV caches are primarily intended to be stored on an instance, TokenLake can dispatch the batch to that instance to reduce communication volume.
+
+Figure 8 illustrates an example where the scheduler has grouped four requests into three batches. The communication volume generated by each batch depends on the instance
+
+it is placed on. For example, consider the batch containing request R3. If it is executed on Instance 3, it only needs to send one query to Instance 2 for attending related segments. Then the communication volume of this dispatching is  $1 \times 4d$ . If, however, it is executed on Instance 1, a query tensor and the newly generated KV cache need to be sent to Instance 2 for query and Instance 3 for put, leading to  $2 \times 4d$  communication volume. Therefore, for efficient memory pooling, the dispatching of batches should be optimized to minimize the overall communication volume.
+
+# 5.2 Bipartite matching-based dispatching algorithm
+
+Regarding this problem, our key insight is that the dispatching can be decoupled from the computation scheduling. Because load has been actively balanced across instances (§4), where to place the computation has no significant impact on the computation. Therefore, dispatching can be optimized as an independent problem and be transparent to the scheduler. The scheduler only needs to invoke gen\_plans with batching specifications and their respective DoP. TokenLake can optimize dispatching plans transparently.
+
+For this problem, our key observation is that it can be converted into a bipartite matching problem to efficiently find the solution with the minimum communication volume. Specifically, we construct a bipartite graph G=(U,V,E), where  $u_i\in U$  represents a batch with its transfer plan, and V is the set of instances. Let  $Q(u_i)$  be the set of instances caching segments related to  $u_i, P(u_i)$  be the set of instances where new KV cache of  $u_i$  will be cached and  $N_p(u_i,v_k)$  is the number of new KV cache of  $u_i$  sent to instance  $v_k$ , according to the transfer plans. For a batch with DoP greater than one, the corresponding node  $u_i$  needs to be decomposed into DoP sub-batch nodes  $u'_{i1} \cdots u'_{id}$ , and the above functions are then defined for each new sub-batch node according to the actual communication of that sub-batch. Then the weight of an edge from  $u_i \in U$  to  $v_i \in V$  is equal to:
+
+$$e(u_i, v_j) = -\left(\sum_{v_k \neq v_j, v_k \in Q(u_i)} 4d + \sum_{v_k \neq v_j, v_k \in P(u_i)} 4d * N_p(u_i, v_k)\right)$$
+
+With this construction, we convert the problem of minimizing communication volume to finding a perfect matching in G with minimal edge weights. It can be solved by using the Hungarian algorithm [5]. The time complexity of this algorithm is  $O(n^3)$ , where n is the number of instances. Therefore, TokenLake can efficiently find the dispatching plan with the minimal communication volume by invoking this algorithm at the beginning of each iteration.
+
+# <span id="page-6-1"></span>6 Stateless Elastic Scheduling
+
+#### 6.1 Cache load isolation
+
+With TokenLake, the scheduler can still serve for different objectives and combine various scheduling strategies, such as PD disaggregation [48], chunked prefill [24], and elastic
+
+sequence parallelism [62], as usual, and does not need to manage prefix cache. The only difference is that TokenLake inevitably occupies some GPU resources for prefix cache management. But as long as the scheduler is aware of this load, it can adjust its scheduling accordingly to avoid interference. For example, it can reduce the batch size, split long sequences into chunks, or use sequence parallelism to reduce the load on each instance. Because the scheduling becomes stateless, these adjustments can be made efficiently.
+
+In the end, TokenLake provides a get\_cache\_load API to expose its own resource consumption. Specifically, Token-Lake calculates the percentage of GPU resources consumed by TokenLake for requests (reqs) in the worst case. First, it estimates the minimum execution time of reqs,  $T_r$ , under an ideal scenario where all GPUs are fully utilized. This estimation is based on pre-profiled results and follows the quadratic curve fitting method as prior work [62]. Next, the memory bandwidth and computation consumption  $M_r$  and  $F_r$  of TokenLake are respectively calculated as follows:
+
+$$M_r = \sum_{r \in regs} 4 \times d \times (r.prefix\_len + r.input\_len)$$
+
+$$F_r = \sum_{r \in reqs} 2 \times d \times r.prefix\_len \times r.input\_len$$
+
+Based on the roofline model, the percentage of GPU resources consumed by TokenLake is then calculated as:
+
+$$L = \max(\frac{M_r}{M_r + N \times B_{mem} \times T_r}, \frac{F_r}{F_r + N \times F \times T_r})$$
+
+Because the load of TokenLake is balanced ( $\S4$ ), L is independent of instances. With this information, the scheduler can factor the load of TokenLake into its scheduling decisions.
+
+#### 6.2 Goodput-optimized stateless elastic scheduling
+
+To showcase the flexibility and potential of elastic scheduling on TokenLake, we designed a goodput-optimized stateless elastic scheduling algorithm. To optimize the overall goodput for requests with varying lengths and in different phases, our optimization objective is to minimize the overall latency, subject to the constraint that the output token latency, a.k.a Time Between Tokens (TBT), meets a Service Level Objective (SLO). This objective first minimizes the overall processing time. Second, it allows more requests in the prefill phase to enter the decoding phase quickly. This, in turn, increases the batch size during the decoding phase, thereby improving overall GPU efficiency.
+
+To tackle this optimization problem, in each iteration, following existing systems [24, 31, 73], we first use chunked prefill to split the long context to avoid overloading the whole cluster. Then it can be formulated as a dynamic programming (DP) problem to decide batching and DoP of each batch. Since requests with similar context lengths exhibit similar characteristics, we first sort all requests by their context length. Let f(i,k) represent the minimum overall latency for
+
+the first i requests given k instances. The DP equation can be formulated as follows:
+
+$$f(i,k) = \min_{\substack{0 \le j < l, 0 \le l < k, \\ SLO_{j+1...i} \le T(j+1,i,k-l,L)}} f(j,l) + (i-j) \times T(j+1,i,k-l,L)$$
+
+where T(j+1,i,k-l) is the latency to batch requests from j+1 to i using k-l instances when cache load is L. The time is also estimated by the quadratic curve fitting method [62]. Then the scheduling plan is constructed by backtracking from  $\min_{k\leq N} f(M,k)$ , where M is the total number of requests. To ensure PD disaggregation, we constrain requests in a batch to be in the same phase. If the SLO actually cannot be met, the algorithm will fall back to throughput-oriented scheduling by ignoring the SLO constraint to mitigate head-of-line blocking. Because DoP of request in the decoding phase must be one, the algorithm complexity is  $O(M_p^2 \times N^2)$ , where  $M_p$  is the number of requests in the prefill phase.
+
+#### <span id="page-7-0"></span>7 Evaluation
+
+We implement TokenLake as a prototype based on FlashInfer [67], SGLang [73], ZMQ [6], Ray [42], and LoongServe [62] in 16k LoCs. TokenLake uses CUDA IPC to share GPU memory among engines and uses inter-process CUDA events and Python semaphores for interactions between the engines. In this section, we evaluate it with state-of-the-art systems on real-world workloads to show its effectiveness.
+
+**Experimental Setup.** We conduct experiments on servers with 8 NVIDIA A100 80 GB GPUs and 128 CPUs. Most of the experiments are conducted on one server, and we evaluate multi-node performance in Section 7.5. The NVLink bandwidth is 400 GB/s. The servers are interconnected via four 200 Gbps InfiniBand NICs. We use CUDA 12.4 and NCCL 2.24.3. Similar to prior works [35, 62], we use the LWM-1M-Text, a long-context Llama-2-7B model [58] for experiments.
+
+Workloads As prior works [31, 62, 74], the requests are sampled from the three real-world datasets with the arrival pattern generated by a Poisson process. *LooGLE* [33] is a popular dataset of requests with shared prefixes. The average sequence length is 24K. *SCBench* [34] is a dataset of long-context multi-turn sessions. The average sequence length is 227K, and the average number of turns is 5. *ShareGPT* [2] is a conversation dataset with short requests. The sequence length is less than 2.4K. To mimic the real-world scenario, we add a system prompt of OpenAI o3 [1] to each request.
+
+**Baselines.** vLLM [31] and SGLang [73] are two state-of-the-art open-sourced LLM serving ecosystems without a significant difference. Because we reuse some components from SGLang, we choose solutions on top of it to ensure a fair comparison. Specifically, *SGLang-MoonCake-xPyD* is a cache-centric PD disaggregation solution based on Moon-Cake [50] and SGLang. Because the P:D ratio can affect performance, we evaluate two configurations, P:D = 1:3 and P:D = 3:1. *SGLang-Router* is a cache-aware routing solution by combining multiple SGLang instances and an SGL-router. It
+
+<span id="page-8-0"></span>> **[图片提取文字 (无描述)]:**
+> SGLang-Router → SGLang-MoonCake-1P3D → SGLang-MoonCake-3P1D TokenLake (%) nalized Latenc (s/token) LooGLE SLO Attainment ( malized Late (s/token) 2.5 0.5 1.0 2.0 2.5 1.5 2.0 1.5 2.0 2.5 SCBench SLO Attainment (%) malized Laten (s/token) 50 0.5 0.2 0.4 0.1 0.3 0.4 0.5 0.1 0.2 0.3 0.4 ShareGPT SLO Attainment (%) Normalized Late (s/token) 0.8.0 7.5 12.5 15.0 2.5 10.0 12.5 15.0 10.0 12.5 15.0 5.0 10.0 7.5 7.5 Request Rate (reg/s) Request Rate (reg/s) Request Rate (req/s) Goodput Input Token Latency Output Token Latency
+![](_page_8_Figure_0.jpeg)
+
+Figure 9. End-to-end performance.
+
+considers both cache hit rate and load balancing to route requests. Similar to prior works [15, 62], tensor parallelism (TP) is set to 2, and chunked prefill with the same chunked prefill size is enabled.
+
+**Metrics.** For prefill performance, we measure the input token latency [37, 62], i.e., time to first token (TTFT) normalized by the input length. For decoding performance, we measure the output token latency, i.e. the time between tokens (TBT). For the SLO attainment, we set the SLO to be that all input and output token latency is less than 10× the processing time when the batch size is 1. The P90 goodput is defined as the maximum throughput of the system when 90% of requests meet the SLO.
+
+#### <span id="page-8-1"></span>7.1 End-to-end performance
+
+We compare TokenLake against three distinct baselines across three different datasets on three key metrics. As shown in Figure 9, TokenLake outperforms the other baselines on nearly all datasets, particularly in SLO attainment.
+
+The first row shows the results on LooGLE. For SGLang-Router, although it attempts to balance computation load, it still tends to direct requests to instances with related prefixes. Given the limited local cache size, this often results in cache thrashing and costly recomputation. Consequently, at the same input token latency, its throughput is 4.64× lower than that of TokenLake. Its output token latency is also high due to the interference from prefill requests. In contrast, SGLang-MoonCake-1P-3D and SGLang-MoonCake-3P-1D, although protecting the decoding phase, only 25% and 75% of prefix cache slots can be used during the prefill phase, respectively, leading to a lower cache hit rate. Furthermore, because only 75% and 25% of prefix cache slots can be used during the decoding phase, requests in the prefill phase have to wait for cache slots in decode instances to be released.
+
+which also inflates the input token latency. By efficiently pooling GPU memories, TokenLake improves P90 goodput by 2.08× and 2.04× over SGLang-MoonCake-1P-3D and SGLang-MoonCake-3P-1D, respectively. At equivalent input token latencies, the throughput improvements are 4.46× and 3.32×.
+
+On SCBench, because it contains multi-turn conversation, which involves multiple cycles of prefill and decoding phases, cache-centric PD disaggregation has to frequently transfer prefix caches between prefill and decode instances, creating substantial transfer overhead. Fragmentation between two phases also decreases the hit rate. Therefore, SGLang-MoonCake-1P-3D and SGLang-MoonCake-3P-1D can only serve about 20% of requests, essentially the first turn of a conversation, under the SLO. Although SGLang-Router does not suffer from this issue, it still causes a low hit rate due to inherent fragmentation and load imbalance across instances. Consequently, TokenLake achieves 2.55× higher P90 goodput than SGLang-Router. Moreover, because TokenLake employs PD disaggregation, its decoding phase latency is also significantly lower than SGLang-Router's.
+
+Finally, on the ShareGPT dataset, TokenLake demonstrates the flexibility of its interfaces. Different from SGLang-Router, which sacrifices the SLO attainment, it prevents interference between the two phases as PD disaggregation does, while empowering the dynamic adjustments of the resources allocated to the two phases based on real-time workload. As a result, compared to SGLang-MoonCake-1P-3D and SGLang-MoonCake-3P-1D with the static partitioning, TokenLake improves the P90 goodput by 3.71× and 1.56× respectively.
+
+#### 7.2 Load balancing comparison
+
+To compare the load-balancing capability, we monitored the prefix cache accesses on each instance at a request rate approaching TokenLake's P90 SLO threshold. Figure 10 shows
+
+<span id="page-9-1"></span>> **[图片提取文字 (无描述)]:**
+> Instance-0 Instance-3 Instance-3 -- Prefill-0 Decode-0 -- Prefill-2 Instance-0 Decode-0 Instance-1 ---- CV Decode-1 ---- CV Prefill-0 ---- CV Instance-1 Instance-2 Decode-2 Prefill-1 Instance-2 1200% 1200% 1200% #Cache Access (tokens/iteration) tion 300000 를 150000 150% 150% ⊕ 200000 100% 100% 100% (tokens Time (seconds) Time (seconds) Time (seconds) Time (seconds) (b) SGLang-Router (d) SGLang-MoonCake-3P1D (c) SGLang-MoonCake-1P3D (a) TokenLake
+![](_page_9_Figure_0.jpeg)
+
+Figure 10. Load balancing of different systems.
+
+<span id="page-9-2"></span>> **[图片提取文字 (无描述)]:**
+> TokenLake SGLang-MoonCake-3P1D 100% SGLang-MoonCake-1P3D SGLang-Router 80% Hit Rate 60% 40% 20% 200000 400000 800000 #Cache Slots
+![](_page_9_Figure_2.jpeg)
+
+Figure 11. Hit rate under different cache sizes.
+
+both the per-instance cache access pattern over time and the corresponding Coefficient of Variation (CV), which serves to quantify the degree of load imbalance across instances.
+
+As shown in Figure 10a, the CV of TokenLake remains steadily below 15%, with an average value of just 11%. This result demonstrates the effectiveness of TokenLake's load-balancing mechanism over dynamic workloads.
+
+As shown in Figure 10b, SGLang-Router exhibits significant shortcomings in load balancing. Although SGLang Router takes load conditions into account when routing requests, without memory pooling, it has to trade load balance for a higher hit rate. Therefore, its average CV reached 99%, substantially 9× higher than that of TokenLake.
+
+As shown in Figure 10c and Figure 10d, due to disaggregation, both SGLang-MoonCake-1P3D and SGLang-MoonCake-3P1D exhibit significant load imbalance. Furthermore, the load imbalance also occurs across decode instances of SGLang-MoonCake-1P3D and across prefill instances of SGLang-MoonCake-3P1D. The figure also reveals that without memory pooling, they serve initial requests at a low hit rate. Ultimately, their average CV reaches 62% and 122%, respectively, 5.63× and 11.09× higher than that of TokenLake.
+
+#### 7.3 Hit rate analysis
+
+We then analyzed the hit rate of each system under varying cache sizes using the LooGLE dataset. As shown in Figure 11, the hit rate of TokenLake is the highest across all cache sizes and consistently improves as the capacity increases. In contrast, the SGLang-MoonCake-1P3D and SGLang-MoonCake-3P1D suffer from their isolated prefix caches for the prefill and decoding phases, so their hit rates are 1.67-2.14× and
+
+<span id="page-9-3"></span>> **[图片提取文字 (无描述)]:**
+> SGLang-MoonCake-1P3D TokenLake-3P1D TokenLake-1P3D TokenLake-Elastic (Default) SGLang-MoonCake-3P1D (S 75000 E 50000 atency . Request 2000 200000 400000 800000 #Cache Slots
+![](_page_9_Figure_10.jpeg)
+
+Figure 12. Effectiveness of pooling and elasticity.
+
+1.78-2.70× lower than TokenLake's, respectively. SGLang-Router also exhibits a low hit rate due to the limitations of its isolated local caches, which lead to load imbalance, data redundancy, and memory fragmentation. Furthermore, the interference from the requests in the prefill phase slows down its decoding phase performance, which in turn diminishes cache utilization efficiency. Therefore, the hit rate of TokenLake is 1.72-2.04× higher than SGLang-Router's.
+
+#### 7.4 Effectiveness of pooling and elasticity
+
+To evaluate the respective effectiveness of the TokenLake interface to support elastic scheduling and prefix cache pooling, we implemented PD disaggregation (TokenLake-1P3D) and TokenLake-3P1D) on top of TokenLake to isolate their contributions. As shown in Figure 12, first, the latency of TokenLake-1P3D and TokenLake-3P1D is 26.62-86.05× and 2.18-39.48× lower than that of SGLang-MoonCake-1P3D and SGLang-MoonCake-3P1D, respectively, showing the effectiveness of prefix cache pooling. Second, our fully-featured system, TokenLake-Elastic, consistently outperforms other TokenLake variants across all cache sizes. The performance advantage becomes more pronounced as the cache size decreases, reducing latency by up to 5.22× and 2.82× compared to TokenLake-1P3D and TokenLake-3P1D, respectively. This result validates the effectiveness of the TokenLake interface to enable stateless elastic scheduling.
+
+# <span id="page-9-0"></span>7.5 Multi-node performance
+
+Finally, we also tested the multi-node performance of Token-Lake on 16 A800 80GB GPUs across two servers. We mixed
+
+<span id="page-10-0"></span>> **[图片提取文字 (无描述)]:**
+> → TokenLake SGLang-Router SGLang-MoonCake-2P6D → SGLang-MoonCake-6P2D ---- SLO reGPT+LooGLE+SCBe SLO Attainment (%) 100 1.00⊦ 0.75 0.75 50 0.50 0.50 25 0.25 0.25 0.08.0 0.08.0 8.0 0.2 Request Rate (reg/s) Request Rate (reg/s) Request Rate (reg/s) (b) Input Token Latency (c) Output Token Latency (a) Goodput
+![](_page_10_Figure_0.jpeg)
+
+Figure 13. Multi-node performance.
+
+the three datasets in a 1:1:1 ratio as a more dynamic workload. The PD disaggregation baselines are adjusted to SGLang-MoonCake-6P2D and SGLang-MoonCake-2P6D to maintain the original PD ratios. As shown in Figure 13, TokenLake still outperforms the baselines in multi-node scenarios. Due to the increased variability in requests from the mixed dataset, the problem of load imbalance, redundancy, and fragmentation is more severe. Similar to Section 7.1, SGLang-MoonCake-6P2D and SGLang-MoonCake-2P6D struggle to handle multi-turn interactions, while SGLang-Router's attempt to improve hit rates leads to load imbalance and interference between the two phases. Ultimately, they fail to achieve 90% SLO attainment. Additionally, under the same input token latency, TokenLake's throughput is 5.47×, 28.49×, and 5.46× higher than that of SGLang-MoonCake-6P2D, SGLang-MoonCake-2P6D, and SGLang-Router, respectively. Furthermore, because only 25% of prefix cache slots in SGLang-MoonCake-6P2D is available to its decoding phase, it has to frequently trigger recomputation, leading to a substantial output token latency.
+
+#### 8 Related Work
+
+LLM serving. Modern LLM serving systems combine many techniques for better performance. Continuous batching [68] is proposed to batch different requests. To reduce interference between two phases, chunked prefill [8, 24, 30] is proposed to split the long context into smaller chunks, while PD disaggregation [27, 48, 74] is proposed to disaggregate two phases into different instances. Elastic sequence parallelism [62] is proposed to handle variable context lengths and frequent ratio changes between two phases by setting DoP elastically. Many recent works also explore dynamic PD instance reconfiguration [16, 18, 29, 49, 51, 60, 72] and multiplexing partial computation between two phases [15, 25, 35, 37, 52] to accommodate dynamic workloads. These works focus on computation optimizations, while TokenLake focuses on prefix cache pooling and provides declarative interfaces to support them. AF disaggregation [14, 22, 59, 63, 75] is proposed to disaggregate attention and FFN. Much research focuses on expert parallelism [21, 23, 32, 70, 71] and sequence parallelism [9, 11, 12, 39, 54, 65] to efficiently parallelize the computation of FFN and attention modules across multiple devices. They are orthogonal to TokenLake.
+
+KV cache optimizations. Reusing KV caches is critical to accelerate LLM serving. PagedAttention [31] manages the KV cache as paged memory to reduce fragmentation. SGLang [73] manages prefix cache as radix tree to enable efficient prefix sharing in an instance. Many prefix caching systems, such as Mooncake [50], LMCache [3], Aibrix [57], Preble [56], and MemServe [26], explore cache reuse across instances, while suffering from load imbalance, redundancy, and fragmentation as discussed in Section 2. Infinite-LLM [36] borrows the KV cache slots from other instances when local memory is insufficient, but it does not support prefix sharing between requests, leading to redundancy, uses the strict locality-based policy, leading to load imbalance, tightly couples the cache-free computation scheduling, restricting the elasticity, and cannot concurrently handle prefix attention and cache-free computation in an instance. Many operators are developed to optimize prefix attention [55, 66, 67], and the cache policy is explored to optimize hit rate [61]. They are orthogonal to TokenLake. Many works also explore hierarchical KV cache management [19, 28, 47, 64, 69, 76]. Because GPU memory often has higher bandwidth than host memory, and cache typically needs to be swapped back to GPU memory when used, TokenLake can be used together with these solutions to further improve the performance.
+
+#### 9 Conclusion
+
+In this paper, we present TokenLake, a unified segment-level prefix cache pool for elastic long-context LLM serving. By designing a declarative interface to expose query tensors and prefix attention, TokenLake can manages prefix cache at the segment level to reduce fragmentation and enable fine-grained cache management. Based on it, we propose a heavy-hitter-aware segment-level load balancing algorithm to achieve better load balance and deduplication, and propose the bipartite matching-based dispatching algorithm to minimize the communication volume of query tensors and new prefix caches. Finally, TokenLake enables stateless elastic scheduling to accommodate dynamic workloads. The evaluation results on real-world workloads demonstrate that TokenLake significantly improves throughput and hit rate compared to existing cache-aware routing and cache-centric PD-disaggregation solutions.
+
+# References
+
+- <span id="page-11-25"></span>[1] 2023. PromptCraft: The Ultimate GPT System Prompt Collection. [https:](https://github.com/LouisShark/chatgpt_system_prompt/tree/main) [//github.com/LouisShark/chatgpt\\_system\\_prompt/tree/main](https://github.com/LouisShark/chatgpt_system_prompt/tree/main). (2023).
+- <span id="page-11-24"></span>[2] 2023. ShareGPT Teams. <https://sharegpt.com/>. (2023).
+- <span id="page-11-6"></span>[3] 2024. LMCache. <https://github.com/LMCache/LMCache>. (2024).
+- <span id="page-11-17"></span>[4] 2025. CUDA Multi-Process Service. (2025). [https://docs.nvidia.com/](https://docs.nvidia.com/deploy/pdf/CUDA_Multi_Process_Service_Overview.pdf) [deploy/pdf/CUDA\\_Multi\\_Process\\_Service\\_Overview.pdf](https://docs.nvidia.com/deploy/pdf/CUDA_Multi_Process_Service_Overview.pdf).
+- <span id="page-11-19"></span>[5] 2025. Hungarian algorithm. [https://en.wikipedia.org/wiki/Hungarian\\_](https://en.wikipedia.org/wiki/Hungarian_algorithm) [algorithm](https://en.wikipedia.org/wiki/Hungarian_algorithm). (2025).
+- <span id="page-11-20"></span>[6] 2025. The ZeroMQ project. <https://github.com/zeromq>. (2025).
+- <span id="page-11-16"></span>[7] Saksham Agarwal, Arvind Krishnamurthy, and Rachit Agarwal. 2023. Host Congestion Control. In ACM SIGCOMM.
+- <span id="page-11-10"></span>[8] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav Gulavani, Alexey Tumanov, and Ramachandran Ramjee. 2024. Taming Throughput-Latency tradeoff in LLM inference with Sarathi-Serve. In USENIX OSDI.
+- <span id="page-11-34"></span>[9] Amey Agrawal, Haoran Qiu, Junda Chen, Íñigo Goiri, Chaojie Zhang, Rayyan Shahid, Ramachandran Ramjee, Alexey Tumanov, and Esha Choukse. 2024. Medha: Efficiently Serving Multi-Million Context Length LLM Inference Requests Without Approximations. arXiv (2024).
+- <span id="page-11-0"></span>[10] Anthropic. 2025. Claude Sonnet 4 now supports 1M tokens of context. <https://www.anthropic.com/news/1m-context>. (2025).
+- <span id="page-11-35"></span>[11] Nidhi Bhatia, Ankit More, Ritika Borkar, Tiyasa Mitra, Ramon Matas, Ritchie Zhao, Maximilian Golub, Dheevatsa Mudigere, Brian Pharris, and Bita Darvish Rouhani. 2025. Helix Parallelism: Rethinking Sharding Strategies for Interactive Multi-Million-Token LLM Decoding. arXiv (2025).
+- <span id="page-11-36"></span>[12] William Brandon, Aniruddha Nrusimha, Kevin Qian, Zachary Ankner, Tian Jin, Zhiye Song, and Jonathan Ragan-Kelley. 2023. Striped attention: Faster ring attention for causal transformers. arXiv (2023).
+- <span id="page-11-3"></span>[13] Charactor.AI. 2024. Optimizing AI Inference at Character.AI. [https:](https://research.character.ai/optimizing-inference/) [//research.character.ai/optimizing-inference/](https://research.character.ai/optimizing-inference/). (2024).
+- <span id="page-11-29"></span>[14] Shaoyuan Chen, Wencong Xiao, Yutong Lin, Mingxing Zhang, Yingdi Shan, Jinlei Jiang, Kang Chen, and Yongwei Wu. 2024. Efficient Heterogeneous Large Language Model Decoding with Model-Attention Disaggregation. arXiv (2024).
+- <span id="page-11-26"></span>[15] Weihao Cui, Yukang Chen, Han Zhao, Ziyi Xu, Quan Chen, Xusheng Chen, Yangjie Zhou, Shixuan Sun, and Minyi Guo. 2025. Optimizing SLO-oriented LLM Serving with PD-Multiplexing. arXiv (2025).
+- <span id="page-11-13"></span>[16] Jiangsu Du, Hongbin Zhang, Taosheng Wei, Zhenyi Zheng, Kaiyi Wu, Zhiguang Chen, and Yutong Lu. 2025. EcoServe: Enabling Costeffective LLM Serving with Proactive Intra-and Inter-Instance Orchestration. arXiv (2025).
+- <span id="page-11-18"></span>[17] Bin Fan, Hyeontaek Lim, David G Andersen, and Michael Kaminsky. 2011. Small cache, big effect: Provable load balancing for randomly partitioned cluster services. In ACM Symposium on Cloud Computing.
+- <span id="page-11-14"></span>[18] Jingqi Feng, Yukai Huang, Rui Zhang, Sicheng Liang, Ming Yan, and Jie Wu. 2025. WindServe: Efficient Phase-Disaggregated LLM Serving with Stream-based Dynamic Scheduling. In ACM/IEEE ISCA.
+- <span id="page-11-8"></span>[19] Bin Gao, Zhuomin He, Puru Sharma, Qingxuan Kang, Djordje Jevdjic, Junbo Deng, Xingkun Yang, Zhou Yu, and Pengfei Zuo. 2024. Cost-Efficient large language model serving for multi-turn conversations with CachedAttention. In USENIX ATC.
+- <span id="page-11-1"></span>[20] Google. 2024. Our next-generation model: Gemini 1.5. [https://blog.google/technology/ai/google-gemini-next-generation](https://blog.google/technology/ai/google-gemini-next-generation-model-february-2024/)[model-february-2024/](https://blog.google/technology/ai/google-gemini-next-generation-model-february-2024/). (2024).
+- <span id="page-11-31"></span>[21] Jiaao He, Jiezhong Qiu, Aohan Zeng, Zhilin Yang, Jidong Zhai, and Jie Tang. 2021. Fastmoe: A fast mixture-of-expert training system. arXiv preprint arXiv:2103.13262 (2021).
+- <span id="page-11-30"></span>[22] Jiaao He and Jidong Zhai. 2024. Fastdecode: High-throughput gpuefficient llm serving using heterogeneous pipelines. arXiv (2024).
+
+- <span id="page-11-32"></span>[23] Jiaao He, Jidong Zhai, Tiago Antunes, Haojie Wang, Fuwen Luo, Shangfeng Shi, and Qin Li. 2022. Fastermoe: modeling and optimizing training of large-scale dynamic pre-trained models. In ACM PPoPP.
+- <span id="page-11-11"></span>[24] Connor Holmes, Masahiro Tanaka, Michael Wyatt, Ammar Ahmad Awan, Jeff Rasley, Samyam Rajbhandari, Reza Yazdani Aminabadi, Heyang Qin, Arash Bakhtiari, Lev Kurilenko, and Yuxiong He. 2024. Deepspeed-fastgen: High-throughput text generation for llms via mii and deepspeed-inference. arXiv (2024).
+- <span id="page-11-28"></span>[25] Ke Hong, Lufang Chen, Zhong Wang, Xiuhong Li, Qiuli Mao, Jianping Ma, Chao Xiong, Guanyu Wu, Buhe Han, Guohao Dai, Yun Liang, and Yu Wang. 2025. semi-PD: Towards Efficient LLM Serving via Phase-Wise Disaggregated Computation and Unified Storage. arXiv (2025).
+- <span id="page-11-7"></span>[26] Cunchen Hu, Heyang Huang, Junhao Hu, Jiang Xu, Xusheng Chen, Tao Xie, Chenxi Wang, Sa Wang, Yungang Bao, Ninghui Sun, and Yizhou Shan. 2024. Memserve: Context caching for disaggregated llm serving with elastic memory pool. arXiv (2024).
+- <span id="page-11-5"></span>[27] Cunchen Hu, Heyang Huang, Liangliang Xu, Xusheng Chen, Jiang Xu, Shuang Chen, Hao Feng, Chenxi Wang, Sa Wang, Yungang Bao, Ninghui Sun, and Yizhou Shan. 2024. Inference without interference: Disaggregate llm inference for mixed downstream workloads. arXiv (2024).
+- <span id="page-11-9"></span>[28] Xuanlin Jiang, Yang Zhou, Shiyi Cao, Ion Stoica, and Minlan Yu. 2024. Neo: Saving gpu memory crisis with cpu offloading for online llm inference. arXiv (2024).
+- <span id="page-11-15"></span>[29] Hongyi Jin, Ruihang Lai, Charlie F Ruan, Yingcheng Wang, Todd C Mowry, Xupeng Miao, Zhihao Jia, and Tianqi Chen. 2024. A System for Microserving of LLMs. arXiv (2024).
+- <span id="page-11-12"></span>[30] Aditya K Kamath, Ramya Prabhu, Jayashree Mohan, Simon Peter, Ramachandran Ramjee, and Ashish Panwar. 2025. Pod-attention: Unlocking full prefill-decode overlap for faster llm inference. In ACM ASPLOS.
+- <span id="page-11-4"></span>[31] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao Zhang, and Ion Stoica. 2023. Efficient memory management for large language model serving with pagedattention. In ACM SOSP.
+- <span id="page-11-33"></span>[32] Jiamin Li, Yimin Jiang, Yibo Zhu, Cong Wang, and Hong Xu. 2023. Accelerating Distributed MoE Training and Inference with Lina. In USENIX ATC.
+- <span id="page-11-22"></span>[33] Jiaqi Li, Mengmeng Wang, Zilong Zheng, and Muhan Zhang. 2024. LooGLE: Can Long-Context Language Models Understand Long Contexts?. In Association for Computational Linguistics (ACL).
+- <span id="page-11-23"></span>[34] Yucheng Li, Huiqiang Jiang, Qianhui Wu, Xufang Luo, Surin Ahn, Chengruidong Zhang, Amir H. Abdi, Dongsheng Li, Jianfeng Gao, Yuqing Yang, and Lili Qiu. 2025. SCBench: A KV Cache-Centric Analysis of Long-Context Methods. In International Conference on Learning Representations (ICLR).
+- <span id="page-11-21"></span>[35] Yunkai Liang, Zhangyu Chen, Pengfei Zuo, Zhi Zhou, Xu Chen, and Zhou Yu. 2025. Injecting Adrenaline into LLM Serving: Boosting Resource Utilization and Throughput via Attention Disaggregation. arXiv (2025).
+- <span id="page-11-37"></span>[36] Bin Lin, Chen Zhang, Tao Peng, Hanyu Zhao, Wencong Xiao, Minmin Sun, Anmin Liu, Zhipeng Zhang, Lanbo Li, Xiafei Qiu, Shen Li, Zhigang Ji, Tao Xie, Yong Li, and Wei Lin. 2024. Infinite-llm: Efficient llm service for long context with distattention and distributed kvcache. arXiv (2024).
+- <span id="page-11-27"></span>[37] Zejia Lin, Hongxin Xu, Guanyi Chen, Xianwei Zhang, and Yutong Lu. 2025. Bullet: Boosting GPU Utilization for LLM Serving via Dynamic Spatial-Temporal Orchestration. arXiv (2025).
+- <span id="page-11-2"></span>[38] Hao Liu, Wilson Yan, Matei Zaharia, and Pieter Abbeel. 2025. World Model on Million-Length Video And Language With Blockwise RingAttention. In International Conference on Learning Representations (ICLR).
+
+- <span id="page-12-19"></span>[39] Hao Liu, Matei Zaharia, and Pieter Abbeel. 2023. Ring attention with blockwise transformers for near-infinite context. arXiv (2023).
+- <span id="page-12-14"></span>[40] Zaoxing Liu, Zhihao Bai, Zhenming Liu, Xiaozhou Li, Changhoon Kim, Vladimir Braverman, Xin Jin, and Ion Stoica. 2019. DistCache: Provable Load Balancing for Large-Scale Storage Systems with Distributed Caching. In USENIX FAST.
+- <span id="page-12-0"></span>[41] Manus. 2025. Context Engineering for AI Agents: Lessons from Building Manus. [https://manus.im/blog/Context-Engineering-for-](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus)[AI-Agents-Lessons-from-Building-Manus](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus). (2025).
+- <span id="page-12-15"></span>[42] Philipp Moritz, Robert Nishihara, Stephanie Wang, Alexey Tumanov, Richard Liaw, Eric Liang, Melih Elibol, Zongheng Yang, William Paul, Michael I. Jordan, and Ion Stoica. 2018. Ray: A Distributed Framework for Emerging AI Applications. In USENIX OSDI.
+- <span id="page-12-10"></span>[43] NVIDIA. 2020. NVIDIA A100 Tensor Core GPU. [https://www.nvidia.](https://www.nvidia.com/en-us/data-center/a100/) [com/en-us/data-center/a100/](https://www.nvidia.com/en-us/data-center/a100/). (2020).
+- <span id="page-12-2"></span>[44] NVIDIA. 2024. NVIDIA Dynamo. [https://github.com/ai-dynamo/](https://github.com/ai-dynamo/dynamo) [dynamo](https://github.com/ai-dynamo/dynamo). (2024).
+- <span id="page-12-13"></span>[45] NVIDIA. 2025. CUDA Programming Guide. [https://docs.nvidia.com/](https://docs.nvidia.com/cuda/cuda-c-programming-guide) [cuda/cuda-c-programming-guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide). (2025).
+- <span id="page-12-11"></span>[46] NVIDIA. 2025. NVIDIA GB200 NVL72. [https://www.nvidia.com/en](https://www.nvidia.com/en-us/data-center/gb200-nvl72/)[us/data-center/gb200-nvl72/](https://www.nvidia.com/en-us/data-center/gb200-nvl72/). (2025).
+- <span id="page-12-6"></span>[47] Zaifeng Pan, Ajjkumar Patel, Zhengding Hu, Yipeng Shen, Yue Guan, Wan-Lu Li, Lianhui Qin, Yida Wang, and Yufei Ding. 2025. KVFlow: Efficient Prefix Caching for Accelerating LLM-Based Multi-Agent Workflows. arXiv (2025).
+- <span id="page-12-5"></span>[48] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo Goiri, Saeed Maleki, and Ricardo Bianchini. 2024. Splitwise: Efficient generative llm inference using phase splitting. In ACM/IEEE ISCA.
+- <span id="page-12-7"></span>[49] Yifan Qiao, Shu Anzai, Shan Yu, Haoran Ma, Yang Wang, Miryung Kim, and Harry Xu. 2024. Conserve: Harvesting gpus for low-latency and high-throughput large language model serving. arXiv (2024).
+- <span id="page-12-1"></span>[50] Ruoyu Qin, Zheming Li, Weiran He, Jialei Cui, Feng Ren, Mingxing Zhang, Yongwei Wu, Weimin Zheng, and Xinran Xu. 2025. Mooncake: Trading more storage for less computation—a KVCache-centric architecture for serving LLM chatbot. In USENIX FAST.
+- <span id="page-12-8"></span>[51] Chaoyi Ruan, Yinhe Chen, Dongqi Tian, Yandong Shi, Yongji Wu, Jialin Li, and Cheng Li. 2025. DynaServe: Unified and Elastic Execution for Dynamic Disaggregated LLM Serving. arXiv (2025).
+- <span id="page-12-17"></span>[52] Xiaoxiang Shi, Colin Cai, Junjia Du, Zhanda Zhu, Xingda Wei, and Zhihao Jia. 2025. Nexus: Taming Throughput-Latency Tradeoff in LLM Serving via Efficient GPU Sharing. arXiv (2025).
+- <span id="page-12-12"></span>[53] Chenchen Shou, Guyue Liu, Hao Nie, Huaiyu Meng, Yu Zhou, Yimin Jiang, Wenqing Lv, Yelong Xu, Yuanwei Lu, Zhang Chen, Yanbo Yu, Yichen Shen, Yibo Zhu, and Daxin Jiang. 2025. InfiniteHBD: Building Datacenter-Scale High-Bandwidth Domain for LLM with Optical Circuit Switching Transceivers. In ACM SIGCOMM.
+- <span id="page-12-20"></span>[54] Vasudev Shyam, Jonathan Pilault, Emily Shepperd, Quentin Anthony, and Beren Millidge. 2024. Tree attention: Topology-aware decoding for long-context attention on gpu clusters. arXiv (2024).
+- <span id="page-12-21"></span>[55] Mingcong Song, Xinru Tang, Fengfan Hou, Jing Li, Wei Wei, Yipeng Ma, Runqiu Xiao, Hongjie Si, Dingcheng Jiang, Shouyi Yin, Yang Hu, and Guoping Long. 2024. Tackling the dynamicity in a production llm serving system with sota optimizations via hybrid prefill/decode/verify scheduling on efficient meta-kernels. arXiv (2024).
+- <span id="page-12-3"></span>[56] Vikranth Srivatsa, Zijian He, Reyna Abhyankar, Dongming Li, and Yiying Zhang. 2025. Preble: Efficient distributed prompt scheduling for llm serving. International Conference on Learning Representations (ICLR) (2025).
+- <span id="page-12-4"></span>[57] The AIBrix Team, Jiaxin Shan, Varun Gupta, Le Xu, Haiyang Shi, Jingyuan Zhang, Ning Wang, Linhui Xu, Rong Kang, Tongping Liu, Yifei Zhang, Yiqing Zhu, Shuowei Jin, Gangmuk Lim, Binbin Chen, Zuzhi Chen, Xiao Liu, Xin Chen, Kante Yin, Chak-Pong Chung, Chenyu Jiang, Yicheng Lu, Jianjun Chen, Caixue Lin, Wu Xiang, Rui
+
+- Shi, and Liguang Xie. 2025. AIBrix: Towards Scalable, Cost-Effective Large Language Model Inference Infrastructure. arXiv (2025).
+- <span id="page-12-16"></span>[58] Hugo Touvron, Louis Martin, Kevin Stone, Peter Albert, Amjad Almahairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale, Dan Bikel, Lukas Blecher, Cristian Canton Ferrer, Moya Chen, Guillem Cucurull, David Esiobu, Jude Fernandes, Jeremy Fu, Wenyin Fu, Brian Fuller, Cynthia Gao, Vedanuj Goswami, Naman Goyal, Anthony Hartshorn, Saghar Hosseini, Rui Hou, Hakan Inan, Marcin Kardas, Viktor Kerkez, Madian Khabsa, Isabel Kloumann, Artem Korenev, Punit Singh Koura, Marie-Anne Lachaux, Thibaut Lavril, Jenya Lee, Diana Liskovich, Yinghai Lu, Yuning Mao, Xavier Martinet, Todor Mihaylov, Pushkar Mishra, Igor Molybog, Yixin Nie, Andrew Poulton, Jeremy Reizenstein, Rashi Rungta, Kalyan Saladi, Alan Schelten, Ruan Silva, Eric Michael Smith, Ranjan Subramanian, Xiaoqing Ellen Tan, Binh Tang, Ross Taylor, Adina Williams, Jian Xiang Kuan, Puxin Xu, Zheng Yan, Iliyan Zarov, Yuchen Zhang, Angela Fan, Melanie Kambadur, Sharan Narang, Aurelien Rodriguez, Robert Stojnic, Sergey Edunov, and Thomas Scialom. 2023. Llama 2: Open Foundation and Fine-Tuned Chat Models. (2023).
+- <span id="page-12-18"></span>[59] Bin Wang, Bojun Wang, Changyi Wan, Guanzhe Huang, Hanpeng Hu, Haonan Jia, Hao Nie, Mingliang Li, Nuo Chen, Siyu Chen, Song Yuan, Wuxun Xie, Xiaoniu Song, Xing Chen, Xingping Yang, Xuelin Zhang, Yanbo Yu, Yaoyu Wang, Yibo Zhu, Yimin Jiang, Yu Zhou, Yuanwei Lu, Houyi Li, Jingcheng Hu, Ka Man Lo, Ailin Huang, Binxing Jiao, Bo Li, Boyu Chen, Changxin Miao, Chang Lou, Chen Hu, Chen Xu, Chenfeng Yu, Chengyuan Yao, Daokuan Lv, Dapeng Shi, Deshan Sun, Ding Huang, Dingyuan Hu, Dongqing Pang, Enle Liu, Fajie Zhang, Fanqi Wan, Gulin Yan, Han Zhang, Han Zhou, Hanghao Wu, Hangyu Guo, Hanqi Chen, Hanshan Zhang, Hao Wu, Haocheng Zhang, Haolong Yan, Haoran Lv, Haoran Wei, Hebin Zhou, Heng Wang, Heng Wang, Hongxin Li, Hongyu Zhou, Hongyuan Wang, Huiyong Guo, Jia Wang, Jiahao Gong, Jialing Xie, Jian Zhou, Jianjian Sun, Jiaoren Wu, Jiaran Zhang, Jiayu Liu, Jie Cheng, Jie Luo, Jie Yan, Jie Yang, Jieyi Hou, Jinguang Zhang, Jinlan Cao, Jisheng Yin, Junfeng Liu, Junhao Huang, Junzhe Lin, Kaijun Tan, Kaixiang Li, Kang An, Kangheng Lin, Kenkun Liu, Lei Yang, Liang Zhao, Liangyu Chen, Lieyu Shi, Liguo Tan, Lin Lin, Lin Zhang, Lina Chen, Liwen Huang, Liying Shi, Longlong Gu, Mei Chen, Mengqiang Ren, Ming Li, Mingzhe Chen, Na Wang, Nan Wu, Qi Han, Qian Zhao, Qiang Zhang, Qianni Liu, Qiaohui Chen, Qiling Wu, Qinglin He, Qinyuan Tan, Qiufeng Wang, Qiuping Wu, Qiuyan Liang, Quan Sun, Rui Li, Ruihang Miao, Ruosi Wan, Ruyan Guo, Shangwu Zhong, Shaoliang Pang, Shengjie Fan, Shijie Shang, Shilei Jiang, Shiliang Yang, Shiming Hao, Shuli Gao, Siming Huang, Siqi Liu, Tiancheng Cao, Tianhao Cheng, Tianhao Peng, Wang You, Wei Ji, Wen Sun, Wenjin Deng, Wenqing He, Wenzhen Zheng, Xi Chen, Xiangwen Kong, Xianzhen Luo, Xiaobo Yang, Xiaojia Liu, Xiaoxiao Ren, Xin Han, Xin Li, Xin Wu, Xu Zhao, Yanan Wei, Yang Li, Yangguang Li, Yangshijie Xu, Yanming Xu, Yaqiang Shi, Yeqing Shen, Yi Yang, Yifei Yang, Yifeng Gong, Yihan Chen, Yijing Yang, Yinmin Zhang, Yizhuang Zhou, Yuanhao Ding, Yuantao Fan, Yuanzhen Yang, Yuchu Luo, Yue Peng, Yufan Lu, Yuhang Deng, Yuhe Yin, Yujie Liu, Yukun Chen, Yuling Zhao, Yun Mou, Yunlong Li, Yunzhou Ju, Yusheng Li, Yuxiang Yang, Yuxiang Zhang, Yuyang Chen, Zejia Weng, Zhe Xie, Zheng Ge, Zheng Gong, Zhenyi Lu, Zhewei Huang, Zhichao Chang, Zhiguo Huang, Zhirui Wang, Zidong Yang, Zili Wang, Ziqi Wang, Zixin Zhang, Binxing Jiao, Daxin Jiang, Heung-Yeung Shum, and Xiangyu Zhang. 2025. Step-3 is Large yet Affordable: Model-system Co-design for Cost-effective Decoding. (2025).
+- <span id="page-12-9"></span>[60] Chao Wang, Pengfei Zuo, Zhangyu Chen, Yunkai Liang, Zhou Yu, and Ming-Chang Yang. 2025. Prefill-Decode Aggregation or Disaggregation? Unifying Both for Goodput-Optimized LLM Serving. arXiv (2025).
+- <span id="page-12-22"></span>[61] Jiahao Wang, Jinbo Han, Xingda Wei, Sijie Shen, Dingyan Zhang, Chenguang Fang, Rong Chen, Wenyuan Yu, and Haibo Chen. 2025.
+
+- KVCache Cache in the Wild: Characterizing and Optimizing KVCache Cache at a Large Cloud Provider. USENIX ATC (2025).
+- <span id="page-13-7"></span>[62] Bingyang Wu, Shengyu Liu, Yinmin Zhong, Peng Sun, Xuanzhe Liu, and Xin Jin. 2024. Loongserve: Efficiently serving long-context large language models with elastic sequence parallelism. In ACM SOSP.
+- <span id="page-13-11"></span>[63] Ao Xiao, Bangzheng He, Baoquan Zhang, Baoxing Huai, Bingji Wang, Bo Wang, Bo Xu, Boyi Hou, Chan Yang, Changhong Liu, Cheng Cui, Chenyu Zhu, Cong Feng, Daohui Wang, Dayun Lin, Duo Zhao, Fengshao Zou, Fu Wang, Gangqiang Zhang, Gengyuan Dan, Guanjie Chen, Guodong Guan, Guodong Yang, Haifeng Li, Haipei Zhu, Haley Li, Hao Feng, Hao Huang, Hao Xu, Hengrui Ma, Hengtao Fan, Hui Liu, Jia Li, Jiang Liu, Jiang Xu, Jie Meng, Jinhan Xin, Junhao Hu, Juwei Chen, Lan Yu, Lanxin Miao, Liang Liu, Linan Jing, Lu Zhou, Meina Han, Mingkun Deng, Mingyu Deng, Naitian Deng, Nizhong Lin, Peihan Zhao, Peng Pan, Pengfei Shen, Ping Li, Qi Zhang, Qian Wang, Qin ZhC Qingrong Xia, Qingyi Zhang, Qunchao Fu, Ren Guo, Ruimin Gao, Shaochun Li, Sheng Long, Shentian Li, Shining Wan, Shuai Shen, Shuangfu Zeng, Shuming Jing, Siqi Yang, Song Zhang, Tao Xu, Tianlin Du, Ting Chen, Wanxu Wu, Wei Jiang, Weinan Tong, Weiwei Chen, Wen Peng, Wenli Zhou, Wenquan Yang, Wenxin Liang, Xiang Liu, Xiaoli Zhou, Xin Jin, Xinyu Duan, Xu Li, Xu Zhang, Xusheng Chen, Yalong Shan, Yang Gan, Yao Lu, Yi Deng, Yi Zheng, Ying Xiong, Yingfei Zheng, Yiyun Zheng, Yizhou Shan, Yong Gao, Yong Zhang, Yongqiang Yang, Yuanjin Gong, Yue Yu, Yuetao Chen, Yukun Zhu, Yulong He, Yusu Zhao, Yuyan Wu, Zenan Zhang, Zhaojin Zhuo, Zhaoyang Ji, Zhefeng Wang, Zheng Wang, Zhenan Fan, Zhenhua Yang, Zhenli Sheng, Zhibin Yu, Zhigang Ji, Zhihao Ren, Zhipeng Bian, Zhixia Liu, Zhiyu Dong, Zhonghua Li, Zhou Yu, Zhuoming Shen, Zhuwei Peng, Zi Ye, Zihao Xiang, Zimin Fu, and Zixuan Zhang. 2025. xDeepServe: Model-as-a-Service on Huawei CloudMatrix384. arXiv (2025).
+- <span id="page-13-3"></span>[64] Yi Xu, Ziming Mao, Xiangxi Mo, Shu Liu, and Ion Stoica. 2024. Pie: Pooling cpu memory for llm inference. arXiv (2024).
+- <span id="page-13-8"></span>[65] Amy Yang, Jingyi Yang, Aya Ibrahim, Xinfeng Xie, Bangsheng Tang, Grigory Sizov, Jeremy Reizenstein, Jongsoo Park, and Jianyu Huang. 2025. Context parallelism for scalable million-token inference. Conference on Machine Learning and Systems (2025).
+- <span id="page-13-14"></span>[66] Lu Ye, Ze Tao, Yong Huang, and Yang Li. 2024. ChunkAttention: Efficient Self-Attention with Prefix-Aware KV Cache and Two-Phase Partition. In Association for Computational Linguistics (ACL).
+- <span id="page-13-2"></span>[67] Zihao Ye, Lequn Chen, Ruihang Lai, Wuwei Lin, Yineng Zhang, Stephanie Wang, Tianqi Chen, Baris Kasikci, Vinod Grover, Arvind Krishnamurthy, and Luis Ceze. 2025. Flashinfer: Efficient and customizable attention engine for llm inference serving. Conference on Machine Learning and Systems (2025).
+- <span id="page-13-10"></span>[68] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. 2022. Orca: A Distributed Serving System for Transformer-Based Generative Models. In USENIX OSDI.
+- <span id="page-13-4"></span>[69] Lingfan Yu, Jinkun Lin, and Jinyang Li. 2025. Stateful large language model serving with pensieve. In EuroSys.
+- <span id="page-13-13"></span>[70] Mingshu Zhai, Jiaao He, Zixuan Ma, Zan Zong, Runqing Zhang, and Jidong Zhai. 2023. SmartMoE: Efficiently Training Sparsely-Activated Models through Combining Offline and Online Parallelization. In USENIX ATC.
+- <span id="page-13-9"></span>[71] Chenggang Zhao, Chengqi Deng, Chong Ruan, Damai Dai, Huazuo Gao, Jiashi Li, Liyue Zhang, Panpan Huang, Shangyan Zhou, Shirong Ma, Wenfeng Liang, Ying He, Yuqing Wang, Yuxuan Liu, and Y.X. Wei. 2025. Insights into deepseek-v3: Scaling challenges and reflections on hardware for ai architectures. In ACM/IEEE ISCA.
+- <span id="page-13-6"></span>[72] Yilong Zhao, Shuo Yang, Kan Zhu, Lianmin Zheng, Baris Kasikci, Yang Zhou, Jiarong Xing, and Ion Stoica. 2024. Blendserve: Optimizing offline inference for auto-regressive large models with resource-aware batching. arXiv (2024).
+- <span id="page-13-0"></span>[73] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Sun, Jeff Huang, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion Stoica,
+
+- Joseph E. Gonzalez, Clark Barrett, and Ying Sheng. 2024. SGLang: Efficient Execution of Structured Language Model Programs. In Neural Information Processing Systems.
+- <span id="page-13-1"></span>[74] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xuanzhe Liu, Xin Jin, and Hao Zhang. 2024. DistServe: Disaggregating prefill and decoding for goodput-optimized large language model serving. In USENIX OSDI.
+- <span id="page-13-12"></span>[75] Ruidong Zhu, Ziheng Jiang, Chao Jin, Peng Wu, Cesar A. Stuardo, Dongyang Wang, Xinlei Zhang, Huaping Zhou, Haoran Wei, Yang Cheng, Jianzhe Xiao, Xinyi Zhang, Lingjun Liu, Haibin Lin, Li-Wen Chang, Jianxi Ye, Xiao Yu, Xuanzhe Liu, Xin Jin, and Xin Liu. 2025. MegaScale-Infer: Serving Mixture-of-Experts at Scale with Disaggregated Expert Parallelism. ACM SIGCOMM (2025).
+- <span id="page-13-5"></span>[76] Pengfei Zuo, Huimin Lin, Junbo Deng, Nan Zou, Xingkun Yang, Yingyu Diao, Weifeng Gao, Ke Xu, Zhangyu Chen, Shirui Lu, Zhao Qiu, Peiyang Li, Xianyu Chang, Zhengzhong Yu, Fangzheng Miao, Jia Zheng, Ying Li, Yuan Feng, Bei Wang, Zaijian Zong, Mosong Zhou, Wenli Zhou, Houjiang Chen, Xingyu Liao, Yipeng Li, Wenxiao Zhang, Ping Zhu, Yinggang Wang, Chuanjie Xiao, Depeng Liang, Dong Cao, Juncheng Liu, Yongqiang Yang, Xiaolong Bai, Yi Li, Huaguo Xie, Huatao Wu, Zhibin Yu, Lv Chen, Hu Liu, Yujun Ding, Haipei Zhu, Jing Xia, Yi Xiong, Zhou Yu, and Heng Liao. 2025. Serving Large Language Models on Huawei CloudMatrix384. arXiv (2025).

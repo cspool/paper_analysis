@@ -1,0 +1,4 @@
+# 6 Conclusion
+
+In this work, we propose *Adaptive Reasoning Model* (ARM), which adaptively selects reasoning formats based on task difficulty. ARM is trained with Ada-GRPO, a GRPO variant that addresses format collapse via a format diversity reward and achieves a ∼ 2× training speedup. Experiments show that ARM maintains performance comparable to the GRPO-trained model relying solely on *Long CoT*, while significantly improving token efficiency. Beyond the default Adaptive Mode, ARM also supports Instruction-Guided Mode, which excels when the format is appropriately specified, and Consensus-Guided Mode, which maximizes performance at higher token usage. By adopting the adaptive reasoning format selection strategy, ARM effectively mitigates the overthinking problem and offers a novel, efficient approach to reducing unnecessary reasoning overhead.
+

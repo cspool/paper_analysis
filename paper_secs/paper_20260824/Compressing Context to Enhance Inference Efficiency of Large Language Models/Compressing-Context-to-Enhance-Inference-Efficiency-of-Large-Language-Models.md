@@ -1,0 +1,32 @@
+# Compressing Context to Enhance Inference Efficiency of Large Language Models
+
+Yucheng Li<sup>1</sup> , Bo Dong<sup>1</sup> , Chenghua Lin<sup>2</sup><sup>∗</sup> , Frank Guerin<sup>1</sup>
+
+<sup>1</sup> University of Surrey <sup>2</sup> University of Manchester {yucheng.li, bd00531, f.guerin}@surrey.ac.uk chenghua.lin@manchester.ac.uk
+
+### Abstract
+
+Large language models (LLMs) achieved remarkable performance across various tasks. However, they face challenges in managing long documents and extended conversations, due to significantly increased computational requirements, both in memory and inference time, and potential context truncation when the input exceeds the LLM's fixed context length. This paper proposes a method called *Selective Context* that enhances the inference efficiency of LLMs by identifying and pruning redundancy in the input context to make the input more compact. We test our approach using common data sources requiring long context processing: arXiv papers, news articles, and long conversations, on tasks of summarisation, question answering, and response generation. Experimental results show that Selective Context significantly reduces memory cost and decreases generation latency while maintaining comparable performance compared to that achieved when full context is used. Specifically, we achieve a 50% reduction in context cost, resulting in a 36% reduction in inference memory usage and a 32% reduction in inference time, while observing only a minor drop of .023 in BERTscore and .038 in faithfulness on four downstream applications, indicating that our method strikes a good balance between efficiency and performance. Code and data are available at [https://github.com/](https://github.com/liyucheng09/Selective_Context) [liyucheng09/Selective\\_Context](https://github.com/liyucheng09/Selective_Context).
+
+### 1 Introduction
+
+Large language models (LLMs) have demonstrated remarkable power and impressive generalisation abilities across a wide range of natural language processing tasks, as well as real-life applications [\(Brown et al.,](#page-8-0) [2020;](#page-8-0) [Touvron et al.,](#page-9-0) [2023;](#page-9-0) [Bubeck](#page-8-1) [et al.,](#page-8-1) [2023\)](#page-8-1). However, a major challenge for existing LLMs is processing longer context. Dealing with longer context with LLMs is fundamen<span id="page-0-0"></span>Context: Large Languages Models (LLMs) have shown their ability to perform new tasks, resulting in a line of work that focuses on further scaling these models. These efforts are based on the assumption {*that more parameters will lead to better performance.*}
+
+Query: What's the assumption behind the efforts to further scale LLMs?
+
+LLMs: Further scaling Large Language Models will lead to better performance on a wide range of tasks.
+
+Figure 1: Some context is redundant because LLMs have learned that knowledge. LLMs can generate the correct answer even when these redundancies are deleted.
+
+tal in scenarios such as having long conversations, document summarisation, and question answering given long documents. However, it is very computationally expensive, particularly with Transformer based LLMs, due to the quadratic growth of memory and computation associated with the 2-D attention matrix [\(Vaswani et al.,](#page-9-1) [2017\)](#page-9-1). This makes LLMs less accessible and sometimes leads to context truncation during inference. Moreover, due to the above limitation, existing LLMs were usually pre-trained with fixed-context windows, which further constrains their capability in processing longer context.
+
+There are active attempts in reducing the computation and memory cost of the Transformer architecture with sparse attention [\(Child et al.,](#page-8-2) [2019\)](#page-8-2) or local dense attention [\(Beltagy et al.,](#page-8-3) [2020\)](#page-8-3). There are also efforts to learn soft prompts with further distillation to save context cost during inference [\(Mu et al.,](#page-8-4) [2023;](#page-8-4) [Chevalier et al.,](#page-8-5) [2023\)](#page-8-5). In contrast to existing approaches that primarily focus on architectures or distillations, we introduce a fresh perspective to tackle the redundancy in the input context itself, thus proposing a complementary, modelagnostic approach that can be potentially combined with other architecture optimisation methods to further enhance inference efficiency.
+
+<sup>∗</sup> Corresponding author
+
+The proposed method is motivated by the potential redundancy and repetition in human language, which has two main sources. The first is the inherent redundancy of natural language. For example, in the conversation *"A: Did you get the chance to pick up groceries today?"*, *"B: Yes, I did get the groceries."*, the underlined part can be seen as a common redundancy in communication. Linguistic studies suggest redundancy is ubiquitous in language [\(Wit and Gillette,](#page-9-2) [1999\)](#page-9-2). The other type of input redundancy is from the overlap with training material. As the example in Fig. [1](#page-0-0) shows, if some parts of input have already been included in the pre-training stage of LLMs, then it is safe to delete them and the model can still generate the correct answer. In summary, redundancy in the input context, while beneficial for human comprehension, can be extraneous for LLMs and might lead to unnecessary computational expense.
+
+In this paper, we propose *Selective Context*, which prunes redundant content in a given input context, thereby reducing the computational cost and making better use of the fixed context length in LLMs. *Selective Context* evaluates informativeness of lexical units (i.e., tokens, phrases, or sentences) with self-information [\(Shannon,](#page-8-6) [1948\)](#page-8-6) computed by a base causal language model. By selectively retaining content with higher self-information, our method provides a more compact and efficient context representation for LLMs to process without compromising their performance on various applications.
+
+We evaluate the effectiveness and different settings of *Selective Context* on arXiv papers, BBC News, and real conversation on ShareGPT.com with four NLP tasks: summarisation, question answering, original context reconstruction, and conversation. Experimental results demonstrate that our proposed method can significantly enhance context efficiency of LLMs during inference while maintaining comparable performance compared to that achieved when full context is used.
+

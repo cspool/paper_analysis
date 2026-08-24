@@ -1,0 +1,6 @@
+# 3 Method
+
+In this section, we introduce the details of AAG to activate LLMs' intrinsic knowledge and obtain a richer context for QA. The fundamental premise underlying this method is that QA with a richer context (teacher model) yields a better internal representation and greater performance (e.g., RAG with retrieved documents). Therefore, to enable a student model without external documents as context to also possess rich context, it is necessary to both learn to independently generate context (though not excessively long) and to allow the student model to mimic and acquire rich internal representations.
+
+Specifically, as shown in Figure [2,](#page-3-0) AAG comprises two main modules. Explicit awakening with long context compression learns to generate a compressed dummy document (§ [3.2\)](#page-3-1). Implicit awakening with the hypernetwork leverages hidden knowledge that learns a shared knowledge feature projection across questions (§ [3.3\)](#page-3-2). The hypernetwork is trained to generate lightweight LoRA modules to align the question and the internal knowledge. Besides, there is long context distillation in training, which learns the teacher's rich representations to compensate for missing knowledge in label learning (§ [3.4\)](#page-4-0).
+

@@ -1,0 +1,3 @@
+# C.2 Future Work
+
+For future work, we plan to extend ToolCaching to support more diverse tool-calling patterns, multi-tenant scenarios, and integration with multi-agent frameworks, particularly exploring caching opportunities across inter-agent tool-calling patterns. Also, we aim to explore how caching can be safely and effectively applied to COMMAND-type tool calls, thereby enhancing performance in MCP scenarios.

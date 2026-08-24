@@ -1,0 +1,4 @@
+# 5 MobiFlow: a DAG-Based Benchmark Framework for Mobile Agents
+
+Current mobile benchmarks primarily focus on system applications and tasks with clearly defined evaluation criteria. However, in real-world mobile agent scenarios, operations often involve third-party applications and lack explicit verification conditions. As a result, existing mobile agent benchmarks fail to accurately reflect the model's capabilities in mobile-side scenarios. To address this limitation, we propose an evaluation framework tailored to the manipulation of third-party mobile applications. By leveraging a Directed Acyclic Graph (DAG) to model the complex dependencies and sequential constraints inherent in mobile application tasks, our framework enables a more realistic assessment of model performance in practical on-device agent scenarios.
+

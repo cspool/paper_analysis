@@ -1,0 +1,512 @@
+# NALAR: A Serving Framework for Agent Workflows
+
+Marco Laju *UT-Austin*
+
+Donghyun Son *UT-Austin*
+
+Saurabh Agarwal<sup>∗</sup> *UT-Austin*
+
+Nitin Kedia *UT-Austin*
+
+Myungjin Lee *Cisco-Research*
+
+Jayanth Srinivasa *Cisco-Research*
+
+Aditya Akella *UT-Austin*
+
+## Abstract
+
+LLM-driven agentic applications increasingly automate complex, multi-step tasks, but serving them efficiently remains challenging due to heterogeneous components, dynamic and model-driven control flow, long-running state, and unpredictable latencies. NALAR is a ground-up agent-serving framework that cleanly separates workflow specification from execution while providing the runtime visibility and control needed for robust performance. NALAR preserves full Python expressiveness, using lightweight auto-generated stubs that turn agent and tool invocations into futures carrying dependency and context metadata. A managed state layer decouples logical state from physical placement, enabling safe reuse, migration, and consistent retry behavior. A two-level control architecture combines global policy computation with local event-driven enforcement to support adaptive routing, scheduling, and resource management across evolving workflows. Together, these mechanisms allow NALAR to deliver scalable, efficient, and policy-driven serving of heterogeneous agentic applications without burdening developers with orchestration logic. Across three agentic workloads, NALAR cuts tail latency by 34–74%, achieves up to 2.9× speedups, sustains 80 RPS where baselines fail, and scales to 130K futures with sub-500 ms control overhead.
+
+# 1 Introduction
+
+Agentic applications [\[15,](#page-13-0) [21,](#page-14-0) [26,](#page-14-1) [27,](#page-14-2) [41\]](#page-15-0) are rapidly emerging as a powerful paradigm for automating complex, multi-step tasks. Built from interacting LLM-driven agents and external tools, these applications or "workflows" can decompose high-level instructions, invoke specialized services, maintain long-running state, and iteratively refine their outputs, unlocking capabilities well beyond single-shot LLM prompting. This has resulted in agentic workflows appearing in domains ranging from software engineering, financial planning to operations planning. The growing adoption brings to fore a
+
+pressing challenge: delivering predictable performance and efficient resource use for agentic applications whose execution structure, resource profiles, and state dependencies evolve dynamically at runtime.
+
+Serving such workloads is fundamentally harder than traditional inference or fixed-graph pipelines. A single user request for an agentic workflow often induces multiple requests through various heterogeneous components (LLMs, vector stores, APIs, test harnesses). Agentic workflows generate a rich state that must persist across long-running sessions. Furthermore, each agent invocation may change the future structure of the workflow, each tool call may introduce new dependencies, and each retry may require reusing cached state to maintain correctness or avoid redundant recomputation. These properties – data-dependent and dynamic control flow, non-determinism, and statefulness – create tight run-time coupling between workflow execution, scheduling, placement, and state management.
+
+Existing agent frameworks offer partial serving solutions that force hard tradeoffs. Lightweight libraries [\[12,](#page-13-1) [13\]](#page-13-2) provide flexible programming interfaces but expose no control hooks to the runtime, leaving developers to embed ad hoc and rigid performance and resource management policies directly in workflow code. Conversely, systems that expose request scheduling or resource management [\[28,](#page-14-3) [39\]](#page-14-4) typically require rigid, statically declared graphs that fail to capture the dynamic execution patterns characteristic of real agentic applications. Neither approach provides the ideal combination of ensuring agentic applications' expressiveness, while supporting runtime visibility to enable fine-grained control.
+
+This work identifies two key insights that enable a better design point. First, the agentic runtime can obtain the structural information it needs without restricting how developers write workflows; by replacing agent and tool invocations with lightweight, automatically generated stubs that return coordination objects instead of concrete values, the system can observe dependencies, track execution, and migrate work transparently. Second, efficient serving requires a runtime that maintains a global view of execution – spanning resource
+
+<sup>∗</sup>Corresponding Author: sagarwal@cs.utexas.edu
+
+conditions, request progress, and the availability of state – and uses this information to dynamically drive scheduling, placement, and prioritization decisions as workflows evolve.
+
+Guided by these insights, we introduce NALAR, a groundup serving platform for agentic applications that brings together three complementary design elements. First, *a lightweight specification layer* that preserves full Python expressiveness, allowing developers to write workflows as ordinary code without adopting new abstractions or declaring static execution graphs. Second, NALAR instruments agent and tool invocations with *futures* that encode dependencies, dataflow relationships, and execution context. This transforms the serving problem into one of scheduling and coordinating futures, giving the runtime the semantic hooks needed for late binding, adaptive routing, and fine-grained prioritization. Third, a two-level control architecture separates global decision-making from local enforcement: component-level controllers react immediately to events such as future creation or completion, while a global controller periodically evaluates system-wide conditions and installs component-level policies that govern scheduling and state placement. Together, these mechanisms allow NALAR to orchestrate dynamically evolving agentic workflows efficiently and robustly, without burdening developers with explicit coordination logic.
+
+NALAR's design incorporates several mechanisms that make agentic serving practical and scalable. Firstly, futures in NALAR are more than placeholders for pending results: they carry structured metadata that enables decentralized dependency tracking and execution control. This metadata allows component-level controllers to resolve dependencies, update executors, propagate readiness, and coordinate migrations without involving a centralized coordinator, maintaining responsiveness as workflows grow in complexity. Secondly, NALAR provides a managed state layer that cleanly decouples logical state from the physical instances executing agent calls. Managed state objects are runtime-tracked entities with usersession-based identities. This allows the system to relocate computation or retry operations while preserving state continuity, enabling safe reuse and informed placement decisions without developer involvement. Finally, the control layer's policy interface supports evolving and expressive policies. Policies operate over futures, state, and resource descriptors, expressing high-level intents using canonical primitives like routing, prioritization, or migration. The two-level control architecture translates policies into continuous, fine-grained adjustments that respond to queue dynamics, locality shifts, and emerging bottlenecks.
+
+We implement NALAR in roughly 13,300 lines of Python, forming a complete end-to-end serving stack for agentic workflows. Across three representative multi-agent workloads, our evaluation shows that NALAR 's futures-centric execution model and two-level control plane deliver substantial performance improvements over existing agent frameworks. NALAR reduces P95–P99 tail latency by 34–74% in stateful
+
+<span id="page-1-0"></span>![](_page_1_Picture_4.jpeg)
+
+Figure 1: An example agentic application: Exemplifying a software engineering company setup based on a MetaGPT [\[21\]](#page-14-0) workflow for software development.
+
+workloads, sustains < 50s average latency at 80 RPS whereas baselines fail under load imbalance, and achieves up to 2.9× end-to-end speedups through dynamic resource reallocation and mitigation of head-of-line blocking. We show that operators can implement new scheduling policies in only a few lines of code, yielding measurable gains.
+
+# 2 Background and Motivation
+
+In this section, we use an example to characterize the structure of agentic applications, identify the fundamental systems problems that any agent-serving platform must address, and present the key ideas we propose to overcome them.
+
+Agentic applications. Recent advances in large language models have enabled applications built from multiple interacting *agents*, each capable of planning, acting, and maintaining context across long-running sessions. These agents behave as long-lived, stateful programs that, with the aid of LLMs, can autonomously decompose tasks from natural language descriptions, invoke tools, maintain persistent context, interface with databases and file systems, call external APIs, issue commands that affect the external environment, and coordinate with other agents [\[27,](#page-14-2) [36,](#page-14-5) [38,](#page-14-6) [41\]](#page-15-0). Unlike traditional workflows, which follow a fixed DAG, agentic workflows form dynamic computation graphs whose structure depends on model outputs, tool results, and user-driven corrections.
+
+To illustrate these dynamics, consider the softwareengineering workflow shown in Figure [1](#page-1-0) (adapted from MetaGPT [\[21\]](#page-14-0)). In Step 1 , the user requests the agentic workflow to "Enable OAuth login for the website". The request is first handled by a *program-manager* agent, which interprets the specification and decomposes it into a sequence of actionable subtasks. In Steps 2a – 2d , the program manager emits these subtasks and forwards them to an available *software-engineer* agent.
+
+Upon receiving a subtask, the software-engineering agent generates candidate implementation code using an LLM. To do so effectively, it may consult auxiliary tools: for example, it can query an indexed documentation store (Step 3 ) to retrieve relevant code patterns or API references, or it may perform a web search (Step 4 ) when external knowledge is needed. Once a code candidate is produced, the workflow triggers parallel *testing agents* (Step 5 ), which evaluate the implementation under both regression tests and integration tests, fetching complete source artifacts when necessary (Step 6 ). The testing environment then runs these tests (Step 7 ) and returns structured results (Step 8 ). If the implementation fails to satisfy the specification, the workflow enters a corrective loop (Step 9 ), potentially requesting and reusing state accumulated during prior attempts, such as retrieved documentation, intermediate code drafts, or cached test traces, to accelerate subsequent iterations and avoid redundant computation. If the implementation satisfies the specification, the request is sent back to the user (Step 10 , however the user may not be satisfied with the implementation and start a corrective loop Step 11 ), which might require reusing state. This example highlights how agentic workflows combine dynamic control flow, rich state, and heterogeneous components with human-in-the-loop interaction imposing unpredictable execution latencies and resource demands.
+
+# 2.1 Challenges
+
+The example above illustrates the expressive power of agentic workflows, but it also exposes fundamental challenges for both programming and serving them. In this section, we outline two central challenges that arise when building, running, and scaling such applications. These challenges motivate the design principles that guide our abstractions and architecture.
+
+Challenge 1: A central challenge in building agentic applications is *reconciling developer freedom with the runtime control required for efficient serving*. Developers naturally express workflows as ordinary Python programs that contain long-running agent calls, data-dependent branches, retries, and session-scoped state. However, such imperative logic conceals the structural and state-use information needed by a serving system to make informed scheduling decisions, coordinate execution across heterogeneous agents, tools, and external resources, batch compatible work, migrate requests, and manage state placement. Existing systems force an undesirable tradeoff: either developers specify static graphs [\[39\]](#page-14-4) that cannot capture dynamic behavior, or the runtime is deprived of visibility into the workflow's dependency structure and operation, which undermines the ability to enforce quality of service, maintain consistent state across retries, or adapt to changing system conditions (as we discuss shortly in Section [2.3\)](#page-3-0). The core difficulty is enabling developers to program against simple callable agents while still allowing the serving system to observe and control the evolving computation graph and the state that connects agent invocations within and across requests[1](#page-2-0) and sessions[2](#page-2-1) .
+
+Challenge 2: Beyond workflow expressiveness, *serving agentic applications requires coordinating heterogeneous,*
+
+<span id="page-2-2"></span>![](_page_2_Picture_7.jpeg)
+
+Figure 2: NALAR Overview: NALAR takes user-specified files and generates stubs (§ [3.1\)](#page-4-0) that replace original function calls with controllable hooks to generate futures (§ [3.2\)](#page-5-0). These stubs act as a conduit between the user program and the framework's controllers. At deployment, NALAR launches and manages the runtime (§ [4\)](#page-5-1), where component-level controllers and the global controller coordinate to enforce scheduling, routing, and resource policies.
+
+*long-running components without constraining their inherently dynamic and unpredictable execution*. Agentic workflows traverse LLMs, specialized tools, databases, and external APIs, each with distinct performance characteristics and resource demands. Execution paths vary across requests due to conditional logic, tool results, retries, and human input, preventing the use of static routing or precomputed scheduling decisions. Meanwhile, meeting quality of service (QoS) objectives demands responsive decisions about where to place work, how to avoid head of line blocking, when to reassign requests, and how to maintain locality for session-specific state. Existing frameworks either relegate control to within each agent or impose rigid workflow structures, both of which hinder global coordination and limit the ability to adapt to workload variations or resource fluctuations. Equally important, they make it challenging to realize new QoS objectives as workflows and their requirements change. The overall challenge is designing a control plane that provides global visibility and adaptive policy enforcement without serializing execution or restricting the workflow's dynamism.
+
+## 2.2 Our Key Ideas
+
+The challenges above reveal a gap between how developers want to express agentic workflows and what a serving system needs to execute them efficiently. Our approach addresses this gap along two complementary dimensions: a programming model that exposes the right structural information to the runtime, and an execution architecture that enables finegrained, policy-driven control without sacrificing scalability. Figure [2](#page-2-2) provides a high-level overview, how NALAR takes a user-provided program and enables control. It also indicates at runtime how controllers interact.
+
+To address the first challenge, we introduce *a programming model that preserves Python-level expressiveness while exposing the structure and semantics needed for runtime control*. First, agents and tools are wrapped in auto-generated stubs that make remote calls appear as local function invoca-
+
+<span id="page-2-1"></span><span id="page-2-0"></span><sup>1</sup> a single inference request sent by the user
+
+collection of multiple inference requests which require context from prior ones, *e.g.*, chat sessions
+
+tions yet emit *futures* – rich runtime objects whose metadata captures dependencies, producers, consumers, and session context. By observing the creation and consumption of futures, our approach dynamically reconstructs the workflow's dataflow graph, enabling *late binding* of placement, adaptive scheduling, and fine-grained prioritization. Furthermore, the programming model provides managed state abstractions (lists, dictionaries, session-bound K,V caches) that decouple logical state from physical placement, allowing the runtime to exercise control over state lifecycle and locality, eliminating the need for developers to embed state coordination logic into their workflows. Together, these mechanisms give our system the hooks needed to orchestrate complex, dynamic workflows while keeping the programming experience simple.
+
+To address the second challenge, we introduce a two-level agentic workflow execution architecture that decouples global policy decisions from local enforcement. A flexible policy interface allows the policies to evolve with workflow requirements without forcing deep mechanism changes across the systems. A global controller maintains a workflow-wide view of futures, resource usage, and agent behavior, and installs policies that govern routing, prioritization, and migration. Component-level controllers, co-located with each agent or tool, enforce the policies by scheduling futures, managing managed state and K,V caches, and propagating readiness and dependency updates. This division of responsibility avoids placing the global controller in the execution fast path while preserving the ability to make rapid, policy-driven adjustments such as reassigning requests to idle instances, migrating futures across nodes, or materializing state on demand. To enable controllers to coordinate without explicit synchronization, we introduce a node-level store that provides a low-latency metadata and telemetry substrate. Together, these mechanisms give our system the flexibility, scalability, responsiveness, and control required to serve dynamic multiagent workflows under diverse and evolving workloads and performance objectives.
+
+## <span id="page-3-0"></span>2.3 Existing Agent Serving Systems
+
+Before delving into our system, we describe the limitations of state-of-the-art agentic frameworks. There are primarily two classes of frameworks today.
+
+**Specification-focused frameworks.** These include CrewAI [13] and Microsoft's AutoGen [40]; they provide only thin abstractions for defining agentic workflows. These frameworks lack resource management capabilities, leaving developers to manually allocate resources and embed custom policies into workflow code. Scaling deployments to meet performance and QoS targets typically involves replicating the entire workflow and all its components, rather than selectively scaling bottleneck agents, an approach that results in poor resource utilization and operational inefficiency.
+
+End-to-end frameworks. Examples here include Lang-
+
+```
+import vllm_shared
+zimport technical_documentation as documentation\nsimport testing_agent as tester
+4class DeveloperAgent:
+6    def __init__(self):
+7    # Tries to generate working code in one-shot
+9    def implement_and_test(self, task):
+10    docs = documentation.get(task)
+11    generated_code = vllm_shared.execute(self.role + task + docs)
+12    test_result = tester.unit_test(generated_code)
+13    return test_result, generated_code
+```
+
+Figure 3: **Example Agent**: A *software developer* agent definition. It calls a documentation lookup tool, a shared inference engine and another testing agent. These calls look like calls to local objects.
+
+Graph [12], Parrot [28], and Ayo [39]. These frameworks aim to provide integrated support for both building and managing agentic workflows, but fall short in key areas.
+
+Specification. Ayo [39] and LangGraph [12] require users to specify workflows as static graphs, which fails to capture the dynamic nature of agentic workflows. This design forces developers to enumerate all possible branches ahead of time, which is ill-matched with workflows that rely on conditional logic or runtime decisions. Parrot introduces semantic variables to track LLM requests, but its approach breaks down for data-dependent execution paths and flexible tool invocations. Scheduling and resource management. Ayo and Parrot provide limited point solutions for scheduling. Ayo supports parallel execution and pipelining, assuming a complete computation graph, which is often unavailable in dynamic workflows. Parrot attempts to batch LLM requests in agentic workflows, but its rigid strategy cannot adapt to data-dependent flows or dynamic control logic. LangGraph performs best-effort, FCFS scheduling and offers no mechanism for implementing policies like request prioritization or cross-agent coordination. State Management. Most commercial frameworks provide lightweight request-level state but require developers to manage session-level state, lifetime, and placement manually. This forces developers to reason about consistency and locality across retries and long-running sessions, which is difficult to scale and easy to misuse.
+
+## 3 Programming Model
+
+NALAR enables developers to express complex multi-agent workflows in ordinary Python, where agents and tools appear as local callable objects. Developers don't need to write custom communication or scheduling code. Nevertheless, the runtime needs visibility and control points for efficient end-to-end orchestration. NALAR achieves this through three tightly integrated components: an *agent and tool specification* interface, a *future* abstraction that exposes runtime workflow structure, and a *memory layer* that separates logical state from physical placement. We'll discuss these constructs using a simplified illustrative multi-agent workflow.
+
+```
+2 import planner_agent as planner
+3 import developer_agent as developer
+6 planner.init(preemptable=True, max resources={"GPU":2, "CPU":1})
+7 developer.init(batchable=True, max_resources={ "GPU":4, "CPU":2})
+9 def main(prompt, max retries):
+      # 1. Flammer decomposes the request into su
+subtasks = planner.plan(prompt)
+subtask_done_list = [False] * len(subtasks)
+generated_codes = [None] * len(subtasks)
+      # 2. Assign each subtask to a different developer with relevant docs
+       # Each developer immediately returns a future
+# which eventually resolves to "Pass" / "Fail"
+      futures = [developer.implement_and_test(subtask)
+                                for subtask in subtasks]
+      # 3. Developer might fail to generate to working code for its subtasks.
+# So the driver implements fine-grained retry logic.
+       retries = 0
+             (False in subtask_done_list):
+                raise Exception (f"Failed_to_implement_{prompt}")
+           for i, future in enumerate(futures):
+    if not future.available:
+                     continue
+                 test_result, generated_code = future.value\nif test_result == "Pass":
+                 generated_codes[i] = True
+generated_codes[i] = generated_code\nelse:
+                      subtask_done_list[i] = True
+                      futures[i] = developer.implement_and_test(subtasks[i])
+                                    ach subtask and return it
+      return concat (generated codes)
+      deployment.main("Enable_OAuth_login_for_the_website", max_retries=3)
+```
+
+Figure 4: **Three-agent workflow:** The planner agent decomposes a natural-language coding request into subtasks. Each subtask is sent to a Developer agent from Figure 3, which returns a future indicating test success or failure. The program creates and consumes these futures, automatically retrying failing subtasks.
+
+#### <span id="page-4-0"></span>3.1 Specifying Agentic Workflows
+
+**Agent and workflow specification.** We start by discussing the programming model.
+
+Agent and Tool specification. Agentic workflows are composed of shared tools, individual agents, and multi-agent subworkflows. In NALAR, developers define these agents, tools, and their interactions using standard Python classes and libraries of their choice. In our running example, three agents - planner, developer, and tester - and one tool, documentation, are implemented as ordinary Python classes. Figure 3 shows the implementation of the developer agent responsible for retrieving relevant documentation, generating code, and submitting it to the tester agent. From the developer's perspective, these interactions are written as simple method calls on local objects without explicit orchestration logic.
+
+<u>Workflow Specification.</u> A multi-agent workflow, which strings together all the agents/tools, acts as a *driver* (this is where the request enters the agentic workflow). Writing a driver is similar to building these agents and tools.
+
+Figure 4 shows the driver program for our three-agent workflow. In Lines 2-3, the programmer imports agents as if they were local modules. Lines 5-7 allow runtime directives discussed later in §3.4. Now, considering the *main* function. For simplicity of exposition, we show and explain the code here in three parts, labeled #1–#3. In #1, the planner agent is invoked
+
+to generate a task breakdown. "subtasks" here is a *future*. The program doesn't block on this invocation; only when the number of subtasks is queried in the next line (Line 12) does the program block. This is because the number of subtasks is not known before the planning completes. In #2, each subtask is assigned to a developer agent. These invocations are done in parallel and the program doesn't block on them.
+
+In #3, we first have the retry boilerplate. In our example, the developer agent in Figure 3 generates code for the subtask assigned to it in a one-shot manner. If this code doesn't pass the tester agent, the agent returns *test\_result* as "Fail" and doesn't retry. It is the driver's responsibility to invoke the developer agent again if a subtask couldn't be completed.
+
+This example highlights the fact that the driver program can check if individual *futures* have resolved and to what value; in our example, if the value (i.e., *test\_result* of the future corresponding to the subtask assigned to the developer agent) is false, the corresponding subtask is relaunched.
+
+The above code highlights three features: first, developers have no restrictions on the program they can specify, and they can build their agents and workflows using standard Python constructs. Second, unless the workflow programmer desires, they do not need to interact with the future objects (Line 11 in Figure 4, where future object is immediately consumed in Line 12). Third, the only difference between driver and agent specification is at Line 42, where the programmer's code calls NALAR's deployment functionality. In other words, an agent specification can itself contain a multi-agent workflow. One may wonder how function calls such as Line 12 return future objects rather than concrete outputs. Before introducing futures, we first explain how this transformation takes place. Transforming function calls into futures. Given a workflow specification written as ordinary Python code, NALAR must transform agent and tool invocations so that they return futures rather than concrete values. These futures serve as the coordination handles through which the runtime can track dependencies, manage execution, and apply policy-driven control. To achieve this, NALAR adopts a classic idea from programming languages: replace direct function calls with stubs that mediate execution.
+
+NALAR provides an automated stub-generation tool for this purpose. Before deployment, developers run this tool on each agent or tool and supply a short YAML declaration describing the callable functions, their input parameters, and the agent's name. From this description, NALAR generates an importable Python module whose methods mirror the declared agent functions. When invoked, these methods do not execute the underlying logic; instead, they create and return future objects that encode the call's metadata, allowing the runtime to schedule, route, and monitor the computation.
+
+This lightweight stub-generation step is what enables NALAR to observe and control workflow execution without requiring developers to modify their code or adopt new programming abstractions.
+
+# <span id="page-5-0"></span>3.2 Futures as First-Class Runtime Objects
+
+NALAR's futures are inspired by prior systems such as Ray [\[32\]](#page-14-7), CIEL [\[33\]](#page-14-8), and Dask [\[34\]](#page-14-9). A future in NALAR represents a long-running, agent-driven computation and encapsulates its readiness, consumers, and workflow position. This *metadata* enables informed scheduling decisions.
+
+NALAR 's futures are designed to be unobtrusive to workflow programmers. In contrast to systems like Ray, where programmers must explicitly manipulate futures via calls such as ray.get() or ray.wait(), NALAR allows most workflows to be written without any direct interaction with future objects. The runtime transparently manages their creation, propagation, and resolution. This not only simplifies programming but also enables developers to run the same unmodified code locally for testing, without needing to emulate distributed future-handling logic. We believe programmer experience is one of NALAR 's key contributions. Developers can build and evaluate their agentic workflows locally without any dependency on NALAR, and only integrate with the framework at runtime. This contrasts sharply with systems like Ray [\[32\]](#page-14-7), CIEL [\[33\]](#page-14-8), and Orleans [\[3\]](#page-13-3), which require developers to interact with the library before writing any code.
+
+Futures API: In certain scenarios, programmers may want to interact with futures, as shown in Line 29 of Figure [4:](#page-4-1) the programmer could check whether multiple tasks have failed without blocking and immediately relaunch them, enabling greater parallelism and fault tolerance. To enable this, NALAR futures provide a simple API, with two methods: (i) future.available (): returns true if the value is ready, false otherwise; (ii) future.value (timeout=t), returns the future output, and blocks upto timeout *t*. [§4.3](#page-7-0) discusses run-time future creation and management.
+
+## 3.3 Custom State Management
+
+Agentic workflows often require maintaining state for longrunning, session-based requests. We analyzed several agentic applications on GitHub [\[6,](#page-13-4) [7,](#page-13-5) [25,](#page-14-10) [35\]](#page-14-11) and observed that developers typically use Python lists and dictionaries for maintaining custom state. Current frameworks force developers to manually manage state, including its lifetime and placement [\[12,](#page-13-1) [13,](#page-13-2) [40\]](#page-15-1), which is challenging because: (1) it is difficult for the programmer to anticipate runtime conditions and (2) it requires rewriting workflows whenever the application needs or logic changes. For efficiency, the serving framework should transparently and dynamically manage state, handling placement, consistency, and life-times without developer intervention. To simplify the management of custom state and give the framework visibility and control over it, NALAR provides *managedList* and *managedDict* abstractions. To utilize these in their workflows, the developers import these in their workflow and use them as standard Python lists and dictionaries. The framework transparently manages placement, consis-
+
+Table 1: NALAR's hint interface
+
+<span id="page-5-3"></span>
+
+| Hint          | Values   | Descriptions                                                                                      |  |
+|---------------|----------|---------------------------------------------------------------------------------------------------|--|
+| stateful      | Boolean  | True indicates for a session successive calls to<br>the agent will be routed to the same instance |  |
+| batchable     | Boolean  | True indicates that module can accept a batch of request                                          |  |
+| preemptable   | function | A running request on this agent can be preempted,<br>by calling the given function name           |  |
+| max_instances | Integer  | Indicates the max number of instances<br>to initialize                                            |  |
+| min_instances | Integer  | Indicates the min number of instances<br>the framework should keep alive                          |  |
+| resources     | Dict     | A dictionary of CPU, GPU and Memory to allocate                                                   |  |
+
+tency, and life-cycle. Also, it automatically tracks the *session* associated with the current program instance. We discuss the design details in [§4.3.](#page-7-0)
+
+## <span id="page-5-2"></span>3.4 Runtime *directives*
+
+Agents and tools often have execution properties that the runtime can exploit for efficiency. For example, if an agent supports batching, a common pattern in ML workloads, NALAR can coalesce compatible futures and execute them together, as the throughput of LLM output generation greatly benefits from batching [\[2,](#page-13-6)[24\]](#page-14-12). Incorporating such agent-specific characteristics enables more informed scheduling and placement decisions than futures alone would allow.
+
+To this end, NALAR provides a *directive* interface. For example, in Line 7 of Figure [4,](#page-4-1) the programmer indicates that the developer agent supports batching. Table [1](#page-5-3) lists the supported agent-level directives used by the runtime to guide execution. Most directives are straightforward, but we highlight the *stateful* directive. For agents marked stateful, NALAR guarantees that all requests to the agent are associated with a single user request and a single session are scheduled in order and routed to the same agent instance ensuring consistent processing.
+
+# <span id="page-5-1"></span>4 NALAR Control Architecture
+
+NALAR's control architecture is responsible for leveraging the high-level abstractions expressed in workflow programs, namely, futures, state, and directives, for efficient serving. It must coordinate heterogeneous agents and tools, implement policy-driven routing and scheduling, and manage state placement and migration. We describe the NALAR control plane, the policy interface, and the runtime substrates that together realize control, and end with an example.
+
+## 4.1 Control Components
+
+Fine-grained control over request scheduling is essential for meeting both performance and QoS objectives for agentic workflows. Consider the three-agent workflow in Figure [4.](#page-4-1) Suppose multiple instances of each agent are running and
+
+the goal is to minimize tail latency for a high-priority session while remaining resource-efficient. A naive policy that always selects the instance with the shortest queue can still suffer head-of-line blocking if that instance is occupied with a long-running request. In contrast, a runtime controller, given system-wide and workflow-level visibility, can identify idle instances and suitably migrate futures corresponding to high-priority requests, improving tail latency and utilization.
+
+Systems like Ray [32] rely solely on event-driven scheduling, where scheduling is performed when a task associated with the future is created. This simplifies control logic because once a task associated with a future is scheduled, its placement never changes. In contrast, serving agentic workflows requires both event-driven *and* periodic scheduling. The former reacts to the creation of a future and decides where to execute its computation. However, agentic workflows are dynamic, and the definition of a "good" scheduling decision evolves as more information about future consumers and system state becomes available. To adapt, NALAR runs another periodic loop that revisits prior decisions, adjusts priorities, and performs migrations to optimize performance over time.
+
+One might wonder whether periodic bulk scheduling, as used in deep-learning cluster schedulers [1, 31, 44], would suffice. However, futures in agentic workflows can execute anywhere from milliseconds to tens of minutes. To avoid delaying short tasks, periodic scheduling would need to run at sub-millisecond intervals — an impractical requirement that motivates our periodic-plus-event-driven approach.
+
+Ideally, a single global controller that schedules every future and manages resources would suffice. However, this design quickly becomes a bottleneck at scale (show in §6.3), as a single agentic workflow can generate thousands of futures.
+
+NALAR therefore adopts a *two-level control* design that cleanly *separates periodic policy computation from event-driven enforcement*. Shown in Figure 5, the global controller maintains a logically central workflow and system view. It periodically installs scheduling and routing policies at component-level controllers, which apply them immediately as events occur. A node store mediates information flow between the two levels.
+
+**Component-Level Controllers.** When an agent or tool is launched, NALAR creates a component-level controller to manage its execution. These controllers serve three key roles.
+
+First, they perform local scheduling using policies supplied by the global controller to determine which futures to execute on the agent/tool and when. They also maintain and update futures' metadata, crucial for efficient migration and ensuring that future values are propagated correctly across components.
+
+Second, they act as the interface between the programming model and the runtime. The auto-generated stubs from §3.1 invoke the component-level controller rather than calling the user-provided code directly. This allows NALAR to intercept all agent and tool invocations, create futures, and coordinate state management. The local controllers also manage
+
+<span id="page-6-0"></span>![](_page_6_Figure_8.jpeg)
+
+Figure 5: **NALAR's architecture:** The figure shows NALAR's twolevel control. Each component has an associated controller with it. Each node has a local node store. The global controller communicates with each agent and workflow driver, through the node store.
+
+NALAR's state layer for the associated agent or tool.
+
+Third, they collect serving-time metrics, including queue lengths, per-request latencies, and local resource usage that inform the global controller's periodic computations.
+
+Global Controller. For each workflow, NALAR runs a global controller that implements policy logic specified by the operator. Running periodically, the global controller tracks the global state of NALAR during serving by aggregating metrics and metadata from component-level controllers through the node store, computing decisions related (for request routing, prioritization, and resource allocation) and pushing the computed decisions to component-level controllers.
+
+Node Store. Because the component-level and global controllers operate at different frequencies, NALAR introduces a node-level store to decouple their communication. Each node maintains a local store that serves as both a metadata repository and a telemetry-and-decision broker: component-level controllers push metrics and local observations to the store, and the global controller writes policy updates into it. Implemented using Redis in our prototype, this design avoids direct synchronization between controllers while providing low-latency access to shared state. Component-level controllers consume policy changes asynchronously, allowing global decisions to propagate without placing the global controller on the critical path and thereby supporting scalability. The node store also holds future-associated metadata needed for dependency tracking and execution management.
+
+## <span id="page-6-1"></span>4.2 Specifying Control Policies in NALAR
+
+Agentic workflows evolve as developers add tools and agents, or introduce more complex control-flow, and scheduling must correspondingly keep pace. For an agent serving engine, it's thus key to support easy modification and expression of new scheduling strategies. Therefore, NALAR exposes a minimal yet expressive policy interface. Policies are expressed as programs that inspect metrics, reason about sessions and agents, and invoke a small set of primitives to influence routing, prioritization, migration, and provisioning decisions.
+
+The global controller executes a single-threaded, pushbased policy loop. The single-threaded design ensures a single decision-maker and a single authoritative update stream, sim-
+
+Table 2: NALAR's scheduling API
+
+<span id="page-7-2"></span><span id="page-7-1"></span>
+
+| Interface                                                             | Arguments                                                                                                                                                                                                                       | Descriptions                                                                             |  |
+|-----------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|--|
+| route                                                                 | (session-id, agent-type, agent-instance)                                                                                                                                                                                        | Route all request of a given session-id for agent-type to the suggestion agent-instance. |  |
+|                                                                       | (agent-type, list(agent-instances),<br>list(associate-weight))                                                                                                                                                                  | Route request of agent-type,<br>to list of agent-instances, by given weight              |  |
+| set_priority                                                          | (session-id, priority-value)                                                                                                                                                                                                    | Set session-id with associated priority value                                            |  |
+| set_priority                                                          | (session-id, priority-value, agent)                                                                                                                                                                                             | Set priority-value of given session-id for the given agent                               |  |
+| migrate (session-id, current-location, session-location)              |                                                                                                                                                                                                                                 | Migrate requests associated with session-id from source to destination                   |  |
+| kill                                                                  | (agent-instance)                                                                                                                                                                                                                | Kill agent-instance                                                                      |  |
+| provision                                                             | (agent-type, instance-ip)                                                                                                                                                                                                       | Launch agent-instance                                                                    |  |
+| # The target<br>2 AGENTS = [Ag<br># The two ag<br>3<br>4 for agent in | Y_SESSION - S_star:     high-priority session ID\nentA, AgentB]\nents in the workflow     iAGENTS:     rity(HIGE_PRIORITY_SESSION, prior rity(HIGE_PRIORITY_SESSION, prior                                                      | ity_value-10)                                                                            |  |
+| <pre>9 metrics 0 for agen 1 # If 2 if F</pre>                         | DLL_INTERVAL_MS) - poll_all_local_metrics() *fget a t in agentInstance: 'the high priority session is wai IGM_PRIORITY_SESSION in agent.wai for other_agents in agentInstance\nif other_agents_qsize 0 an # migrate the session | ting ting.session: 1 gentInstances:                                                      |  |
+| 6                                                                     | migrate(HIGH_PRIORITY_SES                                                                                                                                                                                                       | SION, other_agent)                                                                       |  |
+
+Figure 6: **Request prioritization policy using NALAR:** NALAR's level API (Lines 5 & 16) makes complex request prioritization and future management effortless.
+
+plifying implementation. The push-based model keeps the global controller off the critical path.
+
+Policy Implementation Interface. When trying to build policies for serving agentic workflows, we observed significant reuse of a small set of primitives. Building native support for these allowed us to simplify and standardize the design of policies, local controllers, and the global-local interface. Table 2 lists the core primitives that policies can use to control serving behavior. For instance, route can direct a session for an agent type to specific instances; set\_priority can adjust per-session priority globally or at a specific agent; and migrate can move a session between instances.
+
+Figure 6 shows a simple policy that uses these primitives to minimize tail latency for a high-priority session; the policy raises the request's priority and migrates it away from busy instances. Even more complex policies, such as selectively prioritizing retries or adapting to dynamic DAG structure, can be implemented often with fewer than 15 lines of code, without modifying the workflow implementation. In §6.2 we show developers can implement simple policies in as little as 12 lines of code.
+
+## <span id="page-7-0"></span>4.3 Runtime Handling of Futures and State
+
+We describe how futures and state are represented in the runtime and their interaction with controllers and node stores.
+
+#### 4.3.1 Futures
+
+**Generation and Materialization.** Figure 7 provides the futures' timeline and operations in the context of our example workflow in Figure 4. There are three operations on futures: *Op 1. Future Creation:* This is a non-blocking operation.
+
+<span id="page-7-3"></span>![](_page_7_Figure_10.jpeg)
+
+Figure 7: **Future Generation Timeline:** For the agent workflow depicted in Figure 4 we depict a timeline for future generation and how their consumers are updated and their values realized in NALAR
+
+*Op 2. Register Consumer:* When an agent or driver program calls a future, it is registered as a consumer, also non-blocking. *Op 3. Return:* Any call to the value of a future is blocking.
+
+When the driver first calls the *planning* agent, a future called *subtasks* is created. When in Line 12 (Figure 7) the driver checks the subtasks' length, the future must be materialized; at this point, the driver's component controller registers with the component controller of the planner as one of the future's consumers. Once the *subtasks* future is ready, the driver receives the subtasks. The driver then dispatches each subtask from the *subtasks* future to the developer agents. Again, each call to the developer agent creates a future. When the driver agent tries to access the value of a future (Line 29), a callback is registered, and the process of waiting for the future to materialize repeats. For brevity, we end the example here.
+
+**Metadata.** Futures in NALAR are designed to be routed across agents without requiring the global controller to supervise every step. To enable this, each future carries rich metadata, including its dependencies, dependents, output value, location, and creator information (Table 3). This metadata is sufficient for component-level controllers to route and execute the computation associated with futures locally, to update the consumers when a producer completes, and to apply policydriven changes such as migration. The global controller only installs the policies that govern future management.
+
+**Properties.** We now describe important properties of NALAR's futures:
+
+1. Immutable data, partially mutable metadata: Unlike Ray [32] and CIEL [33], futures in NALAR are selectively mutable. While a future's value remains immutable once materialized, the framework can update metadata such as its consumers and executor location. This mutable state enables NALAR to migrate already routed requests as serving state changes. For example, a future may initially be scheduled on a node with the smallest queue, but head-of-line blocking can occur, and another node may later become a better choice. NALAR can change the node where the future is scheduled in the future's metadata. Note that mutability is restricted to metadata only, to avoid the need for complex consistency management when managing the state of a future.
+
+2. Dynamic dependency graph extraction. As the workflow dynamically evolves and it becomes apparent that a future has
+
+Table 3: NALAR's future Metadata.
+
+<span id="page-8-0"></span>
+
+| Metadata                         | Structure | Descriptions                                                                  |  |
+|----------------------------------|-----------|-------------------------------------------------------------------------------|--|
+| list(agentA:ip,)<br>dependencies |           | List all dependencies which are<br>needed to compute the output of the future |  |
+| agentName:ip<br>creator          |           | List the agent name and the associated creator                                |  |
+| agentName:ip<br>executor         |           | The location where the future is slated to be executed                        |  |
+| list(agentA:ip,)<br>consumers    |           | The consumers of these executors and their location                           |  |
+
+more consumers, the metadata of the future is modified. To aid in this, NALAR extracts the computation graph by tracking the three per-future operations above. As NALAR observes different futures blocking, it reasons about the structure of the graph and different dependencies.
+
+*3. Push-Based Readiness.* NALAR futures use a push-based readiness model. When a future resolves, the producing node immediately transfers the value of the computations to all the consumers associated with the future. Employing pushbased coordination is what allows NALAR to incorporate late binding: until a future is ready, NALAR can take various actions - reacting in a timely fashion to state changes, migrating pending work, re-prioritizing tasks, moving or materializing memory state, or adjusting batching strategies based on the system's instantaneous conditions. This is significantly challenging to do in systems like Ray whose scheduler is eventdriven and the futures' metadata is immutable.
+
+### 4.3.2 State Management
+
+Agentic workflows are inherently stateful: agents accumulate state across retries and sessions; furthermore, LLM invocations benefit from K,V caches that capture prompt history. If the runtime cannot control where these states reside, scheduling is rendered sticky, forcing requests to be sent to the instances that hold the prior state, creating load imbalance, and hurting performance. NALAR therefore carefully manages both user-visible state and internal K,V caches.
+
+*User State:* In existing frameworks [\[12,](#page-13-1) [40\]](#page-15-1), when serving multiple user sessions, the developer needs to maintain state associated with each session while serving associated requests. This state management requires developers to make code changes to access and maintain the state associated with the user session. Using NALAR 's state management layer, developers do not need to track sessions explicitly or ensure that the correct state is present at the correct instance; NALAR materializes state transparently. The key enabling insight is that, during inference, the local controller always knows which session a request belongs to. NALAR, when accepting a new session from a user, assigns a unique session ID, and propagates it with each future. This allows NALAR to attach and propagate session metadata automatically as state is accessed. Because controllers mediate all request executions, they can consistently tag, track, and relocate state as needed.
+
+A major benefit of this design is that NALAR can move both requests and their associated state across instances to improve scheduling or placement. When an agent begins serving a request, the local controller consults the node store, where session state is indexed by session ID, and reconstructs the appropriate managed lists and dictionaries. To the developer, the state appears local and stable even as NALAR migrates it. *K,V caches:* Given the session-based nature of agentic workflows, K,V caches are essential for reducing LLM inference latency. Managing their lifetime and placement, however, is nontrivial: deciding how long a cache should persist and whether it should remain on GPU memory or be offloaded requires balancing performance against limited device resources. In principle, agent-serving systems could simplify this problem by providing information about future state requirements — for example, that a session has ended or that a particular request is likely to recur. Yet current agent-serving frameworks do not communicate such information to underlying LLM engines. As a result, systems such as vLLM [\[24\]](#page-14-12) and SGLang [\[43\]](#page-15-3) rely on prefix-based caching combined with generic eviction heuristics (e.g., LRU), which may inadvertently discard K,V caches that are about to be reused.
+
+NALAR remedies this by leveraging its global view of workflow execution. Because NALAR tracks futures and knows which requests are pending or likely to arrive next, it can supply the LLM serving layer with explicit hints about which K,V caches should be retained. To support fine-grained control over cache lifetime and placement, NALAR extends existing caching mechanisms (e.g., LMCache [\[9\]](#page-13-8)) with hooks for policy-driven management. These hooks allow the global controller to decide whether a cache remains on the GPU, is offloaded to far memory, or is migrated across devices, ensuring that cache residency aligns with anticipated demand and resource availability.
+
+Control Example in NALAR. We illustrate how the global and component-level controllers coordinate during a migration. Consider the simple two-agent workflow with agents agentA and agentB. Here, the driver is implementing the workflow, the output of agentA feeds into agentB, and two instances of agentB (B:0 and B:1) are running. This workflow is depicted in Figure [8](#page-9-0) and leads to creation of two futures f1 and f2 . Suppose the NALAR global controller decides to migrate a future f2 from B:0 to B:1. Since these futures are created by the driver, the creator of both futures is the driver. Future f1 is consumed by agentB, therefore f1's consumer is the location where f2 will be executed (initially B:0). For f2, since it's consumed by the driver, the consumer is the driver.
+
+In Step 1 of Figure [8,](#page-9-0) the global controller issues a migrate command for f2. On receiving this command, the componentlevel controller for B:0 contacts the producer of f2, i.e., A:0, to check whether the dependency value has already been sent (Step 2). If not, the controller updates the dependency target to B:1 (Step 3). If the value is already in flight to B:0, the B:0 controller waits for it to arrive before proceeding.
+
+Once the required dependencies arrive, the controller notifies the creator of f2 that its executor has changed (Step 4). The state associated with f2 at B:0 is then transferred to
+
+<span id="page-9-0"></span>![](_page_9_Figure_0.jpeg)
+
+(a) Migration initiation
+
+(b) Dependency Updates
+
+(c) Migration Completion
+
+Figure 8: Control Interaction in NALAR. The above figure shows the interaction and relevant updates to metadata when a future is being migrated. An important feature is that it's entirely locally coordinated, *i.e.*, the global controller only issues the migrate command, the component level controllers coordinate it among themselves.
+
+B:1 (Step 5). Finally, the migrated future is activated at B:1 (Step 6), completing the migration.
+
+Although migration is one of the more complex primitives in the API, the example shows how underlying mechanisms are composed of simple building blocks. It also illustrates how concise policies translate into coordinated actions between the global controller and the component-level controllers, while keeping the details hidden from the developer.
+
+#### 5 Discussion
+
+**State Management.** Using the state-management layer introduces a few constraints that clarify how NALAR handles execution. When an agent relies on managed state abstractions, NALAR ensures that all requests belonging to the same session are routed to the same instance of that agent; however, NALAR may still migrate the entire session – including its state – to a different instance when appropriate. This differs from marking an agent as fully *stateful*, in which case NALAR prohibits session migration altogether. These routing guarantees are enforced automatically by the scheduler. A second constraint is that a managed state cannot be combined with batchable agents. Because batching aggregates requests from multiple sessions, the framework cannot determine which session a given state update belongs to, making correct state tracking impossible under batching.
+
+**Fault Tolerance.** Like most inference systems [2, 11, 18, 42], NALAR doesn't support fault tolerance. Instead, it notifies the driver program of requests that failed due to system errors, along with information associated with the failure. We believe this is reasonable, as faults typically cause SLO violations and users retry the request. However, additional coordination between the global and component-level controllers could enable recovery mechanisms, a subject for future work.
+
+**Debuggability.** Building NALAR required significant investment in debuggability. Because NALAR has complete visibility into inter-agent calls, it can provide rich data for introspective debugging. We maintain detailed per-session logs, including time spent in each stage and the agents or tools accessed on each node. NALAR also includes a visualization tool for these logs, initially built for internal use but
+
+planned for open-sourcing with NALAR. For runtime debugging, NALAR provides the driver program with detailed information about failed requests, including the workflow path, the agent where the failure occurred, and the full traceback.
+
+### 6 Evaluation
+
+Implementation. We implement NALAR in roughly 13,300 lines of Python, leveraging several existing libraries: (1) gRPC, which serves as the communication backend for all inter-component interactions; (2) ChromaDB, a vector search engine used in our workflows (more in the next section); (3) vLLM for serving LLM models; (4) a modified version of LMCache that exposes NALAR-level control for K,V cache migration; and (5) Redis, used as the node-local store to provide transactional support and reduce coordination overhead between controllers.
+
+We compare NALAR against three different baselines, on three different types of workflow.
+
+**Baselines.** The baselines we use are as follows.
+
+Ayo Ayo [39] is a recent work that enables developers to specify agentic applications using a graph-based interface. It enables parallel execution and pipelining of different components in an agent serving pipeline. Internally, Ayo uses Ray to build the execution engine.
+
+<u>CrewAI</u> CrewAI [13] is a popular library to build agents (with over 41K stars on GitHub). It provides a development framework to build and orchestrate agents.
+
+<u>AutoGen</u> AutoGen [40] is another popular library by Microsoft (over 52K stars on GitHub). It supports event-driven programming to build agents.
+
+**Experimental Setup.** Unless otherwise noted, all experiments use 2 nodes, each with 4 NVIDIA A100 GPUs (80GB HBM), 256GB DRAM, and 4TB SSDs. The nodes are connected via a 100Gbps Ethernet link.
+
+**Workflow.** We use three representative workflows. *Financial Analyst:* In this workflow [14], an analyst agent invokes a stock analysis agent, a bond market agent, a market research agent, and a web/news search agent. The aggregated results are summarized for the user, who may issue follow-up
+
+queries after long delays, making this a human-in-the-loop workflow. This workflow is stateful, meaning the same LLM engine is shared across tasks, creating resource contention. We use the FinQA dataset [\[8\]](#page-13-12) for evaluation.
+
+*Router-based workflow:* This workflow follows a common pattern in which a lightweight agent classifies each query and routes it accordingly—either to a chat workflow or, for coding tasks, to a dedicated coding agent. We evaluate this workflow using Microsoft Azure LLM traces [\[37\]](#page-14-14), which report request volumes for two distinct workflow types.
+
+*Software engineering workflow:* This workflow mirrors the structure in Figure [1.](#page-1-0) We integrate tool calling via web-search APIs and store documentation in ChromaDB. Due to their unique properties, each agent is paired with its own LLM. We evaluate this workflow on the SWE-bench dataset [\[23\]](#page-14-15). Unlike other workflows, this is a recursive workflow.
+
+For LLM inference, we use vLLM [\[24\]](#page-14-12) as the serving backend with workflow-specific fine-tuned LLaMA-8B models.
+
+## 6.1 End-to-End Evaluation
+
+First, we present an end-to-end evaluation of NALAR. Figure [9](#page-11-1) shows the results. We measure average latency along with P50, P95, and P99 latencies under varying request rates to assess each framework's capacity. The bars show the average, while whiskers represent P50, P95, and P99 latencies.
+
+For this evaluation, NALAR uses three default policies, one that actively balances load across resources through routing, a second that migrates a job if it's waiting in the queue and observing head-of-line blocking, and a third that performs resource reassignment from low-load agents to high-load agents. These policies were implemented using the interface discussed in [§4.2](#page-6-1) and required less than 100 lines of code cumulatively. We discuss additional policies in [§6.2.](#page-10-0)
+
+Financial Analyst Workflow. Figure [9a](#page-11-1) shows the results on the Financial Analyst workflow. Given its stateful nature (a user can send multiple requests per session), every baseline must route successive requests with the same sessionID to the GPU originally assigned. By controlling K,V caches, however, NALAR is not bound by this constraint and can migrate sessions across GPUs. In this workflow, NALAR mitigates headof-line blocking through such request migrations, enabled by its system-wide view. As a result, NALAR improves P95 and P99 latencies by roughly 34% to 74% across request rates. At 8 RPS, while other frameworks exhibit extreme tail latency (P99 exceeding 3,000s) with a 1,300s average, NALAR remains robust, keeping P99 near 800s (3.75×). However, because the average is dominated by long-running requests (large context and generation lengths), NALAR improves average latency by only 8% to 35% across rates.
+
+Router-based Workflow. Figure [9b](#page-11-1) shows results for the router-based workflow. We observe load imbalance as different branches are invoked at varying frequencies due to shifting query characteristics, causing under-utilization on
+
+less-used branches. Existing serving frameworks cannot dynamically reallocate resources; *i.e.*, they lack control over execution mechanisms and visibility into resource use, leading to poor utilization. Azure agent traces [\[37\]](#page-14-14) show that this imbalance can exceed 90%. As a result, heavily used branches experience excessive load and out-of-memory failures, causing AutoGen and Ayo to fail at 70 and 80 RPS, respectively. In contrast, NALAR adapts to imbalance via dynamic resource allocation, redistributing capacity across workflows and sustaining average latency below 50s even at 80 RPS.
+
+Software Engineering Workflow. Here, we observe that NALAR delivers speedups of up to 2.9×. As resource demands shift across agents, NALAR dynamically adjusts allocations, maintaining efficiency throughout the workflow. Unlike router-based workflow, load imbalance here arises due to the recursive nature of the workflow, *i.e.*, a non-deterministic set of requests can fail and requeue at the beginning of the application. We observed that compared to NALAR, baselines show more than 2.1× higher load-imbalance.
+
+*Takeaways:* These results show that NALAR, with global control and complete workflow visibility, can easily support dynamic and agile multi-agent execution. We argue that existing solutions which lack global visibility and control and cannot achieve the same level of performance or run-time flexibility.
+
+## <span id="page-10-0"></span>6.2 Adding New Policies
+
+Next, we show how NALAR's scheduling API allows developers to easily implement diverse and effective policies.
+
+Minimize JCT. A common way to reduce job completion time is to prioritize jobs with the least remaining work, *i.e.*, shortest remaining time first (SRTF). In call-graph–structured workloads such as the financial analyst agent, a practical heuristic is to prioritize calls originating from later stages of the graph. Implementing this policy in NALAR requires just *12 lines* of Python running on the global controller. The policy can be concisely expressed due to well designed policy interface provided by NALAR. We observe that this heuristic reduces average JCT by over 2.4% at the cost of a 3.3% increase in P95 latency.
+
+Control Makespan. A standard way to reduce makespan compared to default approaches like FCFS is to prioritize the Longest Processing Time (LPT) job first. In call-graph workflows such as software engineering, this corresponds to prioritizing jobs that re-enter the graph because they failed to meet the specification. Implementing this policy also required just *12 lines* of code. We observed that it reduced makespan by 5.8%, with a 2.6% increase in P95 latency.
+
+*Takeaways:* Although the gains are modest, we see that operators can easily explore new scheduling policies with NALAR to improve agentic inference performance. We attempted to implement a similar policy in AutoGen, the strongest baseline, but were unsuccessful: AutoGen's cross-agent communication, which is built using an asynchronous messaging engine,
+
+<span id="page-11-1"></span>![](_page_11_Figure_0.jpeg)
+
+(a) Financial Analyst Agent
+
+(b) Router-based Workflow
+
+(c) Software Eng Workflow
+
+<span id="page-11-2"></span>Figure 9: End-to-End Evaluation The bars represent average latency, the whiskers represent P50, P95 and P99 latencies.
+
+![](_page_11_Figure_5.jpeg)
+
+Figure 10: **Global Control Loop Latency:** Global control loop latency vs the number of futures. Even at a 64 Node and 131K futures, the loop takes only 464ms, where the majority of time (over 65%) is spent in scheduling policy logic.
+
+lacks the fine-grained policy control needed.
+
+## <span id="page-11-0"></span>**6.3** Scalability of NALAR
+
+As an academic lab without access to large-scale GPU resources, we follow prior work [1, 10] and use emulation to study NALAR 's overhead and design implications on scalablity. Our setup profiles LLM inference calls to mimic execution behavior. Since NALAR 's design is not tied to GPUs, we believe this approach is reasonable.
+
+Scalability with many futures. At its core, NALAR manages the execution of futures. To evaluate scalability, we measure the performance of NALAR's control mechanisms as the number of futures grows. We emulate large-scale deployments using 64 CPU nodes with 128 agents (each paired with a component-level controller) and a second setup with 32 nodes and 64 agents. Before evaluating global control, we reiterate that in our design, the global controller is not on the critical path; the only benefit of a faster global controller is faster propagation of policy updates to component-level controllers. Figure 10 shows that for the SRTF policy discussed earlier, the global control loop's execution time is largely independent of the number of nodes-scheduling on 64 nodes and 32 nodes takes nearly identical time. Scalability, however, depends on the number of futures: for example, collecting state for 1,024 futures from 64 nodes takes 76ms, while handling 130K futures requires 151ms; both are reasonably low.
+
+**Impact of two-level design.** To evaluate the benefit of the two-level design, we measure the overhead a centralized global controller would incur if it routed every future directly rather than installing policies on component-level controllers to
+
+Table 4: Impact of Two-level Control.
+
+<span id="page-11-3"></span>
+
+| Number of Futures | One-Level Design | Two-level Design |  |
+|-------------------|------------------|------------------|--|
+| rumber of rutures | Time(ms)         | Time(ms)         |  |
+| 1024              | 1.2              | 0.1              |  |
+| 2048              | 2.3              | 0.1              |  |
+| 4096              | 2.8              | 0.2              |  |
+| 8192              | 3.4              | 0.4              |  |
+| 16384             | 3.9              | 0.4              |  |
+| 32768             | 19.4             | 0.3              |  |
+| 65536             | 32.3             | 0.4              |  |
+| 131072            | 72.3             | 0.4              |  |
+
+maintain the SRTF policy. Table 4 reports the time to schedule a single token. We observe that up to 16K futures, scheduling overhead remains below 4ms; however, beyond 16K, latency grows sharply due to queuing delays, reaching over 72ms for 130K futures. The two-level design in NALAR avoids queuing bottlenecks at scale on the global controller, as futures can be routed independently by their node controllers.
+
+<u>Takeaways:</u> These results demonstrate that our design choices around global control significantly improve NALAR 's scalability, and using futures does not incur significant overhead in the current NALAR prototype.
+
+### 7 Related Work
+
+The Future Abstraction. Computing using futures and promises has had a long history in computing [4, 5, 19, 29]. There have been several distributed dynamic task scheduling frameworks like Ciel [33], Dask [34] and Ray [32]. Dask and Ray both integrate with Python. Unlike Dask and Ray, which use an event-driven scheduler (central in case of Dask, and bottom-up two-level in case of Ray), NALAR uses a two-level controller, one level is a global controller responsible for coarse-grained scheduling, and the second level is a component-level controller that is event-driven and performs scheduling based on the rules installed by the global controller. Compared to Ray, which supports both tasks and actors, NALAR exclusively targets long-running, stateful agents that often encapsulate heavy components such as LLMs and vector databases. Finally, NALAR supports a wide range of configurable policies for managing requests and agent performance. Implementing similar policies in Ray would require intervention at the level of every task, making customization complex and error-prone. These differences make NALAR better suited for dynamic, stateful, multi-agent workflows.
+
+Global Control Plane. Logically centralized control planes
+
+have appeared in several settings [\[16,](#page-13-17) [17,](#page-13-18) [20,](#page-13-19) [30,](#page-14-17) [32\]](#page-14-7). NALAR draws inspiration from this lineage, but differs in its complete decoupling of local component-level controllers from the global controller, an idea borrowed from SDN systems such as B4 [\[22\]](#page-14-18). This separation allows NALAR to override poor local decisions by migrating tasks, making scheduling changes reversible through job migration.
+
+## 8 Conclusion
+
+NALAR demonstrates that agentic workflows can be served efficiently without constraining developers by exposing finegrained structure, state semantics, and control points to the runtime. Its futures-centric execution model and two-level control plane enable adaptive scheduling, coordinated state management, and policy evolution as workflows and requirements change. We find that these mechanisms provide strong performance and flexibility across diverse applications.
+
+# References
+
+- <span id="page-13-7"></span>[1] Saurabh Agarwal, Amar Phanishayee, and Shivaram Venkataraman. Blox: A modular toolkit for deep learning schedulers. In *Proceedings of the Nineteenth European Conference on Computer Systems*, pages 1093– 1109, 2024.
+- <span id="page-13-6"></span>[2] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav S Gulavani, Alexey Tumanov, and Ramachandran Ramjee. Taming throughputlatency tradeoff in llm inference with sarathi-serve. *Proceedings of 18th USENIX Symposium on Operating Systems Design and Implementation, 2024, Santa Clara*, 2024.
+- <span id="page-13-3"></span>[3] Phil Bernstein, Sergey Bykov, Alan Geller, Gabriel Kliot, and Jorgen Thelin. Orleans: Distributed virtual actors for programmability and scalability. *MSRTR2014*, 41, 2014.
+- <span id="page-13-14"></span>[4] Bard Bloom, John Field, Nathaniel Nystrom, Johan Östlund, Gregor Richards, Rok Strniša, Jan Vitek, and Tobias Wrigstad. Thorn: robust, concurrent, extensible scripting on the jvm. *ACM SIGPLAN Notices*, 44(10):117–136, 2009.
+- <span id="page-13-15"></span>[5] Arunodaya Chatterjee. Futures: a mechanism for concurrency among objects. In *Proceedings of the 1989 ACM/IEEE conference on Supercomputing*, pages 562– 567, 1989.
+- <span id="page-13-4"></span>[6] Guangyao Chen, Siwei Dong, Yu Shu, Ge Zhang, Jaward Sesay, Börje F Karlsson, Jie Fu, and Yemin Shi. Autoagents: A framework for automatic agent generation. *arXiv preprint arXiv:2309.17288*, 2023.
+- <span id="page-13-5"></span>[7] Zehui Chen, Kuikun Liu, Qiuchen Wang, Jiangning Liu, Wenwei Zhang, Kai Chen, and Feng Zhao. Mindsearch: Mimicking human minds elicits deep ai searcher. *arXiv preprint arXiv:2407.20183*, 2024.
+- <span id="page-13-12"></span>[8] Zhiyu Chen, Wenhu Chen, Charese Smiley, Sameena Shah, Iana Borova, Dylan Langdon, Reema Moussa, Matt Beane, Ting-Hao Huang, Bryan R Routledge, et al. Finqa: A dataset of numerical reasoning over financial data. In *Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing*, pages 3697–3711, 2021.
+- <span id="page-13-8"></span>[9] Yihua Cheng, Yuhan Liu, Jiayi Yao, Yuwei An, Xiaokun Chen, Shaoting Feng, Yuyang Huang, Samuel Shen, Kuntai Du, and Junchen Jiang. Lmcache: An efficient kv cache layer for enterprise-scale llm inference. *arXiv preprint arXiv:2510.09665*, 2025.
+
+- <span id="page-13-13"></span>[10] Jae-Won Chung, Yile Gu, Insu Jang, Luoxi Meng, Nikhil Bansal, and Mosharaf Chowdhury. Reducing energy bloat in large model training. In *Proceedings of the ACM SIGOPS 30th Symposium on Operating Systems Principles*, pages 144–159, 2024.
+- <span id="page-13-9"></span>[11] Daniel Crankshaw, Xin Wang, Guilio Zhou, Michael J Franklin, Joseph E Gonzalez, and Ion Stoica. Clipper: A {Low-Latency} online prediction serving system. In *14th USENIX Symposium on Networked Systems Design and Implementation (NSDI 17)*, pages 613–627, 2017.
+- <span id="page-13-1"></span>[12] crew. <https://www.langchain.com/langgraph>, 2025. Accessed: November 11, 2025.
+- <span id="page-13-2"></span>[13] crew. The leading multi-agent platform. [https://www.](https://www.crewai.com/) [crewai.com/](https://www.crewai.com/), 2025. Accessed: November 11, 2025.
+- <span id="page-13-11"></span>[14] Yifei Dong, Fengyi Wu, Kunlin Zhang, Yilong Dai, Sanjian Zhang, Wanghao Ye, Sihan Chen, and Zhi-Qi Cheng. Large language model agents in finance: A survey bridging research, practice, and real-world deployment. In *Findings of the Association for Computational Linguistics: EMNLP 2025*, pages 17889–17907, 2025.
+- <span id="page-13-0"></span>[15] Yingqiang Ge, Wenyue Hua, Kai Mei, Juntao Tan, Shuyuan Xu, Zelong Li, Yongfeng Zhang, et al. Openagi: When llm meets domain experts. *Advances in Neural Information Processing Systems*, 36:5539–5568, 2023.
+- <span id="page-13-17"></span>[16] Sanjay Ghemawat, Howard Gobioff, and Shun-Tak Leung. The google file system. In *Proceedings of the nineteenth ACM symposium on Operating systems principles*, pages 29–43, 2003.
+- <span id="page-13-18"></span>[17] Ionel Gog, Malte Schwarzkopf, Adam Gleave, Robert NM Watson, and Steven Hand. Firmament: Fast, centralized cluster scheduling at scale. In *12th USENIX Symposium on Operating Systems Design and Implementation (OSDI 16)*, pages 99–115, 2016.
+- <span id="page-13-10"></span>[18] Arpan Gujarati, Reza Karimi, Safya Alzayat, Wei Hao, Antoine Kaufmann, Ymir Vigfusson, and Jonathan Mace. Serving {DNNs} like clockwork: Performance predictability from the bottom up. In *14th USENIX Symposium on Operating Systems Design and Implementation (OSDI 20)*, pages 443–462, 2020.
+- <span id="page-13-16"></span>[19] Carl Hewitt and Henry Baker Jr. Actors and continuous functionals. Technical report, 1977.
+- <span id="page-13-19"></span>[20] Benjamin Hindman, Andy Konwinski, Matei Zaharia, Ali Ghodsi, Anthony D Joseph, Randy Katz, Scott Shenker, and Ion Stoica. Mesos: A platform for {Fine-Grained} resource sharing in the data center. In *8th USENIX Symposium on Networked Systems Design and Implementation (NSDI 11)*, 2011.
+
+- <span id="page-14-0"></span>[21] Sirui Hong, Mingchen Zhuge, Jonathan Chen, Xiawu Zheng, Yuheng Cheng, Jinlin Wang, Ceyao Zhang, Zili Wang, Steven Ka Shing Yau, Zijuan Lin, et al. Metagpt: Meta programming for a multi-agent collaborative framework. In *The Twelfth International Conference on Learning Representations*, 2023.
+- <span id="page-14-18"></span>[22] Sushant Jain, Alok Kumar, Subhasree Mandal, Joon Ong, Leon Poutievski, Arjun Singh, Subbaiah Venkata, Jim Wanderer, Junlan Zhou, Min Zhu, Jon Zolla, Urs Hölzle, Stephen Stuart, and Amin Vahdat. B4: experience with a globally-deployed software defined wan. In Dah Ming Chiu, Jia Wang, Paul Barford, and Srinivasan Seshan, editors, *ACM SIGCOMM 2013 Conference, SIG-COMM 2013, Hong Kong, August 12-16, 2013*, pages 3–14. ACM, 2013.
+- <span id="page-14-15"></span>[23] Carlos E Jimenez, John Yang, Alexander Wettig, Shunyu Yao, Kexin Pei, Ofir Press, and Karthik Narasimhan. Swe-bench: Can language models resolve real-world github issues? *arXiv preprint arXiv:2310.06770*, 2023.
+- <span id="page-14-12"></span>[24] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention, 2023.
+- <span id="page-14-10"></span>[25] LazyAGI. Lazyllm: A low-code development tool for building multi-agent llms applications. [https:](https://github.com/LazyAGI/LazyLLM/) [//github.com/LazyAGI/LazyLLM/](https://github.com/LazyAGI/LazyLLM/), 2025. Accessed: November 11, 2025.
+- <span id="page-14-1"></span>[26] Xiaoxi Li, Jiajie Jin, Guanting Dong, Hongjin Qian, Yongkang Wu, Ji-Rong Wen, Yutao Zhu, and Zhicheng Dou. Webthinker: Empowering large reasoning models with deep research capability. *arXiv preprint arXiv:2504.21776*, 2025.
+- <span id="page-14-2"></span>[27] Zelong Li, Shuyuan Xu, Kai Mei, Wenyue Hua, Balaji Rama, Om Raheja, Hao Wang, He Zhu, and Yongfeng Zhang. Autoflow: Automated workflow generation for large language model agents. *arXiv preprint arXiv:2407.12821*, 2024.
+- <span id="page-14-3"></span>[28] Chaofan Lin, Zhenhua Han, Chengruidong Zhang, Yuqing Yang, Fan Yang, Chen Chen, and Lili Qiu. Parrot: Efficient serving of {LLM-based} applications with semantic variable. In *18th USENIX Symposium on Operating Systems Design and Implementation (OSDI 24)*, pages 929–945, 2024.
+- <span id="page-14-16"></span>[29] Barbara Liskov. Distributed programming in argus. *Communications of the ACM*, 31(3):300–312, 1988.
+- <span id="page-14-17"></span>[30] Marko Luksa. *Kubernetes in action*. Simon and Schuster, 2017.
+
+- <span id="page-14-13"></span>[31] Kshiteej Mahajan, Arjun Balasubramanian, Arjun Singhvi, Shivaram Venkataraman, Aditya Akella, Amar Phanishayee, and Shuchi Chawla. Themis: Fair and efficient {GPU} cluster scheduling. In *17th USENIX Symposium on Networked Systems Design and Implementation (NSDI 20)*, pages 289–304, 2020.
+- <span id="page-14-7"></span>[32] Philipp Moritz, Robert Nishihara, Stephanie Wang, Alexey Tumanov, Richard Liaw, Eric Liang, Melih Elibol, Zongheng Yang, William Paul, Michael I Jordan, et al. Ray: A distributed framework for emerging {AI} applications. In *13th USENIX symposium on operating systems design and implementation (OSDI 18)*, pages 561–577, 2018.
+- <span id="page-14-8"></span>[33] Derek G Murray, Malte Schwarzkopf, Christopher Smowton, Steven Smith, Anil Madhavapeddy, and Steven Hand. {CIEL}: A universal execution engine for distributed {Data-Flow} computing. In *8th USENIX Symposium on Networked Systems Design and Implementation (NSDI 11)*, 2011.
+- <span id="page-14-9"></span>[34] Tim Peters. *Parallel Python with Dask: Perform distributed computing, concurrent programming and manage large dataset*. GitforGits, 2023.
+- <span id="page-14-11"></span>[35] Chen Qian, Wei Liu, Hongzhang Liu, Nuo Chen, Yufan Dang, Jiahao Li, Cheng Yang, Weize Chen, Yusheng Su, Xin Cong, et al. Chatdev: Communicative agents for software development. In *Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)*, pages 15174–15186, 2024.
+- <span id="page-14-5"></span>[36] Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta Raileanu, Maria Lomeli, Eric Hambro, Luke Zettlemoyer, Nicola Cancedda, and Thomas Scialom. Toolformer: Language models can teach themselves to use tools. *Advances in Neural Information Processing Systems*, 36:68539–68551, 2023.
+- <span id="page-14-14"></span>[37] Jovan Stojkovic, Chaojie Zhang, Íñigo Goiri, Josep Torrellas, and Esha Choukse. Dynamollm: Designing llm inference clusters for performance and energy efficiency. In *2025 IEEE International Symposium on High Performance Computer Architecture (HPCA)*, pages 1348– 1362. IEEE, 2025.
+- <span id="page-14-6"></span>[38] Dídac Surís, Sachit Menon, and Carl Vondrick. Vipergpt: Visual inference via python execution for reasoning. In *Proceedings of the IEEE/CVF international conference on computer vision*, pages 11888–11898, 2023.
+- <span id="page-14-4"></span>[39] Xin Tan, Yimin Jiang, Yitao Yang, and Hong Xu. Towards end-to-end optimization of llm-based applications with ayo. In *Proceedings of the 30th ACM International Conference on Architectural Support for Programming*
+
+- *Languages and Operating Systems, Volume 2*, pages 1302–1316, 2025.
+- <span id="page-15-1"></span>[40] Qingyun Wu, Gagan Bansal, Jieyu Zhang, Yiran Wu, Beibin Li, Erkang Zhu, Li Jiang, Xiaoyun Zhang, Shaokun Zhang, Jiale Liu, et al. Autogen: Enabling next-gen llm applications via multi-agent conversations. In *First Conference on Language Modeling*, 2024.
+- <span id="page-15-0"></span>[41] Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik R Narasimhan, and Yuan Cao. React: Synergizing reasoning and actingain language models. In *The eleventh international conference on learning representations*, 2022.
+- <span id="page-15-4"></span>[42] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. Orca: A distributed serving system for {Transformer-Based} generative models. In *16th USENIX Symposium on Operating Systems Design and Implementation (OSDI 22)*, pages 521–538, 2022.
+- <span id="page-15-3"></span>[43] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Livia Sun, Jeff Huang, Cody Hao Yu, Shiyi Cao, Christos Kozyrakis, Ion Stoica, Joseph E Gonzalez, et al. Sglang: Efficient execution of structured language model programs. *Advances in neural information processing systems*, 37:62557–62583, 2024.
+- <span id="page-15-2"></span>[44] Pengfei Zheng, Rui Pan, Tarannum Khan, Shivaram Venkataraman, and Aditya Akella. Shockwave: Fair and efficient cluster scheduling for dynamic adaptation in machine learning. In *20th USENIX Symposium on Networked Systems Design and Implementation (NSDI 23)*, pages 703–723, 2023.

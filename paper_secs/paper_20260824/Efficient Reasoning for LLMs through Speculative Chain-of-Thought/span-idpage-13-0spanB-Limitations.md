@@ -1,0 +1,6 @@
+# <span id="page-13-0"></span>B Limitations
+
+- SCoT adopts existing pre-trained reasoning models as draft models. However, for some target models, existing pre-trained models of the same family may not be available. In addition, the size of the draft model has a significant impact on the efficiency of reasoning. For example, in the experiments, the speedup ratio of SCoT on the Llama group is lower than that on the Qwen group. This is largely because the 8B draft model is still a bit large for the 70B target model. An overly large draft model may limit acceleration performance or even slow down reasoning. Future work can consider how to train a more effective draft model for any target model.
+- SCoT needs to fine-tune the main model and the target model. In this paper, due to resource limitations, we only consider its performance on mathematical reasoning tasks. We used only limited training data. Its performance on other types of reasoning tasks may vary, especially for out-of-domain tasks.
+- SCoT may change the original output of the target model, which may have a certain impact on the original security of the pre-trained model. In practical applications, it may lead to harmful output. If used in real-world scenarios, the security of the inference framework needs to be reconsidered.
+

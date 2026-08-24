@@ -1,0 +1,4 @@
+# A Ablating pruning retraining length and step size.
+
+As discussed in this work, the retraining duration is a crucial parameter for network pruning, influenced by two main factors: patience and step size. This ablation study highlights the substantial impact of these parameters on pruning performance. Patience-based training allows for better adaptation during retraining cycles. However, as shown in Fig. 7(a-c), choosing an arbitrary patience value can negatively affect performance. Extended retraining may not only waste computational resources but also lead to performance degradation. Similarly, step size is essential in iterative pruning, as illustrated in Fig. 7(d-e). Step size determines the frequency of pruning and finetuning cycles, and our findings reveal a non-monotonic trend: both overly small and excessively large steps can reduce performance.
+

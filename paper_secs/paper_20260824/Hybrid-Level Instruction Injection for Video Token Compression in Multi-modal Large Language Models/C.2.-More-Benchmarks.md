@@ -1,0 +1,7 @@
+# C.2. More Benchmarks
+
+We also report our HICom on MLVU [\[73\]](#page-10-20) in Tab. [A7](#page-15-1) as MLVU is a long video benchmark. We report the performance of MLVU's dev split on multi-choice tasks. Our HICom also achieves comparable performance among SOTA 7B models.
+
+#### C.3. More Qualitative Analysis
+
+We provide some examples of video dialogues in this section to intuitively show the video understanding ability. Fig. [A2](#page-14-0) shows the situation of animated style videos. Thanks to the design of the local-level compression, our HICom also obtains powerful caption capabilities and gives detailed and accurate captions for videos. Meanwhile, HICom can make judgments based on the understanding of the video. For example, it captures the girl's outfit to draw the conclusion that the girl is cute in the first example video, and think the dancing is beautiful and captivating after watching the second example video. Fig. [A3](#page-15-2) shows the scene of realistic style videos, which is also easy for HICom to handle. In the first example video, HICom accurately describes the concert scene, and also recognize the word "Lover" on the large screen. In the second movie clip example, HICom can perceive the environment information and accurately count how many people are in the scene.

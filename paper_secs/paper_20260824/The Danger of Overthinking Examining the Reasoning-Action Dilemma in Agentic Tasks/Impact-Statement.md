@@ -1,0 +1,4 @@
+# Impact Statement
+
+This paper advances our understanding of how Large Reasoning Models (LRMs) balance internal reasoning with environmental interaction, a critical factor in their real-world deployment. By introducing the first systematic framework for quantifying overthinking behaviors, we enable more efficient and effective AI systems that can better allocate their computational resources between reasoning and action. Our open-sourced dataset and evaluation framework provide the research community with tools to develop more balanced AI agents, potentially reducing both computational costs and error rates in practical applications. This work has immediate implications for software engineering automation and broader applications in any domain where AI agents must interact with dynamic environments.
+

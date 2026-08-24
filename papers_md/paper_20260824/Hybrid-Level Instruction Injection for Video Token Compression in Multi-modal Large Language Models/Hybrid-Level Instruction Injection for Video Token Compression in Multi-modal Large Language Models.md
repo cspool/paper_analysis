@@ -1,0 +1,650 @@
+# <span id="page-0-1"></span>Hybrid-Level Instruction Injection for Video Token Compression in Multi-modal Large Language Models
+
+Zhihang Liu1\*, Chen-Wei Xie<sup>2</sup> , Pandeng Li1,2†, Liming Zhao<sup>2</sup> , Longxiang Tang<sup>3</sup> , Yun Zheng<sup>2</sup> , Chuanbin Liu<sup>1</sup> , Hongtao Xie<sup>1</sup> <sup>1</sup> University of Science and Technology of China <sup>2</sup> Tongyi Lab, Alibaba Group <sup>3</sup> Tsinghua University
+
+{liuzhihang, lpd}@mail.ustc.edu.cn, htxie@ustc.edu.cn
+
+# Abstract
+
+*Recent Multi-modal Large Language Models (MLLMs) have been challenged by the computational overhead resulting from massive video frames, often alleviated through compression strategies. However, the visual content is not equally contributed to user instructions, existing strategies (*e.g*., average pool) inevitably lead to the loss of potentially useful information. To tackle this, we propose the Hybridlevel Instruction Injection Strategy for Conditional Token Compression in MLLMs (HICom), utilizing the instruction as a condition to guide the compression from both local and global levels. This encourages the compression to retain the maximum amount of user-focused information while reducing visual tokens to minimize computational burden. Specifically, the instruction condition is injected into the grouped visual tokens at the local level and the learnable tokens at the global level, and we conduct the attention mechanism to complete the conditional compression. From the hybridlevel compression, the instruction-relevant visual parts are highlighted while the temporal-spatial structure is also preserved for easier understanding of LLMs. To further unleash the potential of HICom, we introduce a new conditional pre-training stage with our proposed dataset HICom-248K. Experiments show that our HICom can obtain distinguished video understanding ability with fewer tokens, increasing the performance by 2.43% average on three multiple-choice QA benchmarks and saving 78.8% tokens compared with the SOTA method. The code is available at* <https://github.com/lntzm/HICom>*.*
+
+# 1. Introduction
+
+Multi-modal Large Language Models [\[2,](#page-8-0) [14,](#page-8-1) [22,](#page-8-2) [31,](#page-9-0) [32,](#page-9-1) [74\]](#page-10-0) (MLLMs) have gained significant improvements in multi-
+
+<span id="page-0-0"></span>> **[图片提取文字 (无描述)]:**
+> Instruction: How many candle holders are made in this video? Answer: 3. (a) An example of video understanding How many candle holders Average pooling are made in this video? Resampler (b) Unconditional compressions (c) Conditional compression with hybrid-level (Previous methods) instruction injection (Our HICom)
+![](_page_0_Picture_10.jpeg)
+
+Figure 1. An example of the video understanding task, and the comparison between the unconditional compression and our proposed conditional compression with hybrid-level instruction injection. We inject instruction at both local and global levels, guiding the compression to retain the maximum amount of user-focused information and minimize the computational burden.
+
+modal understanding by integrating visual information into the LLMs, beating various expert methods on downstream tasks [\[12,](#page-8-3) [13,](#page-8-4) [25,](#page-9-2) [26,](#page-9-3) [47,](#page-9-4) [61,](#page-10-1) [65,](#page-10-2) [70\]](#page-10-3). While initially focused on image understanding, more research [\[30,](#page-9-5) [34,](#page-9-6) [36,](#page-9-7) [40,](#page-9-8) [56,](#page-10-4) [57\]](#page-10-5) has shifted towards challenging video tasks. Most MLLMs handle videos by treating them as sequences of images, sampling frames, and concatenating visual tokens from these frames [\[6,](#page-8-5) [20,](#page-8-6) [42,](#page-9-9) [52,](#page-9-10) [66\]](#page-10-6).
+
+Compared to images, videos comprise multiple frames, resulting in more visual tokens and thus higher computational costs. To make the computation affordable, early methods [\[23,](#page-8-7) [30,](#page-9-5) [34\]](#page-9-6) often employ sparse temporal sampling strategies, leading to significant loss of temporal information. Consequently, current MLLMs focus on compress-
+
+<sup>\*</sup>Interns at Alibaba Group
+
+<sup>†</sup>Corresponding author
+
+<span id="page-1-0"></span>ing visual tokens to achieve a trade-off between computational costs and video understanding ability. Mainstream MLLMs [\[20,](#page-8-6) [59,](#page-10-7) [71\]](#page-10-8) use a spatial pooling strategy within each frame, leveraging capabilities gained from image data. Some approaches [\[19,](#page-8-8) [43,](#page-9-11) [67\]](#page-10-9) use Q-Former [\[22\]](#page-8-2) or Resampler [\[1\]](#page-8-9) to compress the spatial-temporal information into a fixed number of visual tokens. Other methods employ convolution [\[7\]](#page-8-10), clustering [\[17\]](#page-8-11), or memory mechanisms [\[16,](#page-8-12) [46,](#page-9-12) [68\]](#page-10-10) to compress visual tokens in both spatial and temporal dimensions. However, these compression methods are unconditional, lacking explicit guidance, as illustrated in Fig. [1](#page-0-0) (b), making it challenging to achieve high compression ratios with minimal information loss. Consequently, user-relevant visual content may be overlooked during such unconditional compression.
+
+Therefore, we focus on introducing the instruction information as a condition to perform targeted compression, as it is rarely explored in previous work. As shown in Fig. [1](#page-0-0) (c), conditional compression uses explicit instructional guidance to select user-focused information for retention, thereby enhancing efficiency. To thoroughly explore the conditional compression, we propose Hybridlevel Instruction Injection Strategy for Conditional Token Compression in MLLMs (HICom). Observing how humans process complex visual information, they usually adopt a coarse-to-fine approach, first considering the relative parts in the global coarse impression and then seeking detailed information locally in the video. Motivated by this human perception process, HICom conducts the compression at both local and global levels, retaining the maximum amount of instruction-relevant information while preserving the temporal-spatial structure with fewer tokens, thus achieving a better balance between the computational burden and video comprehension.
+
+Specifically, at the local level, we divide the sampled frame features into several groups and compress the tokens of each group into one token based on the attention with the injected instruction condition. Different from Q-Former [\[22\]](#page-8-2) and Resampler [\[1\]](#page-8-9), the grouped local attention can explicitly maintain the spatial-temporal structural characteristics of the video while highlighting the relevant parts within each group. At the global level, we inject the instruction condition into a small number of learnable tokens and then conduct the attention with the flattened frame features without grouping. The global compression focuses more on searching instruction-relevant information in the whole video and thus can be expressed by a small number of tokens as an auxiliary. To further unleash the potential of HICom, we introduce a new conditional pre-training stage between the alignment and instruction tuning and construct a new dataset HICom-248K of 248K video clips with high-quality instruction-followed descriptions. The proposed new stage continues to pre-train the parameters of condition injection, further improving the performance. Experiments show that our HICom can achieve state-of-the-art performance on 5 benchmarks with significantly fewer tokens. (*e.g*., increasing by 2.43% average on three multiplechoice QA benchmarks and saving 78.8% tokens compared with LLaVA-Video-7B [\[72\]](#page-10-11)).
+
+Our main contributions are listed as follows:
+
+- We propose a conditional compression method HICom for MLLMs, achieving effective video understanding while significantly reducing the computational burden.
+- We conduct hybrid-level instruction injection to achieve the conditional compression, and introduce a new conditional pre-training stage with our constructed HICom-248K dataset to further unleash the potential of the conditional compressing.
+- Experiments on various benchmarks show the proposed HICom can achieve better performance with fewer visual tokens, providing valuable insights for MLLMs.
+
+# 2. Related Work
+
+Multi-modal large language models. Based on the powerful capabilities of LLMs among various linguistic tasks, many works try to extend the understanding abilities to the computer vision area. Flamingo [\[1\]](#page-8-9) and BLIP series [\[8,](#page-8-13) [22\]](#page-8-2) successfully explore the usage of Resampler and Q-Former to bridge the visual tokens to language models. LLaVA series [\[31–](#page-9-0)[33\]](#page-9-13) use a simple MLP as the visual projector to translate visual tokens to the LLM's embedding space, achieving huge success. Recently, more researchers have focused on extending image tasks to video tasks. The biggest challenge for video tasks is to design an effective method to achieve the trade-off between computational costs and video understanding ability. Early methods [\[23,](#page-8-7) [30,](#page-9-5) [34\]](#page-9-6) sparsely sample frames, lossing too much temporal information. Mainstream methods [\[20,](#page-8-6) [59,](#page-10-7) [71\]](#page-10-8) use a simple spatial pooling strategy to reduce the number of visual tokens and get a huge success. [\[19,](#page-8-8) [67\]](#page-10-9) employ Q-Former to compress the spatial-temporal tokens into a fixed number. Chat-Univi [\[17\]](#page-8-11) uses DPC-KNN algorithm to cluster dynamic visual tokens. VideoLLaMA2 [\[7\]](#page-8-10) utilizes convolution both in temporal and spatial dimensions to downsample tokens. Flash-VStream [\[68\]](#page-10-10) introduces a learnable memory mechanism to compress online video streaming. All of them try their best to observe more visual information. However, their unconditional compression without explicit guidance inherently leads to the loss of instructionrelevant information. Different from them, we conduct conditional compression by injecting instruction at hybrid levels, only emphasizing the visual parts related to the instruction and allowing the irrelevant parts to be discarded, thus getting a better representation for each question.
+
+Text-based visual representation for video LLMs. There are some methods using instruction information during the
+
+<span id="page-2-3"></span><span id="page-2-0"></span>> **[图片提取文字 (无描述)]:**
+> The color of the train is red. Instruction Condition Injection Large Language Model Direct Injection Injected Output Local Compressed Tokens Global Compressed Tokens Instruction MLP Global Local Compressing Compressing Coarse Injection Injected Output Instruction Injection Instruction Injection Global Scale, Shift MLP Local Attention Attention Layer Norm Learnable Temporal-Spatial Grouped Tokens Flatten Tokens Fine Injection Injected Output Tokens Conditional Compression Cross Attention Vision Encoder Layer Norm Downsampled or Learnable Token What color is the train in the video? Instruction Token
+![](_page_2_Figure_0.jpeg)
+
+Figure 2. The framework of our proposed HICom. We propose the hybrid-level instruction injection to conditionally compress video tokens in MLLMs. We extract instruction-relevant information within each grouped sub-region at the local level, and extract it to a fixed number of tokens at the global level. The instruction condition is injected into the attention process to guide the compression.
+
+visual encoding. [53, 63] sample the frames based on the CLIP [41] similarity or a localization model using the instruction, [29, 50] make the frame selection strategy trainable. However, these methods only focus on how to select the correct frames in a rough manner, failing to guide the token compression with the key instruction information. LLaMA-VID [28] follows a similar instruction-guided idea, as it introduces the instruction to interact with visual features. However, it roughly simplifies the interacted but uncompressed result into a single token only as auxiliary information for each frame, destroying the spatial structure and failing to discuss the guiding role of the instruction for conditional compression. Therefore, it is only designed for long videos and the performance is limited. To fully explore conditional compression, we propose to inject the instruction at hybrid levels, exploring a better way for conditional compression to alleviate the information loss while maintaining the performance.
+
+#### 3. Method
+
+#### <span id="page-2-2"></span>3.1. Instruction-Guided Conditional Compression
+
+Fig. 2 shows the framework of our proposed HICom, which focuses on the design between the vision encoder and the LLM to conduct the conditional compression. We inject the instruction condition into the compression process at both local and global levels for better information extraction with spatial-temporal structure maintained.
+
+Local-Level Compression. Previous works have demon-
+
+strated the importance of the spatial inductive bias when processing visual representations for image MLLMs [27, 49]. Inspired by them, we divide the tokens into several groups and perform conditional compression within each group to preserve the temporal-spatial structure of video features. Specifically, given the encoded video frame features  $\boldsymbol{V} \in \mathbb{R}^{T \times H \times W \times D}$ , and the downsampling ratio  $(\alpha_T, \alpha_H, \alpha_W)$ , we divide  $\boldsymbol{V}$  into  $N_T \cdot N_H \cdot N_W$  groups, where  $N_i = \lceil i/\alpha_i \rceil$ ,  $i \in \{T, H, W\}$ . Therefore, there are  $\alpha_T \cdot \alpha_H \cdot \alpha_W$  tokens in each group, which can be formulated as  $\boldsymbol{V}^{t,h,w} \in \mathbb{R}^{\alpha_T \times \alpha_H \times \alpha_W \times D}$ , where  $0 \leq \{t,h,w\} \leq \{N_T,N_H,N_W\}$ . We first pool  $\boldsymbol{V}^{t,h,w}$  into one token  $\boldsymbol{V}_p^{t,h,w} \in \mathbb{R}^{1 \times D}$  and inject the instruction condition  $\boldsymbol{C}$  (i.e., the text feature of instructions) into  $\boldsymbol{V}_p^{t,h,w}$ . Then the local attention within each group can be calculated by:
+
+<span id="page-2-1"></span>
+$$\boldsymbol{Z}_{l}^{t,h,w} = \operatorname{Attn}\left[\operatorname{Inj}(\boldsymbol{V}_{p}^{t,h,w},\boldsymbol{C}),\boldsymbol{V}^{t,h,w},\boldsymbol{V}^{t,h,w}\right], \quad (1)$$
+
+where  $\operatorname{Inj}(\cdot)$  represents the condition injection,  $\operatorname{Attn}(\cdot)$  donates the attention mechanism [9] and the inputs of  $\operatorname{Attn}(\cdot)$  are *query*, *key*, and *value*, respectively. Therefore, the visual features within each group are compressed into only one token, preserving the temporal-spatial structure while conditionally highlighting the instruction-relevant parts. Finally, we concatenate  $\boldsymbol{Z}_l^{t,h,w}$  as the local compressed results  $\boldsymbol{Z}_l \in \mathbb{R}^{N_T \times N_H \times N_W \times D}$ , and use an MLP layer to project  $\boldsymbol{Z}_l$  into the LLM's embedding space.
+
+Global-Level Compression. Though the temporal-spatial structure can be maintained at the local level, the attention
+
+<span id="page-3-4"></span><span id="page-3-1"></span>> **[图片提取文字 (无描述)]:**
+> Alignment Stage A bride smiles Visior Compressing LLM while holding her Module bouquet in a field. Image Caption 2. Conditional Pre-training Stage The two individuals Compressing in the video are Visior Module LLM wearing life jackets and hats while they Injection converse. Instruction-Followed What are the two individuals wearing Description while they engage in conversation? 3. Instruction Tuning Stage The person retrieves Compressing two objects using the Vision Module LLM long, flexible tool: a golden chain and a Injection piece of cloth. Various Question-How many objects does the person Answer Pairs retrieve using the long, flexible tool?
+![](_page_3_Figure_0.jpeg)
+
+Figure 3. We introduce a new guidance pre-training stage and implement three-stage training for conditional compression.
+
+is forced to focus on small sub-regions. However, each sub-region may contain information that is not equally valid for the question, and some sub-regions are even quite irrelevant. Therefore, we also implement conditional compression at the global level to highlight the most relevant parts within the whole video. Specifically, we initialize a small set of learnable tokens  $\boldsymbol{L} \in \mathbb{R}^{N_L \times D}$ , where  $N_L$  donates the number of tokens, and then inject the instruction condition into them. Instead of grouping the video frame features, we apply 3D position embedding  $\operatorname{Pos}(\cdot)$  for them and directly flatten them at global-level compression. Then the global compressed tokens  $\boldsymbol{Z}_q \in \mathbb{R}^{N_L \times D}$  can be calculated by:
+
+$$Z_g = \text{Attn}\left[\text{Inj}(L, C), V + \text{Pos}(V), V\right].$$
+ (2)
+
+An MLP layer is also utilized to project  $Z_g$  into the LLM's embedding space. And we finally concatenate  $Z_l$  and  $Z_g$  together for further understanding of LLM.
+
+**Instruction Condition Injection.** In order to fulfill the guiding role of the instruction condition, we explore three different types of injection modules, and define them direct injection, coarse injection, and fine injection, respectively. Note the text encoder can obtain both pooled tokens  $C_p \in \mathbb{R}^{1 \times D}$  (i.e., global text embedding) and finegrained tokens  $C_f \in \mathbb{R}^{L \times D}$  (i.e., token-level text embedding). Given the pooled token  $C_p$ , the direct injection uses an MLP to translate the single token into the injected output without any interaction with  $V_p^{t,h,w}$  or L. We employ coarse injection by the adaptive layer norm [39]. Specifically, we use an MLP to regress the scale and shift from  $C_p$ , then add to the visual input  $V_p^{t,h,w}$  or learnable tokens L, which we represent them as A, after the layer norm. The process can be formulated as:
+
+$$Inj(\mathbf{A}, \mathbf{C}) = LN(\mathbf{A}) \cdot scale(\mathbf{C}_p) + shift(\mathbf{C}_p), \quad (3)$$
+
+<span id="page-3-2"></span>Table 1. The statistical information of our constructed HICom-248K dataset.
+
+<span id="page-3-3"></span>
+
+| # Videos          | Sources                      | Avg Length          | # QA Pairs       |
+|-------------------|------------------------------|---------------------|------------------|
+| 248K              | Panda70M: 238K<br>Ego4D: 10K | 25.67s              | 739K             |
+| Data Sou<br>4.05% | 20K -<br>15K -<br>10K -      | Histogram of Vi     | deo Length       |
+| Panda-70M         | 5K 0K 0                      | 30 60<br>Video Leng | 90 120<br>th (s) |
+
+Figure 4. The visualization of data source (left) and video length (right) of our constructed HICom-248K dataset.
+
+where  $LN(\cdot)$  is the layer norm. Given the fine-grained tokens  $C_f$  as condition C, we conduct the fine injection via the cross attention, which can be formulated as:
+
+$$\operatorname{Inj}(\boldsymbol{A}, \boldsymbol{C}) = \operatorname{Attn}\left(\operatorname{LN}(\boldsymbol{A}), \boldsymbol{C}_f, \boldsymbol{C}_f\right). \tag{4}$$
+
+As the direct injection directly translates the condition to the *query* of the attention in Eq. (1) and Eq. (2), the token length limits that it is only suitable for local compression as the local branch compresses each group into only one token. On the contrary, the coarse and fine injections are more flexible to fit various situations as the condition is added into A. We conduct the experiments on the three types of injection and finally choose direct injection for local compression and coarse injection for global compression.
+
+<span id="page-3-0"></span>Conditional Pre-training Stage. The existing mainstream methods follow the pipeline of alignment first and then instruction tuning [7, 31, 32, 68], and previous text-based methods [28, 53] also follow this pipeline. However, the image-caption pairs cannot provide valid instruction information in the alignment stage, direct instruction tuning with modules that are not adequately aligned will confuse the guiding process, thus harming the performance. Therefore, we propose a new conditional pre-training stage between the alignment and the instruction tuning to make the training process easier, as shown in Fig. 3. In this stage, we use our constructed instruction-followed descriptions to pre-train the compression module with condition injection, fulfilling the guiding role of the instruction.
+
+#### 3.2. Dataset Construction
+
+To pre-train the condition injection in the compression module, we construct a new instruction-followed description dataset HICom-248K. Different from common instruction tuning datasets, HICom-248K focuses on providing only one data type, *i.e.*, the description of the visual content re-
+
+<span id="page-4-1"></span><span id="page-4-0"></span>Table 2. Performance comparison between our HICom and other SOTA methods on multiple-choice QA video benchmarks. † means we use the result reproduced by VideoLLaMA2 [7], \* indicates we reproduce the results ourselves using the official checkpoint and inference code provided by authors. § donates we inference with a new length of frames trained by sampling 32 frames.
+
+| Methods                   | IIM Ciae      | # Frames | # Tokona | Vic           | leoMM       | E w/o s     | sub.             | Vi            | deoMN | IE w/s      | ub.         | MV-               | Ego-              |
+|---------------------------|---------------|----------|----------|---------------|-------------|-------------|------------------|---------------|-------|-------------|-------------|-------------------|-------------------|
+| Methods                   | LLWI Size     | # Frames | # Tokens | short         | mid         | long        | all              | short         | mid   | long        | all         | Bench             | Schema            |
+| Video-LLaVA [30]          | 7B            | 8        | 2048     | 45.3          | 38.0        | 36.2        | 39.9             | 46.1          | 40.7  | 38.1        | 41.6        | 43.0              | -                 |
+| VideoChat2-Mistral [24]   | 7B            | 16       | 1536     | 48.3          | 36.3        | 35.0        | 39.5             | 52.8          | 39.4  | 39.2        | 43.8        | 60.4              | -                 |
+| LLaMA-VID [28]            | 7B            | 1fps     | 2tps     | -             | -           | -           | $25.9^{\dagger}$ | -             | -     | -           | -           | 41.9 <sup>†</sup> | 38.5 <sup>†</sup> |
+| Chat-Univi-1.5 [17]       | 7B            | 64       | 448      | 45.7          | 40.3        | 35.8        | 40.6             | 51.2          | 44.6  | 41.8        | 45.9        | 45.9              | -                 |
+| PLLaVA [59]               | 7B            | 16       | 2304     | -             | -           | -           | -                | -             | -     | -           | -           | 46.6              | -                 |
+| LLaVA-Next-Video [71]     | 7B            | 32       | 4608     | 49.9*         | 41.4*       | 37.0*       | 42.8*            | -             | -     | -           | -           | 46.5 <sup>†</sup> | 43.9 <sup>†</sup> |
+| LongVA [69]               | 7B            | 128      | 18432    | 61.1          | 50.4        | 46.2        | 52.6             | 61.6          | 53.6  | 47.6        | 54.3        | -                 | -                 |
+| VideoLLaMA2 [7]           | 7B            | 16       | 1152     | 56.0          | 45.4        | 42.1        | 47.9             | -             | -     | -           | -           | 54.6              | 51.7              |
+| Tarsier [51]              | 7B            | 16       | 2304     | -             | -           | -           | -                | -             | -     | -           | -           | 62.6              | 56.0              |
+| VITA [11]                 | $8 \times 7B$ | 16       | 4096     | 65.9          | 52.9        | 48.6        | 55.8             | 70.4          | 56.2  | 50.9        | 59.2        | -                 | -                 |
+| LLaVA-OneVision [20]      | 7B            | 32       | 6272     | <u>70.1</u> * | 56.4*       | 48.9*       | 58.5*            | <u>75.8</u> * | 58.4* | 51.6*       | 61.9*       | 56.7              | 60.1              |
+| LLaVA-Video [72]          | 7B            | 32       | 6272     | 73.9*         | 57.3*       | 50.4*       | 60.6*            | 76.6*         | 60.3* | 51.7*       | 62.9*       | 58.6              | 57.3              |
+| HICom (Ours)              | 1.5B          | 32       | 680      | 61.7          | 51.3        | 43.9        | 52.3             | 65.1          | 54.7  | 47.3        | 55.7        | 56.4              | 50.1              |
+| HICom (Ours)              | 7B            | 32       | 680      | 65.7          | 57.1        | <u>51.4</u> | 58.1             | 68.4          | 58.9  | 53.1        | 60.1        | <u>64.1</u>       | 60.5              |
+| HICom (Ours) <sup>§</sup> | 7B            | 64       | 1328     | 67.6          | <u>58.0</u> | 51.2        | 58.9             | 71.8          | 63.7  | <u>54.5</u> | <u>63.3</u> | 64.7              | 62.2              |
+| HICom (Ours)§             | 7B            | 128      | 2624     | 69.0          | 60.2        | 51.5        | <u>60.3</u>      | 72.7          | 64.6  | 57.3        | 64.8        | 64.0              | 62.3              |
+
+lated to the instruction, and does not include other rich types of instruction data (*e.g.*, reasoning, counting, *etc*).
+
+**Data Collection.** To ensure the diversity and quality of our videos, we collect videos from public datasets Panda-70M [5] and Ego4D [15]. Panda-70M contains various open-domain videos from YouTube, and Ego4D collects many high-resolution ego-centric human activity videos. Notably, we use the original untrimmed videos to cut clips ourselves since the provided split clips of both datasets are too short, greatly decreasing the content complexity. To balance the number of different types of videos, we pre-define 29 categories [10, 72] using natural language (*e.g. A video about cooking activity.*) and use InternVideo2 [54] to extract both the video features and the pre-defined sentence features. Based on the similarities between them, we select 1,500 videos for each category and then randomly select additional 10,000 videos from the others to ensure diversity.
+
+Video Processing. The untrimmed videos are too long for our pre-training, and also severely affect the quality of captions and annotations by existing SOTA models. Therefore, we use PySceneDetect to split each video into shorter ones with a much looser threshold than Panda-70M. As the split clips can sometimes be redundant with repeat semantics, we further extract keyframes for each video and only select the split clips containing the keyframes as our final results. Specifically, inspired by ShareGPT4Video [4], we calculate the CLIP score for densely sampled frames within a video, and select the less similar frames as keyframes. Finally, we further filter out the video clips shorter than 5 seconds and longer than 120 seconds.
+
+**Instruction-Followed Description Generation.** For the processed video clips, we use Qwen2-VL-72B-Instruct [52] to systematically generate the instruction-followed descrip-
+
+tion with the CoT technique [55]. Specifically, we first generate the detailed caption of each input video, then take both the video content and caption as input to generate the three instruction-answer pairs for each video. Different from the normal instruction datasets, we require Qwen2-VL-72B-Instruct to meet the following two rules: 1) The instructions should refer to the specific visual information, such as the people or the objects in the video; 2) The instructions should lead to a descriptive response and the answers should describe the object mentioned in the instruction in detail. Finally, we filter the generated results by discarding answers containing invalid information, such as the phrase "not provide", or "not describe".
+
+**Dataset Statistics.** Tab. 1 and Fig. 4 shows some statistics about our constructed dataset. We collect 248K video clips in total from Panda-70M and Ego4D, the average of the video lengths is 25.67 seconds and the distribution is shown in Fig. 4. With the help of Qwen2-VL-72B-Instruct, we generate 739K instruction-followed descriptions, providing sufficient data for our guidance pre-training.
+
+#### 4. Experiments
+
+#### 4.1. Experimental Setup
+
+Implementation Details. We use SigLIP [64] (so400m-patch14-384) as our vision encoder and text encoder, choose Qwen2.5 series [48] as our LLMs, and randomly initialize the compressor. The vision encoder keeps frozen at all stages, the LLM is frozen at the two pre-train stages, and is fine-tuned at the instruction tuning stage. We follow LLaVA-OneVision [20] to choose our training configurations, the global batch size is set to 512 at the alignment stage, 256 at the conditional pre-train and instruction tun-
+
+<span id="page-5-3"></span><span id="page-5-0"></span>Table 3. Performance of our HICom and other SOTA methods on open-ended QA video benchmarks. All the compared models are 7B. †, \*, and § keep the same meaning with Tab. 2. # F., # T. are short for # Frames, # Tokens, ANet is short for ActivityNet, LLaVA-NV, LLaVA-OV are short for LLaVA-Next-Video, and LLaVA-OneVision. The format we report ANet is Acc/Score.
+
+| M-4b-1-          | # TD | # TF  | A NT-4            |       | Video | Chat  | GPT I | Bench |       |
+|------------------|------|-------|-------------------|-------|-------|-------|-------|-------|-------|
+| Methods          | # F. | # T.  | ANet              | CI    | DO    | CU    | TU    | CO    | Avg   |
+| Video-LLaVA [30] | 8    | 2048  | 45.3/3.3          | -     | -     | -     | -     | -     | -     |
+| VideoChat2 [24]  | 16   | 1536  | 49.1/3.3          | 3.02  | 2.88  | 3.51  | 2.66  | 2.81  | 2.98  |
+| Chat-Univi [17]  | 64   | 448   | 45.8/3.2          | 2.89  | 2.91  | 3.46  | 2.89  | 2.81  | 2.99  |
+| LLaMA-VID [28]   | 1fps | 2tps  | 47.4/3.3          | 2.96  | 3.00  | 3.53  | 2.46  | 2.51  | 2.89  |
+| LongVLM [58]     | 100  | 305   | 47.6/3.3          | 2.76  | 2.86  | 3.34  | 2.39  | 3.11  | 2.89  |
+| ST-LLM [35]      | 16   | 512   | 50.9/3.3          | 3.23  | 3.05  | 3.74  | 2.93  | 2.81  | 3.15  |
+| PLLaVA [59]      | 16   | 2304  | 56.3/3.5          | 3.21  | 2.86  | 3.62  | 2.33  | 2.93  | 2.99  |
+| LLaVA-NV [71]    | 32   | 4608  | 53.5/3.2          | 3.39  | 3.29  | 3.92  | 2.6   | 3.12  | 3.26  |
+| LongVA [69]      | 128  | 18432 | -/2.8             | 3.05  | 3.09  | 3.77  | 2.44  | 3.64  | 3.20  |
+| VideoLLaMA2 [7]  | 16   | 1152  | 50.2/3.3          | 3.16  | 3.08  | 3.69  | 2.56  | 3.14  | 3.13  |
+| Tarsier [51]     | 16   | 2304  | <b>59.5</b> /3.6  | -     | -     | -     | -     | -     | -     |
+| SF-LLaVA [60]    | 50   | 3680  | 56.3/3.4          | 3.09  | 2.70  | 3.57  | 2.52  | 3.35  | 3.04  |
+| LLaVA-OV [20]    | 32   | 6272  | 56.6/ <u>3.6*</u> | 3.45* | 3.00* | 3.71* | 2.68* | 3.14* | 3.20* |
+| HICom(Ours)-1.5B | 32   | 680   | 53.0/3.5          | 3.09  | 2.67  | 3.40  | 2.41  | 2.98  | 2.91  |
+| HICom(Ours)-7B   | 32   | 680   | 58.3/ <b>3.7</b>  | 3.29  | 2.85  | 3.59  | 2.67  | 3.22  | 3.12  |
+| HICom(Ours)-7B§  | 64   | 1328  | 59.4/ <b>3.7</b>  | 3.32  | 2.92  | 3.65  | 2.74  | 3.35  | 3.20  |
+| HICom(Ours)-7B§  | 128  | 2624  | 59.5/3.7          | 3.33  | 2.86  | 3.65  | 2.74  | 3.32  | 3.18  |
+
+ing stage. We use the learning rate of 1e-3 at the alignment stage, 1e-5 at the instruction tuning stage. At our proposed conditional pre-training stage, we use 1e-3 for the condition injection sub-module and 1e-4 for other parameters in the compressing module. We train 1 epoch for all stages. More implementation details can be found in Appendix A. **Datasets.** We use LLaVA-558K [32] image-caption pairs for our alignment stage, the constructed 248K HICom-Pretrain instruction-followed descriptions for conditional pre-train stage. Inspired by [51, 72], we collect 2.68M video instruction data for instruction tuning, including 1.6M from LLaVA-Video [72], 292K from VideoChat2-IT [23] subset, 255K from M4-Instruct-Data [21], 11K from Charades [45], 114K from NTU RGB+D [44], 122K from TVQA [18], and 290K from MiT [38]. We evaluate our model on 5 video benchmarks, including 3 multiplechoice benchmarks VideoMME [10], MVBench [24], EgoSchema [37], and 2 open-ended benchmarks ActivityNet [3], VideoChatGPT Bench [36].
+
+#### 4.2. Main Results
+
+**Multiple-choice benchmarks.** In Tab. 2, we compare the performance of our HICom with different SOTA models on three multiple-choice video benchmarks. We sample 32 frames with 680 tokens to train all our models and sample different frames for inference. Our HICom-7B with 2624 tokens inference achieves the best performance on all three benchmarks. Compared to LLaVA-Video with 6272 tokens, our HICom with only 1328 tokens can obtain better performance, increasing the performance by 2.43% average and
+
+<span id="page-5-1"></span>Table 4. The ablation study on our proposed HICom,  $\alpha_{(T,H,W)}$  donates the downsampling ratio of each dimension, #Tok. donates the number of tokens input to LLMs. 8f means we sample 8 frames for training. The conditional compression combining both local and global achieves the best.
+
+| Methods      | $\alpha_{(T,H,W)}$ | # Tok.  | Video<br>short | MM]<br>mid l | E w/o<br>long | sub.<br>all | MV-<br>Bench | Ego-<br>Schema |
+|--------------|--------------------|---------|----------------|--------------|---------------|-------------|--------------|----------------|
+| Unconditi    | onal Compi         | ression |                |              |               |             |              |                |
+| avg pool     | (1,3,3)            | 2592    | 39.3           | 34.9         | 33.0          | 35.7        | 44.8         | 43.2           |
+| 8f, avg pool | (1,3,3)            | 648     | 36.3           | 34.4         | 32.0          | 34.3        | 43.6         | 42.7           |
+| avg pool     | (4,3,3)            | 648     | 36.3           | 33.3         | 32.2          | 34.0        | 43.7         | 41.9           |
+| local        | (4,3,3)            | 648     | 36.7           | 34.4         | 32.0          | 34.4        | 43.7         | 42.7           |
+| global       | None               | 32      | 30.0           | 31.6         | 28.9          | 30.1        | 34.6         | 33.6           |
+| local+global | (4,3,3)            | 680     | 37.1           | 34.8         | 32.3          | 34.7        | 44.1         | 42.4           |
+| Condition    | al Compres         | sion    |                |              |               |             |              |                |
+| local        | (4,3,3)            | 648     | 38.8           | 36.1         | 33.1          | 36.0        | 44.0         | 43.2           |
+| global       | None               | 32      | 30.8           | 30.3         | 29.8          | 30.3        | 35.5         | 34.0           |
+| local+global | (4,3,3)            | 680     | 39.0           | 36.7         | 34.2          | 36.6        | 45.0         | 43.5           |
+
+<span id="page-5-2"></span>> **[图片提取文字 (无描述)]:**
+> 41 46 ----pool ---- pool VideoMME-Short (%) 45 w/o inj. w/o inj. 39 MVBench (%) w/ inj. w/inj. 44 37 43 42 35 41 40 33 (1,3,3)(8,9,9)(1,3,3)(8,9,9)(4,3,3)(4,9,9)(4,3,3)(4,9,9) $(\alpha_T, \alpha_H, \alpha_W)$  $(\alpha_T, \alpha_H, \alpha_W)$ 45 0.28 LLM Inference Time (s) Qwen2.5-7B EgoSchema (%) 43 0.22 0.16 41 pool 0.1 39 -w/o inj. w/ inj. 0.04 37 (1,3,3)(4,3,3)(4,9,9)(8,9,9)(1,3,3)(4,3,3)(4,9,9)(8,9,9) $(\alpha_T, \alpha_H, \alpha_W)$  $(\alpha_T, \alpha_H, \alpha_W)$
+![](_page_5_Figure_7.jpeg)
+
+Figure 5. The ablation study on different compressing ratios. The figures show the performance on VideoMME-Short (upper left), MVBench (upper right), EgoSchema (lower left), and the inference time of 7B LLM (lower right).
+
+saving 78.8% tokens, HICom with 2624 tokens gains 3% averagely when saving 58.2% tokens, significantly lowering the computational burden. Notably, LLaVA-Video uses numerous additional image data, and it also unfreezes the vision encoder during training, which can both increase performance. It is also noteworthy that though our HICom performs a little worse than LLaVA-Video on VideoMME short videos (less than 2 minutes), we beat LLaVA-Video on both VideoMME medium (4-15 minutes) and long videos (30-60 minutes). We argue that conditional compression is more helpful for long videos. For short videos, the sampled frames are dense enough for unconditional compression, baselines with enough information would naturally perform powerfully. But for long videos, the sampled frames are more sparse with less redundant, our HICom can preserve
+
+<span id="page-6-2"></span><span id="page-6-0"></span>Table 5. The ablation study on the conditional pre-training stage with the constructed HICom-248K dataset.
+
+| Methods  | Conditional | Video | oMMI | MV-  | Ego- |       |        |
+|----------|-------------|-------|------|------|------|-------|--------|
+| Methous  | Pre-trained | short | mid  | long | all  | Bench | Schema |
+| avg pool | ×           | 36.6  | 32.4 | 33.2 | 34.1 | 42.7  | 40.6   |
+|          | 1           | 36.3  | 33.3 | 32.2 | 34.0 | 43.7  | 41.9   |
+| w/o inj. | ×           | 39.4  | 33.7 | 33.1 | 35.4 | 42.8  | 41.64  |
+|          | 1           | 37.1  | 34.8 | 32.3 | 34.7 | 44.1  | 42.4   |
+| w/ inj.  | ×           | 38.8  | 35.1 | 34.1 | 36.0 | 44.0  | 41.6   |
+|          | 1           | 39.0  | 36.7 | 34.2 | 36.6 | 45.0  | 43.5   |
+
+the maximum amount of instruct-relevant information while it is easily suppressed in LLaVA-Video.
+
+**Open-ended benchmarks.** We also compare the performance of different models on two open-ended video benchmarks, as shown in Tab. 3. We evaluate all our results via GPT-3.5-Turbo-0125. Our HICom also achieves comparable results on both benchmarks, as arriving the SOTA on ActivityNet and getting the second best on the VideoChat-GPT Bench. Our HICom with 1328 tokens is on par with Tarsier with much more training data, and performs similarly to LLaVA-OneVision with much more training data and much more visual tokens, demonstrating the effectiveness of our compression.
+
+Generalization Ability on Video Length. Due to the design of the local-level compression, we can easily extend the lengths of sampled frames at the inference stage for our trained model with 32 frames, rather than re-training it. As we increase the number of sampled frames, the metrics of our HICom also improve across all these benchmarks. For example, the performance on short and medium videos of VideoMME grows fast from 32 frames to 128 frames at our high compressing ratio, as more useful frames are sampled. The performance on long videos of VideoMME without subtitles changes slightly, and we argue this may caused by the extremely long videos (30-60 minutes). Both 32 frames and 128 frames are too sparse for them. Our HICom can pay attention to the most relevant parts based on the sparsely sampled frames, thus changing slightly.
+
+### 4.3. Ablation Studies
+
+To save time costs, we choose VideoChat2-IT [23] 896K video data as our instruction tuning data and Qwen2.5-0.5B [48] as our LLM to conduct ablation studies, and extract 32 frames for training unless otherwise specified. This requires less than 28 hours training on 8 A800 GPUs.
+
+**Component Analysis.** The key components of our HICom are local- and global- level compression. Tab. 4 shows the results of them in the status of both unconditional (*i.e.*, without condition injection) and conditional compression (*i.e.*, with condition injection). Note we use  $V_p^{t,h,w}$  as query of Eq. (1) in unconditional compression for direct injection. With the same number of input tokens, the un-
+
+<span id="page-6-1"></span>Table 6. The ablation study on different types of injection.
+
+| Local  | Global | VideoMME w/o sub.<br>short mid long all |      | MV-<br>Bench | Ego-<br>Schema |      |      |
+|--------|--------|-----------------------------------------|------|--------------|----------------|------|------|
+| direct | coarse | 39.0                                    | 36.7 | 34.2         | 36.6           | 45.0 | 43.5 |
+| direct | fine   | 39.3                                    | 35.3 | 34.3         | 36.3           | 44.1 | 43.5 |
+| coarse | coarse | 39.8                                    | 34.8 | 35.0         | 36.5           | 44.1 | 42.7 |
+| coarse | fine   | 38.4                                    | 36.7 | 34.2         | 36.4           | 44.3 | 43.5 |
+| fine   | coarse | 39.1                                    | 34.7 | 34.2         | 36.0           | 44.2 | 42.7 |
+| fine   | fine   | 38.8                                    | 34.9 | 34.2         | 36.0           | 43.6 | 42.0 |
+
+conditional local compression can achieve comparable performance with both spatial pooling (line 2) and temporalspatial pooling (line 3). Due to the lack of temporal-spatial inductive bias and too few tokens, the global compression significantly harms the performance, and local+global performs only slightly better than local as the additional information of the global branch is limited without explicit guidance. Compared with unconditional compression, the local and global conditional compression increase by 0.8% and 0.5%, respectively. The local+global achieves the best, increasing by 1.9% on VideoMME and 1.3% average on three benchmarks, also increasing by 0.63% compared with local conditional compression. As the global branch can provide instruction-relevant information from a global sight, combining both is better. It is noteworthy that our conditional compression with 680 tokens can beat the average pooling with 2592 tokens on all benchmarks, reducing 73.8% visual tokens and increasing by 0.47% on the performance.
+
+**Compressing Ratio.** We explore the effectiveness of the compressing ratio on both unconditional and conditional compression in Fig. 5. Our unconditional compression performs similarly with average pooling on three benchmarks at different compressing ratios, and the conditional compression performs much better than them. It is noteworthy that the speed of performance decreasing of the conditional compression is also lower than the unconditional compression as the compressing ratio becomes higher. This shows instruction-relevant information remains with the guidance, demonstrating the superiority. In the lower right sub-figure of Fig. 5, the compressing ratio of (4,3,3) saves 57.68% inference time on Qwen2.5-7B than (1,3,3) with only 2.06% performance loss on Qwen2.5-0.5B. Higher compressing ratios (4,9,9) and (8,9,9) can only save a little more time with much higher performance loss. Therefore, we choose (4,3,3) as our final compressing ratio.
+
+Conditional Pre-training Stage. To evaluate the effectiveness of our proposed conditional pre-training stage, we conduct experiments on whether to use this stage or not on both unconditional and conditional compression in Tab. 5. For average pooling and our unconditional compression, the conditional pre-training stage is also effective on MVBench and EgoSchema since more data is trained, but is hard to be effective on VideoMME. For the conditional compression,
+
+<span id="page-7-0"></span>> **[图片提取文字 (无描述)]:**
+> Q: When demonstrating the Germany modern Christmas tree is Q: How many candle holders are made in this video? initially decorated with apples, candles and berries, which kind of the decoration has the largest number? Video Local w/o inj. Global w/ inj. Global
+![](_page_7_Figure_0.jpeg)
+
+Figure 6. The visualization of the attention map at both the local and global level in the situation of unconditional (w/o inj.) and conditional (w/ inj.) compression. We indicate the instruction-relevant parts with the red bounding box for easier reading.
+
+the conditional pre-training stage is effective on all benchmarks, increasing by 1.17% averagely, demonstrating the effectiveness of not only the constructed data, but also the newly proposed stage.
+
+Types of Injection. We propose three types of instruction condition injection in Sec. [3.1,](#page-2-2) direct injection is designed for local compression only, while coarse and fine injection fit both. We conduct the ablation study on them in Tab. [6.](#page-6-1) Coarse injection performs better than fine injection on all three benchmarks, and both of them perform better than unconditional compression. We argue the reason may be that the pooled instruction feature is more in line with the CLIP training, and the attention of fine injection is harder to converge than the MLP of coarse injection.
+
+#### 4.4. Qualitative Analysis
+
+To qualitatively figure out how our HICom realizes the conditional compression, we visualize the attention map of the compression module in Fig. [6.](#page-7-0) It clearly shows where the model pays attention to based on the instructions. Since we conduct the local-level compression within the subregion of each group, the attention map of the local level is more evenly distributed throughout the video than the global level. Compared to unconditional compression, the attention map of conditional compression is more related to the instruction-relevant visual parts. As shown in Fig. [6,](#page-7-0) the attention maps at both levels successfully focus on the candle holders in the first example, and successfully on the Christmas tree, the apples, candles, and berries in the second example, which means the model will give more weights of these parts during compressing. We also notice that the global-level compression tends to forget some detailed visual information (*e.g*., the candle holders in the first and third frame of the first example, the Christmas tree in the second frame of the second example), while the locallevel compression is better to capture these details due to group-limited attention. This shows that hybrid-level compression provides different sights, thus helping the model better understand the videos.
+
+# 5. Conclusion
+
+In this paper, we address the challenge of achieving efficient video understanding in multi-modal large language models (MLLMs) through our proposed HICom. Our approach effectively balances the trade-off between computational costs and information retention by integrating user instructions into the compression process. This method not only preserves the temporal-spatial structure of video data but also emphasizes instruction-relevant content through a dual-level compression strategy. Furthermore, by introducing a conditional pre-training stage with proposed HICom-248K dataset, targeted pre-training enhances the efficacy of instruction-injected schema. Our experiments demonstrate the effectiveness, as HICom can maintain distinguished video understanding ability with much fewer tokens. HICom shows a good generalization ability to extend the number of frames during inference, but the fixed frame sampling strategy during training still limits the ability to understand long videos. In the future, we will try to sample frames based on fps and add more long videos for training to further increase the ability. We will also explore the potential of conditional compression on images, especially high-resolution images, making our HICom more powerful.
+
+# Acknowledgment
+
+This work is supported by the National Key Research and Development Program of China (2022YFB3104700), the National Nature Science Foundation of China (62425114, 62121002, U23B2028, 62232006). We acknowledge the support of Alibaba Group, the GPU cluster built by MCC Lab of Information Science and Technology Institution, USTC, and USTC super-computing center for providing computational resources for this project.
+
+# References
+
+- <span id="page-8-9"></span>[1] Jean-Baptiste Alayrac, Jeff Donahue, Pauline Luc, Antoine Miech, Iain Barr, Yana Hasson, Karel Lenc, Arthur Mensch, Katherine Millican, Malcolm Reynolds, et al. Flamingo: a visual language model for few-shot learning. *NeurIPS*, 35: 23716–23736, 2022. [2](#page-1-0)
+- <span id="page-8-0"></span>[2] Jinze Bai, Shuai Bai, Shusheng Yang, Shijie Wang, Sinan Tan, Peng Wang, Junyang Lin, Chang Zhou, and Jingren Zhou. Qwen-vl: A frontier large vision-language model with versatile abilities. *arXiv preprint arXiv:2308.12966*, 2023. [1](#page-0-1)
+- <span id="page-8-23"></span>[3] Fabian Caba Heilbron, Victor Escorcia, Bernard Ghanem, and Juan Carlos Niebles. Activitynet: A large-scale video benchmark for human activity understanding. In *CVPR*, pages 961–970, 2015. [6](#page-5-3)
+- <span id="page-8-20"></span>[4] Lin Chen, Xilin Wei, Jinsong Li, Xiaoyi Dong, Pan Zhang, Yuhang Zang, Zehui Chen, Haodong Duan, Bin Lin, Zhenyu Tang, et al. Sharegpt4video: Improving video understanding and generation with better captions. *arXiv preprint arXiv:2406.04325*, 2024. [5](#page-4-1)
+- <span id="page-8-17"></span>[5] Tsai-Shien Chen, Aliaksandr Siarohin, Willi Menapace, Ekaterina Deyneka, Hsiang-wei Chao, Byung Eun Jeon, Yuwei Fang, Hsin-Ying Lee, Jian Ren, Ming-Hsuan Yang, et al. Panda-70m: Captioning 70m videos with multiple cross-modality teachers. In *CVPR*, pages 13320–13331, 2024. [5,](#page-4-1) [3](#page-2-3)
+- <span id="page-8-5"></span>[6] Zhe Chen, Weiyun Wang, Hao Tian, Shenglong Ye, Zhangwei Gao, Erfei Cui, Wenwen Tong, Kongzhi Hu, Jiapeng Luo, Zheng Ma, et al. How far are we to gpt-4v? closing the gap to commercial multimodal models with open-source suites. *arXiv preprint arXiv:2404.16821*, 2024. [1](#page-0-1)
+- <span id="page-8-10"></span>[7] Zesen Cheng, Sicong Leng, Hang Zhang, Yifei Xin, Xin Li, Guanzheng Chen, Yongxin Zhu, Wenqi Zhang, Ziyang Luo, Deli Zhao, et al. Videollama 2: Advancing spatialtemporal modeling and audio understanding in video-llms. *arXiv preprint arXiv:2406.07476*, 2024. [2,](#page-1-0) [4,](#page-3-4) [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-8-13"></span>[8] Wenliang Dai, Junnan Li, DONGXU LI, Anthony Tiong, Junqi Zhao, Weisheng Wang, Boyang Li, Pascale N Fung, and Steven Hoi. Instructblip: Towards general-purpose vision-language models with instruction tuning. In *NeurIPS*, pages 49250–49267, 2023. [2](#page-1-0)
+- <span id="page-8-14"></span>[9] Alexey Dosovitskiy. An image is worth 16x16 words: Transformers for image recognition at scale. *arXiv preprint arXiv:2010.11929*, 2020. [3](#page-2-3)
+- <span id="page-8-19"></span>[10] Chaoyou Fu, Yuhan Dai, Yondong Luo, Lei Li, Shuhuai Ren, Renrui Zhang, Zihan Wang, Chenyu Zhou, Yunhang Shen,
+
+- Mengdan Zhang, et al. Video-mme: The first-ever comprehensive evaluation benchmark of multi-modal llms in video analysis. *arXiv preprint arXiv:2405.21075*, 2024. [5,](#page-4-1) [6,](#page-5-3) [3](#page-2-3)
+- <span id="page-8-16"></span>[11] Chaoyou Fu, Haojia Lin, Zuwei Long, Yunhang Shen, Meng Zhao, Yifan Zhang, Xiong Wang, Di Yin, Long Ma, Xiawu Zheng, et al. Vita: Towards open-source interactive omni multimodal llm. *arXiv preprint arXiv:2408.05211*, 2024. [5](#page-4-1)
+- <span id="page-8-3"></span>[12] Zuan Gao, Yuxin Wang, Yadong Qu, Boqiang Zhang, Zixiao Wang, Jianjun Xu, and Hongtao Xie. Self-supervised pretraining with symmetric superimposition modeling for scene text recognition. *arXiv preprint arXiv:2405.05841*, 2024. [1](#page-0-1)
+- <span id="page-8-4"></span>[13] Jiannan Ge, Hongtao Xie, Pandeng Li, Lingxi Xie, Shaobo Min, and Yongdong Zhang. Towards discriminative feature generation for generalized zero-shot learning. *IEEE Transactions on Multimedia*, 2024. [1](#page-0-1)
+- <span id="page-8-1"></span>[14] Jiannan Ge, Lingxi Xie, Hongtao Xie, Pandeng Li, Xiaopeng Zhang, Yongdong Zhang, and Qi Tian. Alignzeg: Mitigating objective misalignment for zero-shot semantic segmentation. In *ECCV*, pages 142–161. Springer, 2024. [1](#page-0-1)
+- <span id="page-8-18"></span>[15] Kristen Grauman, Andrew Westbury, Eugene Byrne, Zachary Chavis, Antonino Furnari, Rohit Girdhar, Jackson Hamburger, Hao Jiang, Miao Liu, Xingyu Liu, et al. Ego4d: Around the world in 3,000 hours of egocentric video. In *CVPR*, pages 18995–19012, 2022. [5,](#page-4-1) [3](#page-2-3)
+- <span id="page-8-12"></span>[16] Bo He, Hengduo Li, Young Kyun Jang, Menglin Jia, Xuefei Cao, Ashish Shah, Abhinav Shrivastava, and Ser-Nam Lim. Ma-lmm: Memory-augmented large multimodal model for long-term video understanding. In *CVPR*, pages 13504– 13514, 2024. [2](#page-1-0)
+- <span id="page-8-11"></span>[17] Peng Jin, Ryuichi Takanobu, Wancai Zhang, Xiaochun Cao, and Li Yuan. Chat-univi: Unified visual representation empowers large language models with image and video understanding. In *CVPR*, pages 13700–13710, 2024. [2,](#page-1-0) [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-8-22"></span>[18] Jie Lei, Licheng Yu, Mohit Bansal, and Tamara L Berg. Tvqa: Localized, compositional video question answering. *arXiv preprint arXiv:1809.01696*, 2018. [6](#page-5-3)
+- <span id="page-8-8"></span>[19] Bo Li, Yuanhan Zhang, Liangyu Chen, Jinghao Wang, Jingkang Yang, and Ziwei Liu. Otter: A multi-modal model with in-context instruction tuning. *arXiv preprint arXiv:2305.03726*, 2023. [2](#page-1-0)
+- <span id="page-8-6"></span>[20] Bo Li, Yuanhan Zhang, Dong Guo, Renrui Zhang, Feng Li, Hao Zhang, Kaichen Zhang, Yanwei Li, Ziwei Liu, and Chunyuan Li. Llava-onevision: Easy visual task transfer. *arXiv preprint arXiv:2408.03326*, 2024. [1,](#page-0-1) [2,](#page-1-0) [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-8-21"></span>[21] Feng Li, Renrui Zhang, Hao Zhang, Yuanhan Zhang, Bo Li, Wei Li, Zejun Ma, and Chunyuan Li. Llava-next-interleave: Tackling multi-image, video, and 3d in large multimodal models. *arXiv preprint arXiv:2407.07895*, 2024. [6](#page-5-3)
+- <span id="page-8-2"></span>[22] Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi. Blip-2: Bootstrapping language-image pre-training with frozen image encoders and large language models. In *ICML*, pages 19730–19742. PMLR, 2023. [1,](#page-0-1) [2](#page-1-0)
+- <span id="page-8-7"></span>[23] KunChang Li, Yinan He, Yi Wang, Yizhuo Li, Wenhai Wang, Ping Luo, Yali Wang, Limin Wang, and Yu Qiao. Videochat: Chat-centric video understanding. *arXiv preprint arXiv:2305.06355*, 2023. [1,](#page-0-1) [2,](#page-1-0) [6,](#page-5-3) [7](#page-6-2)
+- <span id="page-8-15"></span>[24] Kunchang Li, Yali Wang, Yinan He, Yizhuo Li, Yi Wang, Yi Liu, Zun Wang, Jilan Xu, Guo Chen, Ping Luo, et al.
+
+- Mvbench: A comprehensive multi-modal video understanding benchmark. In *CVPR*, pages 22195–22206, 2024. [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-9-2"></span>[25] Pandeng Li, Chen-Wei Xie, Hongtao Xie, Liming Zhao, Lei Zhang, Yun Zheng, Deli Zhao, and Yongdong Zhang. Momentdiff: Generative video moment retrieval from random to real. *NeurIPS*, 36:65948–65966, 2023. [1](#page-0-1)
+- <span id="page-9-3"></span>[26] Pandeng Li, Chen-Wei Xie, Liming Zhao, Hongtao Xie, Jiannan Ge, Yun Zheng, Deli Zhao, and Yongdong Zhang. Progressive spatio-temporal prototype matching for textvideo retrieval. In *ICCV*, pages 4100–4110, 2023. [1](#page-0-1)
+- <span id="page-9-19"></span>[27] Wentong Li, Yuqian Yuan, Jian Liu, Dongqi Tang, Song Wang, Jianke Zhu, and Lei Zhang. Tokenpacker: Efficient visual projector for multimodal llm. *arXiv preprint arXiv:2407.02392*, 2024. [3](#page-2-3)
+- <span id="page-9-18"></span>[28] Yanwei Li, Chengyao Wang, and Jiaya Jia. Llama-vid: An image is worth 2 tokens in large language models. In *ECCV*, pages 323–340. Springer, 2024. [3,](#page-2-3) [4,](#page-3-4) [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-9-16"></span>[29] Jianxin Liang, Xiaojun Meng, Yueqian Wang, Chang Liu, Qun Liu, and Dongyan Zhao. End-to-end video question answering with frame scoring mechanisms and adaptive sampling. *arXiv preprint arXiv:2407.15047*, 2024. [3](#page-2-3)
+- <span id="page-9-5"></span>[30] Bin Lin, Yang Ye, Bin Zhu, Jiaxi Cui, Munan Ning, Peng Jin, and Li Yuan. Video-llava: Learning united visual representation by alignment before projection. *arXiv preprint arXiv:2311.10122*, 2023. [1,](#page-0-1) [2,](#page-1-0) [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-9-0"></span>[31] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee. Visual instruction tuning. *NeurIPS*, 36, 2023. [1,](#page-0-1) [2,](#page-1-0) [4](#page-3-4)
+- <span id="page-9-1"></span>[32] Haotian Liu, Chunyuan Li, Yuheng Li, and Yong Jae Lee. Improved baselines with visual instruction tuning. In *CVPR*, pages 26296–26306, 2024. [1,](#page-0-1) [4,](#page-3-4) [6](#page-5-3)
+- <span id="page-9-13"></span>[33] Haotian Liu, Chunyuan Li, Yuheng Li, Bo Li, Yuanhan Zhang, Sheng Shen, and Yong Jae Lee. Llava-next: Improved reasoning, ocr, and world knowledge, 2024. [2,](#page-1-0) [1](#page-0-1)
+- <span id="page-9-6"></span>[34] Ruyang Liu, Chen Li, Yixiao Ge, Thomas H Li, Ying Shan, and Ge Li. Bt-adapter: Video conversation is feasible without video instruction tuning. In *CVPR*, pages 13658–13667, 2024. [1,](#page-0-1) [2](#page-1-0)
+- <span id="page-9-24"></span>[35] Ruyang Liu, Chen Li, Haoran Tang, Yixiao Ge, Ying Shan, and Ge Li. St-llm: Large language models are effective temporal learners. In *European Conference on Computer Vision*, pages 1–18. Springer, 2024. [6](#page-5-3)
+- <span id="page-9-7"></span>[36] Muhammad Maaz, Hanoona Rasheed, Salman Khan, and Fahad Shahbaz Khan. Video-chatgpt: Towards detailed video understanding via large vision and language models. In *ACL*, 2024. [1,](#page-0-1) [6](#page-5-3)
+- <span id="page-9-28"></span>[37] Karttikeya Mangalam, Raiymbek Akshulakov, and Jitendra Malik. Egoschema: A diagnostic benchmark for very longform video language understanding. *NeurIPS*, 36:46212– 46244, 2023. [6](#page-5-3)
+- <span id="page-9-27"></span>[38] Mathew Monfort, Alex Andonian, Bolei Zhou, Kandan Ramakrishnan, Sarah Adel Bargal, Tom Yan, Lisa Brown, Quanfu Fan, Dan Gutfreund, Carl Vondrick, et al. Moments in time dataset: one million videos for event understanding. *IEEE TPAMI*, 42(2):502–508, 2019. [6](#page-5-3)
+- <span id="page-9-21"></span>[39] William Peebles and Saining Xie. Scalable diffusion models with transformers. In *ICCV*, pages 4195–4205, 2023. [4](#page-3-4)
+
+- <span id="page-9-8"></span>[40] Tianyuan Qu, Longxiang Tang, Bohao Peng, Senqiao Yang, Bei Yu, and Jiaya Jia. Does your vision-language model get lost in the long video sampling dilemma?, 2025. [1](#page-0-1)
+- <span id="page-9-15"></span>[41] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning transferable visual models from natural language supervision. In *ICML*, pages 8748–8763. PMLR, 2021. [3](#page-2-3)
+- <span id="page-9-9"></span>[42] Machel Reid, Nikolay Savinov, Denis Teplyashin, Dmitry Lepikhin, Timothy Lillicrap, Jean-baptiste Alayrac, Radu Soricut, Angeliki Lazaridou, Orhan Firat, Julian Schrittwieser, et al. Gemini 1.5: Unlocking multimodal understanding across millions of tokens of context. *arXiv preprint arXiv:2403.05530*, 2024. [1](#page-0-1)
+- <span id="page-9-11"></span>[43] Shuhuai Ren, Linli Yao, Shicheng Li, Xu Sun, and Lu Hou. Timechat: A time-sensitive multimodal large language model for long video understanding. In *CVPR*, pages 14313– 14323, 2024. [2](#page-1-0)
+- <span id="page-9-26"></span>[44] Amir Shahroudy, Jun Liu, Tian-Tsong Ng, and Gang Wang. Ntu rgb+d: A large scale dataset for 3d human activity analysis. In *CVPR*, pages 1010–1019, 2016. [6](#page-5-3)
+- <span id="page-9-25"></span>[45] Gunnar A. Sigurdsson, Gul Varol, Xiaolong Wang, Ivan ¨ Laptev, Ali Farhadi, and Abhinav Gupta. Hollywood in homes: Crowdsourcing data collection for activity understanding. *ArXiv e-prints*, 2016. [6](#page-5-3)
+- <span id="page-9-12"></span>[46] Enxin Song, Wenhao Chai, Guanhong Wang, Yucheng Zhang, Haoyang Zhou, Feiyang Wu, Haozhe Chi, Xun Guo, Tian Ye, Yanting Zhang, et al. Moviechat: From dense token to sparse memory for long video understanding. In *CVPR*, pages 18221–18232, 2024. [2](#page-1-0)
+- <span id="page-9-4"></span>[47] Longxiang Tang, Zhuotao Tian, Kai Li, Chunming He, Hantao Zhou, Hengshuang Zhao, Xiu Li, and Jiaya Jia. Mind the interference: Retaining pre-trained knowledge in parameter efficient continual learning of vision-language models. In *ECCV*, pages 346–365. Springer, 2024. [1](#page-0-1)
+- <span id="page-9-23"></span>[48] Qwen Team. Qwen2.5: A party of foundation models, 2024. [5,](#page-4-1) [7,](#page-6-2) [1](#page-0-1)
+- <span id="page-9-20"></span>[49] Shengbang Tong, Ellis Brown, Penghao Wu, Sanghyun Woo, Manoj Middepogu, Sai Charitha Akula, Jihan Yang, Shusheng Yang, Adithya Iyer, Xichen Pan, et al. Cambrian-1: A fully open, vision-centric exploration of multimodal llms. *arXiv preprint arXiv:2406.16860*, 2024. [3](#page-2-3)
+- <span id="page-9-17"></span>[50] Haibo Wang, Chenghang Lai, Yixuan Sun, and Weifeng Ge. Weakly supervised gaussian contrastive grounding with large multimodal models for video question answering. *arXiv preprint arXiv:2401.10711*, 2024. [3](#page-2-3)
+- <span id="page-9-22"></span>[51] Jiawei Wang, Liping Yuan, Yuchen Zhang, and Haomiao Sun. Tarsier: Recipes for training and evaluating large video description models. *arXiv preprint arXiv:2407.00634*, 2024. [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-9-10"></span>[52] Peng Wang, Shuai Bai, Sinan Tan, Shijie Wang, Zhihao Fan, Jinze Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, et al. Qwen2-vl: Enhancing vision-language model's perception of the world at any resolution. *arXiv preprint arXiv:2409.12191*, 2024. [1,](#page-0-1) [5,](#page-4-1) [3](#page-2-3)
+- <span id="page-9-14"></span>[53] Yizhou Wang, Ruiyi Zhang, Haoliang Wang, Uttaran Bhattacharya, Yun Fu, and Gang Wu. Vaquita: Enhancing align-
+
+- ment in llm-assisted video understanding. *arXiv preprint arXiv:2312.02310*, 2023. [3,](#page-2-3) [4](#page-3-4)
+- <span id="page-10-14"></span>[54] Yi Wang, Kunchang Li, Xinhao Li, Jiashuo Yu, Yinan He, Guo Chen, Baoqi Pei, Rongkun Zheng, Jilan Xu, Zun Wang, et al. Internvideo2: Scaling video foundation models for multimodal video understanding. *arXiv preprint arXiv:2403.15377*, 2024. [5,](#page-4-1) [3](#page-2-3)
+- <span id="page-10-15"></span>[55] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, et al. Chain-of-thought prompting elicits reasoning in large language models. *NeurIPS*, 35:24824–24837, 2022. [5](#page-4-1)
+- <span id="page-10-4"></span>[56] Yujie Wei, Shiwei Zhang, Zhiwu Qing, Hangjie Yuan, Zhiheng Liu, Yu Liu, Yingya Zhang, Jingren Zhou, and Hongming Shan. Dreamvideo: Composing your dream videos with customized subject and motion. In *CVPR*, pages 6537– 6549, 2024. [1](#page-0-1)
+- <span id="page-10-5"></span>[57] Yujie Wei, Shiwei Zhang, Hangjie Yuan, Xiang Wang, Haonan Qiu, Rui Zhao, Yutong Feng, Feng Liu, Zhizhong Huang, Jiaxin Ye, et al. Dreamvideo-2: Zero-shot subjectdriven video customization with precise motion control. *arXiv preprint arXiv:2410.13830*, 2024. [1](#page-0-1)
+- <span id="page-10-17"></span>[58] Yuetian Weng, Mingfei Han, Haoyu He, Xiaojun Chang, and Bohan Zhuang. Longvlm: Efficient long video understanding via large language models. In *ECCV*, pages 453–470. Springer, 2024. [6](#page-5-3)
+- <span id="page-10-7"></span>[59] Lin Xu, Yilin Zhao, Daquan Zhou, Zhijie Lin, See Kiong Ng, and Jiashi Feng. Pllava: Parameter-free llava extension from images to videos for video dense captioning. *arXiv preprint arXiv:2404.16994*, 2024. [2,](#page-1-0) [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-10-18"></span>[60] Mingze Xu, Mingfei Gao, Zhe Gan, Hong-You Chen, Zhengfeng Lai, Haiming Gang, Kai Kang, and Afshin Dehghan. Slowfast-llava: A strong training-free baseline for video large language models. *arXiv preprint arXiv:2407.15841*, 2024. [6](#page-5-3)
+- <span id="page-10-1"></span>[61] Zhipei Xu, Xuanyu Zhang, Runyi Li, Zecheng Tang, Qing Huang, and Jian Zhang. Fakeshield: Explainable image forgery detection and localization via multi-modal large language models. *arXiv preprint arXiv:2410.02761*, 2024. [1](#page-0-1)
+- <span id="page-10-19"></span>[62] Zhuoyi Yang, Jiayan Teng, Wendi Zheng, Ming Ding, Shiyu Huang, Jiazheng Xu, Yuanming Yang, Wenyi Hong, Xiaohan Zhang, Guanyu Feng, et al. Cogvideox: Text-to-video diffusion models with an expert transformer. *arXiv preprint arXiv:2408.06072*, 2024. [1](#page-0-1)
+- <span id="page-10-12"></span>[63] Shoubin Yu, Jaemin Cho, Prateek Yadav, and Mohit Bansal. Self-chained image-language model for video localization and question answering. *NeurIPS*, 36, 2023. [3](#page-2-3)
+- <span id="page-10-16"></span>[64] Xiaohua Zhai, Basil Mustafa, Alexander Kolesnikov, and Lucas Beyer. Sigmoid loss for language image pre-training. In *ICCV*, pages 11975–11986, 2023. [5,](#page-4-1) [1](#page-0-1)
+- <span id="page-10-2"></span>[65] Boqiang Zhang, Hongtao Xie, Zuan Gao, and Yuxin Wang. Choose what you need: Disentangled representation learning for scene text recognition removal and editing. In *CVPR*, pages 28358–28368, 2024. [1](#page-0-1)
+- <span id="page-10-6"></span>[66] Boqiang Zhang, Kehan Li, Zesen Cheng, Zhiqiang Hu, Yuqian Yuan, Guanzheng Chen, Sicong Leng, Yuming Jiang, Hang Zhang, Xin Li, et al. Videollama 3: Frontier multimodal foundation models for image and video understanding. *arXiv preprint arXiv:2501.13106*, 2025. [1](#page-0-1)
+
+- <span id="page-10-9"></span>[67] Hang Zhang, Xin Li, and Lidong Bing. Video-llama: An instruction-tuned audio-visual language model for video understanding. *arXiv preprint arXiv:2306.02858*, 2023. [2](#page-1-0)
+- <span id="page-10-10"></span>[68] Haoji Zhang, Yiqin Wang, Yansong Tang, Yong Liu, Jiashi Feng, Jifeng Dai, and Xiaojie Jin. Flash-vstream: Memorybased real-time understanding for long video streams. *arXiv preprint arXiv:2406.08085*, 2024. [2,](#page-1-0) [4](#page-3-4)
+- <span id="page-10-13"></span>[69] Peiyuan Zhang, Kaichen Zhang, Bo Li, Guangtao Zeng, Jingkang Yang, Yuanhan Zhang, Ziyue Wang, Haoran Tan, Chunyuan Li, and Ziwei Liu. Long context transfer from language to vision. *arXiv preprint arXiv:2406.16852*, 2024. [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-10-3"></span>[70] Xuanyu Zhang, Runyi Li, Jiwen Yu, Youmin Xu, Weiqi Li, and Jian Zhang. Editguard: Versatile image watermarking for tamper localization and copyright protection. In *CVPR*, pages 11964–11974, 2024. [1](#page-0-1)
+- <span id="page-10-8"></span>[71] Yuanhan Zhang, Bo Li, haotian Liu, Yong jae Lee, Liangke Gui, Di Fu, Jiashi Feng, Ziwei Liu, and Chunyuan Li. Llavanext: A strong zero-shot video understanding model, 2024. [2,](#page-1-0) [5,](#page-4-1) [6](#page-5-3)
+- <span id="page-10-11"></span>[72] Yuanhan Zhang, Jinming Wu, Wei Li, Bo Li, Zejun Ma, Ziwei Liu, and Chunyuan Li. Video instruction tuning with synthetic data. *arXiv preprint arXiv:2410.02713*, 2024. [2,](#page-1-0) [5,](#page-4-1) [6,](#page-5-3) [3](#page-2-3)
+- <span id="page-10-20"></span>[73] Junjie Zhou, Yan Shu, Bo Zhao, Boya Wu, Shitao Xiao, Xi Yang, Yongping Xiong, Bo Zhang, Tiejun Huang, and Zheng Liu. Mlvu: A comprehensive benchmark for multi-task long video understanding. *arXiv preprint arXiv:2406.04264*, 2024. [6](#page-5-3)
+- <span id="page-10-0"></span>[74] Deyao Zhu, Jun Chen, Xiaoqian Shen, Xiang Li, and Mohamed Elhoseiny. Minigpt-4: Enhancing vision-language understanding with advanced large language models. *arXiv preprint arXiv:2304.10592*, 2023. [1](#page-0-1)
+
+# Hybrid-Level Instruction Injection for Video Token Compression in Multi-modal Large Language Models
+
+# Supplementary Material
+
+Overview. In the Supplementary Material, we introduce more implementation details in Appendix [A,](#page-11-0) more details about the conditional pre-training stage and the constructed HICom-248K dataset in Appendix [B.](#page-11-1) Then we add more experiments in Appendix [C,](#page-13-0) including more ablation studies, more benchmarks, and more qualitative analysis.
+
+# <span id="page-11-0"></span>A. Implementation Details
+
+We use SigLIP [\[64\]](#page-10-16) (so400m-patch14-384) as our vision encoder and text encoder, and choose Qwen2.5 series [\[48\]](#page-9-23) as our LLMs. At the global-level, the number of the learnable queries is set to 32 referred to Qformer [\[22\]](#page-8-2). We mainly follow LLaVA-OneVision [\[20\]](#page-8-6) to configure our training hyper-parameters and settings. The detailed configurations are shown in Tab. [A1.](#page-11-2) Different from LLaVA-OneVision, we keep our vision encoder frozen at all stages. Compared with the *Stage1.5* of LLaVA-OneVision, the training goal of our conditional pre-training stage is quite different. Therefore, we use a few different training strategies. Specifically, we keep the LLM frozen at the conditional pre-training stage as it is designed to align the compressing module based on the instruction condition. We also use a higher learning rate at this stage, 1e-3 for the parameters of instruction injection, and 1e-4 for other parameters in the compressing module.
+
+We use 3D position embedding for our global-level instruction injection, as the input includes three dimensions: time, width, and height. Following CogVideoX [\[62\]](#page-10-19) and Qwen2VL [\[52\]](#page-9-10), we extend 2D absolute position embedding to 3D. Each latent in the video tensor can be represented by a 3D coordinate. We occupy 3/8, 3/8, and 2/8 of the hidden states' channel of position embedding. The resulting encoding is then concatenated along the channel dimension to obtain the final 3D positional encoding.
+
+# <span id="page-11-1"></span>B. New Dataset and Training Stage
+
+### B.1. Conditional Pre-training Stage
+
+LLaVA [\[31\]](#page-9-0) introduces a two-stage training pipeline for MLLMs, which first pre-trains for feature alignment and then conducts end-to-end instruction tuning. Mainstream methods typically adopt this two-stage training pipeline. During the alignment stage, image-caption pairs are commonly used to pre-train the visual projector, aligning visual features with the LLM's embedding space. At the instruction tuning stage, various types of question-answer pair data are utilized to fine-tune the model, including general QA, <span id="page-11-2"></span>Table A1. Detailed training configurations for each stage. We follow LLaVA-OneVision [\[20\]](#page-8-6) to choose our configurations. At the conditional pre-training stage and instruction tuning stage, we use a global batch size of 512 for the 0.5B model, and 256 for the 7B and 72B models. Comp. denotes our compressing module, which plays the role of compressing the visual tokens and projecting them into the LLM's embedding space.
+
+|                     | Alignment | Conditional<br>Pre-train | Instruction<br>Tuning |
+|---------------------|-----------|--------------------------|-----------------------|
+| Data                | Image     | Video                    | Video                 |
+| # Tokens            | 81+32     | 648+32                   | 648+32                |
+| # Samples           | 558K      | 248K                     | 2.6M                  |
+| Trainable           | Comp.     | Comp.                    | Comp., LLM            |
+| 7B LLM              | 63M       | 63M                      | 7.7B                  |
+| Batch size          | 512       | 256/512                  | 256/512               |
+| lr: Vision Enc.     | -         | -                        | -                     |
+| lr: inj. In Comp.   | -         | 1 × 10−3                 | 1 × 10−5              |
+| lr: others in Comp. | 1 × 10−3  | 1 × 10−4                 | 1 × 10−5              |
+| lr: LLM             | -         | -                        | 1 × 10−5              |
+| Epoch               | 1         | 1                        | 1                     |
+
+multiple-choice QA, OCR, documents/charts/screens, math reasoning, attribute perception, counting, temporal reasoning, information synthesis, *etc* [\[33\]](#page-9-13), equipping the model with instruction-following capabilities. Recently, LLaVA-OneVision [\[20\]](#page-8-6) proposes a three-stage training paradigm. Between *Language-Image Alignment* and *Visual Instruction Tuning*, it introduces a new *stage1.5*, named *High-Quality Knowledge Learning*, using re-captioned detailed description data, OCR data, and Chinese and language data, maintaining a training strategy similar to the instruction tuning stage to inject new knowledge into MLLMs.
+
+In our work, we propose a new training stage between alignment and instruction tuning. Unlike LLaVA-OneVision, our conditional pre-training stage is designed to pre-train the parameters for instruction injection. In the existing alignment stage, instructions typically prompt the model to describe visual content globally (e.g., "Please summarize the visual content of the image."), which is insufficient for selectively retaining information during token compression. Pre-training the instruction injection at this stage does not effectively teach the model to retain userimportant information. By using conditional captions with appropriate instructions, we can pre-train the compression module to perform conditional alignment first, simplifying the instruction tuning for conditional compression. Thus,
+
+<span id="page-12-0"></span>![](_page_12_Picture_0.jpeg)
+
+![](_page_12_Picture_1.jpeg)
+
+![](_page_12_Picture_2.jpeg)
+
+![](_page_12_Picture_3.jpeg)
+
+![](_page_12_Picture_4.jpeg)
+
+![](_page_12_Picture_5.jpeg)
+
+Instruc(on: What are the two individuals doing in front of the clothing rack?
+
+Descrip(on: The two individuals are examining various garments hanging on the clothing rack, possibly selec(ng or organizing clothes.
+
+Instruc(on: How does the person seated at the desk interact with their surroundings?
+
+Descrip(on: The person seated at the desk is gesturing with their hands while speaking, indica(ng they are engaged in
+
+some form of communica(on or explana(on.
+
+Instruc(on: What can be seen on the desk in the office-like seOng?
+
+Descrip(on: The desk in the office-like seOng is cluHered with various items, including books, papers, and a computer
+
+monitor displaying images.
+
+![](_page_12_Picture_14.jpeg)
+
+![](_page_12_Picture_15.jpeg)
+
+![](_page_12_Picture_16.jpeg)
+
+![](_page_12_Picture_17.jpeg)
+
+![](_page_12_Picture_18.jpeg)
+
+![](_page_12_Picture_19.jpeg)
+
+Instruc(on: What is the person riding?
+
+Descrip(on: The person in the video is riding a bicycle.
+
+Instruc(on: What is the person wearing while riding the bicycle?
+
+Descrip(on: The person riding the bicycle is wearing a helmet and carrying a backpack.
+
+Instruc(on: Where does the scene transi(on to a?er the person rides the bicycle along the street?
+
+Descrip(on: The scene transi(ons from the outdoor street to an indoor or semi-enclosed space where the cyclist
+
+con(nues to ride.
+
+![](_page_12_Picture_27.jpeg)
+
+![](_page_12_Picture_28.jpeg)
+
+![](_page_12_Picture_29.jpeg)
+
+![](_page_12_Picture_30.jpeg)
+
+![](_page_12_Picture_31.jpeg)
+
+![](_page_12_Picture_32.jpeg)
+
+Instruc(on: What is the purpose of the login screen shown in the video?
+
+Descrip(on: The login screen displayed in the video is used for accessing NeClix, where users can enter their email address and password to sign in.
+
+Instruc(on: What informa(on is included on the eBay checkout page shown in the video?
+
+Descrip(on: The eBay checkout page in the video contains payment details such as the card number, expira(on date,
+
+and security code for comple(ng a transac(on.
+
+Instruc(on: What does the dashboard interface in the video display?
+
+Descrip(on: The dashboard interface in the video displays various icons represen(ng different services like TwiHer,
+
+LinkedIn, and PayPal, along with a security alert no(fica(on.
+
+Figure A1. Some examples of our constructed HICom-248K instruction-following descriptions.
+
+we introduce a new conditional pre-training stage utilizing our HICom-248K dataset, which implements conditional pre-training for conditional compression.
+
+#### B.2. HICom-248K
+
+HICom-248K dataset is designed for the conditional pretraining, which consists of video question-answer pairs. Since the goal of the conditional pre-training stage is to achieve conditional alignment based on the instruction, HICom-248K focuses on providing one type of data, *i.e*., the instruction-followed descriptions, which meets the following requests:
+
+- The instruction should refer to the specific information in the video, providing the guidance role of conditional compression.
+- The answer should be the caption of the specific visual
+
+<span id="page-13-1"></span>Table A2. The pre-defined 29 categories during the collection of videos in HICom-248K.
+
+| Categories defined with natural language |  |
+|------------------------------------------|--|
+| A video about cooking activity.          |  |
+| A video about writing activity.          |  |
+| A video about travel.                    |  |
+| A video about sight-seeing activity.     |  |
+| A life record video about exercise.      |  |
+| A life record video about daily life.    |  |
+| A life record video about handcraft.     |  |
+| A life record video about food.          |  |
+| A TV news report video.                  |  |
+| A video about computer games.            |  |
+
+A video about sports.
+
+A video about football.
+
+A video about basketball.
+
+A video about pets and animals.
+
+A video about action movie scene.
+
+A video about comedy movie scene.
+
+A video about sci-fi movie scene.
+
+A video about crime movie scene.
+
+A video about horror movie scene.
+
+A video about magic show.
+
+A video about acrobatics.
+
+A documentary or TV show about humanity and history.
+
+A documentary or TV show about biography.
+
+A documentary or TV show about geography.
+
+A documentary or TV show about finance and commerce.
+
+A documentary or TV show about literature and art.
+
+A documentary or TV show about biology and medicine knowledge.
+
+A documentary or TV show about finance and commerce knowledge.
+
+A documentary or TV show about technology knowledge.
+
+<span id="page-13-2"></span>Table A3. The ablation study on the group strategy for the locallevel compression.
+
+| Methods       | w/ group | Video | oMM  | E w/o | MV-  | Ego-         |        |
+|---------------|----------|-------|------|-------|------|--------------|--------|
+| Methous       | w/ group | short | mid  | long  | all  | Bench        | Schema |
+| Unconditional | 1        | 36.7  | 34.4 | 32    | 34.4 | 43.7         | 42.7   |
+|               | X        | 34.7  | 31.9 | 31    | 32.5 | 43.7<br>42.9 | 39.9   |
+| Conditional   | 1        | 38.8  | 36.1 | 33.1  | 36.0 | 44.0         | 43.2   |
+|               | ×        | 36.6  | 33.7 | 31.2  | 33.8 | 44.0<br>43.6 | 41.6   |
+
+content of the video mentioned in the instruction.
+
+We collect the videos from Panda-70M [5] and Ego4D [15]. To ensure the diversity of the video sources, we pre-define 29 categories [10, 72] using natural language, select 1,500 videos for each category based on the similarity score calculated by InternVideo2 [54], and randomly select additional 10,000 videos from the whole Panda-70M and Ego4D datasets. The 29 categories are shown in Tab. A2. Fig. A1 shows some examples of our constructed HICom-248K. We use the open-soured Qwen2-VL-72B-Instruct [52] to generate around three instruction-description pairs for each video. The generated descriptions follow the instructions well and also accurately capture the visual content, which is suitable for conditional pre-training.
+
+<span id="page-13-3"></span>Table A4. The ablation study on valid and invalid instruction on VideoMME without subtitles. We manually select 326 samples with invalid instructions and 2374 samples with valid instructions.
+
+| Method  | S         | Short | Medium | Long | All  |
+|---------|-----------|-------|--------|------|------|
+|         | # Samples | 808   | 816    | 750  | 2374 |
+| Valid   | w/o inj.  | 34.1  | 33.5   | 31.1 | 32.9 |
+|         | w/ inj.   | 36.3  | 35.5   | 33.2 | 35.0 |
+|         | # Samples | 92    | 84     | 150  | 326  |
+| Invalid | w/o inj.  | 63.0  | 47.6   | 38.7 | 47.9 |
+|         | w/ inj.   | 63.0  | 47.6   | 39.3 | 48.1 |
+
+<span id="page-13-4"></span>Table A5. Ablation study about the Conditional Pre-training stage (CP for short) and HICom-248K data with different training strategies. We keep the projector of LLaVA-OV/LLaVA-Video (i.e., two layers of MLP, 2×2 spatial pooling) to train a baseline with our ablation data. We report the result on Video-MME without subtitles and EgoSchema.
+
+| Traning Strategy                   | Methods  | VideoMME    | EgoSchema   |
+|------------------------------------|----------|-------------|-------------|
+| 2 Stage w/o CP                     | Baseline | 36.1        | 42.5        |
+|                                    | HICom    | 36.0        | 41.6        |
+| 2 Stage mix HICom-248K for SFT     | Baseline | 36.4        | 43.3        |
+|                                    | HICom    | 36.2        | 42.4        |
+| 3 Stage w/ HICom-248K for CP       | Baseline | 36.2        | 43.2        |
+|                                    | HICom    | <b>36.6</b> | <b>43.5</b> |
+| 3 Stage w/ random 248K MCQA for CP | HICom    | 34.6        | 40.8        |
+
+# <span id="page-13-0"></span>C. More Experiments
+
+#### C.1. More Ablation Studies
+
+We implement more ablation studies here to demonstrate the superiority and generalization ability of our HICom.
+
+The group strategy at the local level. We introduce the temporal-spatial inductive bias, group the visual tokens, and conduct the local-level conditional compression within each group, preserving the temporal-spatial structure while highlighting the instruction-relevant visual content. We evaluate this grouping strategy for the local-level compression in Tab. A3. Without the grouping strategy, the performance drops significantly, especially on VideoMME and EgoSchema benchmarks, showing the significance of explicitly maintaining the temporal-spatial structure.
+
+Valid and invalid instruction. We notice that not all instructions can provide effective guidance information for capturing visual information, e.g., the instruction of the caption task. We call them the invalid instruction. To evaluate the performance of our HICom in this situation, we manually select out 326 samples with invalid instructions in the VideoMME benchmark. We list some examples of our selected invalid instruction as follows:
+
+- What is this video mainly about?
+- What can be learned from this video?
+- Which element doesn't show up in the video?
+
+<span id="page-14-0"></span>> **[图片提取文字 (无描述)]:**
+> Please describe the video in detail. The video begins with a character dressed in a red and white outfit. The character has long blonde hair tied in pigtails and is wearing a red hat with a white symbol on it. The character is seen smiling and waving, exuding a cheerful demeanor. The scene transitions to the character running through a grassy field, surrounded by flames and glowing objects, indicating an intense battle or action sequence. The character continues to run, dodging and attacking the enemies, showcasing their combat skills. The background features a picturesque landscape with trees, mountains, and a river, adding to the adventurous atmosphere. The video wraps up with a close-up of another character, dressed in a blue and white outfit with intricate designs, standing confidently against a backdrop of a clear blue sky with some clouds and greenery, suggesting a moment of triumph or reflection after the battle. Do you think the character with red and white outfit is cute? Why? Yes, the character with red and white outfit is very cute. She has a small animal on her back and wears a hat with a bunny symbol. Her outfit also has a lot of details that make her look adorable. Can you describe the video in detail? Sure! The video begins with a view of a grand hall with a high ceiling and large windows. The floor is wooden, and the walls are adorned with golden accents. A bright blue beam of light descends from the ceiling, creating a magical atmosphere. In the center of the hall, two characters stand facing each other. One character has long white hair and is dressed in a blue and white outfit, while the other has long silver hair and is wearing a dark blue outfit with gold accents. The character with long white hair starts to move towards the center of the hall, while the other character remains stationary. The scene transitions to a close-up of the character with long white hair, who appears to be speaking or singing. The camera then shifts to a wider view of the hall, showing the character with long white hair standing alone in the center, surrounded by a glowing aura. The character raises their arms, and the blue beam of light reappears, enveloping them in a magical glow. The focus then shifts to a close-up of the character with long white hair, now wearing a blue hat with a decorative bow and a dark blue outfit with gold accents. The character stands in the center of the hall, illuminated by a bright light that creates a halo effect around their head. They raise their arms, causing the blue beam of light to descend once more, enveloping them in a magical glow. The scene transitions to a wider view of the hall, showing the character standing alone in the center, surrounded by a 0\_0 glowing aura. The character then moves gracefully, and the camera follows their movements, capturing the intricate details of their outfit and the magical light effects. The video concludes with a close-up of the character's face, highlighting their expressive eves and the delicate features of their face. What is the character with long white hair mainly doing in the video? The character with long white hair is mainly walking towards the center of the hall, speaking, and then dancing. How do you rate this dance? This dance is a beautiful and captivating performance that showcases the elegance and grace of the dancer. The use of lighting effects and the intricate details of the costumes add to the overall visual appeal of the performance. The video captures the fluidity 00 and precision of the dancer's movements, creating a mesmerizing and enchanting experience for the viewer.
+![](_page_14_Figure_0.jpeg)
+
+Figure A2. Some video dialogue examples of HICom in the scene of the animated style.
+
+- In what order were the following mentioned in the video?
+- According to the video, which of the following statements is true?
+- Which of the following accurately describes the content of the video?
+
+As shown in Tab. [A4,](#page-13-3) we test both the unconditional and
+
+conditional compression on 326 invalid instructions and the other 2374 valid instructions of VideoMME without subtitles separately. For valid instructions, the conditional compression (w/ inj.) gains 2.1% compared with unconditional compression (w/o inj.). When it comes to invalid instructions, the conditional compression keeps the same results
+
+<span id="page-15-2"></span>> **[图片提取文字 (无描述)]:**
+> Please give a detailed description about the video. The video begins with a wide shot of a large stadium filled with an enthusiastic crowd, all holding up their phones to light up the darkened arena. The camera then zooms in on a stage where a woman is performing. She is dressed in a sparkly outfit and is singing into a microphone. The stage is decorated with large pink and purple fabric wings that move around her as she performs. The woman continues to sing and dance around the stage, engaging with the audience. The video captures the energy and excitement of the performance, with the woman's movements and the vibrant colors of the stage creating a captivating visual experience. What is the woman wearing? The woman is wearing a sparkling silver outfit. Do you see any words at the beginning of the video? Yes, the word "lover" appears in large, pink letters on the screen. What kind of environment did the spaceship land in? The spaceship landed in a vast, open ocean under an overcast sky. How many astronauts have come out of the spaceship? Two astronauts have come out of the spaceship.
+![](_page_15_Figure_0.jpeg)
+
+Figure A3. Some video dialogue examples of HICom in the scene of the realistic style.
+
+<span id="page-15-0"></span>Table A6. Inference efficiency comparison between LLaVA-OneVision-7B and our HICom-7B. We report the number of parameters, the inference time of each component, and the final throughput.
+
+|            | Methods     | Frames | Vision Encoder | Compressor | LLM   | All   |
+|------------|-------------|--------|----------------|------------|-------|-------|
+| Params     | LLaVA-OV-7B | 32     | 413M           | 16M        | 7.6B  | 8.0B  |
+| Params     | HICom-7B    | 32     | 428M           | 450M+63M   | 7.6B  | 8.5B  |
+| Time       | LLaVA-OV-7B | 32     | 11.1           | 2.3        | 553.7 | 567.1 |
+| (ms)       | HICom-7B    | 32     | 11.1           | 23.9       | 102.7 | 137.7 |
+|            | LLaVA-OV-7B | 32     | -              | -          | -     | 4.25  |
+| Throughput | HICom-7B    | 32     | -              | -          | -     | 1.51  |
+| (s/video)  | HICom-7B    | 64     | -              | -          | -     | 1.89  |
+|            | HICom-7B    | 128    | -              | -          | -     | 2.68  |
+
+as unconditional compression on short and medium videos, and even gains slightly on long videos. We also find the performance of this situation might be easier than valid instruction, as both models perform much better. Thanks to our design of the local-level compression and the group strategy, we argue that the conditional compression will also focus on the global content of the video within each group, and degrade to the situation of unconditional compression, as there also exists this kind of data during training. The conditional
+
+<span id="page-15-1"></span>Table A7. The comparison of SOTA methods and HICom on MLVU<sub>dev</sub> benchmark. \* indicates we reproduce the results ourselves using the official checkpoint and inference code provided by authors.  $\S$  donates we inference with a new length of frames trained by sampling 32 frames.
+
+| Methods              | LLM Size | Frames | Tokens | $MLVU_{dev}$  |
+|----------------------|----------|--------|--------|---------------|
+| Video-LLaVA [30]     | 7B       | 8      | 2048   | 47.3          |
+| LLaMA-VID [28]       | 7B       | 1fps   | 2tps   | 33.2          |
+| LongVA [69]          | 7B       | 128    | 18432  | 56.3          |
+| VideoLLaMA2 [7]      | 7B       | 16     | 1152   | 48.5          |
+| LLaVA-OneVision [20] | 7B       | 32     | 6272   | 65.3*         |
+| LLaVA-Video [72]     | 7B       | 32     | 6272   | <u>66.7</u> * |
+| HICom (Ours)         | 7B       | 32     | 680    | 62.8          |
+| HICom (Ours)§        | 7B       | 64     | 1328   | 65.1          |
+| HICom (Ours)§        | 7B       | 128    | 2624   | 67.2          |
+
+compression will not perform lower than the unconditional compression.
+
+Conditional pre-training stage and HICom-248K data. We further conduct ablation studies on our proposed conditional pre-training stage and HICom-248K data. We use four different training strategy settings, and report their re-
+
+sults of both baseline and our HICom, as shown inTab. [A5.](#page-13-4) We keep the projector of LLaVA-OV/LLaVA-Video (*i.e*., two layers of MLP, 2×2 spatial pooling) to train a baseline with our ablation data. We find the increase from constructed data for baseline (*i.e*., the comparison between the first strategy and the third strategy) is not as significant as HICom (averagely 0.4% vs 1.25%). We also find that for HICom, mixing SFT (the second strategy) gains slightly (0.5%) on 2-stage training (the first strategy), but our 3 stage training (the third strategy) outperforms 2-stage training (the first strategy) obviously (1.25%). These two findings demonstrate that our improvement comes more from the additional pre-training strategy, rather than the constructed data themselves. The fourth strategy demonstrates the significance of the data type of the conditional stage, as the performance significantly drops when we change our instruction-followed descriptions to multi-choice QA data, which may confuse the alignment of instruction injection.
+
+Inference efficiency. Apart from the number of visual tokens that are sent into LLM, we also report the throughput to further demonstrate the inference efficiency. The comparison between LLaVA-OneVision-7B and HICom-7B is shown in Tab. [A6.](#page-15-0) We report the time using the same sample, and we only report the LLM time of the first generated token for fair comparison. We report the average time-consuming result of inferring 100 samples as throughput, the time in throughput is larger than our reported time because the throughput counts the time of video loading, the prepare inputs labels for multimodal process, and the LLM generates more than one token. Compared with LLaVA-OneVision, our vision encoder includes an additional projector and therefore contains additional 16M parameters, and the compressor includes an additional 450M text encoder. This leads to our 23.9ms consumption of the compressor with the text encoding process, 21.6ms more than LLaVA-OneVision. However, our compressor significantly reduces the visual tokens, resulting much shorter time consumption of LLM (102.7ms *vs* 553.7ms), as the LLM inference time usually occupies the main part. Therefore, the number of visual tokens can also effectively and accurately reflect the inference efficiency. Thanks to our compression, our final throughput is much faster than LLaVA-OneVision, as our HICom with 128 frames still infers 1.6x faster than LLaVA-OneVision with only 32 frames.
+
+# C.2. More Benchmarks
+
+We also report our HICom on MLVU [\[73\]](#page-10-20) in Tab. [A7](#page-15-1) as MLVU is a long video benchmark. We report the performance of MLVU's dev split on multi-choice tasks. Our HICom also achieves comparable performance among SOTA 7B models.
+
+#### C.3. More Qualitative Analysis
+
+We provide some examples of video dialogues in this section to intuitively show the video understanding ability. Fig. [A2](#page-14-0) shows the situation of animated style videos. Thanks to the design of the local-level compression, our HICom also obtains powerful caption capabilities and gives detailed and accurate captions for videos. Meanwhile, HICom can make judgments based on the understanding of the video. For example, it captures the girl's outfit to draw the conclusion that the girl is cute in the first example video, and think the dancing is beautiful and captivating after watching the second example video. Fig. [A3](#page-15-2) shows the scene of realistic style videos, which is also easy for HICom to handle. In the first example video, HICom accurately describes the concert scene, and also recognize the word "Lover" on the large screen. In the second movie clip example, HICom can perceive the environment information and accurately count how many people are in the scene.

@@ -1,0 +1,581 @@
+# QWENLONG-CPRS: Towards ∞-LLMs with Dynamic Context Optimization
+
+Weizhou Shen, Chenliang Li, Fanqi Wan, Shengyi Liao, Shaopeng Lai, Bo Zhang, Yingcheng Shi, Yuning Wu, Gang Fu, Zhansheng Li, Bin Yang, Ji Zhang, Fei Huang, Jingren Zhou, Ming Yan<sup>∗</sup> Tongyi Lab, Alibaba Group
+
+![](_page_0_Picture_3.jpeg)
+
+<https://github.com/Tongyi-Zhiwen/QwenLong-CPRS> <https://huggingface.co/Tongyi-Zhiwen/QwenLong-CPRS-7B> <https://modelscope.cn/models/iic/QwenLong-CPRS-7B>
+
+# Abstract
+
+This technical report presents QWENLONG-CPRS, a context compression framework designed for explicit long-context optimization, addressing prohibitive computation overhead during the prefill stage and the "lost in the middle" performance degradation of large language models (LLMs) during long sequence processing. Implemented through a novel *dynamic context optimization* mechanism, QWENLONG-CPRS enables multi-granularity context compression guided by natural language instructions, achieving both efficiency gains and improved performance.
+
+Evolved from the Qwen architecture series, QWENLONG-CPRS introduces four key innovations: (1) Natural language-guided dynamic optimization, (2) Bidirectional reasoning layers for enhanced boundary awareness, (3) Token critic mechanisms with language modeling heads, and (4) Window-parallel inference.
+
+Comprehensive evaluations across five benchmarks (4K-2M word contexts) demonstrate QWENLONG-CPRS's threefold effectiveness: (1) Consistent superiority over other context management methods like RAG and sparse attention in both accuracy and efficiency. (2) Architecture-agnostic integration with *all* flagship LLMs, including GPT-4o, Gemini2.0-pro, Claude3.7-sonnet, DeepSeek-v3, and Qwen2.5 max, achieves 21.59× context compression alongside 19.15-point average performance gains; (3) Deployed with Qwen2.5-32B-Instruct, QWENLONG-CPRS surpasses leading proprietary LLMs by 4.85 and 10.88 points on Ruler-128K and InfiniteBench, establishing new SOTA performance.
+
+# 1 Introduction
+
+Enhancing the long-context processing capabilities of large language models (LLMs) has emerged as a critical research frontier in both academia and industry [\[31,](#page-14-0) [39,](#page-14-1) [34,](#page-14-2) [1\]](#page-12-0). Recent advancements in positional embedding techniques [\[38,](#page-14-3) [33\]](#page-14-4) and the curation of synthetic long-context training data [\[3\]](#page-12-1) have enabled significant progress in extending LLMs' context windows, achieving expansions from 4K to over 1M tokens [\[46,](#page-15-0) [10\]](#page-12-2). Despite these advances, two critical challenges persist. First, the quadratic computational complexity of processing long sequences imposes prohibitive efficiency costs. Second, the unresolved "lost in the middle" phenomenon [\[25\]](#page-13-0), where LLMs struggle to effectively prioritize critical information within lengthy inputs.
+
+A fundamental strategy involves efficiently managing long context by focusing on key content within the model's reliable context window [\[26\]](#page-14-5). Building upon this strategy, two primary approaches have
+
+<sup>∗</sup> Corresponding author
+
+<span id="page-1-0"></span>![](_page_1_Figure_0.jpeg)
+
+![](_page_1_Figure_1.jpeg)
+
+- (a) The input compression rate and performance gain when different LLMs are cascaded with QWENLONG-CPRS.
+- (b) Performance of Qwen2.5-32b-instruct with different context management methods.
+
+Figure 1: Illustration of the performance of QWENLONG-CPRS. Figure 1a compares the input token consumption and model performance of various LLMs on Ruler-128K before (marked with  $\diamondsuit$ ) and after (marked with  $\Delta$ ) cascading QWENLONG-CPRS. Figure 1b highlights the performance improvements of QWENLONG-CPRS over other context management methods, such as RAG [22] and sparse attention [16].
+
+been proposed: Retrieval-augmented generation (RAG) frameworks [21, 7] enhance computational efficiency by dynamically retrieving query-relevant text chunks from input contexts, enabling selective processing of contextual information. Conversely, sparse attention (SA) mechanisms [16, 27, 49] redesign the self-attention mechanism within LLMs, either by restricting attention computations to structured patterns or by prioritizing critical token interactions during sequential generation.
+
+Despite their advantages, both approaches exhibit significant limitations. First, RAG systems, while efficient, rely on coarse-grained chunk-level embeddings, leading to imprecise outputs. This limitation becomes particularly problematic in scenarios requiring fine-grained localization of uniformly distributed knowledge [23]. On the other hand, SA methods, though flexible in token-level aggregation, necessitate substential data construction and computationally intensive model training to optimize attention patterns [27, 49], alongside specialized infrastructure investments.
+
+To address these challenges, we introduce an innovative *dynamic context optimization* paradigm, which aims to improve context-processing efficiency through maximizing information density. As depicted in Figure 2, this approach dynamically compresses input contexts into query-tailored segments across different granularities, enabling concise and accurate context optimization for various user queries. This paradigm advances existing methods in two key aspects. First, it replaces RAG's coarse chunk-level retrieval with precise token-level content selection, enhancing information identification accuracy. Second, it operates independently as a plug-and-play component, eliminating SA's requirement for model retraining while maintaining compatibility with any downstream LLMs.
+
+Building upon the dynamic context optimization paradigm, we propose a novel compression system QWENLONG-CPRS. Specifically, QWENLONG-CPRS takes the control prompt, task query, and long context as input, and then labels the token critic score to compress task-relevant content based on a single forward pass. To endow QWENLONG-CPRS with both precise and controllable characteristics, we redesign the attention mechanism into a hybrid architecture that combines bi-directional language modeling for comprehensive context location and causal language modeling for reliable language representation. Additionally, we develop a language modeling as token critic framework that repurposes the existing LLM's language modeling head to label token-level importance scores, thus maintaining the pretrained knowledge for better context compression
+
+As illustrated in Figure 1a, QWENLONG-CPRS demonstrates a remarkable context compression effect, achieving a context compression rate ranging from 72.6 to 290.5 times. This indicates that QWENLONG-CPRS possesses efficient context optimization capabilities and can be seamlessly reused across various large models. More experimental results in Section 4 across four long-context benchmarks whose input context lengths ranging from 4K to 2M tokens demonstrate QWENLONG-CPRS's superiority over direct prompting, RAG, and SA methods, with remarkable performance improvements and considerably higher inference efficiency. Notably, we show that smaller, short-
+
+<span id="page-2-0"></span>![](_page_2_Picture_0.jpeg)
+
+Figure 2: The concept of *dynamic context optimization*, which aims to enhance context processing efficiency by maximizing information density. Given a long-context input, this paradigm dynamically compresses it into query-specific content at varying granularities, facilitating concise and accurate information extraction for different user queries. For instance, keywords for *search queries*, sentences for *question answering*, and paragraphs for *summarization*.
+
+context LLMs augmented with QWENLONG-CPRS can outperform larger long-context counterparts. These findings highlight the potential of context optimization paradigms, offering a scalable and efficient pathway to augment LLMs' long-context processing capabilities.
+
+Our key contributions are as follows:
+
+- We introduce dynamic context optimization, a novel paradigm for long-context management through dynamic, instruction-guided token-level compression. This paradigm optimizes information retention while adaptively prioritizing critical content.
+- We propose QWENLONG-CPRS, an innovative model that advances long-context processing via token-level critical scoring, enabling granular context optimization without sacrificing precision. We transformed the Qwen series models into an dynamic context optimization model by integrating a hybrid attention mechanism and leveraging the language modeling head token critic module. Furthermore, we systematically designed the framework for training data construction.
+- Through extensive evaluation across four distinct benchmarks, we demonstrate that QWENLONG-CPRS achieves substantial performance gains while reducing inference overhead. The framework shows consistent efficacy across LLMs of varying parameter scales and context lengths, establishing its versatility as a context-optimization-augmentation solution for long-context processing.
+
+# <span id="page-2-2"></span>2 QWENLONG-CPRS
+
+In this section, we initially present the formal definition of dynamic context optimization in Section [2.1.](#page-2-1) Subsequently, Section [2.2](#page-3-0) details the model architecture of QWENLONG-CPRS and elaborates on the training methodology employed to align QWENLONG-CPRS with the objectives of dynamic context optimization. Our effective window-parallelism inference method is also introduced in Section [2.2.](#page-3-0) Lastly, we describe the data construction method we have devised in Section [2.3.](#page-4-0)
+
+### <span id="page-2-1"></span>2.1 Dynamic Context Optimization
+
+The input structure for long-context tasks comprises two components: the user query q, and the long context X<sup>l</sup> . When X<sup>l</sup> exceeds the effective window size of LLMs, it typically causes either essential input truncation or the "lost-in-the-middle" phenomenon, ultimately degrading response quality. To address this, we propose identifying an information-condensed subset X<sup>s</sup> such that:
+
+$$|X_s| \ll |X_l|$$
+, where  $X_s \subseteq X_l$  (1)
+
+This process, termed *context optimization*, aims to find the minimal-length |Xs| that preserves maximally informative content for generating high-quality responses Y . Formally, we define our
+
+<span id="page-3-1"></span>![](_page_3_Figure_0.jpeg)
+
+![](_page_3_Figure_1.jpeg)
+
+- (a) The model architecture of QWENLONG-CPRS.
+- (b) The workflow of generative LLMs cascading QWENLONG-CPRS in this paper.
+
+Figure 3: The model architecture and workflow of QWENLONG-CPRS.
+
+objective function as:
+
+$$\mathcal{J} = \max_{\phi} \mathbb{E}_{X_s \subseteq X_l} \left[ \frac{\mathcal{I}(Y; [X_s, q])}{|X_s|^{\beta}} \right], \tag{2}$$
+
+where I(·, ·) is the mutual information, β controls the length penalty intensity, and ϕ parameterizes the context optimizer. In this paper, we propose QWENLONG-CPRS, which achieves context optimization by identifying and retaining the most semantically crucial tokens from X<sup>l</sup> . In addition, we introduce a natural language prompt P that enables users to dynamically configure the granularity of the optimized context and how it will contribute the the response. Therefore, the resulting dynamically optimized context X<sup>s</sup> is formalized as:
+
+$$X_s = \mathcal{F}_{\phi}(P, q, X_l), \tag{3}$$
+
+where F(·) is the token selection operation.
+
+# <span id="page-3-0"></span>2.2 Model Architecture
+
+The model architecture of QWENLONG-CPRS is illustrated in Figure [3a.](#page-3-1) To ensure model generalization and achieve better awareness of the use's controlling prompt and query, we adopt the parameters and vocabulary of the Qwen-2-Base [\[45\]](#page-15-2) series models[2](#page-3-2) as the starting checkpoint for initializing our QWENLONG-CPRS. Beside the parameter initialization and vocabulary inheritance, there are several key modifications for QWENLONG-CPRS to achieve better context optimization performance:
+
+Dynamic Control via Natural Language: We define the input structure for QWENLONG-CPRS as a concatenation of three text components: {system prompt, user query, long context}, formatted according to the Qwen message organization template. In this paradigm, the system prompt specifies the desired properties of the optimized context, such as its granularity and its relationship to the query. For instance: You are an expert in information extraction; your task is to extract sentences from the documents that support the user's question. The user query contains the original instruction provided by the user, and the long context component is the source document requiring optimization. Through this paradigm design, QWENLONG-CPRS can adaptively extract informative context according to the requirements of the system prompt and user query.
+
+Bidirectional Location Reasoning: QWENLONG-CPRS implements context optimization through a token scoring paradigm, preserving original token positions for prediction outputs. To improve
+
+<span id="page-3-2"></span><sup>2</sup>Our experimental results demonstrate that the Qwen-2-Base series models outperform the Qwen-2.5-Base series models
+
+boundary detection accuracy in optimized contexts, we introduce a *bidirectional location reasoning* mechanism that enables global awareness of long-range contextual dependencies. As shown in Figure 3a, we retain the causal masking in lower Transformer layers to maintain the base model's inherent language modeling capabilities. On the other hand, the upper layers employ bi-directional attention, allowing token-level decisions to incorporate both forward and backward contextual signals. This modification ensures the stable retention of linguistic knowledge and enhanced boundary detection via bi-directional reasoning.
+
+Language Modeling as Token Critic: Unlike conventional methods that predict token importance through scalar scores [15, 32] or restricted tagging schemes [24, 12], QWENLONG-CPRS unifies semantic categorization and positional reasoning within a single framework. As illustrated in Figure 3a, we repurpose the base model's language modeling head to predict token-level semantic categories from the LLM vocabulary  $\mathcal{V}$ , while simultaneously employing a secondary head to generate sequence labeling scores for boundary detection. The resulting search space constitutes the Cartesian product of the vocabulary  $\mathcal{V}$  the positional tag set. This combinatorial formulation expands the decision space by a considerable scale, enabling dynamic adaptation to diverse optimization criteria through prompt conditioning while preserving the base model's linguistic knowledge via parameter inheritance. With this language modeling as token critic setting, we maximize the log-probability of token's label during the supervised fine-tuning.
+
+Window-Parallel Inference: We propose a window-parallel inference strategy for efficient context optimization, as depicted in Figure 3b. Given a window size w, the long context  $X_l$  is partitioned into  $\lceil |X_l|/w \rceil$  non-overlapping windows. Each window is concatenated with the system prompt P and query q to form independent inputs for parallel processing via QWENLONG-CPRS. Let  $\rho$  denote the parallelism factor, the computational complexity of the LLM's pre-filling stage reduces to:
+
+$$O(\frac{|X_l|}{\rho w} * w^2) + O(|X_s|^2) = O(\frac{w}{\rho} |X_l|) + O(|X_s|^2)$$
+(4)
+
+In the above equation,  $O(\frac{|X_l|}{\rho w} * w^2)$  represents the window-parallel inference overhead of QWENLONG-CPRS, while  $O(|X_s|^2)$  denotes the prefill computation cost for the generative LLM processing optimized context  $X_s$ . Given constant parameters w and  $\rho$ , and  $|X_s| \ll |X_l|$  in practice, this formulation achieves strictly lower complexity than the  $O(|X_l|^2)$  baseline of direct prompting. The windowing strategy further enables theoretically infinite long context optimization - the length  $|X_l|$  can scale with arbitrarily large while maintaining fixed memory overhead per parallel computation unit.
+
+## <span id="page-4-0"></span>2.3 Training Data Construction
+
+The supervised fine-tuning process of QWENLONG-CPRS is conducted based on the token critic task described in Section 2.2. To enhance contextual reasoning capabilities, we construct two specialized training datasets: (1) Multi-granularity context optimization data for fundamental context grounding skills, and (2) Query-aware context optimization data that specifically improves query-context interaction understanding. This dual training strategy enables simultaneous development of general contextual awareness and targeted query-response alignment capabilities.
+
+**Multi-granularity context optimization:** In the multi-granularity context optimization training data, we focus on how QWENLONG-CPRS can adaptively and controllably compress the long context into different granularities of optimized according to the system prompt:
+
+- **Keyword granularity**: We collected training data from open source datasets such as named entity recognition (NER) [42, 6, 20] and machine reading comprehension (MRC) with phrase-level answer [13, 36, 18]. In addition to these open datasets, we also crawled publicly accessible documents, including arXiv papers, financial reports, contracts, bidding announcements, and court judgments. We hired annotators to highlight and annotate keywords and entities within these documents and trained the model to extract these keywords.
+- Sentence granularity: We modified the word granularity compression training data to sentence granularity compression, such as altering "extract the keyword k in the context" to "extract sentences mentioning the keyword k in the context". Additionally, we constructed a set of training data inspired by the "Needle in a Haystack" task [17], enabling the model to extract "needle" sentences from long documents. Furthermore, in sentence-level compression, we also aimed for
+
+QWENLONG-CPRS to learn how to compress the long context into information-rich sentences. We assume that the summary of a context represents the richest information in that context to some extent. Therefore, we collected open-source summarization datasets [\[37\]](#page-14-10) and our own annotated summarization datasets, leveraging the greedy search algorithm from SummaRuNNer [\[29\]](#page-14-11) to construct sentence-level extractive summarization training data.
+
+• Paragraph granularity: In paragraph-granularity compression training, we intended for QWENLONG-CPRS to learn the ability to compress entire paragraphs. Using the document parsing toolkit DocMind [3](#page-5-0) , we segmented the crawled documents into paragraphs, tables, images, and other blocks. We employed annotators to label the meaning of randomly sampled paragraphs and tables, and trained the model to extract paragraphs or tables that correspond to these meanings from the context.
+
+Query-aware context optimization: This training set focuses on enabling QWENLONG-CPRS to perform context optimization aligned with user queries, thereby enhancing practical application performance. We leverage existing long-context QA datasets containing annotated supporting facts for reference answers [\[36,](#page-14-9) [47,](#page-15-3) [43\]](#page-15-4), directly incorporating these into QWENLONG-CPRS's training to develop supporting fact extraction capabilities. To augment data diversity, we implement two complementary context compression synthesis approaches:
+
+- Forward synthesis initiates with context segmentation into 256-token fragments, preserving semantic integrity through boundary sentence pruning. From these fragments, N(1 ≤ N ≤ 3) are randomly selected to generate query-answer pairs via self-instruction prompting [\[44\]](#page-15-5), with the LLM simultaneously producing supporting facts from the selected fragments. This process creates training instances for query-driven fact extraction from extended contexts.
+- Backward synthesis operates on pre-annotated query-answer pairs, applying identical context segmentation followed by map-reduce processing. The LLM evaluates each fragment's relevance to answering the target query, enabling construction of training data for context segment retrieval aligned with specific information needs.
+
+Both synthesis pipelines incorporate answer consistency verification: generated supporting facts are fed back to the LLM for answer reproduction, with subsequent comparison against original annotations to filter low-quality outputs.
+
+Through aformentioned methodologies, we curate a multi-domain, multilingual context compression corpus containing 126K samples (1.2B tokens) spanning various granularities and task types.
+
+# 3 Experimental Setup
+
+### 3.1 Implementation Details
+
+QWENLONG-CPRS was initialized using the Qwen2-7b-Base architecture [\[45\]](#page-15-2), inheriting its parameters and vocabulary. The first 21 Transformer layers were retained as causal attention modules, while layers 22–28 were reconfigured as bi-directional location reasoning layers following the design in Section [2.2.](#page-3-0) A 3-epoch supervised fine-tuning regimen was implemented for the token critic task, employing the following configurations: window-parallel inference with 8192-token context windows, global batch size of 256, and constant learning rate of 1e-5. Training stability was ensured through Zero-3 partitioning with optimizer state offloading [\[35\]](#page-14-12). To address input token optimization sparsity in long-context processing, we applied random gradient masking to 50% of non-critical token positions during backpropagation.
+
+# 3.2 Benchmarks
+
+Our evaluation protocol employs five long-context benchmarks with input lengths exceeding standard capabilities:
+
+Ruler-128K [\[14\]](#page-13-11): Generates synthetic long-context data through controlled noise injection (essays, sentence repetitions, UUID strings) into conventional text. We assess performance on three representative subsets: Needle-in-a-Haystack (NIAH), Variable Tracking (VT), and Question Answering (QA).
+
+<span id="page-5-0"></span><sup>3</sup> <https://www.aliyun.com/product/ai/docmind>
+
+Table 1: Evaluation results on Ruler-128K and InfiniteBench
+
+<span id="page-6-2"></span>
+
+|                           | I        | Rul   | er-128k |       |       | l     |       |       | InfiniteBench |        |       |       |
+|---------------------------|----------|-------|---------|-------|-------|-------|-------|-------|---------------|--------|-------|-------|
+| Model                     | NIAH-sub | NIAH  | VT      | QA    | Avg   | QA.EN | QA.ZH | MC.EN | RT.Passkey    | RT.NUM | RT.KV | Avg   |
+| Qwen2.5-72b-instruct [34] | 47.92    | 75.00 | 91.60   | 66.00 | 77.53 | 27.36 | 31.29 | 76.42 | 79.66         | 79.66  | 32.00 | 54.40 |
+| Qwen2.5-max [34]          | 10.00    | 19.84 | 23.60   | 38.00 | 27.15 | 18.11 | 18.87 | 69.87 | 22.03         | 22.33  | 16.40 | 27.93 |
+| Qwen2.5-turbo-1M [46]     | 41.67    | 75.00 | 90.00   | 65.31 | 76.77 | 17.46 | 25.86 | 65.94 | 100.00        | 99.83  | 38.00 | 57.85 |
+| Qwen3-32b                 | 48.26    | 60.54 | 70.08   | 40.37 | 57.00 | 15.83 | 26.86 | 75.55 | 71.19         | 71.19  | 32.00 | 48.77 |
+| Qwen3-235b-a22b           | 48.60    | 61.57 | 70.04   | 39.55 | 57.05 | 9.62  | 17.73 | 77.29 | 71.19         | 71.19  | 33.00 | 46.67 |
+| gpt-4o [30]               | 47.92    | 71.25 | 77.60   | 76.00 | 74.95 | 31.72 | 25.24 | 86.46 | 79.66         | 79.66  | 58.00 | 60.12 |
+| claude-3.7-sonnet [2]     | 49.17    | 70.94 | 76.00   | 70.00 | 72.31 | 35.95 | 17.02 | 74.67 | 79.62         | 80.00  | 59.20 | 57.74 |
+| deepseek-v3 [11]          | 16.25    | 30.47 | 34.40   | 30.00 | 31.26 | 20.69 | 26.76 | 74.67 | 41.19         | 41.86  | 21.60 | 37.18 |
+| gemini-2.0-pro [9]        | 58.47    | 71.63 | 75.48   | 72.20 | 73.10 | 38.06 | 32.03 | 90.39 | 79.66         | 79.66  | 57.80 | 62.93 |
+| Qwen-Long                 | 86.61    | 94.92 | 99.84   | 68.70 | 87.82 | 17.46 | 25.80 | 71.56 | 100.00        | 100.00 | 36.20 | 58.50 |
+| LLaMA3.1-8b-instruct [1]  | 47.22    | 65.69 | 28.63   | 59.80 | 51.37 | 26.74 | 35.18 | 26.20 | 94.58         | 91.86  | 64.00 | 56.43 |
+| + RAG [22]                | 78.40    | 91.20 | 93.32   | 71.80 | 85.44 | 23.22 | 35.78 | 34.70 | 96.70         | 93.60  | 68.18 | 58.70 |
+| + MOBA [27]               | 75.58    | -     | -       | -     | -     | -     | -     | -     | -             | -      | -     | -     |
+| + MInference [16]         | 47.80    | 73.66 | 29.08   | 46.10 | 49.16 | 27.60 | 30.28 | 44.54 | 87.80         | 84.24  | 22.60 | 49.51 |
+| + QWENLONG-CPRS           | 99.65    | 99.75 | 100.00  | 73.53 | 91.09 | 26.20 | 35.82 | 64.63 | 95.93         | 96.78  | 99.00 | 69.73 |
+| Qwen2.5-7b-instruct [34]  | 21.33    | 59.98 | 24.48   | 45.90 | 43.45 | 16.69 | 21.34 | 59.82 | 94.91         | 94.91  | 14.60 | 50.38 |
+| + RAG [22]                | 82.65    | 93.30 | 98.92   | 65.70 | 85.97 | 15.56 | 20.26 | 79.04 | 100.00        | 99.66  | 73.60 | 64.69 |
+| + MInference [16]         | 37.87    | 69.34 | 22.92   | 45.70 | 45.99 | 16.80 | 21.12 | 62.54 | 94.92         | 94.92  | 13.20 | 50.38 |
+| + QWENLONG-CPRS           | 99.87    | 99.85 | 98.68   | 72.20 | 90.24 | 26.43 | 28.82 | 79.91 | 100.00        | 100.00 | 98.80 | 72.33 |
+| Qwen2.5-32b-instruct [34] | 50.70    | 75.76 | 93.56   | 50.61 | 73.31 | 20.88 | 18.17 | 79.04 | 91.53         | 85.08  | 35.20 | 54.98 |
+| + RAG [22]                | 86.41    | 93.38 | 97.92   | 65.30 | 85.53 | 14.97 | 20.44 | 76.86 | 99.66         | 100.00 | 73.00 | 64.16 |
+| + MInference [16]         | 50.62    | 76.14 | 95.84   | 51.10 | 74.36 | 21.65 | 18.0  | 80.79 | 94.92         | 94.92  | 36.4  | 57.78 |
+| + QWENLONG-CPRS           | 99.93    | 99.95 | 99.86   | 78.20 | 92.67 | 26.63 | 26.62 | 90.39 | 100.00        | 100.00 | 99.20 | 73.81 |
+
+For cross-system comparability with closed-source approaches [27], we also select the multi-key level 2, multi-key level 3 and multi-value tasks from Ruler-NIAH to derive the NIAH-sub benchmark.
+
+**InfiniteBench** [50]: Features multilingual (English/Chinese) and multi-task evaluations across six categories: QA (EN/ZH), multiple choice (MC.EN) and specialized retrieval tasks (Passkey, Numeric, Key-Value). Context lengths span 122K–2M words, testing extreme-scale processing capabilities.
+
+**Longbench V1** [4]: Comprehensive benchmark with 13K-word average context length. We evaluated the compared methods through established protocols [48, 49] across three dimensions: single-document QA, multi-document QA, and summarization.
+
+**Longbench V2** [5]: Advanced successor featuring complex reasoning tasks with 8K-word to 2M-word contexts, requiring deep linguistic understanding and logical inference.
+
+**Needle-in-a-Haystack** [17]: Precision evaluation for target statement retrieval from irrelevant contexts. We test the performance of QWENLONG-CPRS with the context lengths range from 32K to 1M tokens, and the inserted depths range from 0% to 100%.
+
+#### 3.3 Compared Baselines
+
+Our comparative analysis includes state-of-the-art LLMs and specialized long-context management approaches across three categories:
+
+**Proprietary LLMs**: Qwen2.5-Max [34], Qwen2.5-Turbo-1M [46], GPT-4o [30], Claude-3.7-Sonnet [2], Gemini-2.0-Pro [9], and Qwen-Long<sup>4</sup>.
+
+**Open-Source LLMs**: Qwen2.5-7b/32b/72b-instruct [34], DeepSeek-V3 [11], LLaMA3.1-8b-instruct [1], Qwen3-32b/235b-a22b [41].
+
+**RAG**: The long context is partitioned into 600-token chunks with GTE embeddings [22] for top-k retrieval, accumulating results until reaching 16K tokens.
+
+**Sparse Attention**: The open-source implementation: Minference [16]. And the experimental results reported at the original papers of the established methods: InfiniteRetrieval [48], MOBA [27], and NSA [49].
+
+# <span id="page-6-0"></span>4 Experimental Results
+
+#### <span id="page-6-3"></span>4.1 Overall Results
+
+The evaluation results across Tables 1, 2, and 3 demonstrate QWENLONG-CPRS's effectiveness against comparative baselines, revealing several key findings:
+
+<span id="page-6-1"></span><sup>4</sup>https://help.aliyun.com/zh/model-studio/long-context-qwen-long
+
+Table 2: Evaluation results on Longbench V1
+
+<span id="page-7-0"></span>
+
+| M. J.1                    |         | SingleDoc | QA    |       |       | MultiDe | oc QA |       | <b>.</b> | l     | Sum   | mary  |       |       |
+|---------------------------|---------|-----------|-------|-------|-------|---------|-------|-------|----------|-------|-------|-------|-------|-------|
+| Model                     | MF (en) | MF (zh)   | NQ    | Qasp  | HPQA  | 2Wiki.  | Musi. | Du.   | Avg_qa   | GR    | QM    | MN    | VC    | Avg   |
+| Qwen2.5-72b-instruct [34] | 54.26   | 66.20     | 33.78 | 47.56 | 65.88 | 64.46   | 42.00 | 19.29 | 45.89    | 19.56 | 18.69 | 13.52 | 16.30 | 38.46 |
+| Qwen2.5-max [34]          | 51.40   | 64.75     | 27.80 | 43.47 | 65.77 | 62.51   | 40.16 | 20.09 | 46.99    | 16.90 | 18.64 | 13.57 | 16.52 | 36.80 |
+| Qwen2.5-turbo-1M [46]     | 54.41   | 60.66     | 24.59 | 42.73 | 63.03 | 52.72   | 39.21 | 23.88 | 45.15    | 17.33 | 18.39 | 14.32 | 19.12 | 35.87 |
+| Qwen3-32b                 | 46.71   | 62.90     | 27.79 | 40.73 | 66.56 | 74.00   | 52.57 | 18.48 | 48.72    | 27.73 | 19.93 | 21.69 | 13.99 | 39.42 |
+| Qwen3-235b-a22b           | 45.60   | 61.45     | 30.16 | 42.06 | 68.40 | 75.42   | 56.20 | 17.59 | 49.61    | 27.35 | 20.00 | 21.45 | 13.50 | 39.93 |
+| gpt-4o [30]               | 53.99   | 62.56     | 35.13 | 46.97 | 68.79 | 68.51   | 46.20 | 17.71 | 49.98    | 15.82 | 17.11 | 14.40 | 14.95 | 38.51 |
+| claude-3.7-sonnet [2]     | 53.45   | 63.82     | 37.57 | 48.80 | 66.15 | 67.22   | 48.37 | 19.53 | 50.16    | 18.08 | 16.73 | 15.42 | 16.61 | 39.61 |
+| deepseek-v3 [11]          | 56.69   | 66.72     | 34.80 | 47.59 | 69.53 | 69.65   | 57.62 | 21.23 | 52.98    | 17.85 | 17.85 | 15.06 | 17.81 | 41.03 |
+| gemini-2.0-pro [9]        | 55.77   | 65.47     | 33.10 | 51.39 | 70.69 | 80.43   | 68.18 | 12.10 | 54.64    | 16.41 | 17.41 | 13.35 | 10.64 | 41.25 |
+| Qwen-Long                 | 53.62   | 64.49     | 30.92 | 43.98 | 64.80 | 62.53   | 41.06 | 21.83 | 47.90    | 33.04 | 24.06 | 22.44 | 13.71 | 39.71 |
+| LLaMA3.1-8b-instruct [1]  | 49.39   | 60.64     | 26.81 | 37.79 | 53.07 | 40.42   | 29.79 | 21.06 | 39.87    | 19.09 | 17.99 | 14.80 | 9.63  | 31.71 |
+| + RAG [22]                | 32.09   | 25.91     | 12.83 | 18.36 | 30.91 | 21.35   | 10.64 | 15.21 | 20.91    | 12.09 | 15.50 | 13.77 | 6.94  | 17.97 |
+| + MInference [16]         | 55.21   | 60.69     | 28.61 | 47.57 | 53.60 | 40.43   | 29.08 | 27.76 | 42.87    | 19.88 | 18.19 | 15.40 | 17.37 | 34.48 |
+| + InfiniteRetrieval [48]  | 44.72   | -         | 18.88 | 36.45 | 50.10 | 29.98   | 27.26 | -     | -        | 21.94 | 20.17 | 24.14 | -     | -     |
+| + QWENLONG-CPRS           | 54.37   | 60.87     | 28.68 | 42.92 | 59.03 | 52.46   | 34.58 | 23.93 | 44.60    | 20.02 | 18.22 | 15.06 | 16.84 | 35.58 |
+| Qwen2.5-7b-instruct [34]  | 52.35   | 62.94     | 25.40 | 45.40 | 56.92 | 45.02   | 31.16 | 28.57 | 43.47    | 32.64 | 23.35 | 23.20 | 13.69 | 36.72 |
+| + RAG [22]                | 33.93   | 26.97     | 12.15 | 21.97 | 33.15 | 23.72   | 11.14 | 20.64 | 22.96    | 20.48 | 20.15 | 21.41 | 9.81  | 21.29 |
+| + MInference [16]         | 51.86   | 62.95     | 28.25 | 45.87 | 56.29 | 43.03   | 31.16 | 23.15 | 42.82    | 18.57 | 18.64 | 14.50 | 17.89 | 34.35 |
+| + InfiniteRetrieval [48]  | 50.92   | -         | 25.48 | 42.12 | 57.52 | 50.26   | 30.62 | -     | -        | 19.26 | 20.47 | 20.60 | -     | -     |
+| + QWENLONG-CPRS           | 53.42   | 62.48     | 24.97 | 44.16 | 63.95 | 56.16   | 41.01 | 19.04 | 45.65    | 17.37 | 17.63 | 15.30 | 18.02 | 36.12 |
+| Qwen2.5-32b-instruct [34] | 52.68   | 66.22     | 31.91 | 47.99 | 64.81 | 59.81   | 40.60 | 22.00 | 48.25    | 17.09 | 17.84 | 14.88 | 18.80 | 37.89 |
+| + RAG [22]                | 34.17   | 32.17     | 13.21 | 22.79 | 35.86 | 25.30   | 13.19 | 21.13 | 24.73    | 27.83 | 20.12 | 21.29 | 10.15 | 23.10 |
+| + MInference [16]         | 50.98   | 66.14     | 27.90 | 46.46 | 62.37 | 59.22   | 39.13 | 24.90 | 47.17    | 18.46 | 17.62 | 14.32 | 17.36 | 37.07 |
+| + QWENLONG-CPRS           | 54.59   | 65.82     | 30.56 | 45.54 | 67.44 | 66.28   | 47.89 | 19.81 | 49.74    | 16.37 | 18.01 | 14.62 | 19.23 | 38.85 |
+
+Table 3: Evaluation results on Longbench V2
+
+<span id="page-7-1"></span>
+
+| Model                     | Overall | l .  | culty | Length (< 32K; 32K-128K; > 12 |        |      |  |  |  |
+|---------------------------|---------|------|-------|-------------------------------|--------|------|--|--|--|
+|                           |         | Easy | Hard  | Short                         | Medium | Long |  |  |  |
+| Qwen2.5-72b-instruct [34] | 42.1    | 42.7 | 41.8  | 45.6                          | 38.1   | 44.4 |  |  |  |
+| Qwen2.5-max [34]          | 46.5    | 51.6 | 43.4  | 56.7                          | 38.6   | 45.4 |  |  |  |
+| Qwen2.5-turbo-1M [46]     | 40.8    | 45.3 | 37.9  | 46.1                          | 37.7   | 38.0 |  |  |  |
+| Qwen3-32b [41]            | 48.7    | 57.3 | 43.4  | 57.2                          | 42.3   | 47.2 |  |  |  |
+| Qwen3-235b-a22b [41]      | 51.9    | 58.1 | 48.1  | 60.3                          | 46.7   | 48.1 |  |  |  |
+| gpt-4o [30]               | 46.0    | 50.8 | 43.0  | 47.5                          | 47.9   | 39.8 |  |  |  |
+| claude-3.7-sonnet [2]     | 50.9    | 60.4 | 45.0  | 55.0                          | 47.9   | 50.0 |  |  |  |
+| deepseek-v3 [11]          | 45.3    | 51.0 | 41.8  | 51.7                          | 40.0   | 45.4 |  |  |  |
+| gemini-2.0-pro [9]        | 60.6    | 71.6 | 53.7  | 69.1                          | 54.0   | 59.4 |  |  |  |
+| Qwen-Long                 | 43.0    | 49.2 | 39.2  | 48.3                          | 37.7   | 44.9 |  |  |  |
+| Qwen2.5-7b-instruct [34]  | 27.4    | 30.2 | 25.7  | 35.0                          | 24.2   | 21.3 |  |  |  |
+| + RAG [22]                | 31.4    | 35.9 | 28.6  | 33.3                          | 28.4   | 34.3 |  |  |  |
+| + MInference [16]         | 27.8    | 27.6 | 28.0  | 31.7                          | 27.0   | 23.1 |  |  |  |
+| + QWENLONG-CPRS           | 33.1    | 30.9 | 34.4  | 36.7                          | 29.8   | 33.6 |  |  |  |
+| Qwen2.5-32b-instruct [34] | 41.7    | 47.9 | 37.9  | 46.1                          | 38.1   | 41.7 |  |  |  |
+| + RAG [22]                | 32.2    | 36.5 | 29.6  | 35.6                          | 27.0   | 37.0 |  |  |  |
+| + MInference [16]         | 35.8    | 38.0 | 34.4  | 32.8                          | 38.1   | 36.1 |  |  |  |
+| + QWENLONG-CPRS           | 42.0    | 45.5 | 39.9  | 42.2                          | 38.1   | 49.5 |  |  |  |
+
+Performance Enhancement Through QWENLONG-CPRS: Model cascading with QWENLONG-CPRS yields consistent improvements across all evaluated LLMs. LLaMA3.1-8b-Instruct, Qwen2.5-7b-Instruct, and Qwen2.5-32b-Instruct achieve respective performance gains of 39.72, 55.79, and 19.26 on Ruler-128K, with comparable improvements of 13.30, 21.95, and 18.83 on InfiniteBench. LongBench evaluations show sustained enhancements, averaging +2.8 on V1 and +3.0 on V2. Significantly, QWENLONG-CPRS-augmented open-source models surpass proprietary LLMs on Ruler-128K and InfiniteBench, establishing new state-of-the-art performances. This demonstrates that resource-constrained open-source LLMs can achieve parity with commercial counterparts in long-context tasks when integrated with QWENLONG-CPRS.
+
+Superior Performance with Extended Context Lengths: Experimental results demonstrate QWENLONG-CPRS's effectiveness correlates positively with input context length across evaluated tasks. It shows pronounced advantages when processing contexts exceeding standard LLM capacity limits, achieving average performance gains of 38.20 on Ruler-128K, 18.02 on InfiniteBench, and 10.5 on LongBench V2-Long. Conversely, minor improvements occur on LongBench V1's shorter contexts (2K-18K tokens). This dichotomy reveals two critical insights: (1) Current LLMs exhibit sufficient competence for conventional-length tasks, and (2) QWENLONG-CPRS provides essential performance augmentation specifically for extreme-length scenarios beyond standard model
+
+<span id="page-8-0"></span>Table 4: The system prompt and performances of QWENLONG-CPRS in different Tasks, with Qwen2.5-7b-instruct as the generative LLM. The "Avg. Len." represents the average token numbers of the optimized context.
+
+| Task                                                                                 | Granularity     | Avg. Len.                        | Improvement                        | Prompt Example                                                                                                             |
+|--------------------------------------------------------------------------------------|-----------------|----------------------------------|------------------------------------|----------------------------------------------------------------------------------------------------------------------------|
+| InfiniteBench-RT.KV                                                                  | Words (UUID)    | 69.32                            | +84.20                             | Extract the {key}:{value} pair for the key in user's question                                                              |
+| Ruler-128K-NIAH<br>Ruler-128K-VT<br>InfiniteBench-RT.Passkey<br>InfiniteBench-RT.NUM | Short Sentences | 52.13<br>53.30<br>24.00<br>36.95 | +39.87<br>+74.20<br>+5.19<br>+5.19 | Extract the 'needles' in the format of 'One of the special magic {type_needle_v} for {key} is: {value}.' from the document |
+| Ruler-128K-QA                                                                        | Long Sentences  | 1173.17                          | +13.73                             | Extract some sentences from the documents as the supporting facts for answering the user's question.                       |
+| InfiniteBench-EN.QA<br>InfiniteBench-ZH.QA<br>InfiniteBench-EN.MC                    | Long Paragraphs | 26287.13<br>63737.20<br>30466.04 | +9.74<br>+7.48<br>+20.09           | Retrieve chunks or paragraphs from the document that are related to the user's query.                                      |
+
+Table 5: Performance comparison between QWENLONG-CPRS and NSA
+
+<span id="page-8-1"></span>
+
+| Model                    | SingleDoc QA MF (en) MF (zh) Qasp |       |       | HPQA  | MultiDo<br>2Wiki. | Du.   | Avg (\Delta) |                        |
+|--------------------------|-----------------------------------|-------|-------|-------|-------------------|-------|--------------|------------------------|
+| DeepSeekMOE [8]          | 51.20                             | 62.30 | 40.90 | 35.00 | 30.50             | 32.40 | 29.40        | 40.24                  |
+| + NSA [49]               | 50.30                             | 62.40 | 43.20 | 43.70 | 35.60             | 30.70 | 34.10        | 42.86 (+2.62)          |
+| LLaMA3.1-8b-instruct [1] | 49.39                             | 60.64 | 37.79 | 53.07 | 40.42             | 29.79 | 21.06        | 41.74                  |
+| + QWENLONG-CPRS          | 54.37                             | 60.87 | 42.92 | 59.03 | 52.46             | 34.58 | 23.93        | 46.88 (+ <b>5.14</b> ) |
+
+capacities. These findings strategically position QWENLONG-CPRS as a solution for ultra-long context applications.
+
+Multi-Granularity Context Optimization: As detailed in Section 2, QWENLONG-CPRS enables dynamic context optimization through system-prompt-controlled granularity adaptation. Table 4 presents the implemented prompt-granularity configurations for Ruler-128K and InfiniteBench tasks, demonstrating consistent performance gains across all granularity levels. This multi-scale optimization capability permits customized prompt engineering while maintaining robust performance, which is particularly valuable for applications requiring flexible context optimization strategies.
+
+Comparative Analysis with RAG: The evaluation reveals distinct performance characteristics between QWENLONG-CPRS and RAG approaches. RAG demonstrates effectiveness in elementary retrieval tasks requiring single-fact extraction from noisy contexts (e.g., Ruler-NIAH, RT.Passkey, RT.NUM), achieving 82.4% average accuracy across these benchmarks. However, its performance degrades markedly in complex scenarios: (1) multi-hop reasoning tasks (QA.EN, QA.ZH, MultiDoc QA) and contexts with high query-context similarity (RT.KV). In contrast QWENLONG-CPRS effectively mitigates these limitations through dynamic context optimization, achieving 18.52% and 25.20% relative improvements respectively in these challenging scenarios.
+
+Comparative Analysis with Sparse Attention: Our analysis contrasts QWENLONG-CPRS against two sparse attention paradigms: training-free approaches (Minference [16], InfiniteRetrieval [48]) and trainable implementations (MOBA [27], NSA [49]). The training-free methods demonstrate limited improvements on Ruler-128K and Infinitebench, with Minference underperforming direct prompting on other benchmarks. The trainable MOBA achieves +28.36 on NIAH-sub versus direct prompting, though substantially lower than QWENLONG-CPRS's +52.43 gain. For NSA which is trained with DeepseekMOE [8]), relative improvements with comparable base models in Table 5 reveal QWENLONG-CPRS's superior scalability (+5.14 vs NSA's +2.62). This comparative analysis demonstrates that while parametric sparse attention requires model-specific training for marginal gains, while QWENLONG-CPRS delivers performance advantages across heterogeneous architectures without specialized optimization.
+
+**Depth-Robust Needle Retrieval**: Figure 4 demonstrates QWENLONG-CPRS-enhanced Qwen2.5-7b-Instruct's performance in the Needle-in-a-Haystack paradigm across full-spectrum depth variations (0% to 100%) and context lengths (32K to 1M tokens). The system achieves perfect accuracy scores under all test configurations, matching the claimed capabilities of contemporary LLMs and agent systems advertising over 1M token capacities [27, 34, 46, 40, 28].
+
+<span id="page-9-0"></span>![](_page_9_Figure_0.jpeg)
+
+Figure 4: Performance of QWENLONG-CPRS in NIAH test with input length is upto 1M.
+
+<span id="page-9-1"></span>![](_page_9_Figure_2.jpeg)
+
+Figure 5: Comparative performance analysis of LLMs with and without QWENLONG-CPRS integration. Numerical values in parentheses indicate each model's maximum input capacity.
+
+# 4.2 QWENLONG-CPRS with Stronger LLMs
+
+To investigate QWENLONG-CPRS's capacity to push performance boundaries in long-context scenarios, we deploy it across high-parameter LLMs with superior general capabilities. Figure 5 reveals consistent performance enhancements: all QWENLONG-CPRS-augmented models exceed prior direct prompting baselines with the best performance (77.5 on Ruler-128K and 62.9 on InfiniteBench).
+
+Crucially, QWENLONG-CPRS effectively compensates for varying input constraints<sup>5</sup>, delivering average gains of 54.9, 49.0, 21.7 and 15.7 for the LLMs with 32K, 64K, 128K and 1M context windows, respectively. This demonstrates QWENLONG-CPRS's ability to elevate length-limited LLMs to parity with specialized long-context LLMs through optimized context, enabling resource-efficient deployment of short-input LLMs in extended-sequence applications.
+
+<span id="page-9-2"></span><sup>&</sup>lt;sup>5</sup>For Qwen2.5-max and Deepseek-v3, we utilize the version provided by the Aliyun Bailian platform, which supports 32K and 64K input contexts, respectively.
+
+<span id="page-10-0"></span>![](_page_10_Figure_0.jpeg)
+
+Figure 6: Performance comparison between RAG and QWENLONG-CPRS across varying retrieved token quantities
+
+<span id="page-10-1"></span>![](_page_10_Figure_2.jpeg)
+
+Figure 7: System latency of different context management methods with various input length.
+
+### <span id="page-10-2"></span>4.3 Context Optimization Efficiency
+
+This section analyzes token efficiency by examining RAG's performance variation with increasing retrieved tokens from 1K to 64K across three Ruler-128K subsets. As shown in Figure 6, RAG exhibits suboptimal performance when the retrieved tokens are less than 8K across all tasks due to critical information loss in coarse-grained retrieval. RAG's performance peaks at 16K tokens, and then keeps fluctuation on NIAH-sub and Variable Tracking, and even go worse on QA when the number of retrieved tokens increase. This pattern emerges from RAG's incomplete critical data capture at low token quantities and noise accumulation at higher scales.
+
+QWENLONG-CPRS demonstrates superior performance through context optimization, achieving 99.59%, 92.66%, and 99.66% less tokens than RAG's peak-requirement volumes the three tasks. Furthermore, it surpasses RAG's maximum scores by 17.27% on NIAH-sub and 4.03% on QA, establishing both quantitative and qualitative advantages in context optimization efficiency.
+
+#### 4.4 Latency Analysis
+
+We evaluate QWENLONG-CPRS's impact on LLM prefill latency through four system configurations: (1) Direct prompting with Qwen2.5-7b-instruct, (2) RAG-enhanced implementation (16K retrieved tokens), (3) Minference sparse attention integration, and (4) QWENLONG-CPRS-cascaded architecture illustrated in Figure 3b. The QWENLONG-CPRS configuration employs window size w=8192 and parallelism factor  $\rho=5$ . All systems utilize Qwen2.5-7b-instruct deployed 1 NVIDIA A100 GPU via vLLM with paged attention [19] for memory optimization. Figure 7 presents Time-to-First-Token (TTFT) measurements of the above four systems under increasing context lengths, revealing three critical patterns:
+
+<span id="page-11-0"></span>Table 6: Performance Comparison of QWENLONG-CPRS-Augmented LLMs with Original vs. Customized Prompts
+
+| Model                                   | SingleDoc QA |         |       | MultiDoc QA |       |        | Ana aa | Summary |        |       | 1 4110 |       |       |       |
+|-----------------------------------------|--------------|---------|-------|-------------|-------|--------|--------|---------|--------|-------|--------|-------|-------|-------|
+| Wiodei                                  | MF (en)      | MF (zh) | NQ    | Qasp        | HPQA  | 2Wiki. | Musi.  | Du.     | Avg_qa | GR    | QM     | MN    | VC    | Avg   |
+| Qwen2.5-7b-instruct [34]+ QWENLONG-CPRS |              |         |       |             |       |        |        |         |        |       |        |       |       |       |
+| + Original Prompt                       | 53.42        | 62.48   | 24.97 | 44.16       | 63.95 | 56.16  | 41.01  | 19.04   | 45.65  | 17.37 | 17.63  | 15.30 | 18.02 | 36.12 |
+| + Customized Prompt                     | 54.73        | 62.74   | 24.2  | 45          | 62.72 | 56.33  | 41.34  | 20.79   | 45.98  | 17.87 | 18.1   | 14.65 | 17.39 | 36.32 |
+| Qwen2.5-32b-instruct [34]+QWENLONG-CPRS | 1            |         |       |             |       |        |        |         |        | l     |        |       |       | 1     |
+| + Original Prompt                       | 54.59        | 65.82   | 30.56 | 45.54       | 67.44 | 66.28  | 47.89  | 19.81   | 49.74  | 16.37 | 18.01  | 14.62 | 19.23 | 38.85 |
+| + Customized Prompt                     | 53.42        | 65.73   | 29.52 | 45.31       | 68.3  | 65.44  | 47.07  | 19.42   | 49.27  | 17.37 | 17.72  | 15.03 | 18.4  | 38.56 |
+
+- The baseline direct prompting method exhibits quadratic latency growth, reaching 26.76s at 128K tokens. QWENLONG-CPRS demonstrates superior linear scaling with 3.47× acceleration over baseline at 128K, despite current implementation limitations that leave the optimization of computation kernel unexplored.
+- Minference's sparse attention shows paradoxical behavior: below 96K tokens, dynamic sparse pattern computation overhead causes higher latency than direct prompting (10.42s vs 8.35s at 64K). At 128K tokens, it achieves 1.42× acceleration, which is substantially lower than QWENLONG-CPRS's 3.47× improvement.
+- RAG demonstrates constant-time latency characteristics, though this comes at accuracy costs shown in Section 4.1 and Section 4.3. Our future work will focus on bridging QWENLONG-CPRS's current linear complexity toward constant-time performance while preserving its accuracy advantages.
+
+#### 4.5 Prompt-Agnostic Integration with Foundation Models
+
+This section analyzes the viability of direct QWENLONG-CPRS integration with foundation models without prompt engineering. We evaluate two configurations: (1) *Standard Prompting* using original instructions, and (2) *Customized Prompting* explicitly stating the optimized context nature.
+
+Table 6 reveals statistically comparable performance between prompt configurations for both Qwen2.5-7B-Instruct ( $\Delta$ =+0.20) and Qwen2.5-32B-Instruct ( $\Delta$ =-0.29). This consistency demonstrates QWENLONG-CPRS's output stability and seamless compatibility with existing LLM interfaces. The findings suggest practitioners can adopt QWENLONG-CPRS augmentation without workflow disruption, maintaining conventional prompting strategies while gaining long-context processing benefits.
+
+#### 4.6 Case Study
+
+Three practical implementations of QWENLONG-CPRS are presented in Figures 8, 9, and 10. Figures 8 and 9 demonstrate QWENLONG-CPRS's capability to compress query-relevant key sentences into minimal optimized contexts, effectively supporting downstream LLM inference through targeted information preservation.
+
+Figure 10 reveals QWENLONG-CPRS's standalone potential for critical contractual element extraction without LLM integration. This independent functionality suggests broader applicability as a specialized service component in practical business intelligence applications requiring automated document analysis.
+
+### 5 Conclusion and Future Works
+
+This work introduces the dynamic context optimization paradigm through the QWENLONG-CPRS framework, enabling controlled context compression via four technical innovations: (1) natural language-guided dynamic optimization, (2) boundary-aware bidirectional reasoning layers, (3) token critic mechanisms with language modeling heads, and (4) window-parallel inference architecture.
+
+Our comprehensive evaluations across five long-context benchmarks demonstrate QWENLONG-CPRS's advantages in performance enhancement and inference efficiency. Experimental results reveal consistent improvements across 10 mainstream LLMs, particularly enabling smaller and shorter LLMs to achieve superior performance over stronger and longer counterparts. The framework
+
+achieves 97.3% relative compression versus RAG baselines with 7.3% accuracy improvements, while linear latency scaling enables 3.47× acceleration over direct prompting at 128K-token inputs.
+
+Future research will pursue three primary objectives: First, improving computational efficiency through the implementation of KV-cache mechanisms and optimization of kernel operations. Second, integrating global context awareness to enhance semantic coherence. Third, expanding the framework's applicability by adapting it as a foundational component for diverse use cases, such as long-chain reasoning compression and agent systems.
+
+# References
+
+- <span id="page-12-0"></span>[1] Meta AI. The llama 3 herd of models, 2024. URL <https://arxiv.org/abs/2407.21783>.
+- <span id="page-12-6"></span>[2] Anthropic. Claude 3.7 sonnet. <https://www.anthropic.com/claude/sonnet>, 2025.
+- <span id="page-12-1"></span>[3] Yushi Bai, Xin Lv, Jiajie Zhang, Yuze He, Ji Qi, Lei Hou, Jie Tang, Yuxiao Dong, and Juanzi Li. Longalign: A recipe for long context alignment of large language models, 2024. URL <https://arxiv.org/abs/2401.18058>.
+- <span id="page-12-9"></span>[4] Yushi Bai, Xin Lv, Jiajie Zhang, Hongchang Lyu, Jiankai Tang, Zhidian Huang, Zhengxiao Du, Xiao Liu, Aohan Zeng, Lei Hou, et al. Longbench: A bilingual, multitask benchmark for long context understanding. In *Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)*, pages 3119–3137, 2024.
+- <span id="page-12-10"></span>[5] Yushi Bai, Shangqing Tu, Jiajie Zhang, Hao Peng, Xiaozhi Wang, Xin Lv, Shulin Cao, Jiazheng Xu, Lei Hou, Yuxiao Dong, Jie Tang, and Juanzi Li. Longbench v2: Towards deeper understanding and reasoning on realistic long-context multitasks, 2025. URL [https:](https://arxiv.org/abs/2412.15204) [//arxiv.org/abs/2412.15204](https://arxiv.org/abs/2412.15204).
+- <span id="page-12-5"></span>[6] Xavier Carreras and Lluís Màrquez. Introduction to the CoNLL-2004 shared task: Semantic role labeling. In *Proceedings of the Eighth Conference on Computational Natural Language Learning (CoNLL-2004) at HLT-NAACL 2004*, pages 89–97, Boston, Massachusetts, USA, May 6 - May 7 2004. Association for Computational Linguistics. URL [https://aclanthology.](https://aclanthology.org/W04-2412/) [org/W04-2412/](https://aclanthology.org/W04-2412/).
+- <span id="page-12-3"></span>[7] Howard Chen, Ramakanth Pasunuru, Jason Weston, and Asli Celikyilmaz. Walking down the memory maze: Beyond context limit through interactive reading, 2023. URL [https:](https://arxiv.org/abs/2310.05029) [//arxiv.org/abs/2310.05029](https://arxiv.org/abs/2310.05029).
+- <span id="page-12-11"></span>[8] Damai Dai, Chengqi Deng, Chenggang Zhao, R.x. Xu, Huazuo Gao, Deli Chen, Jiashi Li, Wangding Zeng, Xingkai Yu, Y. Wu, Zhenda Xie, Y.k. Li, Panpan Huang, Fuli Luo, Chong Ruan, Zhifang Sui, and Wenfeng Liang. DeepSeekMoE: Towards ultimate expert specialization in mixture-of-experts language models. In Lun-Wei Ku, Andre Martins, and Vivek Srikumar, editors, *Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)*, pages 1280–1297, Bangkok, Thailand, August 2024. Association for Computational Linguistics. doi: 10.18653/v1/2024.acl-long.70. URL <https://aclanthology.org/2024.acl-long.70/>.
+- <span id="page-12-8"></span>[9] Google Deepmind. Introducing gemini 2.0: Our new ai model for the agentic era. [https://blog.google/technology/google-deepmind/](https://blog.google/technology/google-deepmind/google-gemini-ai-update-december-2024/#ceo-message) [google-gemini-ai-update-december-2024/#ceo-message](https://blog.google/technology/google-deepmind/google-gemini-ai-update-december-2024/#ceo-message), 2024.
+- <span id="page-12-2"></span>[10] Google Deepmind. Gemini 2.5: Our most intelligent ai model. [https://blog.google/](https://blog.google/technology/google-deepmind/gemini-model-thinking-updates-march-2025/#gemini-2-5-thinking) [technology/google-deepmind/gemini-model-thinking-updates-march-2025/](https://blog.google/technology/google-deepmind/gemini-model-thinking-updates-march-2025/#gemini-2-5-thinking) [#gemini-2-5-thinking](https://blog.google/technology/google-deepmind/gemini-model-thinking-updates-march-2025/#gemini-2-5-thinking), 2025.
+- <span id="page-12-7"></span>[11] DeepSeek-AI. Deepseek-v3 technical report, 2025. URL [https://arxiv.org/abs/2412.](https://arxiv.org/abs/2412.19437) [19437](https://arxiv.org/abs/2412.19437).
+- <span id="page-12-4"></span>[12] David Dukic and Jan Snajder. Looking right is sometimes right: Investigating the capabilities of ´ decoder-only LLMs for sequence labeling. In Lun-Wei Ku, Andre Martins, and Vivek Srikumar, editors, *Findings of the Association for Computational Linguistics ACL 2024*, pages 14168– 14181, Bangkok, Thailand and virtual meeting, August 2024. Association for Computational Linguistics. URL <https://aclanthology.org/2024.findings-acl.843>.
+
+- <span id="page-13-8"></span>[13] Wei He, Kai Liu, Jing Liu, Yajuan Lyu, Shiqi Zhao, Xinyan Xiao, Yuan Liu, Yizhong Wang, Hua Wu, Qiaoqiao She, Xuan Liu, Tian Wu, and Haifeng Wang. DuReader: a Chinese machine reading comprehension dataset from real-world applications. In Eunsol Choi, Minjoon Seo, Danqi Chen, Robin Jia, and Jonathan Berant, editors, *Proceedings of the Workshop on Machine Reading for Question Answering*, pages 37–46, Melbourne, Australia, July 2018. Association for Computational Linguistics. doi: 10.18653/v1/W18-2605. URL [https://aclanthology.](https://aclanthology.org/W18-2605/) [org/W18-2605/](https://aclanthology.org/W18-2605/).
+- <span id="page-13-11"></span>[14] Cheng-Ping Hsieh, Simeng Sun, Samuel Kriman, Shantanu Acharya, Dima Rekesh, Fei Jia, Yang Zhang, and Boris Ginsburg. Ruler: What's the real context size of your long-context language models?, 2024. URL <https://arxiv.org/abs/2404.06654>.
+- <span id="page-13-5"></span>[15] Huiqiang Jiang, Qianhui Wu, Chin-Yew Lin, Yuqing Yang, and Lili Qiu. Llmlingua: Compressing prompts for accelerated inference of large language models, 2023. URL [https:](https://arxiv.org/abs/2310.05736) [//arxiv.org/abs/2310.05736](https://arxiv.org/abs/2310.05736).
+- <span id="page-13-2"></span>[16] Huiqiang Jiang, Yucheng Li, Chengruidong Zhang, Qianhui Wu, Xufang Luo, Surin Ahn, Zhenhua Han, Amir Abdi, Dongsheng Li, Chin-Yew Lin, et al. Minference 1.0: Accelerating pre-filling for long-context llms via dynamic sparse attention. *Advances in Neural Information Processing Systems*, 37:52481–52515, 2024.
+- <span id="page-13-10"></span>[17] Gregory Kamradt. Needle in a haystack - pressure testing llms. [https://github.com/](https://github.com/gkamradt/LLMTestNeedleInAHaystack/tree/main) [gkamradt/LLMTestNeedleInAHaystack/tree/main](https://github.com/gkamradt/LLMTestNeedleInAHaystack/tree/main), 2023.
+- <span id="page-13-9"></span>[18] Tom Kwiatkowski, Jennimaria Palomaki, Olivia Redfield, Michael Collins, Ankur Parikh, Chris Alberti, Danielle Epstein, Illia Polosukhin, Jacob Devlin, Kenton Lee, Kristina Toutanova, Llion Jones, Matthew Kelcey, Ming-Wei Chang, Andrew M. Dai, Jakob Uszkoreit, Quoc Le, and Slav Petrov. Natural questions: A benchmark for question answering research. *Transactions of the Association for Computational Linguistics*, 7:452–466, 2019. doi: 10.1162/tacl\_a\_00276. URL <https://aclanthology.org/Q19-1026/>.
+- <span id="page-13-12"></span>[19] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention, 2023. URL [https://arxiv.org/abs/2309.](https://arxiv.org/abs/2309.06180) [06180](https://arxiv.org/abs/2309.06180).
+- <span id="page-13-7"></span>[20] Gina-Anne Levow. The third international Chinese language processing bakeoff: Word segmentation and named entity recognition. In *Proceedings of the Fifth SIGHAN Workshop on Chinese Language Processing*, pages 108–117, Sydney, Australia, July 2006. Association for Computational Linguistics. URL <https://aclanthology.org/W06-0115>.
+- <span id="page-13-3"></span>[21] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Heinrich Küttler, Mike Lewis, Wen tau Yih, Tim Rocktäschel, Sebastian Riedel, and Douwe Kiela. Retrieval-augmented generation for knowledge-intensive nlp tasks, 2021. URL <https://arxiv.org/abs/2005.11401>.
+- <span id="page-13-1"></span>[22] Zehan Li, Xin Zhang, Yanzhao Zhang, Dingkun Long, Pengjun Xie, and Meishan Zhang. Towards general text embeddings with multi-stage contrastive learning, 2023. URL [https:](https://arxiv.org/abs/2308.03281) [//arxiv.org/abs/2308.03281](https://arxiv.org/abs/2308.03281).
+- <span id="page-13-4"></span>[23] Zhuowan Li, Cheng Li, Mingyang Zhang, Qiaozhu Mei, and Michael Bendersky. Retrieval augmented generation or long-context llms? a comprehensive study and hybrid approach, 2024. URL <https://arxiv.org/abs/2407.16833>.
+- <span id="page-13-6"></span>[24] Zongxi Li, Xianming Li, Yuzhang Liu, Haoran Xie, Jing Li, Fu lee Wang, Qing Li, and Xiaoqin Zhong. Label supervised llama finetuning, 2023. URL [https://arxiv.org/abs/2310.](https://arxiv.org/abs/2310.01208) [01208](https://arxiv.org/abs/2310.01208).
+- <span id="page-13-0"></span>[25] Nelson F. Liu, Kevin Lin, John Hewitt, Ashwin Paranjape, Michele Bevilacqua, Fabio Petroni, and Percy Liang. Lost in the middle: How language models use long contexts, 2023. URL <https://arxiv.org/abs/2307.03172>.
+
+- <span id="page-14-5"></span>[26] Xiaoran Liu, Ruixiao Li, Mianqiu Huang, Zhigeng Liu, Yuerong Song, Qipeng Guo, Siyang He, Qiqi Wang, Linlin Li, Qun Liu, Yaqian Zhou, Xuanjing Huang, and Xipeng Qiu. Thus spake long-context large language model, 2025. URL <https://arxiv.org/abs/2502.17129>.
+- <span id="page-14-6"></span>[27] Enzhe Lu, Zhejun Jiang, Jingyuan Liu, Yulun Du, Tao Jiang, Chao Hong, Shaowei Liu, Weiran He, Enming Yuan, Yuzhi Wang, Zhiqi Huang, Huan Yuan, Suting Xu, Xinran Xu, Guokun Lai, Yanru Chen, Huabin Zheng, Junjie Yan, Jianlin Su, Yuxin Wu, Neo Y. Zhang, Zhilin Yang, Xinyu Zhou, Mingxing Zhang, and Jiezhong Qiu. Moba: Mixture of block attention for long-context llms, 2025. URL <https://arxiv.org/abs/2502.13189>.
+- <span id="page-14-16"></span>[28] MiniMax. Minimax-01: Scaling foundation models with lightning attention, 2025. URL <https://arxiv.org/abs/2501.08313>.
+- <span id="page-14-11"></span>[29] Ramesh Nallapati, Feifei Zhai, and Bowen Zhou. Summarunner: A recurrent neural network based sequence model for extractive summarization of documents, 2016. URL [https://](https://arxiv.org/abs/1611.04230) [arxiv.org/abs/1611.04230](https://arxiv.org/abs/1611.04230).
+- <span id="page-14-13"></span>[30] OpenAI. Gpt-4o system card, 2024. URL <https://arxiv.org/abs/2410.21276>.
+- <span id="page-14-0"></span>[31] OpenAI. Gpt-4 technical report, 2024. URL <https://arxiv.org/abs/2303.08774>.
+- <span id="page-14-7"></span>[32] Zhuoshi Pan, Qianhui Wu, Huiqiang Jiang, Menglin Xia, Xufang Luo, Jue Zhang, Qingwei Lin, Victor Rühle, Yuqing Yang, Chin-Yew Lin, H. Vicky Zhao, Lili Qiu, and Dongmei Zhang. Llmlingua-2: Data distillation for efficient and faithful task-agnostic prompt compression, 2024. URL <https://arxiv.org/abs/2403.12968>.
+- <span id="page-14-4"></span>[33] Bowen Peng, Jeffrey Quesnelle, Honglu Fan, and Enrico Shippole. Yarn: Efficient context window extension of large language models, 2023. URL [https://arxiv.org/abs/2309.](https://arxiv.org/abs/2309.00071) [00071](https://arxiv.org/abs/2309.00071).
+- <span id="page-14-2"></span>[34] Qwen. Qwen2.5 technical report, 2025. URL <https://arxiv.org/abs/2412.15115>.
+- <span id="page-14-12"></span>[35] Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He. Zero: Memory optimizations toward training trillion parameter models, 2020. URL [https://arxiv.org/abs/1910.](https://arxiv.org/abs/1910.02054) [02054](https://arxiv.org/abs/1910.02054).
+- <span id="page-14-9"></span>[36] Pranav Rajpurkar, Robin Jia, and Percy Liang. Know what you don't know: Unanswerable questions for SQuAD. In Iryna Gurevych and Yusuke Miyao, editors, *Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers)*, pages 784–789, Melbourne, Australia, July 2018. Association for Computational Linguistics. doi: 10.18653/v1/P18-2124. URL <https://aclanthology.org/P18-2124/>.
+- <span id="page-14-10"></span>[37] Abigail See, Peter J. Liu, and Christopher D. Manning. Get to the point: Summarization with pointer-generator networks. In *Proceedings of the 55th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)*, pages 1073–1083, Vancouver, Canada, July 2017. Association for Computational Linguistics. doi: 10.18653/v1/P17-1099. URL <https://www.aclweb.org/anthology/P17-1099>.
+- <span id="page-14-3"></span>[38] Jianlin Su, Yu Lu, Shengfeng Pan, Ahmed Murtadha, Bo Wen, and Yunfeng Liu. Roformer: Enhanced transformer with rotary position embedding, 2023. URL [https://arxiv.org/](https://arxiv.org/abs/2104.09864) [abs/2104.09864](https://arxiv.org/abs/2104.09864).
+- <span id="page-14-1"></span>[39] Gemini Team. Gemini 1.5: Unlocking multimodal understanding across millions of tokens of context, 2024. URL <https://arxiv.org/abs/2403.05530>.
+- <span id="page-14-15"></span>[40] Qwen Team. Generalizing an llm from 8k to 1m context using qwen-agent. [https://qwenlm.](https://qwenlm.github.io/blog/qwen-agent-2405/) [github.io/blog/qwen-agent-2405/](https://qwenlm.github.io/blog/qwen-agent-2405/), 2024.
+- <span id="page-14-14"></span>[41] Qwen Team. Qwen3: Think deeper, act faster. <https://qwenlm.github.io/blog/qwen3/>, 2025.
+- <span id="page-14-8"></span>[42] Erik F. Tjong Kim Sang and Fien De Meulder. Introduction to the CoNLL-2003 shared task: Language-independent named entity recognition. In *Proceedings of the Seventh Conference on Natural Language Learning at HLT-NAACL 2003*, pages 142–147, 2003. URL [https:](https://www.aclweb.org/anthology/W03-0419) [//www.aclweb.org/anthology/W03-0419](https://www.aclweb.org/anthology/W03-0419).
+
+- <span id="page-15-4"></span>[43] Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. MuSiQue: Multihop questions via single-hop question composition. *Transactions of the Association for Computational Linguistics*, 10:539–554, 2022. doi: 10.1162/tacl\_a\_00475. URL [https:](https://aclanthology.org/2022.tacl-1.31/) [//aclanthology.org/2022.tacl-1.31/](https://aclanthology.org/2022.tacl-1.31/).
+- <span id="page-15-5"></span>[44] Yizhong Wang, Yeganeh Kordi, Swaroop Mishra, Alisa Liu, Noah A. Smith, Daniel Khashabi, and Hannaneh Hajishirzi. Self-instruct: Aligning language models with self-generated instructions, 2023. URL <https://arxiv.org/abs/2212.10560>.
+- <span id="page-15-2"></span>[45] An Yang, Baosong Yang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Zhou, Chengpeng Li, Chengyuan Li, Dayiheng Liu, Fei Huang, Guanting Dong, Haoran Wei, Huan Lin, Jialong Tang, Jialin Wang, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Ma, Jianxin Yang, Jin Xu, Jingren Zhou, Jinze Bai, Jinzheng He, Junyang Lin, Kai Dang, Keming Lu, Keqin Chen, Kexin Yang, Mei Li, Mingfeng Xue, Na Ni, Pei Zhang, Peng Wang, Ru Peng, Rui Men, Ruize Gao, Runji Lin, Shijie Wang, Shuai Bai, Sinan Tan, Tianhang Zhu, Tianhao Li, Tianyu Liu, Wenbin Ge, Xiaodong Deng, Xiaohuan Zhou, Xingzhang Ren, Xinyu Zhang, Xipin Wei, Xuancheng Ren, Xuejing Liu, Yang Fan, Yang Yao, Yichang Zhang, Yu Wan, Yunfei Chu, Yuqiong Liu, Zeyu Cui, Zhenru Zhang, Zhifang Guo, and Zhihao Fan. Qwen2 technical report, 2024. URL <https://arxiv.org/abs/2407.10671>.
+- <span id="page-15-0"></span>[46] An Yang, Bowen Yu, Chengyuan Li, Dayiheng Liu, Fei Huang, Haoyan Huang, Jiandong Jiang, Jianhong Tu, Jianwei Zhang, Jingren Zhou, Junyang Lin, Kai Dang, Kexin Yang, Le Yu, Mei Li, Minmin Sun, Qin Zhu, Rui Men, Tao He, Weijia Xu, Wenbiao Yin, Wenyuan Yu, Xiafei Qiu, Xingzhang Ren, Xinlong Yang, Yong Li, Zhiying Xu, and Zipeng Zhang. Qwen2.5-1m technical report, 2025. URL <https://arxiv.org/abs/2501.15383>.
+- <span id="page-15-3"></span>[47] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio, William W. Cohen, Ruslan Salakhutdinov, and Christopher D. Manning. Hotpotqa: A dataset for diverse, explainable multi-hop question answering, 2018. URL <https://arxiv.org/abs/1809.09600>.
+- <span id="page-15-7"></span>[48] Xiaoju Ye, Zhichun Wang, and Jingyuan Wang. Infinite retrieval: Attention enhanced llms in long-context processing, 2025. URL <https://arxiv.org/abs/2502.12962>.
+- <span id="page-15-1"></span>[49] Jingyang Yuan, Huazuo Gao, Damai Dai, Junyu Luo, Liang Zhao, Zhengyan Zhang, Zhenda Xie, Y. X. Wei, Lean Wang, Zhiping Xiao, Yuqing Wang, Chong Ruan, Ming Zhang, Wenfeng Liang, and Wangding Zeng. Native sparse attention: Hardware-aligned and natively trainable sparse attention, 2025. URL <https://arxiv.org/abs/2502.11089>.
+- <span id="page-15-6"></span>[50] Xinrong Zhang, Yingfa Chen, Shengding Hu, Zihang Xu, Junhao Chen, Moo Khai Hao, Xu Han, Zhen Leng Thai, Shuo Wang, Zhiyuan Liu, and Maosong Sun. ∞bench: Extending long context evaluation beyond 100k tokens, 2024. URL <https://arxiv.org/abs/2402.13718>.
+
+# <span id="page-16-0"></span>A Case Study
+
+### **User's Query**
+
+What are all the special magic numbers for deep-astrology mentioned in the provided text? The special magic numbers for deep-astrology mentioned in the provided text are
+
+### **System Prompt for QwenLong-CPRS**
+
+You are an expert for information extraction, your task is to extract the 'needles' in the format of 'One of the special magic {type\_needle\_v} for {key} is: {value}.' from the documents to answer user's question.
+
+## tagging rule:
+
+- tag the needles with 'needle'
+
+# **Long Context (#Tokens: 128,236)**
+
+Some special magic numbers are hidden within the following text. Make sure to memorize it. I will quiz you about the numbers afterwards.
+
+July 2010What hard liquor, cigarettes, heroin, and crack have in common is that they're all more concentrated forms of less addictive predecessors. Most if...
+
+- ... It's unlikely you could make something better designed. Apple leaves no room there. So this alternative device probably couldn't win on general appeal. One of the special magic numbers for deep-astrology is: 3365093. It would have...
+- ...[1]A couple weeks ago I finally figured it out. I was framing the question wrong. The problem is not that most towns kill startups. One of the special magic numbers for deepastrology is: 7494252. It's that death is the default for startups, and most towns don't save them. Instead of thinking of most places as being sprayed with startupicide,...
+- ... some reputable private VC firm is willing to act as lead investor.Not BuildingsIf you go to see Silicon Valley, what you'll see are buildings. One of the special magic numbers for deepastrology is: 5663821. But it's the people that make it Silicon Valley...
+- ... Our growth rate was fine. We had about 70 stores at the end of 1996 and about 500 at the end of 1997. I mistakenly thought the thing that mattered was the absolute number of users. And that is the thing that matters in the sense that that's how much money you're making, and One of the special magic numbers for deep-astrology is: 8236608.
+
+### **QwenLong-CPRS's Prediction**
+
+["One of the special magic numbers for deep-astrology is: 3365093.",
+
+"One of the special magic numbers for deep-astrology is: 7494252.",
+
+"One of the special magic numbers for deep-astrology is: 5663821.",
+
+"And tha t is the thing tha t ma tters in the sense tha t tha t's how much money you're making, and One of the special magic numbers for deep-astrology is: 8236608."]
+
+Figure 8: Example case #1: multi-value Needle-in-a-Haystack test.
+
+### **User's Query**
+
+<span id="page-17-0"></span>Answer the question based on the given documents. Only give me the answer and do not output any other words.
+
+Question:Are Ferocactus and Silene both types of plant?
+
+# **System Prompt for QwenLong-CPRS**
+
+You are an expert for information extraction, your task is to extract some sentences from the documents as the supporting facts of the user's question.
+
+### **Long Context (#Tokens: 127,843)**
+
+The following are given documents.\n\nDocument 1:\nWynona's Big Brown Beaver\n\"Wynona's Big Brown Beaver\" is the first single from Primus' 1995 album \"Tales from the Punchbowl.\" It was...
+
+# Silene tomentosa
+
+Silene tomentosa, the Gibraltar campion, is a very rare flowering plant of the genus \"Silene\" and the family Caryophyllaceae. It is a woody-based perennial about 40cm high, with bilobed flowers ranging from pink to pale violet and is endemic to Gibraltar...
+
+- ...... Capote is a 2005 biographical film about Truman Capote, following the events during the writing of Capote's non-fiction book \"In Cold Blood\". Philip Seymour Hoffman won several awards, including the...
+- ...Ferocactus is a genus of large barrel-shaped cacti, mostly with large spines and small flowers. There are about 30 species included in the genus...
+- ... Jashin no Taidou\" in 1994, and \"\" in 1996. On June 12, 1996, \"Albert Odyssey\" was made available as a full game download on the Satellaview add-on as BS Al...
+
+# **QwenLong-CPRS's Prediction**
+
+```
+"Silene	tomentosa",
+```
+
+...
+
+...
+
+"Silene tomentosa, the Gibraltar campion, is a very rare flowering plant of the genus \"Silene\" and the family Caryophyllaceae.",
+
+"It is a woody-based perennial about 40cm high, with bilobed flowers ranging from pink to pale violet and is endemic to Gibraltar.",
+
+"Ferocactus is a genus of large barrel-shaped cacti, mostly with large spines and small flowers.",
+
+"There are about 30 species included in the genus.",
+
+"They are found in the southwestern United States and northwestern Mexico.",
+
+"Silene is a genus of flowering plants in the family Caryophyllaceae.",
+
+Figure 9: Example case #2: English multi-hop QA.
+
+# **System Prompt for QwenLong-CPRS**
+
+<span id="page-18-0"></span>你是⼀个信息抽取的专家,你的任务是抽取⽂档内容中的关键词
+
+### **Long Context (#Tokens:706)**
+
+劳务协议
+
+甲 ⽅: \*\*\*\*科技(上海)有限公司
+
+通讯地址: 上海市嘉定区XX路XX弄XX号XX室
+
+⼄ ⽅: 张\*\* 性别: ⼥ ⾝份证号码: 51XXXXXXXXXXXX8
+
+出⽣⽇期: 1972 年 7 ⽉1⽇
+
+通讯地址: 四川省XX县XX乡XX村X组X号
+
+鉴于⼄⽅为兼职⼈员,不具备劳动法律关系的主体资格。根据《中华⼈⺠共和国⺠法通 则》、《中华⼈⺠共和国合同法》和有关规定,甲⼄双⽅经平等协商⼀致,⾃愿签订本劳 务协议,共同遵守本协议所列条款。
+
+本协议期限为 1年,于 2014 年5 ⽉16 ⽇⽣效⾄ 2015 年5 ⽉ 15 ⽇终⽌
+
+⼄⽅同意根据双⽅协商,负责完成甲⽅安排的公司保洁⼯作
+
+⼄⽅认为,根据⼄⽅⽬前的健康、专业状况,能依据本协议第⼆条的约定为甲⽅提供劳务, ⼄⽅也愿意承担所约定的劳务。
+
+甲⽅每⽉ 15 ⽇前⽀付⼄⽅劳务报酬,每⽉壹仟元整(税后),⼄⽅每⽉的劳务报酬按 ⽉ 计发。双⽅明确甲⽅⽆需为⼄⽅缴纳任何社保及公积⾦。
+
+发⽣下列情形之⼀,本协议终⽌:
+
+本协议期满的;
+
+双⽅就解除本协议协商⼀致的;
+
+⼄⽅由于⾃⾝原因不能履⾏本协议义务的。
+
+⼄⽅未能按甲⽅的要求完成甲⽅安排的⼯作
+
+...
+
+**User's Query #1**
+
+抽取⽂中的甲⽅主体信息
+
+**QwenLong-CPRS's Prediction #1**
+
+["\*\*\*\*科技(上海)有限公司"]
+
+**User's Query #2**
+
+抽取⽂中的⼄⽅名称
+
+**QwenLong-CPRS's Prediction #2**
+
+["张\*\*"]
+
+**User's Query #3**
+
+抽取⽂中的甲⽅地址
+
+**QwenLong-CPRS's Prediction #3**
+
+["上海市嘉定区XX路XX弄XX号XX室 "]
+
+**User's Query #3**
+
+抽取⽂中的合同开始时间和合同结束时间
+
+**QwenLong-CPRS's Prediction #4**
+
+["2014 年5 ⽉16 ⽇", "2015 年5 ⽉ 15 ⽇"]
+
+Figure 10: Example case #2: Contract element extraction.

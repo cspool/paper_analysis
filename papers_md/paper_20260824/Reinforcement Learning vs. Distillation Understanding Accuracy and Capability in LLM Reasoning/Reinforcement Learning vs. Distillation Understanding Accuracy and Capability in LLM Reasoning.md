@@ -1,0 +1,679 @@
+# Reinforcement Learning vs. Distillation: Understanding Accuracy and Capability in LLM Reasoning
+
+Minwu Kim\* † Anubhav Shrestha\* Safal Shrestha Aadim Nepal Keith Ross New York University Abu Dhabi
+
+## Abstract
+
+Recent studies have shown that reinforcement learning with verifiable rewards (RLVR) enhances overall accuracy (pass@1) but often fails to improve capability (pass@k) of LLMs in reasoning tasks, while distillation can improve both. In this paper, we investigate the mechanisms behind these phenomena. First, we demonstrate that RLVR struggles to improve capability as it focuses on improving the accuracy of the easier questions to the detriment of the accuracy of the most difficult questions. Second, we show that RLVR does not merely increase the success probability for the easier questions, but in our small model settings, produces quality responses that were absent in its original output distribution. In addition, we show these responses are neither noticeably longer nor feature more reflectionrelated keywords, underscoring the need for more reliable indicators of response quality. Third, from the experiment distilling teacher responses to in-distribution problems, we find that capability does not always improve with distillation. We conjecture that capability improves only when new knowledge is introduced, whereas distilling reasoning patterns only improves accuracy but not capability, sacrificing performance on the most difficult questions, similar to RLVR. Together, these findings offer a clearer understanding of how RLVR and distillation shape reasoning behavior in LLMs.[1](#page-0-0)
+
+## 1 Introduction
+
+Large language models (LLMs) have made rapid progress in complex domains such as mathematics and programming. A key development is the emergence of reasoning models [\(OpenAI,](#page-9-0) [2024;](#page-9-0) [DeepSeek-AI,](#page-9-1) [2025;](#page-9-1) [MoonshotAI,](#page-9-2) [2025\)](#page-9-2), which outperform conventional LLMs by employing more
+
+advanced reasoning strategies. Instead of relying on linear chains of thought (CoTs) [\(Wei et al.,](#page-10-0) [2022\)](#page-10-0), these models exhibit non-linear behaviors such as subgoal formulation, verification, backtracking, and backward chaining [\(Gandhi et al.,](#page-9-3) [2025;](#page-9-3) [Xiang et al.,](#page-10-1) [2025\)](#page-10-1).
+
+A central technique behind recent reasoning models is *reinforcement learning with verifiable rewards (RLVR)* [\(Lambert et al.,](#page-9-4) [2024;](#page-9-4) [DeepSeek-](#page-9-1)[AI,](#page-9-1) [2025\)](#page-9-1). RLVR fine-tunes pre-trained LLMs using rewards based on whether the model's output matches a ground-truth solution. Without explicit supervision, the model learns complex reasoning behaviors during training, making RLVR an effective fine-tuning method for reasoning tasks. In addition, *distillation* with responses from stronger reasoning models also provides strong performance, demonstrating that reasoning ability can be effectively transferred through supervised learning [\(Min](#page-9-5) [et al.,](#page-9-5) [2024;](#page-9-5) [DeepSeek-AI,](#page-9-1) [2025;](#page-9-1) [Muennighoff](#page-9-6) [et al.,](#page-9-6) [2025;](#page-9-6) [Ye et al.,](#page-10-2) [2025\)](#page-10-2).
+
+It is well established that RLVR improves *accuracy*—the probability of generating a correct answer, but whether it also improves *capability*—the probability that a correct answer exists in the model's output distribution—remains debated. Some studies suggest that, with sufficient compute and carefully matched training and test sets in skills and difficulty, RLVR can solve tasks that were previously unsolvable in certain domains [\(Liu et al.,](#page-9-7) [2025a;](#page-9-7) [Setlur et al.,](#page-10-3) [2025;](#page-10-3) [Sun et al.,](#page-10-4) [2025\)](#page-10-4). Others, however, report that in more typical settings—where training and test sets contain heterogeneous problems with uncontrolled knowledge and difficulty—RLVR primarily amplifies existing reasoning rather than expanding capability [\(Dang](#page-9-8) [et al.,](#page-9-8) [2025;](#page-9-8) [Wu et al.,](#page-10-5) [2025;](#page-10-5) [Yue et al.,](#page-10-6) [2025;](#page-10-6) [Zhao](#page-11-0) [et al.,](#page-11-0) [2025\)](#page-11-0). By contrast, it has been observed that distillation improves both accuracy and capability [\(Yue et al.,](#page-10-6) [2025\)](#page-10-6). In this paper, we take a closer look at how RLVR and distillation shape
+
+<sup>\*</sup>Equal contribution.
+
+<span id="page-0-0"></span><sup>†</sup>Correspondence to mwk300@nyu.edu.
+
+<sup>1</sup>Code available at [https://github.com/minwukim/](https://github.com/minwukim/RLvsDistillation) [RLvsDistillation](https://github.com/minwukim/RLvsDistillation)
+
+mathematical reasoning in LLMs under typical settings, where training and test sets involve diverse problems with varying knowledge and difficulty.
+
+Carrying out experiments with two models, Qwen2.5-1.5B-Math [\(Yang et al.,](#page-10-7) [2024\)](#page-10-7) and Qwen2.5-3B [\(Hui et al.,](#page-9-9) [2024\)](#page-9-9), we first demonstrate that RLVR does not improve capability because RLVR focuses on improving the accuracy of the less-difficult questions to the detriment of the accuracy of the most difficult questions, explaining why capability does not improve and can even decrease. We argue that this "sacrificing-difficultproblems" phenomenon is a direct consequence of the underlying policy-gradient algorithm in GRPO (Shao et al., 2024). We further find that RLVR does not merely increase the success probability for the easier questions, but in our small model settings produces responses that are more direct with fewer keywords. In addition, we find these responses are neither noticeably longer nor richer in reflection-related keywords (e.g., "wait", "alternatively"), underscoring the need for more reliable indicators of reasoning quality.
+
+We next examine teacher distillation. A teacher model's responses convey two main elements: (1) reasoning patterns and (2) domain knowledge. To disentangle their effects, we compare three models: the base model, the publicly released DeepSeek reasoning model, which is distilled on 800k responses from DeepSeek-R1 and likely incorporates substantial new knowledge, and our own reasoningonly model, trained only on teacher responses for questions where the base model is already able to produce correct answers. We find that both distilled models yield substantial accuracy gains, but only the DeepSeek model shows clear capability improvement. These results indicate that teacher distillation does not always expand capability, even when accuracy meaningfully improves. While further investigation is needed to confirm, we conjecture that this difference stems from whether new knowledge is introduced during distillation: introducing new knowledge may expand capability, whereas distilling only reasoning patterns improves accuracy but not capability. Interestingly, for the reasoning-only model, we also find that accuracy of the easier questions improves to the detriment of the most difficult questions, mirroring the RLVR.
+
+Taken together, our findings provide a clearer picture of different dynamics in the model behavior during RLVR training and distillation, and offer insights into strategies for enhancing the fundamental
+
+abilities of LLMs.
+
+## <span id="page-1-0"></span>2 Related Work
+
+Training reasoning models. RLVR has emerged as a key method for training LLMs to tackle complex reasoning tasks by generating long CoTs [\(DeepSeek-AI,](#page-9-1) [2025;](#page-9-1) [Lambert et al.,](#page-9-4) [2024;](#page-9-4) [OpenAI,](#page-9-0) [2024\)](#page-9-0). It has shown strong performance across model sizes [\(Gandhi et al.,](#page-9-3) [2025;](#page-9-3) [Hu et al.,](#page-9-10) [2025;](#page-9-10) [Liu et al.,](#page-9-11) [2025b;](#page-9-11) [Xu et al.,](#page-10-8) [2025;](#page-10-8) [Yeo et al.,](#page-10-9) [2025;](#page-10-9) [Zeng et al.,](#page-11-1) [2025\)](#page-11-1) and domains [\(Pan et al.,](#page-9-12) [2025;](#page-9-12) [Shrestha et al.,](#page-10-10) [2025;](#page-10-10) [Xie et al.,](#page-10-11) [2025;](#page-10-11) [Zhang et al.,](#page-11-2) [2025\)](#page-11-2). Numerous RLVR variants have also been proposed to improve performance, data efficiency, and computational cost [\(Fatemi et al.,](#page-9-13) [2025;](#page-9-13) [Liu](#page-9-11) [et al.,](#page-9-11) [2025b;](#page-9-11) [Shao et al.,](#page-10-12) [2025,](#page-10-12) [2024;](#page-10-13) [Wang et al.,](#page-10-14) [2025a](#page-10-14)[,b;](#page-10-15) [Yu et al.,](#page-10-16) [2025;](#page-10-16) [Zuo et al.,](#page-11-3) [2025\)](#page-11-3). Distilling high-quality CoT data is another effective approach for enhancing LLM reasoning. Such data are obtained either by prompting large models [\(Yu et al.,](#page-10-17) [2024;](#page-10-17) [Zelikman et al.,](#page-11-4) [2022\)](#page-11-4) or by human annotation of complex reasoning traces [\(Qin](#page-10-18) [et al.,](#page-10-18) [2024;](#page-10-18) [Xiang et al.,](#page-10-1) [2025;](#page-10-1) [Ye et al.,](#page-10-2) [2025\)](#page-10-2). A widely used strategy now involves distilling long CoT responses from RLVR-trained models into student models, often yielding substantial performance gains [\(Huang et al.,](#page-9-14) [2024;](#page-9-14) [Min et al.,](#page-9-5) [2024;](#page-9-5) [Muennighoff et al.,](#page-9-6) [2025;](#page-9-6) [Shrestha et al.,](#page-10-10) [2025\)](#page-10-10). Our work examines both RLVR and distillation, and evaluates how these two approaches differentially shape reasoning behavior in LLMs.
+
+Capability expansion in RLVR. There is ongoing debate about whether RLVR develops genuinely new capabilities not already present in a model. Several works [\(Dang et al.,](#page-9-8) [2025;](#page-9-8) [Yue et al.,](#page-10-6) [2025;](#page-10-6) [Zhao et al.,](#page-11-0) [2025\)](#page-11-0) argue that RLVR merely amplifies correct reasoning already latent in the model. By contrast, ProRL demonstrates empirically that, given sufficient compute and diverse data, RLVR can enable models to solve previously unsolvable tasks in some domains-such as logic puzzles—suggesting the possibility of true capability expansion [\(Liu et al.,](#page-9-7) [2025a\)](#page-9-7). OMEGA provides a more controlled analysis by carefully adjusting the knowledge and difficulty requirements of training and test math problems. Their results show that models can generalize to higher difficulty levels when the required knowledge is the same, but remain weak at chaining compositional skills or adopting novel, unconventional strategies [\(Sun](#page-10-4) [et al.,](#page-10-4) [2025\)](#page-10-4). Similarly, e3 finds that only problems
+
+with a sufficiently large verification-generation gap benefit from test-time scaling, through experimenting under settings where the problem types of training and test sets are strictly controlled (Setlur et al., 2025). However, outside such carefully constrained conditions—in typical scenarios where both training and test sets consist of heterogeneous problems with uncontrolled knowledge and difficulty-studies consistently find that RLVR does not substantially expand capability. Theoretical analysis conducted by Wu et al. further argues that, in general, the shrinkage of empirical support outweighs its expansion in such scenarios, leading to little capability gain in RLVR (Wu et al., 2025). In this work, we analyze RLVR under such general, uncontrolled math problem settings. By examining how accuracy shifts across difficulty levels, we show that RLVR often fails to improve capability as it tends to deliver gains on easier problems at the expense of performance on harder ones.
+
+Reasoning pattern and knowledge in distillation. Several studies have examined the respective roles of domain knowledge and reasoning patterns in improving accuracy through distillation. For instance, Shrestha et al. distill teacher responses from logic puzzles—where domain knowledge is minimal—and show that transferring reasoning patterns alone can yield substantial performance gains across domains such as mathematics and coding (Shrestha et al., 2025). Similarly, Huan et al. demonstrate that distilling math problem responses leads to notable improvements in reasoning tasks in other domains (Huan et al., 2025). However, work on capability remains limited. Yue et al. suggest that distillation can drive capability expansion, but their analysis does not disentangle the effects of reasoning patterns and knowledge injection (Yue et al., 2025). In contrast, our study explicitly controls for this distinction and investigates how each factor differentially influences model capability.
+
+## <span id="page-2-0"></span>3 Accuracy and Capability
+
+#### 3.1 Formal Definitions
+
+We evaluate models along two dimensions: *accuracy* and *capability*. Informally, accuracy measures how likely a model is to generate a correct answer in a single attempt, while capability measures whether a correct answer exists within the model's response distribution.
+
+Formally, we define accuracy and capability with respect to given model  ${\cal M}$  and evaluation dataset
+
+ $\mathcal{D}=\{1,\dots,N\}$  of N questions. Let  $p_i^M$  denote the probability that model M successfully solves question i in a single attempt. Note that this can be obtained by sampling model M for n times on question i, computing the fraction of correct responses, and taking the limit as  $n\to\infty$ . In theory, an LLM using softmax sampling assigns non-zero probability to all valid outputs, so any answer could eventually be produced. To make capability practically meaningful, we consider a question i to be in-distribution for model M if  $p_i^M > \epsilon$ , where  $\epsilon$  is a small threshold (typically  $10^{-2}$  to  $10^{-3}$ ).
+
+To evaluate performance under multiple attempts, let  $p_{i,k}^M$  denote the probability that model M solves question i at least once across k independent attempts. This probability satisfies
+
+$$p_{i,k}^M = 1 - (1 - p_i^M)^k$$
+.
+
+With these definitions in place, we define the model's *accuracy* as the average success rate over the entire dataset:
+
+$$Acc(M) = \frac{1}{N} \sum_{i \in \mathcal{D}} p_i^M.$$
+
+We define the model's pass@k capability as the average success probability over  $\mathcal{D}$  given k passes per question:
+
+$$\operatorname{Cap}_{k}(M) = \frac{1}{N} \sum_{i \in \mathcal{D}} p_{i,k}^{M} = \frac{1}{N} \sum_{i \in \mathcal{D}} \left( 1 - (1 - p_{i}^{M})^{k} \right)$$
+
+It is important to note that if model M' has higher accuracy than model M ( $p_i^{M'} > p_i^M$ ) for a specific question, then it will also have higher pass@k capability for that question. However, this relationship does not always hold taking into account the entire dataset. In fact, as shown in Appendix A.1, it is possible for Acc(M') > Acc(M) while  $Cap_k(M') < Cap_k(M)$ .
+
+#### <span id="page-2-1"></span>3.2 Estimating Accuracy and Capability
+
+In practice, it is infeasible to compute the exact accuracy and capability of a model, as this would require a prohibitively large number of samples per question. Instead, we estimate these quantities empirically using a finite number of samples k. Let  $X_{i,k}$  be the number of correct responses among k samples for question i.
+
+We estimate accuracy as:
+
+$$Acc(M) \approx \frac{1}{N} \sum_{i \in \mathcal{D}} \frac{X_{i,k}}{k}$$
+
+We estimate *pass@k capability* as:
+
+$$\operatorname{Cap}_k(M) \approx \frac{1}{N} \sum_{i \in \mathcal{D}} 1(X_{i,k} > 0)$$
+
+These estimators are unbiased. Throughout this work, we report results using these estimators, typically with k=256. We also consider a question i to be out-of-distribution if  $X_{i,256}=0$ , that is, none of the 256 responses to question i are correct. Under this definition, we can say with 95% confidence that  $p_i^M < 1 - (0.05)^{1/256} \approx 0.012$ , that is, question i is truly out-of-distribution under the threshold  $\epsilon=0.012$ .
+
+# <span id="page-3-2"></span>4 Why Doesn't RLVR Improve Capability?
+
+Prior work has shown across multiple models that RLVR yields substantial gains in accuracy but often fails to improve capability, as measured by pass@k with sufficiently large k (Yue et al., 2025). In this section, we extend this observation and analyze the phenomenon in greater depth. Specifically, we aim to answer: Why does RLVR raise accuracy while leaving capability unchanged or even degraded?
+
+#### 4.1 Capability Analysis
+
+We first performed pass@k experiments similar to those by Yue et al., confirming that RLVR improves accuracy but not capability (Fig. 7). Specifically, we evaluated two base models—Qwen2.5-1.5B-Math (Yang et al., 2024) and Qwen2.5-3B (Hui et al., 2024)—along with their corresponding RLVR-trained versions. The full training details and pass@k results are provided in Appendix A.9 and A.2, respectively. All models were trained on the MATH training set, which contains 7,500 questions, and evaluated on the MATH 500 test set with 500 problems. These same datasets are also used for all subsequent experiments in this section.
+
+We report here results on the 1.5B model evaluated on the test set due to space constraints. However, the same pattern holds consistently across both the train and test sets, and across both model sizes (1.5B and 3B). Full results are provided in Appendix A.3. For clarity, we refer to the original 1.5B model as the base model and the RLVR-trained version as the RL model.
+
+# <span id="page-3-3"></span>4.2 A Deeper-Dive: Analysis Based on Question Difficulty
+
+To better understand the accuracy-capability dynamics of RLVR, we conduct a fine-grained anal-
+
+<span id="page-3-0"></span>> **[图片提取文字 (无描述)]:**
+> 40 +36.6% 35 RL Model Improvement 30 +24.7% 25 +19.8% 20 15 +8.8% 10 5 +0.6% +0.5% 0 129-256 1-4 5-16 17-6465-128 Base Model Success Rate
+![](_page_3_Figure_10.jpeg)
+
+Figure 1: Change in success rates after RLVR training on MATH 500 test set, grouped by the base model's per-question success rate measured over 256 responses. The bar height represents the absolute difference (%) between the RL and base models within each bin.
+
+ysis at the question difficulty level. For each question in the training and test sets, we generate 256 responses from the base model and compute its per-question success rate. Questions are then grouped into bins according to these rates: [0], [1–4], [5–16], [17–64], [65–128], and [129–256]. Within each bin, we collect the corresponding questions, retrieve the RL model's responses to the same questions, and compute average success rates for both models. We then calculate the average success rate of the base and RL models in each bin and plot their absolute difference. The results are shown in Figure 1.
+
+<span id="page-3-1"></span>> **[图片提取文字 (无描述)]:**
+> 129-256 (n=287) 1.0% 99.0% (3) (284)0.8 65-128 (n=78) 1.3% 83.3% 15.4% (1) (12)Base Model Success Rate 17-64 (n=69) 0.6 1.4% 4.3% 2.9% 29.0% 30.4% 31.9% (1) (3) (2)(20)(21)(22)5-16 (n=34) 5.9% 11.8% 26.5% 32,4% 20.6% 2.9% 0.4 (2) (1) (4) (9) (11)(7) 1-4 (n=18) 16.7% 61.1% 22.2% (4) (3) 0.2 (n=14) 64.3% 28.6% 7.1% (4) (1) 0.0 0 1-4 5-16 17-64 65-128 129-256 RL Model Success Rate
+![](_page_3_Figure_13.jpeg)
+
+Figure 2: Success rate transition matrix showing redistribution of questions from base model to RL model on MATH 500 test set.
+
+We observe two consistent patterns. (1) For questions where the base model already has a moderately high success rate, the RL model shows substantial improvement. For example, in the training set, the [65–128] bin shows a 36.6% gain in average success rate relative to 256 responses, and the [17–64] bin shows a 24.7% gain. (2) In contrast, for questions where the base model has zero or
+
+near-zero success rate, the improvement is negligible. For instance, the [0] bin in the training set improves by only 0.5% points, and the [1–4] bin by just 0.6% points.
+
+Furthermore, to better understand the pattern observed in success rate improvements, we visualize how individual questions move across success rate bins before and after RLVR training. Figure [2](#page-3-1) presents this transition in test set as a matrix. Here, each row corresponds to a success-rate bin based on the base model's performance, and each column corresponds to the same bin based on the RL model's performance. Each cell shows the percentage (and count) of questions that started in a specific base model bin and end up in a particular RL model bin after training.
+
+Notably, we observe two clear trends. (1) Questions already in high-success bins tend to stay there or shift upward after RLVR. For example, in the [65–128] bin, 15.4% remain in place while 83.3% move to the top [129–256] bin; only 1.3% (1 question out of 78) drop lower. A similar upward shift appears in the [17–64] bin. (2) In contrast, questions in low-success bins—especially those near zero—tend to stagnate or regress. In the [1–4] bin, 61.1% remain and 16.7% fall to [0]; likewise, in the [5–16] bin, 44.2% stay or drop lower. This pattern shows a clearer picture of how RLVR fails to help previously unsolved questions and can even increase their number, as many with a small chance of being answered correctly end up never being solved after training.
+
+To understand this behavior, we need to examine the internal dynamics of RLVR training. Take GRPO algorithm as an example. At each iteration, the model generates multiple responses (e.g., 8) per question in a batch. Each response is evaluated for correctness, and parameter updates are applied accordingly. If all 8 responses for a given question are incorrect, that question has no influence on the update. In contrast, for questions with a mix of correct and incorrect responses, the model parameters are nudged to increase the likelihood of generating correct answers and decrease incorrect ones. Now consider an early training step where the batch includes one difficult question (e.g., in bin [1–4]) and several easier ones (e.g., in bin [65–128]). With high probability, the model will generate only incorrect responses for the difficult question, while producing at least some correct answers for the easier ones. As a result, the parameter update will be guided entirely by the easier questions only. This
+
+can lead to the model assigning even lower probability to the correct answers for the difficult question, especially if model capacity is limited. This selective reinforcement continues throughout training, explaining why questions that initially had a small chance of being answered correctly may become even less likely to be solved after training. To confirm this selective reinforcement effect, we also analyze the entropy of the model's output distributions—measured over 256 responses per question—across difficulty levels. We observe that entropy consistently decreases after RLVR training. Full results are provided in Appendix [A.4.](#page-16-0)
+
+To summarize, these results suggest the following insight: RLVR improves accuracy but not capability because *RLVR focuses on improving the accuracy of the less-difficult questions to the detriment of the accuracy of the most difficult questions.*
+
+# 5 Comparison of Model Responses Before & After RLVR
+
+RLVR causes the model to increase the probability of generating correct answers it could already generate, but does not enable it to solve previously unsolvable questions. This naturally leads us to the following question: *Can we replicate RLVR's effect by directly nudging the model toward its own correct responses—that is, through self-distillation? And if not, why?*
+
+#### <span id="page-4-1"></span>5.1 Self-Distillation Experiments
+
+<span id="page-4-0"></span>
+
+| Setup             | Train Acc (%) | Test Acc (%) |
+|-------------------|---------------|--------------|
+| 1) Base           | 64.0          | 62.6         |
+| 2) Base ←<br>Base | 74.7 (+10.7)  | 63.4 (+0.8)  |
+| 3) RL             | 80.9          | 74.8         |
+| ←<br>4) RL<br>RL  | 84.4 (+3.5)   | 74.4 (-0.4)  |
+| 5) Base ←<br>RL   | 80.5 (+16.5)  | 74.2 (+11.6) |
+
+Table 1: Self-distillation results for the Qwen2.5-1.5B-Math base model and its RLVR-trained variant. The notation A ← B indicates the student model A is trained on responses from the teacher model B. Values in parentheses show gains over the student model with distillation.
+
+To explore this question, we perform selfdistillation with rejection sampling, following approaches similar to STaR [\(Zelikman et al.,](#page-11-4) [2022\)](#page-11-4) and ReST [\(Gulcehre et al.,](#page-9-16) [2023\)](#page-9-16)—that is, we conduct SFT on the model's own correct responses. Recall that, we collected 256 responses per training question from the base model in Section 4. From these, we select up to 8 correct responses for each question (using all available correct ones if fewer than 8 exist) and conduct SFT using this filtered dataset. Additionally, to test whether self-distillation can also further improve the RLVR-trained model, we apply the same self-distillation process to the RL model. We conduct this experiment for both Qwen2.5-1.5B-Math and Qwen2.5-3B, but present only the 1.5B results here due to space constraints. The 3B results show similar trends and are provided in Appendix A.5.
+
+We find that self-distillation fails to replicate the effect of RLVR. As shown in Table 1 (lines 1-2), distilling the base model using its own correct responses yields a train accuracy of 74.7%, a 10.7-point increase. However, test accuracy rises only modestly to 63.4%, a 0.8-point gain over the base model's 62.6% and significantly below the RL model's 74.8%. Similarly, from lines 3-4 we observe self-distillation of the RL model leads to no gain on the test set (74.8% to 74.4%), despite notable rises in training accuracy (80.9% to 84.4%).
+
+These results suggest that, unlike RLVR, self-distillation tends to overfit to the training set and fails to promote more generalizable reasoning behavior.
+
+We take a step further and conduct another self-distillation experiment. Prior work has shown that distilling quality responses from a teacher model can effectively improve the performance of student model (Huang et al., 2024; Min et al., 2024; Muennighoff et al., 2025). In other words, responses that lead to large accuracy gains through distillation can be seen as having high quality (Kim et al., 2025). Based on this idea, we perform an additional experiment: distilling the RL model's responses into the base model.
+
+Interestingly, the base model shows a significant performance gain that is not limited to the training set. As shown in Table 1 (line 5), its accuracy on the training set rises from 64.0% to 80.5%, as expected after fine-tuning. More importantly, its test accuracy also rises—from 62.6% to 74.2%—an absolute gain of 11.6 points, putting it on par with the RL model's 74.8%.
+
+In summary, when distilling the base model with correct responses from the base model there is only minor improvement, whereas when distilling with correct responses from the RLVR-trained model there is significant improvement, on par with RLVR
+
+itself. This suggests that there is a qualitative difference in the two response types, and reveals the following insight: RLVR does more than merely increase the success probability for the easier questions—it enables the model to produce quality responses that were not present in its output distribution before training.
+
+## <span id="page-5-1"></span>5.2 Qualitative Analysis
+
+<span id="page-5-0"></span>> **[图片提取文字 (无描述)]:**
+> Count 974 1000 Base Model 899 0.99RL Model 1.00 Response Length 0.90800 0.86 Keyword 707 643 0.75 0.67600 539 528 0.590.50 0.50 0.00 0.00 400 200 Correct Incorrect All Correct Incorrect
+![](_page_5_Figure_8.jpeg)
+
+Figure 3: Qualitative analysis of Qwen2.5-1.5B-Math before and after RLVR training. (Left) Mean response length, and (Right) mean count of reflection keywords, grouped by correctness.
+
+In addition, given that RLVR improves the model's ability to generate quality responses, we examine how RLVR changes the qualitative characteristics of responses. Prior work suggests that RLVR-trained models often produce longer answers and show reflective reasoning behaviors such as verification and backtracking (DeepSeek-AI, 2025; Gandhi et al., 2025; Liu et al., 2025b; Yeo et al., 2025; Zeng et al., 2025). Following these, we compare responses from the base and RL models along two surface-level dimensions: response length and the frequency of reflection-related keywords (e.g., "let's verify," "alternatively," "wait").
+
+As shown in Figure 3, in our small model settings (1.5B and 3B), we observe no significant difference in response length. Moreover, the RL model tends to produce more direct responses, using fewer reflection-related keywords (Full results in Appendix A.6). These patterns diverge from prior observations in the literature. These findings imply that surface-level traits, such as response length or the frequency of reflection keywords, may not reliably indicate response quality. It also underscores the need for developing better quality evaluation criteria in future work.
+
+# <span id="page-5-2"></span>6 Under What Conditions Does Distillation Increase Capability?
+
+Distillation from teacher reasoning models is known to be another effective approach for improving accuracy (Min et al., 2024; Muennighoff et al., 2025; Ye et al., 2025). Here, we take a step
+
+further and investigate: Can teacher distillation also improve capability, and under what conditions does such improvement occur?
+
+#### 6.1 Capability Analysis
+
+<span id="page-6-0"></span>> **[图片提取文字 (无描述)]:**
+> MATH500 (hardest 50) AIME25 80 60 40 20 Base model DeepSeek model Distilled model 512  $\infty$  $\infty$ 32
+![](_page_6_Figure_2.jpeg)
+
+Figure 4: Pass@k comparisons across AIME25 and MATH500 datasets for the 1.5B model and their distillation-trained variants. For the MATH500 results, we show the results on 50 questions with the lowest success rates under the base model to better visualize the performance gaps between models.
+
+Yue et al. briefly explored this issue by comparing two models: Qwen-2.5-Math-7B (Yang et al., 2024) and DeepSeek-R1-Distill-Qwen-7B (DeepSeek-AI, 2025). The latter is a publicly available model obtained by distilling 800K DeepSeek-R1 responses into the Qwen-2.5-Math-7B student model. Their experiments showed that the distilled model demonstrates improved capability, as evidenced by higher pass@k scores.
+
+However, it remains unclear why the distillation process led to the observed capability improvement. Teacher model responses contain two key components: (1) the model's *reasoning patterns*, and (2) its *domain knowledge*. In the case of DeepSeek-R1-Distill-Qwen-7B, the student model was trained on up to 800K responses generated by DeepSeek-R1 (DeepSeek-AI, 2025), making it highly likely that new mathematical knowledge absent in the original student model's pre-training data was also introduced during distillation. As a result, it is difficult to determine whether the observed gains in capability stem from adopting more effective reasoning pattern or from learning new knowledge.
+
+To disentangle these effects, we conduct a comparative study using three models: (1) Qwen2.5-Math-1.5B, a non-reasoning base model; (2) DeepSeek-R1-Distill-Qwen-1.5B, which, like its 7B counterpart, was trained on 800K responses from DeepSeek-R1 (DeepSeek-AI, 2025) and likely benefits from both new knowledge and im-
+
+<span id="page-6-1"></span>> **[图片提取文字 (无描述)]:**
+> Distillation - DeepSeek 50 +44.1% +37.9% 40 +36.7% +31.0% 30 Model Improvement 20 +13.6% +9.9% 10 Distillation - Reasoning Only 50 40 30 +20.3% +19.0% 20 +16.1% +11.8% 10 +1.2% +1.5% 0 1-45-16 17-6465-128 129-256 Base Model Success Rate
+![](_page_6_Figure_7.jpeg)
+
+Figure 5: Change in success rates (absolute difference in %) for the DeepSeek model and the reasoning-only model, grouped by base model success rate bins.
+
+proved reasoning; (3) a distilled model we train ourselves, designed to isolate the effect of reasoning-pattern transfer without introducing any new domain knowledge beyond what the base model already possesses. For simplicity, we refer to these as the base model, the DeepSeek model, and the reasoning-only model.
+
+We train the reasoning-only model using the following procedure. Starting with the base model, we generate 256 responses for each of the 7,500 questions in the MATH train set. We exclude any question for which the model achieves a zero success rate. Since the base model answers each remaining question correctly at least once, we treat these as in-distribution. As the teacher, we use QwQ-32B (Qwen, 2024), which we verified to have higher capability than the student model (see Appendix A.7 for details). For each indistribution question, QwQ-32B generates 8 candidate responses. From these, we randomly select up to 4 correct ones (using all available if fewer than 4 exist) and conduct SFT on the base model with them. Distilling in this manner should not introduce any new knowledge beyond what the base model already has. The resulting distilled model achieves 69% accuracy on the MATH 500 dataset, significantly outperforming the base model's 60%, indicating a successful distillation.
+
+We evaluate the capability of the three models by conducting pass@k experiments on the AIME25 (OpenCompass, 2025) and MATH500 dataset. Results are shown in Figure 4. We observe the following patterns consistently across both datasets. (1) The DeepSeek model outperforms the base model across the entire range of k values. For AIME25, it
+
+<span id="page-7-0"></span>> **[图片提取文字 (无描述)]:**
+> Distillation - DeepSeek 129-256 0.3% 1.0% 2.8% 95.8% (n=287)(3)(8)(275)(1) 65 - 1281.3% 7.7% 5.1% 85.9% (1) (4) (67)(n=78)(6)0.8 17-641.4% 7.2% 18.8% 21.7% 50.7% (1) (n=69)(5)(13)(15)(35)Base Model Success Rate 5-165.9% 23.5% 20.6% 50.0% (n=34)(2)(8) (7) (17)1-4 11.1% 11.1% 22.2% 33.3% 22.2% 0.6(n=18)(2)(2)(4)(6)(4)0 21.4% 28.6% 21.4% 7.1% 14.3% 7.1% (3)(4)(3)(1) (2)(1) (n=14)Distillation - Reasoning Only 129-256 0.41.4% 5.9% 92.7% (n=287)(4)(17)(266)65-128 1.3% 20.5% 15.4% (n=78)(1) (16)(12)(49)17-642.9% 11.6% 7.2% 26.1% 27.5% 24.6% (n=69)(2)(8)(5)(18)(19)(17)0.2 5 - 165.9% 23.5% 11.8% 20.6% 20.6% 17.6% (n=34)(2)(8)(4)(7)(7)(6)1-438.9% 27.8% 22.2% 11.1% (n=18)(7)(5)(4) (2)0.00 71.4% 14.3% 7.1% 7.1% (n=14)(10)(2)(1) (1)0 1-45-16 17-64 65-128 129-256 Distilled Model Success Rate
+![](_page_7_Figure_0.jpeg)
+
+Figure 6: Success rate transition matrix showing redistribution of questions in two distillation settings on MATH 500 test set.
+
+achieves a pass@256 score of 70.0%, compared to 56.7% for the base model. To ensure this gap does not close at higher k, we extend evaluation of the base model up to pass@512 and confirm that its performance plateaus, remaining at 56.7%. A similar pattern is observed in MATH500. This shows that the DeepSeek model achieves gains in both accuracy and capability, consistent with (Yue et al., 2025). (2) In contrast, the reasoning-only model initially outperforms the base model at lower k, but the curves converge and even cross as k increases. We also replicate the experiment with Owen2.5-3B and observe the same convergence pattern (See Appendix A.8 for results). These results show that the reasoning-only model we train improves accuracy but does not expand capability, similar to the case of RLVR discussed in Section 4.
+
+These results show that distillation does not always lead to capability expansion, even when it yields significant accuracy gains. We conjecture that the observed difference arises from whether new knowledge is introduced during distillation. Specifically, Distillation may improve capability when it introduces new knowledge, whereas learning reasoning patterns alone boosts accuracy but not capability.
+
+# **6.2** In-Depth Analysis Based on Question Difficulty
+
+To better understand the dynamics of the two types of distillation, we conduct an analysis similar to that in Section 4.2, comparing model performance across question bins grouped by base model success rates, based on 256 sampled responses. As shown in Figure 5, we observe the following patterns: (1) The DeepSeek model shows substantial improvement across all bins, including those with zero or near-zero success rates. (2) In contrast, the reasoning-only model shows improvement primarily in bins with moderately high success rates, but little gain in the zero or near-zero bins, mirroring the behavior of RLVR discussed in Section 4.
+
+As in Section 4.2, we track how per-question success rates change before and after two different distillation settings and visualize the transitions in Figure 6. We observe: (1) For the DeepSeek model, questions consistently move to higher success-rate bins, even those that started in low-success bins. For instance, in the [1–4] bin, only 11.1% (2 out of 18) drop to the [0] bin, and in the [5–16] bin, no question moves downward. (2) In contrast, for the reasoning-only model, we interestingly observe the same "sacrificing difficult problems" effect seen in RLVR. In the [1–4] bin, 38.9% (7 out of 18) drop to the [0] bin, and in the [5–16] bin, 29.4% (10 out of 34) move to lower bins.
+
+We again conjecture that the key factor underlying this difference is whether new knowledge is introduced during distillation. Specifically, distillation with new knowledge improves both accuracy and capability because it enables the model to solve questions across all difficulty levels, including the most difficult ones. In contrast, reasoning-only distillation improves accuracy but not capability because, like RLVR, it focuses on easier questions—often at the cost of performance on the hardest ones. We hope this result motivates further empirical study to validate this conjecture and clarify the role of new knowledge in capability expansion.
+
+#### 7 Conclusions
+
+Recent prior work has shown that RLVR improves accuracy but often fails to improve capability, whereas distillation from a strong teacher typically improves both. In this paper, we provide explanations for these two phenomena, supported by extensive empirical experiments. In summary, the RLVR training algorithm focuses on improving the
+
+accuracy of easier problems while paying less attention to difficult ones; thus, difficult problems on the whole continue to have very low success rates, and the model's overall capability remains largely unchanged. Distillation, on the other hand, is typically performed with a strong teacher model that may include knowledge not present in the base model, which can lead to capability expansion. Our specific contributions are as follows:
+
+- 1. We explain why RLVR improves accuracy but not capability by showing that it disproportionately favors easier questions to the detriment of harder ones—often degrading performance for difficult questions.
+- 2. We demonstrate that RLVR yields higherquality responses, as evidenced by selfdistillation experiments, even though surfacelevel indicators such as response length or reflection keywords fail to capture this improvement.
+- 3. While distillation consistently improves accuracy, its effect on capability is less clear. We conjecture that capability improves only when new knowledge is introduced, whereas distilling reasoning patterns only improves accuracy but not capability, sacrificing performance on the most difficult questions, similar to RLVR.
+
+Together, these findings provide a clearer and more nuanced understanding of how RLVR and distillation shape reasoning behavior in LLMs.
+
+# 8 Limitations
+
+While our study provides an in-depth analysis of RLVR and distillation, it also has limitations that suggest directions for future work.
+
+First, due to resource constraints, our experiments are restricted to a single domain, mathematics, and different patterns may emerge in other tasks. There remains an ongoing debate about whether RLVR truly improves capability. As discussed in Section [2,](#page-1-0) some studies argue that RLVR does not enhance capability in general mathematical settings where both training and test sets contain heterogeneous problems with uncontrolled knowledge and difficulty. Others, however, show that RLVR can indeed expand capability when sufficient training compute is available and when training and test sets are carefully controlled in terms of problem type and difficulty. Therefore, follow-up
+
+work is needed to unify these perspectives and develop a more comprehensive understanding of the phenomenon.
+
+Second, our experiments are limited to relatively small models (1.5B and 3B) and a single RL algorithm family (GRPO & Dr. GRPO). Larger models or different RL algorithms may exhibit different dynamics. A more comprehensive study across model scales and training methods is needed to test the generality of our findings.
+
+Third, our distillation experiments are limited in both scale and control. The DeepSeek model used for comparison is distilled on approximately 800k teacher responses and trained from a different base model, whereas our reasoning-only distillation relies on roughly 30k responses from the same model. In addition, when we extend the setup to include teacher responses to out-of-distribution (OOD) questions, we do not observe measurable capability improvement, possibly due to the small number of OOD samples or limited coverage of new knowledge. Consequently, we cannot conclusively determine whether capability gains depend on the introduction of new knowledge. Future work should validate this conjecture under more controlled settings.
+
+## 9 Acknowledgement
+
+We gratefully acknowledge the support of the Center for AI and Robotics (CAIR) at New York University Abu Dhabi for this research.
+
+## References
+
+- <span id="page-9-8"></span>Xingyu Dang, Christina Baek, J. Zico Kolter, and Aditi Raghunathan. 2025. Assessing diversity collapse in reasoning. In *OpenReview (ICLR Workshop / Supplementary Track)*. Available at [https:](https://openreview.net/forum?id=AMiKsHLjQh) [//openreview.net/forum?id=AMiKsHLjQh](https://openreview.net/forum?id=AMiKsHLjQh).
+- <span id="page-9-1"></span>DeepSeek-AI. 2025. [Deepseek-r1: Incentivizing rea](https://arxiv.org/abs/2501.12948)[soning capability in llms via reinforcement learning.](https://arxiv.org/abs/2501.12948) ArXiv:2501.12948.
+- <span id="page-9-13"></span>Mehdi Fatemi, Banafsheh Rafiee, Mingjie Tang, and Kartik Talamadupula. 2025. [Concise reason](https://arxiv.org/abs/2504.05185)[ing via reinforcement learning.](https://arxiv.org/abs/2504.05185) *arXiv preprint arXiv:2504.05185*.
+- <span id="page-9-3"></span>Kanishk Gandhi, Ayush Chakravarthy, Anikait Singh, Nathan Lile, and Noah D. Goodman. 2025. [Cog](https://arxiv.org/abs/2503.01307)[nitive behaviors that enable self-improving rea](https://arxiv.org/abs/2503.01307)[soners, or, four habits of highly effective stars.](https://arxiv.org/abs/2503.01307) ArXiv:2503.01307.
+- <span id="page-9-16"></span>Caglar Gulcehre, Tom Le Paine, Srivatsan Srinivasan, Ksenia Konyushkova, Lotte Weerts, Abhishek Sharma, Aditya Siddhant, Alex Ahern, Miaosen Wang, Chenjie Gu, Wolfgang Macherey, Arnaud Doucet, Orhan Firat, and Nando de Freitas. 2023. [Reinforced self-training \(rest\) for language modeling.](https://arxiv.org/abs/2308.08998) *arXiv preprint arXiv:2308.08998*.
+- <span id="page-9-19"></span>Andreas Hochlehnert, Hardik Bhatnagar, Vishaal Udandarao, Samuel Albanie, Ameya Prabhu, and Matthias Bethge. 2025. [A sober look at progress in language](https://arxiv.org/abs/2504.07086) [model reasoning: Pitfalls and paths to reproducibility.](https://arxiv.org/abs/2504.07086) *Preprint*, arXiv:2504.07086.
+- <span id="page-9-10"></span>Jingcheng Hu, Yinmin Zhang, Qi Han, Daxin Jiang, Xiangyu Zhang, and Heung-Yeung Shum. 2025. [Open](https://arxiv.org/abs/2503.24290)[reasoner-zero: An open source approach to scaling](https://arxiv.org/abs/2503.24290) [up reinforcement learning on the base model.](https://arxiv.org/abs/2503.24290) *arXiv preprint arXiv:2503.24290*.
+- <span id="page-9-15"></span>Maggie Huan, Yuetai Li, Tuney Zheng, Xiaoyu Xu, Seungone Kim, Minxin Du, Radha Poovendran, Graham Neubig, and Xiang Yue. 2025. Does math reasoning improve general llm capabilities? understanding transferability of llm reasoning. *arXiv preprint arXiv:2507.00432*. Also available at [https:](https://arxiv.org/abs/2507.00432) [//arxiv.org/abs/2507.00432](https://arxiv.org/abs/2507.00432).
+- <span id="page-9-14"></span>Zhen Huang, Haoyang Zou, Xuefeng Li, Yixiu Liu, Yuxiang Zheng, Ethan Chern, Shijie Xia, Yiwei Qin, Weizhe Yuan, and Pengfei Liu. 2024. [O1 replication](https://arxiv.org/abs/2411.16489) [journey–part 2: Surpassing o1-preview through sim](https://arxiv.org/abs/2411.16489)[ple distillation, big progress or bitter lesson?](https://arxiv.org/abs/2411.16489) *arXiv preprint arXiv:2411.16489*.
+- <span id="page-9-9"></span>Binyuan Hui, Jian Yang, Zeyu Cui, Jiaxi Yang, Dayiheng Liu, Lei Zhang, Tianyu Liu, Jiajun Zhang, Bowen Yu, Kai Dang, An Yang, Rui Men, Fei Huang, Xingzhang Ren, Xuancheng Ren, Jingren Zhou, and Junyang Lin. 2024. [Qwen2.5 technical](https://arxiv.org/abs/2412.15115) [report.](https://arxiv.org/abs/2412.15115) *Preprint*, arXiv:2412.15115.
+
+- <span id="page-9-17"></span>Seungone Kim, Juyoung Suk, Xiang Yue, Vijay Viswanathan, Seongyun Lee, Yizhong Wang, Kiril Gashteovski, Carolin Lawrence, Sean Welleck, and Graham Neubig. 2025. [Evaluating language models](https://doi.org/10.18653/v1/2025.acl-long.320) [as synthetic data generators.](https://doi.org/10.18653/v1/2025.acl-long.320) In *Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)*, pages 6385–6403, Vienna, Austria. Association for Computational Linguistics.
+- <span id="page-9-20"></span>Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao Zhang, and Ion Stoica. 2023. [Ef](https://arxiv.org/abs/2309.06180)[ficient memory management for large language](https://arxiv.org/abs/2309.06180) [model serving with pagedattention.](https://arxiv.org/abs/2309.06180) *arXiv preprint arXiv:2309.06180*.
+- <span id="page-9-4"></span>Nathan Lambert, Jacob Morrison, Valentina Pyatkin, Shengyi Huang, Hamish Ivison, Faeze Brahman, Lester James V. Miranda, Alisa Liu, Nouha Dziri, Shane Lyu, Yuling Gu, Saumya Malik, Victoria Graf, Jena D. Hwang, Jiangjiang Yang, Ronan Le Bras, Oyvind Tafjord, Chris Wilhelm, Luca Soldaini, and 4 others. 2024. [Tulu 3: Pushing frontiers in open](https://arxiv.org/abs/2411.15124) [language model post-training.](https://arxiv.org/abs/2411.15124) ArXiv:2411.15124.
+- <span id="page-9-7"></span>Mingjie Liu, Shizhe Diao, Ximing Lu, Jian Hu, Xin Dong, Yejin Choi, Jan Kautz, and Yi Dong. 2025a. Prorl: Prolonged reinforcement learning expands reasoning boundaries in large language models. *arXiv preprint arXiv:2505.24864*.
+- <span id="page-9-11"></span>Zichen Liu, Changyu Chen, Wenjun Li, Penghui Qi, Tianyu Pang, Chao Du, Wee Sun Lee, and Min Lin. 2025b. Understanding r1-zero-like training: A critical perspective. *arXiv preprint arXiv:2503.20783*.
+- <span id="page-9-5"></span>Yingqian Min, Zhipeng Chen, Jinhao Jiang, Jie Chen, Jia Deng, Yiwen Hu, Yiru Tang, Jiapeng Wang, Xiaoxue Cheng, Huatong Song, Wayne Xin Zhao, Zheng Liu, Zhongyuan Wang, and Ji-Rong Wen. 2024. [Imitate, explore, and self-improve: A repro](https://arxiv.org/abs/2412.09413)[duction report on slow-thinking reasoning systems.](https://arxiv.org/abs/2412.09413) *Preprint*, arXiv:2412.09413.
+- <span id="page-9-2"></span>MoonshotAI. 2025. [Kimi k1.5: Scaling reinforcement](https://arxiv.org/abs/2501.12599) [learning with llms.](https://arxiv.org/abs/2501.12599) ArXiv:2501.12599.
+- <span id="page-9-6"></span>Niklas Muennighoff, Zitong Yang, Weijia Shi, Xiang Lisa Li, Li Fei-Fei, Hannaneh Hajishirzi, Luke Zettlemoyer, Percy Liang, Emmanuel Candès, and Tatsunori Hashimoto. 2025. [s1: Simple test-time](https://arxiv.org/abs/2501.19393) [scaling.](https://arxiv.org/abs/2501.19393) ArXiv:2501.19393.
+- <span id="page-9-0"></span>OpenAI. 2024. [Openai o1 system card.](https://arxiv.org/abs/2412.16720) ArXiv:2412.16720.
+- <span id="page-9-18"></span>OpenCompass. 2025. [Aime2025 dataset.](https://huggingface.co/datasets/opencompass/AIME2025)
+- <span id="page-9-12"></span>Jiayi Pan, Junjie Zhang, Xingyao Wang, Lifan Yuan, Hao Peng, and Alane Suhr. 2025. Tinyzero: A minimal reproduction of reasoning models. Available at <https://github.com/Jiayi-Pan/TinyZero>.
+
+- <span id="page-10-18"></span>Yiwei Qin, Xuefeng Li, Haoyang Zou, Yixiu Liu, Shijie Xia, Zhen Huang, Yixin Ye, Weizhe Yuan, Hector Liu, Yuanzhi Li, and Pengfei Liu. 2024. [O1 repli](https://arxiv.org/abs/2410.18982)[cation journey: A strategic progress report – part 1.](https://arxiv.org/abs/2410.18982) *arXiv preprint arXiv:2410.18982*.
+- <span id="page-10-19"></span>Qwen. 2024. Qwq-32b preview: Reflect deeply on the boundaries of the unknown. [https://qwenlm.](https://qwenlm.github.io/blog/qwq-32b-preview/) [github.io/blog/qwq-32b-preview/](https://qwenlm.github.io/blog/qwq-32b-preview/). Accessed: 2025-05-05.
+- <span id="page-10-3"></span>Amrith Setlur, Matthew Y. R. Yang, Charlie Snell, Jeremy Greer, Ian Wu, Virginia Smith, Max Simchowitz, and Aviral Kumar. 2025. e3: Learning to explore enables extrapolation of test-time compute for llms. *arXiv preprint arXiv:2506.09026*.
+- <span id="page-10-12"></span>Rulin Shao, Shuyue Stella Li, Rui Xin, Scott Geng, Yiping Wang, Sewoong Oh, Simon Shaolei Du, Nathan Lambert, Sewon Min, Ranjay Krishna, Yulia Tsvetkov, Hannaneh Hajishirzi, Pang Wei Koh, and Luke Zettlemoyer. 2025. Spurious rewards: Rethinking training signals in rlvr. *arXiv preprint arXiv:2506.10947*.
+- <span id="page-10-13"></span>Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, Y. K. Li, Y. Wu, and Daya Guo. 2024. [Deepseekmath: Pushing the limits of mathemati](https://arxiv.org/abs/2402.03300)[cal reasoning in open language models.](https://arxiv.org/abs/2402.03300) *Preprint*, arXiv:2402.03300.
+- <span id="page-10-10"></span>Safal Shrestha, Minwu Kim, Aadim Nepal, Anubhav Shrestha, and Keith Ross. 2025. Warm up before you train: Unlocking general reasoning in resourceconstrained settings. In *Proceedings of the 2025 Conference on Empirical Methods in Natural Language Processing (EMNLP)*.
+- <span id="page-10-4"></span>Yiyou Sun, Shawn Hu, Georgia Zhou, Ken Zheng, Hannaneh Hajishirzi, Nouha Dziri, and Dawn Song. 2025. Omega: Can llms reason outside the box in math? evaluating exploratory, compositional, and transformative generalization. *arXiv preprint arXiv:2506.18880*.
+- <span id="page-10-14"></span>Yiping Wang, Qing Yang, Zhiyuan Zeng, Liliang Ren, Lucas Liu, Baolin Peng, Hao Cheng, Xuehai He, Kuan Wang, Jianfeng Gao, Weizhu Chen, Shuohang Wang, Simon Shaolei Du, and Yelong Shen. 2025a. [Reinforcement learning for reasoning in large lan](https://arxiv.org/abs/2504.20571)[guage models with one training example.](https://arxiv.org/abs/2504.20571) *arXiv preprint arXiv:2504.20571*.
+- <span id="page-10-15"></span>Yiping Wang, Qing Yang, Zhiyuan Zeng, Liliang Ren, Lucas Liu, Baolin Peng, Hao Cheng, Xuehai He, Kuan Wang, Jianfeng Gao, Weizhu Chen, Shuohang Wang, Simon Shaolei Du, and Yelong Shen. 2025b. Reinforcement learning for reasoning in large language models with one training example. In *Proceedings of the 38th International Conference on Neural Information Processing Systems (NeurIPS)*.
+- <span id="page-10-0"></span>Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Brian Ichter, Fei Xia, Ed H. Chi, Quoc V. Le,
+
+- and Denny Zhou. 2022. [Chain-of-thought prompt](https://arxiv.org/abs/2201.11903)[ing elicits reasoning in large language models.](https://arxiv.org/abs/2201.11903) In *Advances in Neural Information Processing Systems*.
+- <span id="page-10-5"></span>Fang Wu, Weihao Xuan, Ximing Lu, Zaid Harchaoui, and Yejin Choi. 2025. The invisible leash: Why rlvr may not escape its origin. *arXiv preprint arXiv:2507.14843*.
+- <span id="page-10-1"></span>Violet Xiang, Charlie Snell, Kanishk Gandhi, Alon Albalak, Anikait Singh, Chase Blagden, Duy Phung, Rafael Rafailov, Nathan Lile, Dakota Mahan, Louis Castricato, Jan-Philipp Franken, Nick Haber, and Chelsea Finn. 2025. [Towards system 2 reasoning](https://arxiv.org/abs/2501.04682) [in llms: Learning how to think with meta chain-of](https://arxiv.org/abs/2501.04682)[thought.](https://arxiv.org/abs/2501.04682) *Preprint*, arXiv:2501.04682.
+- <span id="page-10-11"></span>Tian Xie, Zitian Gao, Qingnan Ren, Haoming Luo, Yuqian Hong, Bryan Dai, Joey Zhou, Kai Qiu, Zhirong Wu, and Chong Luo. 2025. [Logic-rl: Un](https://arxiv.org/abs/2502.14768)[leashing llm reasoning with rule-based reinforcement](https://arxiv.org/abs/2502.14768) [learning.](https://arxiv.org/abs/2502.14768) *arXiv preprint arXiv:2502.14768*.
+- <span id="page-10-8"></span>Haoran Xu, Baolin Peng, Hany Awadalla, Dongdong Chen, Yen-Chun Chen, Mei Gao, Young Jin Kim, Yunsheng Li, Liliang Ren, Yelong Shen, and 1 others. 2025. [Phi-4-mini-reasoning: Exploring the limits](https://arxiv.org/abs/2504.21233) [of small reasoning language models in math.](https://arxiv.org/abs/2504.21233) *arXiv preprint arXiv:2504.21233*.
+- <span id="page-10-7"></span>An Yang, Beichen Zhang, Binyuan Hui, Bofei Gao, Bowen Yu, Chengpeng Li, Dayiheng Liu, Jianhong Tu, Jingren Zhou, Junyang Lin, Keming Lu, Mingfeng Xue, Runji Lin, Tianyu Liu, Xingzhang Ren, and Zhenru Zhang. 2024. [Qwen2.5-math tech](https://arxiv.org/abs/2409.12122)[nical report: Toward mathematical expert model via](https://arxiv.org/abs/2409.12122) [self-improvement.](https://arxiv.org/abs/2409.12122) *Preprint*, arXiv:2409.12122.
+- <span id="page-10-2"></span>Yixin Ye, Zhen Huang, Yang Xiao, Ethan Chern, Shijie Xia, and Pengfei Liu. 2025. [Limo: Less is more for](https://arxiv.org/abs/2502.03387) [reasoning.](https://arxiv.org/abs/2502.03387) *Preprint*, arXiv:2502.03387.
+- <span id="page-10-9"></span>Edward Yeo, Yuxuan Tong, Morry Niu, Graham Neubig, and Xiang Yue. 2025. [Demystifying long](https://arxiv.org/abs/2502.03373) [chain-of-thought reasoning in llms.](https://arxiv.org/abs/2502.03373) *arXiv preprint arXiv:2502.03373*.
+- <span id="page-10-17"></span>Ping Yu, Jing Xu, Jason Weston, and Ilia Kulikov. 2024. [Distilling system 2 into system 1.](https://arxiv.org/abs/2407.06023) *arXiv preprint arXiv:2407.06023*.
+- <span id="page-10-16"></span>Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Tiantian Fan, Gaohong Liu, Lingjun Liu, Xin Liu, Haibin Lin, Zhiqi Lin, Bole Ma, Guangming Sheng, Yuxuan Tong, Chi Zhang, Mofan Zhang, Wang Zhang, Hang Zhu, and 16 others. 2025. [Dapo: An open-source llm rein](https://arxiv.org/abs/2503.14476)[forcement learning system at scale.](https://arxiv.org/abs/2503.14476) *arXiv preprint arXiv:2503.14476*.
+- <span id="page-10-6"></span>Yang Yue, Zhiqi Chen, Rui Lu, Andrew Zhao, Zhaokai Wang, Shiji Song, and Gao Huang. 2025. [Does re](https://arxiv.org/abs/2504.13837)[inforcement learning really incentivize reasoning ca](https://arxiv.org/abs/2504.13837)[pacity in llms beyond the base model?](https://arxiv.org/abs/2504.13837) *Preprint*, arXiv:2504.13837.
+
+- <span id="page-11-4"></span>Eric Zelikman, Yuhuai Wu, Jesse Mu, and Noah D. Goodman. 2022. [Star: Bootstrapping reasoning with](https://arxiv.org/abs/2203.14465) [reasoning.](https://arxiv.org/abs/2203.14465) *arXiv preprint arXiv:2203.14465*.
+- <span id="page-11-1"></span>Weihao Zeng and 1 others. 2025. [Simplerl-zoo: Inves](https://arxiv.org/abs/2503.18892)[tigating and taming zero reinforcement learning for](https://arxiv.org/abs/2503.18892) [open base models in the wild.](https://arxiv.org/abs/2503.18892) ArXiv:2503.18892.
+- <span id="page-11-2"></span>Sheng Zhang, Qianchu Liu, Guanghui Qin, Tristan Naumann, and Hoifung Poon. 2025. [Med](https://arxiv.org/abs/2502.19655)[rlvr: Emerging medical reasoning from a 3b base](https://arxiv.org/abs/2502.19655) [model via reinforcement learning.](https://arxiv.org/abs/2502.19655) *arXiv preprint arXiv:2502.19655*.
+- <span id="page-11-0"></span>Rosie Zhao, Alexandru Meterez, Sham Kakade, Cengiz Pehlevan, Samy Jelassi, and Eran Malach. 2025. Echo chamber: Rl post-training amplifies behaviors learned in pretraining. In *Proceedings of COLM 2025*. Also available as arXiv preprint arXiv:2504.07912.
+- <span id="page-11-3"></span>Yuxin Zuo, Kaiyan Zhang, Shang Qu, Li Sheng, Xuekai Zhu, Biqing Qi, Youbang Sun, Ganqu Cui, Ning Ding, and Bowen Zhou. 2025. [Ttrl:](https://arxiv.org/abs/2504.16084) [Test-time reinforcement learning.](https://arxiv.org/abs/2504.16084) *arXiv preprint arXiv:2504.16084*.
+
+#### A Appendix
+
+### <span id="page-12-0"></span>A.1 Accuracy vs. Capability Example
+
+As discussed in Section 3, we provide an example to illustrate that a model can have higher *accuracy* but lower *capability* on an evaluation dataset with more than one question.
+
+Recall the definitions:
+
+$$Acc(M) = \frac{1}{N} \sum_{i=1}^{N} p_i^M,$$
+
+$$Cap_k(M) = \frac{1}{N} \sum_{i=1}^{N} \left( 1 - (1 - p_i^M)^k \right).$$
+
+We compare two models,  $M_1$  and  $M_2$ , on a toy dataset of N=3 questions. Their single-attempt success probabilities  $p_i^M$  are shown below:
+
+| Question | $p_i^{M_1}$ | $p_i^{M_2}$ |
+|----------|-------------|-------------|
+| 1        | 0.9         | 0.5         |
+| 2        | 0.9         | 0.5         |
+| 3        | 0.003       | 0.5         |
+
+Table 2: Single-pass success probabilities for models  $M_1$  and  $M_2$ .
+
+We first compute the accuracy of two models on this toy dataset.
+
+$$Acc(M_1) = \frac{1}{3}(0.9 + 0.9 + 0.003) = 0.601,$$
+$$Acc(M_2) = \frac{1}{3}(0.5 + 0.5 + 0.5) = 0.5.$$
+
+Thus,  $M_1$  has higher accuracy.
+
+We now compute capability with k = 256, which is large enough to expose the low success probability on Question 3 for  $M_1$ :
+
+Using the formula:
+
+$$p_{i,k}^M = 1 - (1 - p_i^M)^k,$$
+
+we compute:
+
+Model  $M_1$ :
+
+$$p_{1,256}^{M_1} = 1 - (1 - 0.9)^{256} \approx 1,$$
+
+$$p_{2,256}^{M_1} = 1 - (1 - 0.9)^{256} \approx 1,$$
+
+$$p_{3,256}^{M_1} = 1 - (1 - 0.003)^{256} \approx 0.537.$$
+
+$$\operatorname{Cap}_{256}(M_1) = \frac{1}{3}(1 + 1 + 0.537) \approx 0.845.$$
+
+Model  $M_2$ :
+
+$$p_{i,256}^{M_2} = 1 - (1 - 0.5)^{256} = 1 - 2^{-256} \approx 1 \quad \text{for all } i,$$
+ 
+$$\operatorname{Cap}_{256}(M_2) = \frac{1}{3}(1 + 1 + 1) = 1.0.$$
+
+As shown, although  $M_1$  has significantly higher probabilities to the first two questions—resulting in higher overall accuracy—its probability on the third question is extremely low. As a result, even with many sampling attempts,  $M_1$  is unlikely to solve all questions. In contrast,  $M_2$  maintains moderate but consistent success probabilities across all three questions, which leads to a higher chance of solving every question at least once when given sufficient attempts.
+
+#### <span id="page-13-1"></span>A.2 Pass@k Experiments Results Before & After RLVR
+
+In this paper, we used two models to evaluate the effect of RLVR training: Qwen2.5-1.5B-Math, and Qwen2.5-3B. For corresponding RL model of 1.5B model, we used the Qwen2.5-Math-1.5B-Oat-Zero, a publicly available model trained with MATH train dataset by Liu et al.. For Qwen2.5-3B, we conducted the RLVR training ourselves, also with MATH train dataset. Further details for training can be found at Appendix A.9 and A.10, respectively.
+
+<span id="page-13-2"></span>
+
+| Split | Model      | Qw       | ven2.5-1.5B- | Math     |          | Qwen2.5-3 | В        |
+|-------|------------|----------|--------------|----------|----------|-----------|----------|
+| Spine | 1,10401    | Accuracy | Maj@256      | Pass@256 | Accuracy | Maj@256   | Pass@256 |
+| Train | Base       | 64.0%    | 76.8%        | 97.2%    | 59.3%    | 80.9%     | 92.7%    |
+|       | RL         | 80.9%    | 82.1%        | 97.1%    | 67.9%    | 82.2%     | 92.1%    |
+|       | Difference | +16.9%   | +5.3%        | -0.1%    | +8.6%    | +1.3%     | -0.6%    |
+| Test  | Base       | 60.6%    | 72.0%        | 97.2%    | 54.9%    | 76.5%     | 95.8%    |
+|       | RL         | 74.2%    | 80.8%        | 97.0%    | 63.6%    | 79.5%     | 95.8%    |
+|       | Difference | +13.9%   | +8.8%        | -0.2%    | +8.7%    | +3.0%     | +0.0%    |
+
+Table 3: Performance comparison of base and RL models for Qwen2.5-1.5B-Math and Qwen2.5-3B
+
+<span id="page-13-0"></span>> **[图片提取文字 (无描述)]:**
+> Train Set Test Set Train Set Test Set 0.9 Pass@k 0.6 Base Model 0.5 -- RL Model 1. 64 64 2 32 32 k Qwen2.5-1.5B-Math Qwen2.5-3B
+![](_page_13_Figure_4.jpeg)
+
+Figure 7: Pass@k comparison between base and RLVR-trained models on train and test sets.
+
+Similar to the work done by Yue et al., we conducted the pass@k experiments with these models. For both the base and RL models, we generated 256 responses per question on the MATH train set and MATH500 test set. Using these responses, we estimated accuracy and pass@k capability for k=1 to 256, following the metric defined in Section 3.2. Additionally, we computed majority vote accuracy (maj@256), which is the percentage of questions where the most frequent answer among the 256 responses is correct.
+
+As expected, we observed that RLVR significantly improved both accuracy and majority vote performance across training and test sets. As shown in Table 3, these gains appeared consistently in both the 3B and 1.5B models, indicating that RLVR leads to generalizable improvement in accuracy without signs of overfitting. In contrast, we observed no meaningful improvement in capability. For both the 1.5B and the 3B models, pass@k either remained stable or slightly declined across the training and test sets. As shown in Figure 7, the RL model outperformed the base model at small k, but their curves converged as k increases—a pattern consistent with prior work (Shao et al., 2024; Yue et al., 2025).
+
+#### <span id="page-14-0"></span>A.3 Question-Difficulty-Based Analysis Results
+
+As discussed in Sections 4, we performed detailed analyses based on question difficulty across different training settings. The results are presented below. Figure 8 shows success rate improvements across difficulty bins for both 1.5B and 3B models on train and test. Figure 9 presents the corresponding transition matrices that illustrate how questions move between success rate bins before and after training.
+
+<span id="page-14-1"></span>> **[图片提取文字 (无描述)]:**
+> 40 +38.5% +36.6% 40 RL Model Improvement RL Model Improvement 35 +33.9% +31.7% 30 +27.5% +28.2% 25 +23.4% +20.3% 20 15 +12.8% +11.4% +9.4% +8.8% 10 +3.0% +0.6% +0.5% +0.6% 33-64 65-128 129-192193-256 1-4 17-32 1-4 5-16 17-32 33-64 65-128 129-192193-256 Math Model Success Rate Base Model Success Rate (a) Qwen2.5-1.5B-Math (Train) (b) Qwen2.5-1.5B-Math (Test) +19.7% +19.1% RL Model Improvement RL Model Improvement +18.0% +16.9% 15 +10.6% +9.6% +9.5% +9.0% +5.4% +4.9% +3.3% +1.7% +0.4% +0.4% +0.1% +0.1% 33-64 65-128 129-192193-256 1-4 17-32 33-64 65-128 129-192193-256 0 1-4 5-16 17-32 5-16 Base Model Success Rate Base Model Success Rate (c) Qwen2.5-3B (Train) (d) Qwen2.5-3B (Test)
+![](_page_14_Figure_2.jpeg)
+
+Figure 8: Change in success rates (absolute %) across difficulty bins for Qwen2.5-1.5B-Math and Qwen2.5-3B on the MATH training and test sets. In both models, RLVR significantly improves questions in the mid-success bins (e.g., [17–64], [65–128]), but yields minimal gains in the lowest bins ([0], [1–4]).
+
+<span id="page-15-0"></span>> **[图片提取文字 (无描述)]:**
+> 0.6% 193-256 0.0% 0.0% 0.2% 0.3% 99.5% 193-256 99.4% (n=3589)(1) (7) (9) (3571)(n=168)(1) (167)(1) 129-192 0.2% 0.4% 1.2% 7.9% 90.2% 129-192 1.7% 2.5% 95.8% 0.8 0.8 (n=1476)(3)(6) (18)(117)(1332)(n=119)(2) (3) (114)Base Model Success Rate Success Rate 65-128 0.4% 0.3% 0.9% 1.9% 10.7% 23.6% 62.2% 65-128 1.3% 15.4% 30.8% 52.6% (239)(631)(n=78)(41)(n=1014)(4) (3) (9) (19)(109)(1) (12)(24)0.6 0.6 0.2% 3.0% 5.1% 13.7% 28.0% 24.1% 33-64 7.1% 2.4% 2.4% 16.7% 31.0% 21.4% 19.0% (3) (n=468)(2) (1) (14)(24)(64)(119)(131)(113)(1) (1) (7) (13)(9) (8) Model 3.7% 3.1% 10.4% 13.8% 20.0% 27.3% 14.6% 9.2% 17-32 3.7% 18.5% 25.9% 29.6% 7.4% 11.1% 17-32 (n=260)(4) (8) (27)(36)(52)(71)(38)(24)(n=27)(1) (1) (5) (7) (8) (2) (3) 0.40.4Base 3.1% 16.4% 24.6% 16.4% 19.5% 11.3% 5.5% 3.4% 5.9% 11.8% 26.5% 23.5% 8.8% 20.6% 2.9% 5-16 5-16 (n=293)(9) (48)(72)(48)(57)(33)(16)(10)(n=34)(2) (4) (9) (8) (3) (7) (1) 32.6% 25.7% 8.6% 6.4% 1.6% 16.7% 22.2% 0.2 0.2 (n=187)(47)(61) (48)(16)(12)(3) (n=18)(3) (4) 16.9% 7.0% 0.9% 0.5% 0.5% 28.6% 7.1% (n=213)(36)(15)(2) (1) (n=14)(1) (1) (4) 0.0 0.0 17-32 33-64 65-128 129-192 193-256 129-192 193-256 1-4 5-16 0 1.4 5-16 17-32 33-64 65-128 RL Model Success Rate RL Model Success Rate (a) Qwen2.5-1.5B-Math (Train) (b) Qwen2.5-1.5B-Math (Test) 1.0 0.4% 193-256 99.6% 193-256 100.0% (n=2350)(10)(2340)(n=135)(135)0.1% 0.1% 1.3% 129-192 20.6% 77.8% 1.8% 22.3% 75.9% 129-192 0.8 (n=1769)(2) (23)(365)(1377)(2) (n=112)(2) (25)0.8 Base Model Success Rate Rate 0.1% 0.9% 0.9% 2.4% 18.4% 65-128 36.5% 40.8% 43.0% 43.0% 13.9% 65-128 (n=1188)(11)(11)(28)(434)(485)(218)(1) (n=79)(34)(34)(11)Success 0.6 0.6 0.2% 1.2% 6.3% 2.0% 33-64 36.4% 47.4% 6.5% 6.0% 50.0% 36.0% 4.0% 4.0% 33-64 (7) (37)(214)(279)(38)(12)(1) (n=50)(3) (25)(18)(2) (2) Base Model 0.3% 10.8% 1.1% 0.5% 2.4% 17-32 38.8% 41.4% 7.1% 17-32 7.1% 31.0% 59.5% (n=379)(1) (41) (147)(157)(27)(4) (2) (1) (n=42)(25)(3) (13)0.40.41.5% 15.6% 22.6% 6.2% 0.2% 0.2% 10.3% 30.8% 7.7% 2.6% 2.6% 46.2% 5-16 (n=469)(73)(252)(106)(29)(7) (1) (1) (18)(3) (1) (n=39)(1) (4) (12)21.9% 0.5% 26.0% 51.5% 13.6% 31.8% 0.2 0.2 (n=392)(102)(202)(86)(2) (n=22)(3) (12)(7) 20.8% 0.5% 19.0% (n=21)(n=365)(76)(2) (4) 0.0 0.0 1-4 5-16 17-32 33-64 65-128 129-192 193-256 0 1-4 5-16 17-32 33-64 65-128 129-192 193-256 RL Model Success Rate RL Model Success Rate (c) Qwen2.5-3B (Train) (d) Qwen2.5-3B (Test)
+![](_page_15_Figure_0.jpeg)
+
+Figure 9: Transition matrices comparing base and RLVR success-rate bins for Qwen2.5-1.5B-Math and Qwen2.5-3B. Each cell shows the percentage and count of questions moving between success bins. Most upward transitions occur from mid-success bins; questions in low-success bins are more likely to remain unchanged or regress.
+
+#### <span id="page-16-0"></span>A.4 Entropy Analysis
+
+<span id="page-16-1"></span>> **[图片提取文字 (无描述)]:**
+> Train Set Train Set Base model Base model RL model RL model Mean Entropy Mean Entropy 1.91 1.38 0.54 Test Set Test Set Base model Base model 3 RL model RL model Mean entropy Mean entropy 0.70 1-8 9-64 64-128 129-192 193-256 0 1-8 9-64 64-128 129-192 193-256 Base model success rate Base model success rate (a) Qwen2.5-1.5B-Math (b) Qwen2.5-3B
+![](_page_16_Figure_1.jpeg)
+
+Figure 10: Comparison of output entropy across base and RLVR-trained models, computed over 256 responses per question. Entropy is measured by grouping responses with identical final answers.
+
+As discussed in Section 4.2, we performed an entropy analysis to examine whether RLVR reduces response diversity and causes the model to concentrated on fewer outputs. For both the base and RL models, we computed the entropy of the answers in the 256 responses for each question and then average the entropy values over the questions. Entropy values were measured by grouping responses that yield the same final answer, regardless of correctness. We conducted the experiment for both Qwen2.5-1.5B-Math and Qwen2.5-3B.
+
+As shown in Figure 10, output entropy dropped noticeably after RLVR. More importantly, this reduction consistently appeared across all difficulty levels, including questions where the base model had zero or near-zero success rate. These results support the hypothesis that RLVR reinforces greater consistency, but on harder questions, this often leads the model to focus on incorrect responses—making it less likely to recover even occasional correct answers.
+
+#### <span id="page-17-0"></span>A.5 Self-Distillation Results
+
+Table 4 reports the full accuracy results for the self-distillation experiments introduced in Section 5.1. All fine-tuning used the same hyperparameter configuration (Appendix A.11).
+
+<span id="page-17-2"></span>
+
+| Model             | Student Model | Teacher Model | Train Accuracy | Test Accuracy  |
+|-------------------|---------------|---------------|----------------|----------------|
+|                   | Base model    |               | 64.0%          | 62.6%          |
+|                   | Base model    | Base model    | 74.7% (+10.7%) | 63.4% (+0.8%)  |
+| Qwen2.5-1.5B-Math | RL model      |               | 80.9%          | 74.8%          |
+|                   | RL model      | RL model      | 84.4% (+3.5%)  | 74.4% (-0.4%)  |
+|                   | Base model    | RL model      | 80.5% (+16.5%) | 74.2% (+11.6%) |
+|                   | Base model    |               | 59.3%          | 54.9%          |
+|                   | Base model    | Base model    | 73.6% (+14.3%) | 58.7% (+3.8%)  |
+| Qwen2.5-3B        | RL model      |               | 67.9%          | 63.6%          |
+|                   | RL model      | RL model      | 72.1% (+4.2%)  | 64.4% (+0.8%)  |
+|                   | Base model    | RL model      | 73.6% (+14.3%) | 64.5% (+9.6%)  |
+
+Table 4: Self-distillation results for Qwen2.5-1.5B-Math and Qwen2.5-3B across different student—teacher configurations. Accuracy values in parentheses reflect improvements over the corresponding student model before fine-tuning.
+
+As discussed in Section 5.1, the 1.5B model shows that self-distillation leads to overfitting: while training accuracy increases significantly, test accuracy improves only slightly or even declines. In contrast, distilling RL responses into the base model yields the strongest generalization improvement, raising test accuracy from 62.6% to 74.2%—surpassing both the base and RLVR-trained models. Similar trends are observed for the Qwen2.5-3B model as well: distilling RL responses into the base model again leads to the highest test accuracy, outperforming all other configurations. This consistent pattern across model sizes reinforces the interpretation that RLVR produces responses of higher quality. Taken together, these results suggest that distillation performance itself may serve as a useful proxy for evaluating the quality of model responses—potentially offering a more meaningful signal than surface-level indicators such as response length or syntactic heuristics.
+
+#### <span id="page-17-1"></span>A.6 Qualitative Analysis of Responses Before & After RLVR
+
+In Section 5.2, we compared responses from Qwen2.5-1.5B-Math and Qwen2.5-3B before and after RLVR training along two dimensions: response length and the use of reflection-related keywords (e.g., "let's verify", "alternatively", "wait"). Here, we present the complete results.
+
+## A.6.1 Response Length
+
+> **[图片提取文字 (无描述)]:**
+> Base Model RL Model (cp150) Response Length All responses Correct responses Incorrect responses
+![](_page_17_Figure_8.jpeg)
+
+(a) Mean response length grouped by correctness.
+
+> **[图片提取文字 (无描述)]:**
+> Base Model RL Model - All - All 000 Mean Response Length Correct Correct Incorrect Incorrect 900 800 700-600-500 0 - 6465 - 128129-192 193-256 0 - 6465-128 129-192 193-256
+![](_page_17_Figure_10.jpeg)
+
+(b) Mean response length stratified by difficulty and correctness.
+
+Figure 11: Comparison of response lengths between base and RL models for Qwen-2.5-1.5B-Math. RLVR did not increase verbosity, and correct answers tended to be shorter.
+
+> **[图片提取文字 (无描述)]:**
+> Base Model 775 800 736 RL Model Wean Response Length 400 300 200 594 582 444 439 100 All Correct Incorrect
+![](_page_18_Figure_0.jpeg)
+
+> **[图片提取文字 (无描述)]:**
+> (a) Mean response length grouped by correctness
+![](_page_18_Figure_1.jpeg)
+
+> **[图片提取文字 (无描述)]:**
+> Base Model RL Model All All Mean Response Length Correct Correct Incorrect Incorrect 193-256 0 - 6465 - 128129-192 193-256 0 - 6465 - 128129-192
+![](_page_18_Figure_2.jpeg)
+
+(b) Mean response length stratified by difficulty and correctness.
+
+Figure 12: Comparison of response lengths between base and RL models for Qwen-2.5-3B. RLVR did not increase verbosity, and correct answers tended to be shorter.
+
+<span id="page-18-0"></span>> **[图片提取文字 (无描述)]:**
+> Base Model RL Model (cp150) Response Length All responses Correct responses Incorrect responses
+![](_page_18_Figure_5.jpeg)
+
+(a) Qwen2.5-1.5B-Math: Mean response length grouped by correctness.
+
+> **[图片提取文字 (无描述)]:**
+> Base Model RL Model - All All 1000 Mean Response Length Correct Correct Incorrect Incorrect 900 800 700 600 500 0 - 6465-128 129-192 193-256 0 - 6465-128 129-192 193-256
+![](_page_18_Figure_7.jpeg)
+
+(b) Qwen2.5-1.5B-Math: Mean response length by difficulty and correctness.
+
+> **[图片提取文字 (无描述)]:**
+> Base Model RL Model Mean Response Length All Correct Incorrect
+![](_page_18_Figure_9.jpeg)
+
+(c) Qwen2.5-3B: Mean response length grouped by correctness.
+
+> **[图片提取文字 (无描述)]:**
+> RL Model Base Model All All Mean Response Length Correct Correct Incorrect Incorrect 0 - 64129-192 193-256 0 - 6465 - 128129-192 193-256 65-128
+![](_page_18_Figure_11.jpeg)
+
+(d) Qwen2.5-3B: Mean response length by difficulty and correctness.
+
+Figure 13: Comparison of response lengths between base and RLVR-trained models across model sizes and difficulty levels. Top row: Qwen2.5-1.5B-Math; bottom row: Qwen2.5-3B. Left: Mean response length grouped by correctness. Right: Mean response length further stratified by difficulty. In both models, RLVR did not increase response length, and correct responses tended to be more concise.
+
+For both 1.5B and 3B models, we generated 256 responses per MATH500 question from both the base and RL models and computed mean response lengths. We also separated responses by correctness. As shown in Figure 13, there was no substantial difference in average length between the two models. In both cases, correct responses were consistently shorter than incorrect ones.
+
+To control for the correlation between question difficulty and correctness, we grouped questions into four bins based on how many of the 256 base model responses were correct—higher bins indicating easier questions. Within each bin, we compared mean response lengths by correctness. As shown in the figure, both models exhibited the same trend: correct responses were consistently shorter, and overall response lengths remained similar, indicating that RLVR did not increase response length.
+
+## A.6.2 Reflection-Related Keywords
+
+<span id="page-19-1"></span>> **[图片提取文字 (无描述)]:**
+> Base Model 1.14 Mean Reflection Keyword Count RL Model 0.99 1.0 0.90 0.86 8.0 0.67 0.59 0.6 0.4 0.2 All Correct Incorrect
+![](_page_19_Figure_1.jpeg)
+
+> **[图片提取文字 (无描述)]:**
+> (a) Owen2.5-1.5B-Math: Mean count of reflection keywords grouped by correctness.
+![](_page_19_Figure_2.jpeg)
+
+> **[图片提取文字 (无描述)]:**
+> Base Model **RL Model** Mean Reflection Keyword Count All - All Correct Correct Incorrect Incorrect 1.0 0.8 0.6 -0 - 6465 - 128129-192 193-256 0 - 6465-128 129-192 193-256
+![](_page_19_Figure_3.jpeg)
+
+(b) Qwen 2.5-1.5 B-Math: Reflection keyword frequency by difficulty and correctness.
+
+> **[图片提取文字 (无描述)]:**
+> Mean Reflection Keyword Count Base Model 8.0 RL Model 0.720.64 0.64 0.6 0.540.42 0.40.26 0.2 All Correct Incorrect
+![](_page_19_Figure_5.jpeg)
+
+> **[图片提取文字 (无描述)]:**
+> Count Base Model RL Model 8.0 All All Reflection Keyword ( 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 2.0 Correct Correct Incorrect Incorrect Mean 2.0 129-192 0 - 6465-128 129-192 193-256 0 - 6465-128 193-256
+![](_page_19_Figure_6.jpeg)
+
+(c) Qwen2.5-3B: Mean count of reflection keywords grouped by correctness.
+
+(d) Qwen2.5-3B: Reflection keyword frequency by difficulty and correctness.
+
+Figure 14: Reflection-related keyword analysis across base and RLVR-trained models. Top row: Qwen2.5-1.5B-Math; bottom row: Qwen2.5-3B. Left: Mean count of reflection-related keywords, grouped by correctness. Right: Keyword frequency stratified by question difficulty and correctness. Across both models, RLVR-trained responses consistently contain fewer reflective phrases.
+
+<span id="page-19-0"></span>Prior work suggests that RLVR elicits more non-linear reasoning in model outputs (DeepSeek-AI, 2025; Gandhi et al., 2025). To test this, we analyzed the presence of predefined reflection-related phrases. The full list of the phrases are available in Table 5.
+
+| Reflection-Related Keywo          | ords                           |                           |  |
+|-----------------------------------|--------------------------------|---------------------------|--|
+| actually                          | aha                            | alternatively correction: |  |
+| another approach different method | checking our work double-check | hmm                       |  |
+| however                           | I made a mistake               | I need to reconsider      |  |
+| I realize                         | let me recalculate             | let me think              |  |
+| let's check                       | let's reconsider               | looking back              |  |
+| make sure                         | ok                             | on second thought         |  |
+| retracing                         | to be sure                     | to confirm                |  |
+| verify                            | wait                           | we could also             |  |
+
+Table 5: List of reflection-related phrases used for qualitative analysis.
+
+Using the same setup as the response length analysis, we examined 256 responses per question across all MATH500 test questions for both base and RL models. For each response, we counted occurrences of reflection keywords and stratified results by correctness and difficulty.
+
+As shown in Figure 14, the RL model exhibited substantially fewer reflection keywords than the base
+
+model. The figure further shows that, while the base model showed little variation across correctness levels, the RL model consistently used fewer reflection phrases in correct answers across all difficulty bins. These responses were generally more direct and less exploratory.
+
+#### <span id="page-20-1"></span><span id="page-20-0"></span>A.7 QwQ-32B Capability Experiment
+
+![](_page_20_Figure_2.jpeg)
+
+Figure 15: Pass@k results of QwQ-32B, Qwen2.5-3B-Math, and Qwen2.5-1.5B-Math on AIME 25
+
+In Section [6,](#page-5-2) we selected QwQ-32B as the teacher model for our reasoning-only distillation experiment. To ensure a fair test of whether distillation can improve capability without introducing new knowledge, the teacher must have higher capability than the student models—Qwen2.5-3B and Qwen2.5-1.5B-Math.
+
+To validate this, we conducted a pass@k evaluation on AIME 25 using 64 responses per question from QwQ-32B, and compared the results with the two student models. As shown in Figure [15,](#page-20-1) QwQ-32B consistently outperforms both students across all k values, with no sign of convergence. Notably, its pass@64 score reached 76.7%, compared to just 43.3% and 56.7% at pass@256 for Qwen2.5-3B and Qwen2.5-1.5B-Math, respectively. These results confirm that QwQ-32B has substantially higher capability, making it a suitable teacher model for our distillation setup.
+
+#### <span id="page-21-0"></span>A.8 Teacher Distillation Pass@k results
+
+As discussed in Section 6, we conducted the pass@k on AIME 25 and MATH 500 for both Qwen2.5-1.5B-Math and Qwen2.5-3B and each their 2 distilled variants. The results are shown below in Figure 16.
+
+<span id="page-21-1"></span>> **[图片提取文字 (无描述)]:**
+> MATH500-hardest 50 (1.5B) AIME25 (1.5B) 100 → Base model Base model DeepSeek model DeepSeek model Distilled model Distilled model 80 60 40 20 0 256  $\infty$  $\infty$ 2 64 64 AIME25 (3B) MATH500 (3B) 100 Base model Distilled model 80 60 40 20 Base model Distilled model 0 256 512  $\infty$ 64 64 k
+![](_page_21_Figure_2.jpeg)
+
+Figure 16: Pass@k comparisons across AIME25 and MATH500 datasets for both 1.5B (top) and 3B (bottom) models and their distillation-trained variants. For the MATH500 results of the 1.5B models, we show performance on the 50 questions with the lowest base-model success rates to better highlight the differences.
+
+# <span id="page-22-0"></span>A.9 Qwen2.5-Math-1.5B Training Details
+
+In this paper, we used two models as base models: Qwen2.5-1.5B-Math and Qwen2.5-3B. For the RLVR-trained version of the 1.5B model, we used Qwen2.5-Math-1.5B-Oat-Zero[2](#page-22-2) , a publicly available model trained by [Liu et al..](#page-9-11) According to their report, the model was trained with Dr.GRPO [\(Liu et al.,](#page-9-11) [2025b\)](#page-9-11), a variant of the GRPO algorithm [\(Shao et al.,](#page-10-13) [2024\)](#page-10-13) designed to remove response length and question difficulty biases. The model was trained on questions from level 3 to 5 from the MATH training set. For the 3B model, we performed RLVR training ourselves. Training details are shown right below in Appendix [A.10](#page-22-1)
+
+## <span id="page-22-1"></span>A.10 Qwen2.5-3B RLVR Training Details
+
+For RLVR training of Qwen2.5-3B, we used the GRPOTrainer from the TRL[3](#page-22-3) library, which implements the standard GRPO algorithm. The model was trained on the full MATH training set, consisting of 7,500 questions.
+
+## A.10.1 Prompt Setting
+
+Prior work has shown that the performance of smaller models can be sensitive to prompt design [\(Hochlehn](#page-9-19)[ert et al.,](#page-9-19) [2025;](#page-9-19) [Liu et al.,](#page-9-11) [2025b\)](#page-9-11). Following [Liu et al.,](#page-9-11) we evaluated three prompt formats, as listed below. We ultimately adopted Template 3 (question only), which yielded the best performance.
+
+## Prompt Templates
+
+Template 1 (R1 template) A conversation between User and Assistant. The User asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the User with the answer. The reasoning process is enclosed within <think> </think> and the answer is enclosed within <answer> </answer> tags. User: {question} Assistant: <think> reasoning here </think> <answer> answer here </answer>
+
+Template 2 (Qwen-Math template) <|im start|>system Please reason step by step, and put your final answer within \boxed{}. <|im end|> <|im start|>user {question} <|im end|> <|im start|>assistant
+
+Template 3 (Question only) {question}
+
+# A.10.2 Reward Function
+
+We adopted a minimalistic reward setting. A response received a reward of 1 if it contained the correct final answer, and -1 otherwise. Answer verification was performed using the math\_verify[4](#page-22-4) package.
+
+$$R(q,a,r) = \begin{cases} 1 & \text{if the response } r \text{ to question } q \text{ matches the ground truth answer } a \\ -1 & \text{otherwise} \end{cases}$$
+
+<span id="page-22-2"></span><sup>2</sup> <https://huggingface.co/sail/Qwen2.5-Math-1.5B-Oat-Zero>
+
+<span id="page-22-3"></span><sup>3</sup> <https://github.com/huggingface/trl>
+
+<span id="page-22-4"></span><sup>4</sup> <https://github.com/huggingface/Math-Verify>
+
+#### **A.10.3 RLVR Training Hyperparameters**
+
+Table 6 summarizes the key hyperparameters used in RLVR training for the Qwen2.5-3B model.
+
+<span id="page-23-0"></span>
+
+| Hyperparameter                       | Value                                                             |
+|--------------------------------------|-------------------------------------------------------------------|
+| Optimizer                            | AdamW                                                             |
+| Learning rate scheduler              | Constant                                                          |
+| Maximum token length                 | 4000                                                              |
+| Temperature                          | 0.9                                                               |
+| Top-p                                | 1.0                                                               |
+| Top-k                                | 50                                                                |
+| Number of generations (per question) | 10                                                                |
+| Global batch size                    | 4 (per device) $\times$ 7 (GPUs) $\times$ 10 (accumulation) = 280 |
+| Learning rate                        | $1 \times 10^{-6}$                                                |
+| Gradient clipping (max grad norm)    | 0.1                                                               |
+| Number of gradient steps             | 225                                                               |
+| Warmup steps                         | 20                                                                |
+| Mixed precision                      | bf16                                                              |
+
+Table 6: Key hyperparameters used for RLVR training of Qwen2.5-3B.
+
+## <span id="page-23-1"></span>A.10.4 Training Progress and Evaluation
+
+> **[图片提取文字 (无描述)]:**
+> Response length Mean response length Pass@1 accuracy 80 90 Accuracy (%) Gradient step
+![](_page_23_Figure_5.jpeg)
+
+Figure 17: Change in response length (token counts) over training and accuracy on MATH 500 across checkpoints.
+
+During RLVR training, we evaluated the model every 25 gradient steps. To ensure statistical robustness, we followed the recommendation of Hochlehnert et al. (Hochlehnert et al., 2025) and sampled responses 10 times per checkpoint, reporting the mean accuracy. For each evaluation, we used a temperature of 0.8 and a top-p of 0.9.
+
+As shown in Figure 17, accuracy peaked at step 150, reaching 63.6%, and then plateaued. We selected this checkpoint as the RL model used throughout our experiments. The figure also shows the average response length over training. As discussed in Section 5.2, response length remained stable, showing no significant growth.
+
+## <span id="page-24-0"></span>A.11 Distillation Training Hyperparameters
+
+For all the self-distillation experiments in Section [5.1](#page-4-1) and teacher distillation in Section [6,](#page-5-2) we used the supervised fine-tuning (SFT) hyperparameters listed in Table [7.](#page-24-1)
+
+<span id="page-24-1"></span>
+
+| Hyperparameter          | Value          |
+|-------------------------|----------------|
+| Optimizer               | AdamW          |
+| Learning rate scheduler | Constant       |
+| Weight decay            | 10−4<br>×<br>1 |
+| Warmup steps            | 25             |
+| Max sequence length     | 32,768         |
+| Global batch size       | 4              |
+| Mixed precision         | bf16           |
+
+Table 7: Key hyperparameters used for supervised fine-tuning in distillation experiments.
+
+## A.12 Response Generation Details
+
+We used vLLM[5](#page-24-2) library [\(Kwon et al.,](#page-9-20) [2023\)](#page-9-20) for response generation and math\_verify[6](#page-24-3) package for response grading.
+
+We used temperature 0.9, top-p of 1.0, and top-k of 50 for all models, except where noted below. These settings were chosen to ensure response diversity. Unless otherwise specified, we used the question-only template (Template 3).
+
+For Qwen2.5-Math-1.5B-Oat-Zero, we used the same sampling hyperparameters but followed the Qwen prompt format (Template 2), as recommended in the user guideline.[7](#page-24-4)
+
+For QwQ-32B, we used temperature 0.6, top-p 0.95, and top-k 50. We followed the R1 prompt template (Template 1), as recommended in the user guideline.[8](#page-24-5)
+
+For DeepSeek-R1-Distill-Qwen-1.5B, we used temperature 0.6, top-p 0.95, and top-k 50. We followed the R1 prompt template (Template 1), as recommended in the user guideline.[9](#page-24-6)
+
+<span id="page-24-2"></span><sup>5</sup> <https://docs.vllm.ai>
+
+<span id="page-24-3"></span><sup>6</sup> <https://github.com/huggingface/Math-Verify>
+
+<span id="page-24-4"></span><sup>7</sup> <https://huggingface.co/sail/Qwen2.5-Math-1.5B-Oat-Zero>
+
+<span id="page-24-5"></span><sup>8</sup> <https://huggingface.co/Qwen/QwQ-32B#usage-guidelines>
+
+<span id="page-24-6"></span><sup>9</sup> <https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B#usage-recommendations>

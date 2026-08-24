@@ -1,0 +1,11 @@
+# <span id="page-0-0"></span>Intent-Driven Network Management with Multi-Agent LLMs: The Confucius Framework
+
+Zhaodong Wang\* Samuel Lin\* Guanqing Yan\* Soudeh Ghorbani\* Minlan Yu<sup>‡</sup> Jiawei Zhou<sup>§</sup>
+Nathan Hu\* Lopa Baruah\* Sam Peters\* Srikanth Kamath\* Jerry Yang\* Ying Zhang\*
+
+\*Meta †Johns Hopkins University ‡Harvard University §Stony Brook University
+
+#### **Abstract**
+
+Advancements in Large Language Models (LLMs) are significantly transforming network management practices. In this paper, we present our experience developing Confucius, a multi-agent framework for network management at Meta. We model network management workflows as directed acyclic graphs (DAGs) to aid planning. Our framework integrates LLMs with existing management tools to achieve seamless operational integration, employs retrievalaugmented generation (RAG) to improve long-term memory, and establishes a set of primitives to systematically support human/model interaction. To ensure the accuracy of critical network operations, Confucius closely integrates with existing network validation methods and incorporates its own validation framework to prevent regressions. Remarkably, Confucius is a production-ready LLM development framework that has been operational for two years, with over 60 applications onboarded. To our knowledge, this is the first report on employing multi-agent LLMs for hyper-scale networks.
+

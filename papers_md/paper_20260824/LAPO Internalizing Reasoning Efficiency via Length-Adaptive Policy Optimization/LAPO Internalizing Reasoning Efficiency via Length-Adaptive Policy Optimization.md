@@ -1,0 +1,479 @@
+# LAPO: INTERNALIZING REASONING EFFICIENCY VIA LENGTH-ADAPTIVE POLICY OPTIMIZATION
+
+Xingyu Wu<sup>1</sup> , Yuchen Yan<sup>1</sup> , Shangke Lyu<sup>1</sup> , Linjuan Wu<sup>1</sup> , Yiwen Qiu<sup>1</sup> , Yongliang Shen<sup>1</sup> , Weiming Lu<sup>1</sup> , Jian Shao<sup>1</sup> , Jun Xiao<sup>1</sup> , Yueting Zhuang<sup>1</sup> <sup>1</sup>Zhejiang University {wuxingyu, syl}@zju.edu.cn
+
+§ GitHub: <https://github.com/zju-real/lapo> Project: <https://zju-real.github.io/lapo>
+
+### ABSTRACT
+
+Large reasoning models have achieved remarkable performance through extended chain-of-thought sequences, yet this computational freedom leads to excessive token generation even for simple problems. We present Length-Adaptive Policy Optimization (LAPO), a novel framework that transforms reasoning length control from an external constraint into an intrinsic model capability. Unlike existing approaches that impose rigid limits or rely on post-hoc interventions, LAPO enables models to internalize an understanding of appropriate reasoning depth through a two-stage reinforcement learning process. In the first stage, models learn natural reasoning patterns by discovering the statistical distribution of successful solution lengths. The second stage leverages these patterns as metacognitive guidance, embedding them directly within the model's reasoning context to ensure inference-time flexibility. Experiments on mathematical reasoning benchmarks demonstrate that LAPO reduces token usage by up to 40.9% while improving accuracy by 2.3%. Our analysis reveals that models trained with LAPO develop emergent abilities to allocate computational resources based on problem complexity, achieving efficient reasoning without sacrificing quality.
+
+# 1 INTRODUCTION
+
+Recent advances in large reasoning models have demonstrated remarkable capabilities through extended chain-of-thoughts [\(Wei et al.,](#page-12-0) [2022;](#page-12-0) [Jaech et al.,](#page-11-0) [2024;](#page-11-0) [Guo et al.,](#page-11-1) [2025\)](#page-11-1). However, this computational freedom comes with a critical limitation: these models often generate excessively verbose reasoning chains regardless of problem complexity, leading to significant computational overhead, a phenomenon known as "overthinking" [\(Min et al.,](#page-12-1) [2024\)](#page-12-1). While beneficial for complex problems, this verbosity introduces substantial inefficiencies, making practical deployment challenging.
+
+Existing approaches to address this challenge fall into three main categories, each with inherent limitations. Direct length reduction methods either rely on reward design [\(Yang et al.,](#page-13-0) [2025;](#page-13-0) [Huang](#page-11-2) [et al.,](#page-11-2) [2025a\)](#page-11-2) that can cause over-shortening and accuracy degradation, or impose hard length constraints [\(Aggarwal & Welleck,](#page-10-0) [2025;](#page-10-0) [Hou et al.,](#page-11-3) [2025\)](#page-11-3) that lack adaptability across problem types. Dynamic early-stopping approaches [\(Qiao et al.,](#page-12-2) [2025;](#page-12-2) [Muennighoff et al.,](#page-12-3) [2025\)](#page-12-3) make real-time termination decisions but often truncate mid-reasoning, disrupting the thinking process. Adaptive thinking methods [\(Lou et al.,](#page-11-4) [2025;](#page-11-4) [Zhang et al.,](#page-13-1) [2025a;](#page-13-1) [Fang et al.,](#page-11-5) [2025a\)](#page-11-5) enable models to switch between thinking and non-thinking modes but operate at a coarse granularity.
+
+The fundamental limitation of these approaches lies in their treatment of length control as an external constraint imposed upon the reasoning process. This paradigm inherently conflicts with the nature of mathematical reasoning, where each problem possesses its own intrinsic complexity that naturally determines the required reasoning depth. Current methods fail to recognize that when models successfully solve problems, they naturally converge to certain reasoning lengths that reflect this
+
+<span id="page-1-0"></span>> **[图片提取文字 (无描述)]:**
+> LAPO-I LAPO-D Reference  $R_{acc}^1$  $R^1_{len-i}$  $o_1$  $A_1$ 64% Model ThinkPrune-4k Stage I DeepScaleR-1.5B-Pre  $R^2_{acc}$  $+ |R_{len-i}^2|$  $A_2$ Policy 02 Reward Group ThinkPrune-iter2k Model Model Computation 62% ... ... Stage II ... ... Pass@1 AutoThink  $L_{median}^{q_i}$  $R_{acc}^n$  $R_{len-i}^n$  $A_n$  $o_n$  $q_i$ 60% HAPO Stage I: LAPO-D Stage II: LAPO-I  $prompt_{q'} = prompt_q + L_{median}^q$  $prompt_q$ Response Length  $L_{max}^{q_2}$ L1-Max 58% - $L_{median}^{q_2}$ Thinkless  $L_{min}^{q_2}$ L1-Exact  $R_{len-1}^{i} = |(L_{min} < |\phi_{i}| < L_{max})|$ 56% 3000 5000 6000  $|o_i|$  $|o_i|$ 4000  $q_n$  $q_2$ Average Tokens
+![](_page_1_Figure_1.jpeg)
+
+Figure 1: Overview of Length-Adaptive Policy Optimization (LAPO) and its superior performance. The LAPO framework (left) trains a model in two stages: first discovering natural reasoning lengths, then internalizing them as self-proposed budgets. This process enables our models (LAPO-I) to achieve a state-of-the-art balance between accuracy and efficiency (right), surpassing existing methods by operating in the desirable top-left region of the performance plot.
+
+intrinsic complexity. The challenge is not to impose arbitrary limits, but to help models discover and internalize these natural reasoning patterns.
+
+We propose a paradigm shift: instead of constraining reasoning through external mechanisms, we enable models to learn from their own successful reasoning patterns and develop an internal sense of appropriate reasoning depth. Our key insight is that the distribution of reasoning lengths in correct solutions contains valuable information about how much thinking each problem genuinely requires. By capturing these patterns during training and teaching models to anticipate the appropriate reasoning budget before they begin solving, we can transform length control from an external limitation into an intrinsic capability.
+
+We introduce Length-Adaptive Policy Optimization (LAPO), a two-stage reinforcement learning framework that progressively builds this adaptive capability. In the first stage, we design lengthaware rewards that encourage efficiency while maintaining accuracy. During this process, we collect statistical patterns from successful solutions, specifically focusing on the reasonable length range where most correct answers naturally fall. This reveals the inherent reasoning requirements of each problem without imposing artificial constraints. In the second stage, we leverage these discovered patterns to provide explicit guidance to the model. By incorporating target length information directly into the problem prompt, we enable models to plan their reasoning trajectory before beginning the solution process. Crucially, to ensure models can reason adaptively without requiring predefined lengths at inference time, we embed the length constraint as a self-declarative statement immediately after the <think> token. This technique reframes the budget not as an external command, but as part of the model's own internal reasoning plan. By learning to generate a solution that aligns with its self-proposed budget, the model is incentivized to internalize the link between problem complexity and resource allocation, allowing it to reason flexibly and efficiently when deployed.
+
+LAPO fundamentally differs from existing approaches by recognizing that efficient reasoning requires understanding problem-specific computational needs rather than following rigid rules. Our two-stage design enables a natural progression: models first learn what constitutes appropriate reasoning depth through experience, then develop the ability to anticipate these requirements proactively. This approach mirrors how human experts develop intuition about problem complexity, allocating mental effort proportionally to task demands.
+
+Extensive experiments validate the effectiveness of our approach. LAPO achieves remarkable efficiency gains, reducing token usage by up to 40.9% while simultaneously improving accuracy by 2.3% on mathematical reasoning benchmarks (see Figure [1\)](#page-1-0). Our analysis reveals that this improvement stems from the model's ability to distinguish between problems requiring elaborate derivations versus those needing only brief calculations. The training dynamics demonstrate smooth convergence in both stages, with models maintaining stable accuracy even as they learn increasingly precise length control. These results confirm that when models learn from their own successful patterns rather than arbitrary constraints, they develop more robust and efficient reasoning strategies.
+
+### Our main contributions are:
+
+- We propose LAPO, a novel two-stage reinforcement learning framework that transforms length control from an external constraint into an intrinsic reasoning capability, enabling models to adaptively allocate computational resources based on problem complexity.
+- We introduce a training methodology that combines statistical analysis of successful reasoning patterns with contextual length guidance embedded within the reasoning process, allowing models to internalize length-adaptive behaviors while maintaining inference-time flexibility.
+- We demonstrate through extensive experiments that LAPO achieves substantial efficiency gains (up to 40.9% token reduction) while improving accuracy, revealing that models can develop emergent meta-cognitive abilities for reasoning budget allocation.
+
+# 2 RELATED WORKS
+
+### 2.1 TEST-TIME SCALING IN LARGE LANGUAGE MODELS
+
+Increasing test-time computation has consistently been shown to improve performance in complex reasoning tasks, mathematical problem-solving, and code generation [\(Wu et al.,](#page-12-4) [2024;](#page-12-4) [Wang et al.,](#page-12-5) [2022;](#page-12-5) [Wei et al.,](#page-12-0) [2022;](#page-12-0) [Guo et al.,](#page-11-1) [2025\)](#page-11-1). Test-time scaling laws indicate predictable performance gains from increasing inference computation, either by generating more reasoning chains or longer ones [\(Wu et al.,](#page-12-4) [2024;](#page-12-4) [Snell et al.,](#page-12-6) [2024;](#page-12-6) [Jaech et al.,](#page-11-0) [2024\)](#page-11-0). Prominent approaches include parallel sampling of multiple reasoning paths [\(Wang et al.,](#page-12-5) [2022\)](#page-12-5), tree-based search [\(Yao et al.,](#page-13-2) [2023;](#page-13-2) [Wu](#page-12-4) [et al.,](#page-12-4) [2024\)](#page-12-4), and iterative refinement techniques [\(Snell et al.,](#page-12-6) [2024;](#page-12-6) [Welleck et al.,](#page-12-7) [2024\)](#page-12-7).
+
+Recent reasoning models such as OpenAI's O1 and DeepSeek's R1-style models [\(Jaech et al.,](#page-11-0) [2024;](#page-11-0) [Guo et al.,](#page-11-1) [2025\)](#page-11-1) simplify test-time scaling by generating extended reasoning traces through reinforcement learning with verifiable rewards (RLVR), encouraging deep thinking behaviors such as broad exploration and feasibility checks [\(Gandhi et al.,](#page-11-6) [2025\)](#page-11-6). However, these extended reasoning behaviors often lead to much longer reasoning traces, sometimes several times longer than those produced by short CoT models [\(Sui et al.,](#page-12-8) [2025;](#page-12-8) [Chen et al.,](#page-11-7) [2024\)](#page-11-7), creating an "overthinking" issue that largely increases inference costs [\(Kumar et al.,](#page-11-8) [2025\)](#page-11-8). Several recent works have shown that this extended reasoning often includes redundant or unnecessary verification and reflection, even on simple problems [\(Wang et al.,](#page-12-9) [2025\)](#page-12-9). Despite their promising results, existing methods lack precise and dynamic control over the length of generated reasoning chains, resulting in often suboptimal performance or unrealized potential efficiency gains.
+
+### 2.2 EFFICIENT LONG CHAIN-OF-THOUGHT LLM
+
+While test-time scaling with long CoT significantly improves accuracy, it comes at the cost of computational inefficiency. In particular, reasoning models often produce verbose and unnecessary reasoning when solving simple problems—a phenomenon commonly referred to as overthinking [\(Sui et al.,](#page-12-8) [2025\)](#page-12-8). To address the overthinking phenomenon in reasoning models, various methods have been proposed following three main strategies. Prompt-based methods attempt to control response length by incorporating instructions directly into prompts [\(Xu et al.,](#page-12-10) [2025a\)](#page-12-10), but cannot achieve precise length control. Training-based methods include supervised fine-tuning approaches that collect datasets with variable lengths [\(Han et al.,](#page-11-9) [2024;](#page-11-9) [Kang et al.,](#page-11-10) [2025;](#page-11-10) [Ma et al.,](#page-12-11) [2025;](#page-12-11) [Xia et al.,](#page-12-12) [2025\)](#page-12-12) and RL-based methods that incorporate length penalties into reward functions [\(Muennighoff et al.,](#page-12-3) [2025;](#page-12-3) [Yeo et al.,](#page-13-3) [2025;](#page-13-3) [Luo et al.,](#page-12-13) [2025a;](#page-12-13) [Xu et al.,](#page-13-4) [2025b\)](#page-13-4). However, these methods fail to control length according to users' requirements or problem complexity. Routerbased methods train separate classifiers to route queries between fast and reasoning models [\(Chuang](#page-11-11) [et al.,](#page-11-11) [2024;](#page-11-11) [Ong et al.,](#page-12-14) [2024\)](#page-12-14), but require additional computational overhead. Recent advances in token budget control have introduced more sophisticated approaches. Works like L1 [\(Aggarwal &](#page-10-0) [Welleck,](#page-10-0) [2025\)](#page-10-0) and Elastic Reasoning [\(Xu et al.,](#page-13-4) [2025b\)](#page-13-4) can more precisely control output length under given token budgets, yet they fail to enable autonomous estimation of appropriate response lengths for different problems.
+
+In contrast to these prior approaches, our LAPO framework uniquely combines autonomous budget estimation and precise length control capabilities through a two-stage reinforcement
+
+<span id="page-3-0"></span>> **[图片提取文字 (无描述)]:**
+> **Discovery Stage** N Rollouts r1: | r1 | tokens -Reward **Length Stats** GRPO Policy Model r<sub>2</sub>: | r<sub>2</sub>| tokens  $L_{min} L_{max} L_{median}$ Update  $R_1 = Acc + a \cdot Len$  $\pi_{\theta}$  $|\mathbf{r}_{\mathsf{N}}:|\mathbf{r}_{\mathsf{N}}|$  tokens Initiate M Mapping M  $q' = q + \langle think \rangle$  Think with M(q) tokens  $q \rightarrow L_{median}$ **Guided Rollouts** Update M  $|\mathbf{r'}_1:|\mathbf{r'}_1|\approx \mathbf{M}(\mathbf{q})$ Reward **Length Stats** Policy Model GRPO  $\rightarrow$   $\mathbf{r'}_2$ :  $|\mathbf{r'}_2| \approx \mathbf{M}(\mathbf{q})$ Update  $\pi_{\theta}$  $R_2 = Acc + \beta \cdot Gauss$ Lmedian  $|\mathbf{r'}_{N}:|\mathbf{r'}_{N}|\approx \mathbf{M}(\mathbf{q})|$ **Internalization Stage**
+![](_page_3_Figure_1.jpeg)
+
+Figure 2: The LAPO framework consists of two stages: (1) Discovery stage learns natural reasoning patterns by rewarding efficient correct solutions and collecting length statistics; (2) Internalization stage embeds these statistics as self-proposed plans within the model's reasoning context, teaching models to internalize efficient reasoning.
+
+learning design. Unlike existing methods that rely on external truncation mechanisms or require manual budget specification, LAPO trains models to intrinsically learn appropriate reasoning lengths while maintaining reasoning completeness and logical coherence. This endogenous length control capability enables problem-adaptive token budget allocation, achieving significant efficiency improvements while maintaining or enhancing reasoning performance.
+
+### 3 METHOD
+
+We present Length-Adaptive Policy Optimization (LAPO), a framework that enables reasoning models to internalize efficient reasoning as an intrinsic capability. Our approach fundamentally differs from existing methods by teaching models to develop an internal understanding of appropriate reasoning depth, rather than imposing external constraints. We achieve this through a carefully designed two-stage training process that first discovers natural reasoning patterns, then transforms these patterns into an internalized capability.
+
+#### 3.1 OVERVIEW
+
+Consider a reasoning model generating response r for problem q. While current models produce high-quality solutions, they lack awareness of computational efficiency, often generating responses far exceeding necessary length. Our goal is to train models that autonomously determine appropriate reasoning lengths while maintaining solution quality.
+
+Our key insight is that successful problem solutions naturally exhibit certain length distributions that reflect intrinsic problem complexity. Rather than viewing these patterns as constraints to enforce, we treat them as signals that teach models about reasoning depth requirements. LAPO employs a two-stage approach illustrated in Figure [2:](#page-3-0) the Discovery stage explores natural reasoning patterns through length-aware rewards, while the Internalization stage transforms these patterns into adaptive reasoning behavior.
+
+#### 3.2 DISCOVERY STAGE: LEARNING NATURAL REASONING PATTERNS
+
+The Discovery stage aims to uncover inherent relationships between problems and their natural reasoning lengths through GRPO training with a carefully designed reward mechanism that encourages efficient exploration while maintaining correctness.
+
+Extracting Statistics from GRPO Rollouts. During GRPO training, we generate N rollout responses for each problem q in the training batch. From these rollouts, we collect the lengths
+
+of responses that produce correct answers:
+
+$$\mathcal{L}_q = \{ |r_i| : \mathbb{I}(y_i = y_{\text{gold}}) = 1, i \in [1, N] \}$$
+(1)
+
+where  $y_i$  is the predicted answer from the *i*-th rollout response  $r_i$ . This collection, extracted directly from the GRPO sampling process, represents natural variation in successful reasoning lengths.
+
+We derive two key statistics from these rollouts. First, we establish a reasonable length range using percentiles to filter outliers while preserving central tendencies:
+
+$$[L_{\min}, L_{\max}] = [Percentile_{30}(\mathcal{L}_q), Percentile_{70}(\mathcal{L}_q)]$$
+ (2)
+
+Second, we create a problem-to-length mapping that will guide the Internalization stage:
+
+$$\mathcal{M}: q \mapsto L_{\text{median}}(q) = \text{Median}(\mathcal{L}_q) \tag{3}$$
+
+For problems without correct solutions in the current rollouts, we set  $\mathfrak{M}(q)=4096$  (maximum sequence length) to encourage comprehensive exploration in subsequent episodes.
+
+**Length-Aware Reward Design.** We employ a composite reward function balancing accuracy and efficiency:
+
+<span id="page-4-0"></span>
+$$R_D(r_i, q) = \mathbb{I}(y_i = y_{\text{gold}}) + \alpha \cdot R_1(r_i, q)$$
+(4)
+
+The length component operates on a crucial principle—only correct responses receive length-based rewards. Let  $\mathcal{C}_i = \mathbb{I}(y_i = y_{\mathrm{gold}})$  indicate whether the response is correct, and define the distance to the target length range as  $d_i = \min(||r_i| - L_{\min}|, ||r_i| - L_{\max}|)$ . We introduce a linear decay function  $f(d) = \max(0, 1 - d/100)$  to penalize deviations from the efficient length range. The length reward is then defined as:
+
+$$R_{1}(r_{i},q) = \begin{cases} 1.0 & \text{if } \mathcal{C}_{i} = 1 \land |r_{i}| \in [L_{\min}, L_{\max}] \\ f(d_{i}) & \text{if } \mathcal{C}_{i} = 1 \land |r_{i}| \notin [L_{\min}, L_{\max}] \\ 0 & \text{if } \mathcal{C}_{i} = 0 \end{cases}$$
+
+$$(5)$$
+
+This design creates gradients guiding models toward efficient lengths while allowing flexibility for complex problems. Throughout the Discovery stage, we continuously update  $\mathcal M$  after each GRPO training step to reflect evolving model capabilities.
+
+#### 3.3 Internalization Stage: Length-Aware Efficient Reasoning
+
+The Internalization stage transforms discovered patterns into internalized capabilities through continued GRPO training with modified prompts and rewards.
+
+**Length-Conditioned Rollout.** We augment each problem prompt with explicit length guidance:
+
+$$prompt'_q = prompt_q + " I will answer the question with n tokens."$$
+
+where  $n = \mathcal{M}(q)$  from the Discovery stage. This embeds length awareness within the reasoning context, helping models perceive computational budgets as intrinsic to thinking rather than external constraints.
+
+**Length-Adherence Reward.** To encourage the model to follow its self-declared reasoning budget, the Internalization stage employs a precision-focused reward function. This function is designed to reward the alignment between the model's output length and its self-declared budget n. The total reward is defined as:
+
+<span id="page-4-1"></span>
+$$R_I(r_i, q') = \mathbb{I}(y_i = y_{\text{gold}}) + \beta \cdot R_2(r_i, q')$$
+(6)
+
+where the adherence component,  $R_2$ , is only granted for correct solutions:
+
+$$R_2(r_i, n) = \begin{cases} \exp\left(-\frac{(|r_i| - n)^2}{2\sigma^2}\right) & \text{if } \mathcal{C}_i = 1, \\ 0 & \text{if } \mathcal{C}_i = 0; \end{cases}$$
+
+$$(7)$$
+
+This Gaussian-inspired reward positively reinforces solutions that are both correct and consistent with the intended reasoning depth. By rewarding adherence to the self-proposed plan, this mechanism guides the model to internalize the relationship between problem complexity and an appropriate computational budget, rather than merely tracking an external signal.
+
+#### <span id="page-5-1"></span>Algorithm 1 Length-Adaptive Policy Optimization(LAPO)
+
+```
+1: Input: Base model \pi_{\theta}, training data \mathcal{D}, hyperparameters \alpha, \beta, \sigma, E_1, E_2
+ 2: Output: Length-adaptive model \pi_{\theta}^*
+ 4: // Discovery Stage
+ 5: for episode e = 1 to E_1 do
+ 6:
+          Sample batch \mathcal{B} \subset \mathcal{D}
+ 7:
+          for each problem q \in \mathcal{B} do
+               Generate N rollouts: \{r_1, \ldots, r_N\} \sim \pi_{\theta}(q)
+ 8:
+               Collect correct lengths: \mathcal{L}_q = \{|r_i| : y_i = y_{\text{gold}}\}
+ 9:
+               Compute range: [L_{\min}, L_{\max}] = [P_{30}(\mathcal{L}_q), P_{70}(\mathcal{L}_q)]
+10:
+11:
+               Update mapping: \mathcal{M}(q) = \text{Median}(\mathcal{L}_q)
+12:
+               Compute rewards: R_D(r_i, q) = \mathbb{I}(y_i = y_{\text{gold}}) + \alpha \cdot R_1(r_i, q)
+13:
+          end for
+14:
+          Update \pi_{\theta} using GRPO with rewards R_1
+15: end for
+16:
+17: // Internalization Stage
+18: for episode e = 1 to E_2 do
+19:
+          Sample batch \mathcal{B} \subset \mathcal{D}
+20:
+          for each problem q \in \mathcal{B} do
+               Augment prompt: q' \leftarrow q + \text{``<think> I will answer the question with } M(q) tokens."
+21:
+               Generate N rollouts: \{r_1, \ldots, r_N\} \sim \pi_{\theta}(q')
+22:
+23:
+               Compute rewards: R_I(r_i, q') = \mathbb{I}(y_i = y_{\text{gold}}) + \beta \cdot R_2(r_i, q')
+24:
+               Update mapping \mathcal{M}(q) using dual-strategy (Eq. 8)
+25:
+26:
+          Update \pi_{\theta} using GRPO with rewards R_2
+27: end for
+28: return \pi_{\theta}^*
+```
+
+**Internalization via In-Context Guidance.** A cornerstone of our framework is how it fosters genuine internalization, enabling inference-time flexibility without explicit length targets. The key lies in the design of the augmented prompt. Placing the self-declarative guidance immediately after the <think> token transforms an external constraint into an intrinsic part of the model's cognitive plan.
+
+During the Internalization stage, we refine  ${\mathfrak M}$  based on new GRPO rollouts with a dual-strategy update:
+
+<span id="page-5-0"></span>
+$$\mathcal{M}(q) = \begin{cases} \operatorname{Median}(\mathcal{L}_q^{(t)}) & \text{if previously unsolved} \\ \min(\mathcal{M}(q), \operatorname{Median}(\mathcal{L}_q^{(t)})) & \text{if previously solved} \end{cases} \tag{8}$$
+
+This ensures newly solved problems establish reasonable benchmarks while previously solved problems gravitate toward more efficient solutions.
+
+#### 3.4 Training Pipeline
+
+We present the complete LAPO training procedure in Algorithm 1. LAPO employs GRPO across both stages with the following pipeline:
+
+**Discovery Stage** (Lines 4-15): The model explores natural reasoning patterns through GRPO training with length-aware rewards. For each problem in the training batch, we generate multiple rollouts and extract statistics from successful responses. The mapping  $\mathfrak M$  is continuously updated to capture the evolving understanding of appropriate reasoning lengths. This stage runs for  $E_1$  epochs, allowing the model to discover problem-specific length patterns through self-supervised exploration.
+
+**Internalization Stage** (Lines 17-27): The model learns to internalize efficient reasoning by incorporating discovered length patterns into the training process. Each problem prompt is augmented with target length information derived from the Discovery stage. The placement of
+
+this guidance within the <think> block encourages the model to treat the budget as part of its own reasoning plan, which fosters genuine length awareness rather than rote instruction following. The dual-strategy update mechanism refines the mapping M throughout training, allowing newly solved problems to establish benchmarks while encouraging efficiency improvements for previously solved ones.
+
+This progressive design mirrors cognitive development: first gaining experience about appropriate reasoning depth through practice, then learning to anticipate these requirements proactively. The embedding of guidance as a self-declared plan is the key mechanism that bridges this gap from experience to proactive anticipation. By making efficiency an intrinsic part of reasoning, LAPO creates models that naturally adapt computational investment to match problem demands.
+
+# 4 EXPERIMENT SETUP
+
+# 5 EXPERIMENT SETUP
+
+Training Details. We train our models on a mixed dataset of 10,000 mathematical problems to ensure a balanced difficulty distribution, comprising 6,000 examples from the DeepScaleR-Preview-Dataset [Luo et al.](#page-12-15) [\(2025b\)](#page-12-15) and 4,000 from the intermediate levels of the MATH dataset [Hendrycks](#page-11-12) [et al.](#page-11-12) [\(2020\)](#page-11-12). We apply LAPO to two base models: DeepSeek-R1-1.5B [Guo et al.](#page-11-1) [\(2025\)](#page-11-1) and DeepScaleR-1.5B-Preview [Luo et al.](#page-12-15) [\(2025b\)](#page-12-15).
+
+All models are trained using the Group Relative Policy Optimization (GRPO) algorithm. Discovery Stage(LAPO-D) is trained for 3 episodes with reward R<sup>D</sup> (Eq. [4\)](#page-4-0), where hyperparameter α is 0.7. The resulting model then serves as the initialization for the subsequent Internalization Stage(LAPO-I), which is trained for 3 episodes using reward R<sup>I</sup> (Eq. [6\)](#page-4-1) with β set to 0.7. These hyperparameters were empirically chosen to provide a strong incentive for efficiency while ensuring correctness remains the primary learning signal. Note that we did not conduct extensive hyperparameter tuning, so one can expect further improvements with additional optimization. Besides, due to computational constraints, the maximum context length is limited to 4,096 tokens during training. Crucially, to ensure a fair comparison, most baselines, including ThinkPrune and L1, were also trained or evaluated under this same 4k context limit. Further hyperparameters are detailed in Appendix.
+
+Evaluation Details. At inference, we expand the generation window to a generous 32,768 tokens for all models to assess their true, unconstrained reasoning capabilities. This setup allows us to isolate the efficiency gains stemming directly from the LAPO framework, rather than from simple context window limitations. We evaluate on four challenging benchmarks: MATH-500 [Hendrycks](#page-11-12) [et al.](#page-11-12) [\(2020\)](#page-11-12), AIME2024, AMC23, and Olympiad-Bench [He et al.](#page-11-13) [\(2024\)](#page-11-13). Following standard practices [Guo et al.](#page-11-1) [\(2025\)](#page-11-1), we report both Pass@1 accuracy and the average number of tokens. For each problem, we sample N responses (4 for MATH-500/OlympiadBench, 32 for AIME/AMC) with a temperature of 0.6 and a top-p of 0.95.
+
+Baselines. We benchmark LAPO against three classes of baselines: the foundational models, an ablation baseline, and existing methods designed for efficient reasoning. First, we evaluate the Base Models to establish a performance starting point. These include DeepSeek-R1-1.5B [Guo](#page-11-1) [et al.](#page-11-1) [\(2025\)](#page-11-1) and DeepScaleR-1.5B-Preview [Luo et al.](#page-12-15) [\(2025b\)](#page-12-15). Second, to isolate the effect of our length-reward, we also include an Ablation Baseline, denoted as Acc-Only, which is trained with GRPO using only the accuracy reward. Finally, we compare against several state-of-the-art Efficient Reasoning Baselines, which represent different philosophies for achieving efficiency. (1)Implicit Regularization: HAPO [Huang et al.](#page-11-14) [\(2025b\)](#page-11-14), which uses history-aware rewards. (2)Budget-Driven Control: L1 [Aggarwal & Welleck](#page-10-0) [\(2025\)](#page-10-0) and ThinkPrune [Hou et al.](#page-11-3) [\(2025\)](#page-11-3), which follow external length targets. (3)Adaptive Activation: AutoThink [Tu et al.](#page-12-16) [\(2025\)](#page-12-16), AdaptThink [Zhang et al.](#page-13-5) [\(2025b\)](#page-13-5), and Thinkless [Fang et al.](#page-11-15) [\(2025b\)](#page-11-15), which learn a binary think/no-think policy.
+
+# 6 RESULTS AND ANALYSIS
+
+We present comprehensive experimental results and analysis to validate LAPO's effectiveness and understand its underlying mechanisms. We begin with the main results (Section [6.1\)](#page-7-0), benchmarking
+
+<span id="page-7-1"></span>Table 1: Main results on MATH500, AIME2024, AMC23, and OlympiadBench. We report Pass@1 accuracy (%) and the average number of generated tokens (#Tok). For each metric, bold indicates the best and underline indicates the second-best Pass@1 score within each base model group.
+
+|                                     | MATH-500                     |      | AIME2024    |       | AMC-23      |      | OlympiadBench |      | Average     |      |
+|-------------------------------------|------------------------------|------|-------------|-------|-------------|------|---------------|------|-------------|------|
+|                                     | Pass@1 #Tok                  |      | Pass@1 #Tok |       | Pass@1 #Tok |      | Pass@1 #Tok   |      | Pass@1 #Tok |      |
+|                                     | Base model: DeepSeek-R1-1.5B |      |             |       |             |      |               |      |             |      |
+| HAPO                                | 82.2                         | 2288 | 31.3        | 8649  | 67.3        | 4735 | 50.1          | 5024 | 57.7        | 5174 |
+| AutoThink                           | 83.5                         | 2017 | 29.7        | 7084  | 70.2        | 3499 | 51.2          | 4606 | 58.6        | 3825 |
+| AdaptThink                          | 81.6                         | 1580 | 23.9        | 6432  | 63.2        | 2860 | 48.5          | 4616 | 54.3        | 3871 |
+| Base                                | 83.1                         | 4031 | 30.3        | 12150 | 68.3        | 7222 | 50.0          | 8942 | 57.9        | 8086 |
+| + Acc-Only                          | 83.3                         | 3061 | 31.6        | 10628 | 70.5        | 5307 | 50.6          | 6402 | 59.0        | 6349 |
+| + LAPO-D                            | 84.7                         | 2566 | 28.5        | 8415  | 72.2        | 4132 | 51.3          | 5595 | 59.2        | 5177 |
+| + LAPO-I                            | 84.3                         | 2354 | 29.3        | 8318  | 71.2        | 3568 | 51.7          | 4863 | 59.1        | 4775 |
+| Base model: DeepScaleR-1.5B-Preview |                              |      |             |       |             |      |               |      |             |      |
+| L1-Exact                            | 80.6                         | 1953 | 24.4        | 2625  | 70.9        | 2177 | 48.8          | 2357 | 56.2        | 2278 |
+| L1-Max                              | 81.9                         | 1673 | 24.9        | 3638  | 72.7        | 2705 | 50.5          | 2151 | 57.5        | 2541 |
+| ThinkPrune-I2k                      | 85.5                         | 1707 | 34.9        | 5095  | 74.3        | 2913 | 54.7          | 3498 | 62.3        | 3303 |
+| ThinkPrune-4k                       | 86.6                         | 2042 | 35.5        | 6488  | 76.3        | 3839 | 55.7          | 4010 | 63.5        | 4094 |
+| HAPO                                | 84.4                         | 2370 | 31.4        | 7702  | 70.3        | 4301 | 51.4          | 4571 | 59.3        | 4736 |
+| AutoThink                           | 84.9                         | 1635 | 36.2        | 7201  | 67.8        | 3658 | 52.5          | 4085 | 60.4        | 4144 |
+| Thinkless                           | 81.3                         | 2944 | 28.9        | 9143  | 65.7        | 5276 | 50.2          | 6057 | 56.5        | 5855 |
+| Base                                | 85.8                         | 3280 | 35.5        | 9246  | 74.2        | 6416 | 54.6          | 5974 | 62.5        | 6229 |
+| + Acc-Only                          | 85.6                         | 2510 | 36.9        | 7319  | 77.6        | 4244 | 55.6          | 4712 | 63.9        | 4696 |
+| + LAPO-D                            | 86.4                         | 2365 | 37.6        | 5945  | 77.6        | 3655 | 56.1          | 4499 | 64.4        | 4116 |
+| + LAPO-I                            | 86.3                         | 2168 | 38.1        | 5371  | 78.3        | 3765 | 56.3          | 4024 | 64.8        | 3832 |
+
+LAPO against baselines and state-of-the-art methods. We then conduct in-depth ablation studies on key design choices, including the the form of length guidance (Section [6.2\)](#page-8-0) and the statistical metrics for target length selection (Section [6.3\)](#page-8-1). And a targeted experiment demonstrating the model's robust internalization of reasoning efficiency (Section [6.4\)](#page-9-0). Finally, we provide a mechanistic analysis of how LAPO works, examining its emergent ability for difficulty-aware resource allocation (Section [6.5\)](#page-9-1), its qualitative refinement of reasoning patterns (Section [6.6\)](#page-10-1).
+
+# <span id="page-7-0"></span>6.1 MAIN RESULTS
+
+As shown in Table [1,](#page-7-1) LAPO achieves a superior balance of reasoning accuracy and computational efficiency, consistently outperforming its base models and establishing a new state-of-the-art frontier among methods that do not rely on external length controls.
+
+LAPO simultaneously enhances reasoning performance and reduces test-time computes. Compared to its base models, LAPO delivers substantial gains. On DeepScaleR-1.5B-Preview, it reduces tokens by 38.5% while boosting average accuracy by 2.3 points; a similar trend holds for DeepSeek-R1-1.5B (41.0% token cut and 1.2 point accuracy gain). This validates that LAPO learns to produce more concise yet effective reasoning.
+
+LAPO surpasses existing efficient reasoning optimization approaches. When compared with leading efficiency methods, LAPO consistently demonstrates a superior accuracy-efficiency tradeoff. On the more capable DeepScaleR-1.5B base model, LAPO-I achieves the highest average accuracy among all tested methods. This advantage holds across different baseline paradigms. It surpasses budget-driven methods like ThinkPrune-4k and L1-Max under a fair 4k training context. Compared to implicit regularization methods like HAPO, LAPO shows a clear advantage in preserving accuracy. Furthermore, while adaptive activation methods like AutoThink can be highly token-efficient, they do not reach the same level of reasoning quality. This comprehensive comparison highlights that LAPO's "Discover-Internalize" process, which fosters an autonomous
+
+<span id="page-8-2"></span>Table 2: Experimental results with different length guidance for LAPO-I. Bold and underline indicate the best and second-best Pass@1 scores. w/ indicates the length guidance used in LAPO-I.
+
+| Method                              | MATH-500    |      | AIME2024    |      | AMC-23      |      | OlympiadBench |      | Average     |      |
+|-------------------------------------|-------------|------|-------------|------|-------------|------|---------------|------|-------------|------|
+|                                     | Pass@1 #Tok |      | Pass@1 #Tok |      | Pass@1 #Tok |      | Pass@1 #Tok   |      | Pass@1 #Tok |      |
+| Base model: DeepScaleR-1.5B-Preview |             |      |             |      |             |      |               |      |             |      |
+| Base                                | 85.8        | 3280 | 35.5        | 9246 | 74.2        | 6416 | 54.6          | 5974 | 62.5        | 6229 |
+| LAPO-D                              | 86.4        | 2365 | 37.6        | 5945 | 77.6        | 3655 | 56.1          | 4499 | 64.4        | 4116 |
+| w/ Exact                            | 86.3        | 2168 | 38.1        | 5371 | 78.3        | 3765 | 56.3          | 4024 | 64.8        | 3832 |
+| w/ Range                            | 86.6        | 2153 | 36.5        | 6095 | 76.9        | 3600 | 56.2          | 4011 | 64.1        | 3964 |
+| w/ Outside                          | 86.5        | 2251 | 36.4        | 5882 | 76.3        | 3850 | 55.4          | 4105 | 63.9        | 4022 |
+| w/ Implicit                         | 86.9        | 2181 | 36.2        | 5963 | 76.1        | 4002 | 55.1          | 4206 | 63.6        | 4088 |
+
+and continuous length adaptation, leads to a more robust and effective reasoning policy than methods relying on external budgets, progressive compression, or binary mode-switching.
+
+Both Discovery and Internalization stages contribute to the final performance. LAPO-D first establishes a strong foundation, achieving a significant 36.0% token reduction on its own by learning natural reasoning length distributions. This is highlighted by comparing it to the Acc-Only baseline. While simply finetuning for accuracy yields some token reduction, LAPO-D's length-aware reward achieves substantially greater efficiency while also improving average accuracy by 0.5 points. This demonstrates that encouraging conciseness via our reward not only prunes redundant thoughts but also helps the model find more robust reasoning patterns. Building on this superior foundation, LAPO-I achieves an additional 6.9% efficiency gain by internalizing these patterns through incontext guidance. This progressive refinement indicates that our framework learns a generalizable principle of adaptive reasoning.
+
+#### <span id="page-8-0"></span>6.2 ABLATION STUDY ON IN-CONTEXT GUIDANCE
+
+To validate that our method's success stems from internalizing a self-proposed plan, we ablate the two key factors of our in-context guidance: its form (how precise the guidance is) and its position (whether it's part of the model's internal thought process). We compare our default approach (w/ Exact) against three variants: w/ Range (less precise guidance), w/ Outside (placing the guidance before <think>), and w/ Implicit (no guidance, relying only on the reward). As shown in Table [2,](#page-8-2) the results demonstrate that both form and position are critical for effective internalization.
+
+Our default method outperforms the less precise Range variant, indicating that specific targets discovered in Discovery stage provide a stronger learning signal. More critically, the guidance's position determines whether the model internalizes a plan or merely follows instructions. Moving the guidance outside the <think> block transforms it into an external command and causes accuracy to drop significantly to 63.9%. This illustrates that the model performs best when the budget is framed as part of its own cognitive plan. Finally, removing the guidance entirely results in the worst performance, with accuracy dropping to 63.6% and token count reverting to the LAPO-D baseline. This indicates that our explicit, properly-positioned, self-declarative guidance is the critical mechanism for internalization.
+
+#### <span id="page-8-1"></span>6.3 ABLATION ON STATISTICAL METRICS FOR TARGET LENGTH
+
+The choice of a statistical measure to derive the target length n from the distribution of successful solutions is critical. We conduct an ablation study comparing three strategies for this selection: using the median (our default), the mean, and the minimum length.
+
+As shown in Table [3,](#page-9-2) the median proves to be the most effective choice, achieving the best balance between accuracy and efficiency. Using the median as the target yields the highest average accuracy (64.8%) with an efficient token count of 3,832. This validates our hypothesis that the median, due to its robustness to outliers, provides the most representative signal of a "typically" effective reasoning depth. In contrast, the mean is susceptible to a few excessively long, successful solutions, leading it to set overly generous budgets, resulting in higher token usage (4,040) and slightly lower accuracy.
+
+<span id="page-9-2"></span>Table 3: Experimental results within different statistical metrics used for target length selection in LAPO-I. Bold and underline indicate the best and second-best Pass@1 scores. w/ indicates statistical metrics used for target length selection in LAPO-I.
+
+| Method                              | MATH-500    |      | AIME2024    |      | AMC-23      |      | OlympiadBench |      | Average     |      |
+|-------------------------------------|-------------|------|-------------|------|-------------|------|---------------|------|-------------|------|
+|                                     | Pass@1 #Tok |      | Pass@1 #Tok |      | Pass@1 #Tok |      | Pass@1 #Tok   |      | Pass@1 #Tok |      |
+| Base model: DeepScaleR-1.5B-Preview |             |      |             |      |             |      |               |      |             |      |
+| Base                                | 85.8        | 3280 | 35.5        | 9246 | 74.2        | 6416 | 54.6          | 5974 | 62.5        | 6229 |
+| LAPO-D                              | 86.4        | 2365 | 37.6        | 5945 | 77.6        | 3655 | 56.1          | 4499 | 64.4        | 4116 |
+| w/ Median                           | 86.3        | 2168 | 38.1        | 5371 | 78.3        | 3765 | 56.3          | 4024 | 64.8        | 3832 |
+| w/ Mean                             | 85.6        | 2308 | 36.8        | 6030 | 77.4        | 3658 | 56.6          | 4164 | 64.1        | 4040 |
+| w/ Minimum                          | 85.9        | 2031 | 36.3        | 6080 | 76.7        | 3324 | 55.0          | 3851 | 63.5        | 3821 |
+
+The minimum, while achieving the most aggressive compression (3,821 tokens), suffers a significant accuracy drop (to 63.5%), suggesting it promotes an over-shortening strategy that discards necessary reasoning steps. These findings underscore the importance of robust statistical measures for learning a well-calibrated reasoning-efficiency trade-off.
+
+### <span id="page-9-0"></span>6.4 ANALYSIS OF INTERNALIZATION
+
+To validate that LAPO fosters genuine internalization, we stress-tested our default LAPO-I model against the w/ Outside ablation variant using adversarial Short (500 tokens) and Long (3500 tokens) length prompts. The results in Table [4](#page-9-3) reveal a stark behavioral divergence. Our default LAPO-I remains robust, its output length staying stable around its 2200-token baseline, thus ignoring the conflicting external instructions. In contrast, the w/ Outside model is clearly influenced: its token count drops to 1247 under the Short constraint and rises to 2821 under the Long one. This comparison indicates that the placement of guidance is critical. Framing the budget as part of the model's internal plan (inside <think>) builds a robust, internalized behavior. Framing it externally teaches superficial instruction-following. This
+
+<span id="page-9-3"></span>Table 4: Robustness of LAPO-I to conflicting length instructions on MATH-500.
+
+| Method            | Length     | MATH-500   |      |  |  |  |  |  |
+|-------------------|------------|------------|------|--|--|--|--|--|
+|                   | Constraint | Pass@1 (%) | #Tok |  |  |  |  |  |
+| LAPO-I            |            |            |      |  |  |  |  |  |
+| Base              | N/A        | 86.3       | 2168 |  |  |  |  |  |
+| +Short            | 500        | 86.0       | 2279 |  |  |  |  |  |
+| +Long             | 3500       | 85.9       | 2300 |  |  |  |  |  |
+| LAPO-I w/ Outside |            |            |      |  |  |  |  |  |
+| Base              | N/A        | 86.2       | 2251 |  |  |  |  |  |
+| +Short            | 500        | 85.1       | 1247 |  |  |  |  |  |
+| +Long             | 3500       | 86.1       | 2821 |  |  |  |  |  |
+
+indicates the observed robustness of LAPO-I is a direct result of our internalization mechanism.
+
+# <span id="page-9-1"></span>6.5 DIFFICULTY-AWARE COMPUTATIONAL ALLOCATION
+
+To understand the mechanisms behind LAPO's efficiency gains, we examine its ability to allocate computational resources in proportion to problem complexity. We evaluate LAPO-trained models on benchmarks with clear difficulty gradients, from MATH Level 1 up to the highly complex AIME 2024. As shown in Figure [3,](#page-10-2) our models demonstrate a remarkable emergent capability for difficultyaware resource allocation. There is a clear, near-linear positive correlation between problem complexity and the average reasoning length. On simpler problems, the models generate concise responses, while for the most challenging AIME questions, they produce extensive reasoning chains that are substantially longer than any solution observed during the training phase. This ability to extrapolate reasoning depth well beyond the bounds of their training experience is a crucial finding. It provides strong evidence that LAPO does not merely teach models to compress their outputs. Instead, it successfully imparts a generalizable principle of complexity-to-length mapping. This allows the models to dynamically and appropriately scale their computational investment when faced with novel problems of varying difficulty. The consistent scaling behavior across different base models further underscores that LAPO develops a robust, fundamental reasoning strategy rather than model-specific optimizations.
+
+<span id="page-10-2"></span>> **[图片提取文字 (无描述)]:**
+> DeepSeek-R1 (LAPO-D) DeepSeek-R1 (LAPO-I) 8000 DeepScaleR (LAPO-D) DeepScaleR (LAPO-I) Average Length (Tokens) 6000 4000 2000
+![](_page_10_Figure_1.jpeg)
+
+> **[图片提取文字 (无描述)]:**
+> But -Self-correction & Verification Wait, Alternatively, Perhaps · **Exploration & Alternatives** First, Okay, Context Setting Given -Therefore, DeepScaleR-1.5B-Pre Conclusion Drawing LAPO-D So, LAPO-I 2 12 10 Keyword Count per 1K Tokens
+![](_page_10_Figure_2.jpeg)
+
+Figure 3: Reasoning length allocation across mathematical problem difficulty levels. LAPO learns to scale computation with complexity.
+
+Figure 4: Keyword usage of reasoning behaviors across different stages. LAPO selectively prunes hesitant and exploratory thought patterns.
+
+#### <span id="page-10-1"></span>6.6 QUALITATIVE REFINEMENT OF REASONING BEHAVIORS
+
+Beyond quantitatively adjusting how much computation the model uses, we next investigate how it qualitatively refines the reasoning process to achieve this efficiency. To do this, we analyzed the frequency of keywords indicative of different cognitive behaviors, such as "Self-Correction and Verification", "Exploration and Alternatives", "Context Setting", and "Conclusion Drawing", in the generated responses (Figure 4). The results reveal a significant shift in the model's reasoning style. The most significant change is a dramatic reduction in keywords associated with Self-Correction and Exploration. The base model (DeepScaleR-1.5B-Pre) frequently employs these terms, indicating a verbose and deliberative reasoning style. After LAPO-D training, and further refined in LAPO-I, the model significantly curtails this internal monologue. This suggests that LAPO effectively discourages redundant verification loops and inefficient exploration of the solution space. Crucially, this efficiency gain is not achieved by indiscriminately shortening the response. The frequency of keywords related to Context Setting and Conclusion Drawing remains stable across training stages. This demonstrates that LAPO selectively prunes inefficient and hesitant thought patterns while preserving the essential scaffolding of a coherent logical argument. The model learns to maintain its ability to properly frame a problem and articulate its deductions.
+
+#### 7 Conclusion
+
+In this work, we introduce Length-Adaptive Policy Optimization (LAPO), a two-stage reinforcement learning framework that enables language models to autonomously adjust reasoning length based on problem complexity. Unlike existing approaches that impose uniform constraints, LAPO recognizes that efficient reasoning requires understanding problem-specific computational needs rather than following rigid rules. Our two-stage design enables a natural progression: models first learn what constitutes appropriate reasoning depth through experience, then develop the ability to anticipate these requirements proactively. This approach mirrors how human experts develop intuition about problem complexity, allocating mental effort proportionally to task demands. Extensive experiments validate LAPO's effectiveness, achieving remarkable efficiency gains with up to 40.9% reduction in token usage while simultaneously improving accuracy by 2.3% on mathematical reasoning benchmarks. Our analysis reveals that this improvement stems from the model's ability to distinguish between problems requiring elaborate derivations versus those needing only brief calculations. These results confirm that when models learn from their own successful patterns rather than arbitrary constraints, they develop more robust and efficient reasoning strategies.
+
+#### REFERENCES
+
+<span id="page-10-0"></span>Pranjal Aggarwal and Sean Welleck. L1: Controlling how long a reasoning model thinks with reinforcement learning. *arXiv* preprint arXiv:2503.04697, 2025.
+
+- <span id="page-11-7"></span>Xingyu Chen, Jiahao Xu, Tian Liang, Zhiwei He, Jianhui Pang, Dian Yu, Linfeng Song, Qiuzhi Liu, Mengfei Zhou, Zhuosheng Zhang, et al. Do not think that much for 2+ 3=? on the overthinking of o1-like llms. *arXiv preprint arXiv:2412.21187*, 2024.
+- <span id="page-11-11"></span>Yu-Neng Chuang, Helen Zhou, Prathusha Kameswara Sarma, Parikshit Gopalan, John Boccio, Sara Bolouki, and Xia Hu. Learning to route llms with confidence tokens. *arXiv preprint arXiv:2410.13284*, 2024.
+- <span id="page-11-5"></span>Gongfan Fang, Xinyin Ma, and Xinchao Wang. Thinkless: Llm learns when to think. *arXiv preprint arXiv:2505.13379*, 2025a.
+- <span id="page-11-15"></span>Gongfan Fang, Xinyin Ma, and Xinchao Wang. Thinkless: LLM learns when to think. *CoRR*, abs/2505.13379, 2025b. doi: 10.48550/ARXIV.2505.13379. URL [https://doi.org/10.](https://doi.org/10.48550/arXiv.2505.13379) [48550/arXiv.2505.13379](https://doi.org/10.48550/arXiv.2505.13379).
+- <span id="page-11-6"></span>Kanishk Gandhi, Ayush Chakravarthy, Anikait Singh, Nathan Lile, and Noah D Goodman. Cognitive behaviors that enable self-improving reasoners, or, four habits of highly effective stars. *arXiv preprint arXiv:2503.01307*, 2025.
+- <span id="page-11-1"></span>Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. *arXiv preprint arXiv:2501.12948*, 2025.
+- <span id="page-11-9"></span>Tingxu Han, Zhenting Wang, Chunrong Fang, Shiyu Zhao, Shiqing Ma, and Zhenyu Chen. Tokenbudget-aware llm reasoning. *arXiv preprint arXiv:2412.18547*, 2024.
+- <span id="page-11-13"></span>Chaoqun He, Renjie Luo, Yuzhuo Bai, Shengding Hu, Zhen Leng Thai, Junhao Shen, Jinyi Hu, Xu Han, Yujie Huang, Yuxiang Zhang, et al. Olympiadbench: A challenging benchmark for promoting agi with olympiad-level bilingual multimodal scientific problems. *arXiv preprint arXiv:2402.14008*, 2024.
+- <span id="page-11-12"></span>Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and Jacob Steinhardt. Measuring massive multitask language understanding. *arXiv preprint arXiv:2009.03300*, 2020.
+- <span id="page-11-3"></span>Bairu Hou, Yang Zhang, Jiabao Ji, Yujian Liu, Kaizhi Qian, Jacob Andreas, and Shiyu Chang. Thinkprune: Pruning long chain-of-thought of llms via reinforcement learning. *arXiv preprint arXiv:2504.01296*, 2025.
+- <span id="page-11-2"></span>Chengyu Huang, Zhengxin Zhang, and Claire Cardie. Hapo: Training language models to reason concisely via history-aware policy optimization. *arXiv preprint arXiv:2505.11225*, 2025a.
+- <span id="page-11-14"></span>Chengyu Huang, Zhengxin Zhang, and Claire Cardie. HAPO: training language models to reason concisely via history-aware policy optimization. *CoRR*, abs/2505.11225, 2025b. doi: 10.48550/ ARXIV.2505.11225. URL <https://doi.org/10.48550/arXiv.2505.11225>.
+- <span id="page-11-0"></span>Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richardson, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander Madry, Alex Beutel, Alex Carney, et al. Openai o1 system card. *arXiv preprint arXiv:2412.16720*, 2024.
+- <span id="page-11-10"></span>Yu Kang, Xianghui Sun, Liangyu Chen, and Wei Zou. C3ot: Generating shorter chain-of-thought without compromising effectiveness. In *Proceedings of the AAAI Conference on Artificial Intelligence*, volume 39, pp. 24312–24320, 2025.
+- <span id="page-11-8"></span>Abhinav Kumar, Jaechul Roh, Ali Naseh, Marzena Karpinska, Mohit Iyyer, Amir Houmansadr, and Eugene Bagdasarian. Overthink: Slowdown attacks on reasoning llms. *arXiv preprint arXiv:2502.02542*, 2025.
+- <span id="page-11-4"></span>Chenwei Lou, Zewei Sun, Xinnian Liang, Meng Qu, Wei Shen, Wenqi Wang, Yuntao Li, Qingping Yang, and Shuangzhi Wu. Adacot: Pareto-optimal adaptive chain-of-thought triggering via reinforcement learning. *arXiv preprint arXiv:2505.11896*, 2025.
+
+- <span id="page-12-13"></span>Haotian Luo, Li Shen, Haiying He, Yibo Wang, Shiwei Liu, Wei Li, Naiqiang Tan, Xiaochun Cao, and Dacheng Tao. O1-pruner: Length-harmonizing fine-tuning for o1-like reasoning pruning. *arXiv preprint arXiv:2501.12570*, 2025a.
+- <span id="page-12-15"></span>Michael Luo, Sijun Tan, Justin Wong, Xiaoxiang Shi, William Y Tang, Manan Roongta, Colin Cai, Jeffrey Luo, Tianjun Zhang, Li Erran Li, et al. Deepscaler: Surpassing o1-preview with a 1.5 b model by scaling rl. *Notion Blog*, 2025b.
+- <span id="page-12-11"></span>Xinyin Ma, Guangnian Wan, Runpeng Yu, Gongfan Fang, and Xinchao Wang. Cot-valve: Lengthcompressible chain-of-thought tuning. *arXiv preprint arXiv:2502.09601*, 2025.
+- <span id="page-12-1"></span>Yingqian Min, Zhipeng Chen, Jinhao Jiang, Jie Chen, Jia Deng, Yiwen Hu, Yiru Tang, Jiapeng Wang, Xiaoxue Cheng, Huatong Song, et al. Imitate, explore, and self-improve: A reproduction report on slow-thinking reasoning systems. *arXiv preprint arXiv:2412.09413*, 2024.
+- <span id="page-12-3"></span>Niklas Muennighoff, Zitong Yang, Weijia Shi, Xiang Lisa Li, Li Fei-Fei, Hannaneh Hajishirzi, Luke Zettlemoyer, Percy Liang, Emmanuel Candes, and Tatsunori Hashimoto. s1: Simple test-time ` scaling. *arXiv preprint arXiv:2501.19393*, 2025.
+- <span id="page-12-14"></span>Isaac Ong, Amjad Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph E Gonzalez, M Waleed Kadous, and Ion Stoica. Routellm: Learning to route llms with preference data. *arXiv preprint arXiv:2406.18665*, 2024.
+- <span id="page-12-2"></span>Ziqing Qiao, Yongheng Deng, Jiali Zeng, Dong Wang, Lai Wei, Fandong Meng, Jie Zhou, Ju Ren, and Yaoxue Zhang. Concise: Confidence-guided compression in step-by-step efficient reasoning. *arXiv preprint arXiv:2505.04881*, 2025.
+- <span id="page-12-6"></span>Charlie Snell, Jaehoon Lee, Kelvin Xu, and Aviral Kumar. Scaling llm test-time compute optimally can be more effective than scaling model parameters. *arXiv preprint arXiv:2408.03314*, 2024.
+- <span id="page-12-8"></span>Yang Sui, Yu-Neng Chuang, Guanchu Wang, Jiamu Zhang, Tianyi Zhang, Jiayi Yuan, Hongyi Liu, Andrew Wen, Shaochen Zhong, Hanjie Chen, et al. Stop overthinking: A survey on efficient reasoning for large language models. *arXiv preprint arXiv:2503.16419*, 2025.
+- <span id="page-12-16"></span>Songjun Tu, Jiahao Lin, Qichao Zhang, Xiangyu Tian, Linjing Li, Xiangyuan Lan, and Dongbin Zhao. Learning when to think: Shaping adaptive reasoning in r1-style models via multi-stage rl. *arXiv preprint arXiv:2505.10832*, 2025.
+- <span id="page-12-5"></span>Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc Le, Ed Chi, Sharan Narang, Aakanksha Chowdhery, and Denny Zhou. Self-consistency improves chain of thought reasoning in language models. *arXiv preprint arXiv:2203.11171*, 2022.
+- <span id="page-12-9"></span>Yue Wang, Qiuzhi Liu, Jiahao Xu, Tian Liang, Xingyu Chen, Zhiwei He, Linfeng Song, Dian Yu, Juntao Li, Zhuosheng Zhang, et al. Thoughts are all over the place: On the underthinking of o1-like llms. *arXiv preprint arXiv:2501.18585*, 2025.
+- <span id="page-12-0"></span>Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, et al. Chain-of-thought prompting elicits reasoning in large language models. *Advances in neural information processing systems*, 35:24824–24837, 2022.
+- <span id="page-12-7"></span>Sean Welleck, Amanda Bertsch, Matthew Finlayson, Hailey Schoelkopf, Alex Xie, Graham Neubig, Ilia Kulikov, and Zaid Harchaoui. From decoding to meta-generation: Inference-time algorithms for large language models. *arXiv preprint arXiv:2406.16838*, 2024.
+- <span id="page-12-4"></span>Yangzhen Wu, Zhiqing Sun, Shanda Li, Sean Welleck, and Yiming Yang. Inference scaling laws: An empirical analysis of compute-optimal inference for problem-solving with language models. *arXiv preprint arXiv:2408.00724*, 2024.
+- <span id="page-12-12"></span>Heming Xia, Chak Tou Leong, Wenjie Wang, Yongqi Li, and Wenjie Li. Tokenskip: Controllable chain-of-thought compression in llms. *arXiv preprint arXiv:2502.12067*, 2025.
+- <span id="page-12-10"></span>Silei Xu, Wenhao Xie, Lingxiao Zhao, and Pengcheng He. Chain of draft: Thinking faster by writing less. *arXiv preprint arXiv:2502.18600*, 2025a.
+
+- <span id="page-13-4"></span>Yuhui Xu, Hanze Dong, Lei Wang, Doyen Sahoo, Junnan Li, and Caiming Xiong. Scalable chain of thoughts via elastic reasoning. *arXiv preprint arXiv:2505.05315*, 2025b.
+- <span id="page-13-0"></span>Junjie Yang, Ke Lin, and Xing Yu. Think when you need: Self-adaptive chain-of-thought learning. *arXiv preprint arXiv:2504.03234*, 2025.
+- <span id="page-13-2"></span>Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Tom Griffiths, Yuan Cao, and Karthik Narasimhan. Tree of thoughts: Deliberate problem solving with large language models. *Advances in neural information processing systems*, 36:11809–11822, 2023.
+- <span id="page-13-3"></span>Edward Yeo, Yuxuan Tong, Morry Niu, Graham Neubig, and Xiang Yue. Demystifying long chainof-thought reasoning in llms. *arXiv preprint arXiv:2502.03373*, 2025.
+- <span id="page-13-1"></span>Jiajie Zhang, Nianyi Lin, Lei Hou, Ling Feng, and Juanzi Li. Adaptthink: Reasoning models can learn when to think. *arXiv preprint arXiv:2505.13417*, 2025a.
+- <span id="page-13-5"></span>Jiajie Zhang, Nianyi Lin, Lei Hou, Ling Feng, and Juanzi Li. Adaptthink: Reasoning models can learn when to think. *CoRR*, abs/2505.13417, 2025b. doi: 10.48550/ARXIV.2505.13417. URL <https://doi.org/10.48550/arXiv.2505.13417>.
+
+# A TECHNICAL APPENDICES AND SUPPLEMENTARY MATERIAL
+
+#### A.1 IMPLEMENTATION DETAILS
+
+System prompt used for training. The system prompts used for the two-stage training are shown in the boxes below. The prompt titled LAPO-D-prompt was used for DeepSeek-R1-Distill-Qwen-1.5B, and LAPO-I-prompt was used for DeepScaleR. This approach maintains consistency with the original RL training of DeepSeek-R1.
+
+#### LAPO-D-prompt
+
+You are a helpful assistant. A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process is enclosed within <think> and </think> tags, respectively, i.e., <think> reasoning process here </think> answer here. User: {question} Please think step by step and output the final answer within \boxed{}. Assistant: <think>
+
+### LAPO-I-prompt
+
+You are a helpful assistant. A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The Assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process is enclosed within <think> and </think> tags, respectively, i.e., <think> reasoning process here </think> answer here. User: {question} Please think step by step and output the final answer within \boxed{}. Assistant: <think> I will answer the question with {length} tokens.
+
+Training and Reproduction Details. We trained the model on the OpenRLHF framework. During training, we sampled 8 responses for each query in the batch with a temperature of 1.0, set the kl parameter to 0.0001, used a learning rate of 1e-6 and a batch size of 128, and set the maximum context length to 4K tokens during training. Both LAPO-D and LAPO-I training were conducted for 3 episodes, approximately 240 steps. The α and β parameters in R<sup>1</sup> and R<sup>2</sup> were 0.7 and 0.8, respectively. All experiments were conducted using 4 A800 GPUs. We provide training hyperparameters in Table [5.](#page-14-0)
+
+#### A.2 TRAINING DYNAMICS
+
+We analyze the training dynamics by periodically evaluating model checkpoints on the MATH-500 validation set to understand the learning mechanisms of our twostage framework. As illustrated in Figures [5a](#page-15-0) and [5b,](#page-15-0) LAPO achieves a superior balance between efficiency and accuracy across both training stages.
+
+Continuous Efficiency Gains. Figure [5a](#page-15-0) shows a clear, two-step reduction in token generation. In Stage 1, the LAPO-D policy rapidly becomes more concise, with its average length decreasing from a verbose baseline of 3,280 tokens to a stable 2,365 tokens, driven by the length-aware reward (R1). Building on this, the LAPO-I policy achieves further compression, reducing the length to below 2,200 tokens. This demonstrates that the plan-adherence reward (R2), combined with incontext guidance, effectively encourages the model to execute its self-proposed reasoning plans more precisely.
+
+<span id="page-14-0"></span>Table 5: Training Hyperparameters
+
+| Hyperparameter        | Value  |
+|-----------------------|--------|
+| Epochs                | 1      |
+| Episodes              | 3      |
+| Learning Rate         | 1e-6   |
+| Train Batch Size      | 128    |
+| Temperature           | 1.0    |
+| Rollout per Prompt    | 8      |
+| Prompt Max Length     | 1024   |
+| Generation Max Length | 4096   |
+| KL Coefficient        | 0.0001 |
+| Precision             | BF16   |
+| α                     | 0.7    |
+| β                     | 0.7    |
+
+Accuracy Maintenance and Refinement. Crucially, these efficiency gains do not compromise performance.
+
+As shown in Figure [5b,](#page-15-0) accuracy on MATH-500 is consistently maintained or improved. The
+
+<span id="page-15-0"></span>> **[图片提取文字 (无描述)]:**
+> 88.0 Baseline Baseline LAPO-D 3300 LAPO-D 87.5 LAPO-I LAPO-I Average Length Accuracy (%) 86.5 86.0 2400 85.5 2100 85.0 1 50 100 150 200 250 50 100 150 200 250 Training Steps Training Steps (a) Average Length on MATH-500 (b) Accuracy on MATH-500
+![](_page_15_Figure_1.jpeg)
+
+Figure 5: Training dynamics evaluated on the MATH-500 validation set. Checkpoints were saved periodically during training on our mixed dataset. (a) Both LAPO-D and LAPO-I policies learn to significantly reduce the average response length. (b) These efficiency gains are achieved while maintaining or even improving accuracy over the baseline.
+
+<span id="page-15-1"></span>Table 6: Ablation study on the training dataset. This table compares performance when trained on different data sources. For each metric column, **bold** indicates the best score and <u>underline</u> indicates the second-best score across all configurations.
+
+| Method            | MATH             | 1500         | AIME                | 2024         | AMC                 | -23          | Olympia             | dBench       | Avera        | ige          |
+|-------------------|------------------|--------------|---------------------|--------------|---------------------|--------------|---------------------|--------------|--------------|--------------|
+|                   | Pass@1           | #Tok         | Pass@1              | #Tok         | Pass@1              | #Tok         | Pass@1              | #Tok         | Pass@1       | #Tok         |
+| Training Data: Co | ombined (        | Ours)        |                     |              |                     |              |                     |              |              |              |
+| LAPO-D<br>LAPO-I  | 86.4<br>86.3     | 2365<br>2168 | 37.6<br><b>38.1</b> | 5945<br>5371 | 77.6<br><b>78.3</b> | 3655<br>3765 | 56.1<br><b>56.3</b> | 4499<br>4024 | 64.4<br>64.8 | 4116<br>3832 |
+| Training Data: De | eepScaleR        | R-only       |                     |              |                     |              |                     |              |              |              |
+| LAPO-D<br>LAPO-I  | 86.1<br>86.1     | 2397<br>2210 | 36.8<br>36.5        | 6153<br>6418 | 76.8<br>77.0        | 3983<br>3791 | 55.5<br>55.6        | 4258<br>3933 | 63.8<br>63.8 | 4197<br>4088 |
+| Training Data: M  | ATH-only         |              |                     |              |                     |              |                     |              |              |              |
+| LAPO-D<br>LAPO-I  | <b>86.5</b> 86.1 | 2398<br>2340 | 38.0<br>35.5        | 7034<br>6452 | 77.3<br>75.8        | 4060<br>4021 | 55.8<br>54.5        | 4494<br>4194 | 64.4<br>63.0 | 4496<br>4251 |
+
+LAPO-D policy's accuracy climbs from 85.8% to over 86.4%, suggesting the reward mechanism prunes redundant or error-prone reasoning steps. The LAPO-I policy sustains this high accuracy level even on a much tighter token budget. Notably, it exhibits a transient performance peak, a key finding that suggests the in-context guidance actively steers the model toward more focused and effective reasoning, rather than merely acting as a constraint.
+
+In summary, the training dynamics validate our two-stage design. LAPO-D establishes a robust foundation for efficient reasoning, which LAPO-I then refines to achieve a superior performance-cost balance. The smooth convergence on a challenging validation set confirms that by learning from its own successful patterns, the model develops transferable and efficient reasoning strategies.
+
+#### A.3 SELECTION OF TRAINING DATASET
+
+As mentioned in section 4 Experiment Setup, we chose a mixed dataset for training in our experiments. In this section, we provide a detailed analysis of the impact of different dataset selections on model performance. Table 6 shows the test results on various benchmarks after two-stage training using different training datasets. Several important findings can be observed from the experimental results. Combined-data achieved the best performance in terms of average accuracy, showing a clear advantage over single-dataset training. This indicates that a dataset with
+
+a balanced difficulty distribution helps enhance the model's generalization ability across different types of questions. In terms of token usage efficiency, the model trained on combined-data also performed the best. This suggests that problems with different difficulty gradients help establish a more accurate complexity-length mapping relationship. By exposing the model to a wider range of problem difficulties, it can better learn the optimal thinking range for different questions. Taking all these factors into consideration, we selected the mixed dataset as the training data to expose the model to a more diverse set of problems and enable it to deeply learn the optimal reasoning patterns for different questions.
+
+### A.4 GENERALIZABILITY TO EXPERT-LEVEL QUESTION ANSWERING.
+
+To test if LAPO's benefits extend beyond structured mathematical reasoning, we evaluated our method on the GPQA benchmark. The results, presented in Table [7,](#page-16-0) demonstrate that LAPO's core principles are highly generalizable.
+
+For both base models, LAPO achieves a compelling dual improvement in accuracy and efficiency. On the DeepSeek-R1-1.5B model, LAPO-D improves Pass@1 accuracy by a significant 2.0 points while reducing token generation by 26.2%. Similarly, on the more advanced DeepScaleR-1.5B-Preview, LAPO-D boosts accuracy by 2.2 points and cuts tokens by 19.4%. The internalization stage consistently pushes efficiency further while maintaining a strong accuracy improvement over the baseline. This robust performance on a knowledge-intensive, non-mathematical task indicates that LAPO is not merely exploiting
+
+<span id="page-16-0"></span>Table 7: Performance on the GPQA benchmark. LAPO demonstrates generalizable efficiency and accuracy gains in a non-mathematical, knowledge-intensive domain.
+
+| Method                              | Pass@1 (%) | #Tokens |  |  |  |  |  |  |  |
+|-------------------------------------|------------|---------|--|--|--|--|--|--|--|
+| Base Model: DeepSeek-R1-1.5B        |            |         |  |  |  |  |  |  |  |
+| Base                                | 36.1       | 10297   |  |  |  |  |  |  |  |
+| + LAPO-D                            | 38.1       | 7596    |  |  |  |  |  |  |  |
+| + LAPO-I                            | 36.9       | 7235    |  |  |  |  |  |  |  |
+| Base Model: DeepScaleR-1.5B-Preview |            |         |  |  |  |  |  |  |  |
+| Base                                | 36.1       | 7667    |  |  |  |  |  |  |  |
+| + LAPO-D                            | 38.3       | 6176    |  |  |  |  |  |  |  |
+| + LAPO-I                            | 37.8       | 6154    |  |  |  |  |  |  |  |
+
+domain-specific patterns. Instead, it learns a fundamental and transferable skill: how to allocate cognitive effort efficiently for complex reasoning across different domains.

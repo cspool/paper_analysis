@@ -1,0 +1,343 @@
+# **Scaling Reasoning Tokens via RL and Parallel Thinking: Evidence From Competitive Programming**
+
+**Qianfan Zhang**<sup>2</sup>,† , **Tianyu Guo**<sup>3</sup>,† , **Xuandi Ren**<sup>3</sup>,† , **Jiale Chen**<sup>4</sup>,† , **Ming Ding**<sup>1</sup> , **Ran Xin**<sup>1</sup>,‡,<sup>∗</sup> , **Xia Xiao**<sup>1</sup>,<sup>∗</sup>
+
+ByteDance Seed, Princeton University, UC Berkeley, Stanford University
+
+†Work done during internship at ByteDance Seed, ‡Work done at ByteDance Seed, <sup>∗</sup>Supervising authors
+
+# **Abstract**
+
+We study how to scale reasoning token budgets for competitive programming through two complementary approaches: training-time reinforcement learning (RL) and test-time parallel thinking. During RL training, we observe an approximately log-linear relationship between validation accuracy and the average number of generated reasoning tokens over successive checkpoints, and show two ways to shift this training trajectory: verification RL warmup raises the starting point, while randomized clipping produces a steeper trend in the observed regime. As scaling single-generation reasoning during RL quickly becomes expensive under full attention, we introduce a multi-round parallel thinking pipeline that distributes the token budget across threads and rounds of generation, verification, and refinement. We train the model end-to-end on this pipeline to match the training objective to the test-time structure. Starting from Seed-OSS-36B, the full system with 16 threads and 16 rounds per thread matches the underlying RL model's oracle pass@16 at pass@1 using 7.6 million tokens per problem on average, and surpasses GPT-5-high on 456 hard competitive programming problems from AetherCode.
+
+**Date:** April 3, 2026
+
+**Correspondence:** x.xiaxiao@bytedance.com
+
+## **1 Introduction**
+
+Scaling compute has been a central driver of progress in large language models and general AI systems [\[38\]](#page-10-0). Pre-training scaling laws are well established [\[12,](#page-9-0) [16\]](#page-9-1), and recent work has shifted toward scaling reasoning capabilities. On the training side, reinforcement learning (RL) has proven effective at incentivizing models to produce longer and more useful chain-of-thought reasoning traces [\[42\]](#page-11-0), as seen in systems such as OpenAI o1 [\[29\]](#page-10-1) and DeepSeek-R1 [\[7\]](#page-9-2). On the test-time side, agentic pipelines that orchestrate multiple generations, verification, and search offer a complementary way to spend additional reasoning compute without increasing single-generation length [\[11,](#page-9-3) [37\]](#page-10-2).
+
+In this work, we study reasoning tokens scaling for competitive programming, a technical domain that remains challenging even for frontier models and provides unambiguous correctness signals through execution-based evaluation, making it an ideal testbed. Our contributions are the following:
+
+• We identify an **empirical log-linear trend** between average generated reasoning tokens and validation accuracy during RL training, and use it as a descriptive lens to compare RL variants. In this view, verification RL warmup raises the starting point, while randomized clipping yields a steeper trend.
+
+- We introduce a **parallel thinking** framework, a multi-turn test-time pipeline that scales reasoning tokens across turns rather than within a single generation, combining multi-thread generation, self-verification, sequential self-refinement, and verification-based ranking. We train the model end-to-end on the full multi-turn pipeline via RL, aligning the training objective with the test-time structure.
+- Starting from Seed-OSS-36B [2], our full parallel thinking pipeline with 16 threads and 16 self-verifyrefine rounds achieves pass@1 accuracy matching the oracle pass@16 of the underlying RL model using 7.6 million tokens per problem on average, and surpasses GPT-5-high<sup>1</sup> on 456 hard competitive programming problems from AetherCode [41].
+
+#### 2 Scaling Reasoning Tokens via RL at Training Time
+
+We begin by studying how reasoning tokens scale during RL training. After describing the baseline setup in Section 2.1, we present an empirical log-linear trend between reasoning tokens and accuracy in Section 2.2. This trend serves as a descriptive framework for comparing RL strategies. We then demonstrate in Section 2.3 two examples of improving the curve via verification RL warmup and randomized clipping. Finally, Section 2.4 discusses the training-time compute wall that motivates our test-time approach.
+
+#### <span id="page-1-1"></span>2.1 Baseline Setup
+
+We use Seed-OSS-36B-Base [2] as the base model and train on proprietary competitive programming problems collected from online platforms like Codeforces. For evaluation, we use AetherCode [41] as the validation set, which contains 456 competitive programming problems collected from premier programming competitions such as IOI and ICPC. Each solution is evaluated by execution against unit tests, receiving a reward of +1 if it passes all tests and 0 for any failure, including compilation error, wrong answer, and time limit exceeded. Responses that exceed the maximum context length are truncated and treated as incorrect.
+
+Training uses asynchronous GRPO [33], which is built on an in-house infrastructure similar to open-source RL frameworks [13, 35, 50], and allows 1-step off-policy samples for improved training throughput. At each training step, the model generates 32 rollouts for a batch of 16 problems, receives rewards based on execution results, and updates the policy. Most RL runs use 256 or 512 A100 GPUs with maximum context length of 90K tokens. Before RL training, we perform supervised fine-tuning (SFT) on approximately 6K proprietary trajectories as a cold start. Total RL training data consists of approximately 10K problems.
+
+#### <span id="page-1-2"></span>2.2 An Empirical Log-Linear Trend During RL Training
+
+During RL training, the model progressively generates more reasoning tokens, consistent with prior observations in the literature [7, 24]. Across successive RL checkpoints, we observe that the relationship between the average generation length and validation accuracy is **log-linear**: accuracy increases linearly with the logarithm of the average token count, as shown in Figure 1.
+
+We view this as an empirical regularity of our training setup rather than a universal law, and the plot should be interpreted as a compact summary of training dynamics in this regime. Still, the linear fit holds consistently across our different RL configurations and is stable enough to serve as a useful descriptive framework with several practical implications. First, it enables early comparison of RL recipes, i.e., rather than training to convergence, one can fit the log-linear scaling curve from early checkpoints and extrapolate to compare the start-
+
+<span id="page-1-3"></span>> **[图片提取文字 (无描述)]:**
+> 0.34 -0.320.30 Accuracy 0.280.26 0.24 0.220.20 30k40k50k60k70kAverage tokens (log scale)
+![](_page_1_Figure_10.jpeg)
+
+**Figure 1** Log-linear trend: validation accuracy scales linearly with the logarithm of the average number of reasoning tokens during RL training. Each point corresponds to a successive RL training checkpoint.
+
+ing point and slope across different setups. Second, it provides a framework for diagnosing whether a new
+
+<span id="page-1-0"></span><sup>&</sup>lt;sup>1</sup>GPT-5-high refers to GPT-5 evaluated with reasoning\_effort=high as described in the OpenAI GPT-5 System Card [36].
+
+technique improves the intercept, the slope, or both, as we demonstrate in Section 2.3. Third, it can guide compute budgeting by predicting the accuracy gain from a target increase in reasoning tokens.
+
+#### <span id="page-2-0"></span>2.3 Improving the Log-Linear Trend
+
+We now illustrate two ways to improve the log-linear scaling curve. Randomized clipping steepens the slope by smoothing the hard reward boundary. Verification RL warmup raises the starting point before the generation RL stage described in Section 2.1. Other factors, such as the base model and the composition of the cold-start data, may also matter, but we do not explore them here.
+
+Steepening the slope via randomized clipping. In the baseline generation RL setup from Section 2.1, each response is subject to a hard maximum token limit L. The reward for a prompt-response pair (x, y) is
+
+$$R^{(L)}(x,y) := \operatorname{score}(x,y) \cdot \mathbb{1}[|y| \le L], \tag{1}$$
+
+where  $score(x, y) \in \{0, 1\}$  is the execution result and |y| denotes the response length in tokens. For correct solutions, this is a step function in |y| as shown in Figure 2 (left), i.e., a response just below the limit receives full reward while one just above it receives none. The result is a sharp reward cliff near the boundary, with no gradual incentive to shorten near-limit responses.
+
+<span id="page-2-1"></span>> **[图片提取文字 (无描述)]:**
+> Baseline Randomized clipping 0.35 -1.0 0.33 0.30 0.28 -Reward 0.5 -0.250.23 Randomized clipping - Baseline 0.0 0.0 -0.20 90k90k 60k60k 70k 30k 60k30k 30k 40k 50k Response length Response length Average tokens (log scale)
+![](_page_2_Figure_6.jpeg)
+
+Figure 2 Randomized clipping replaces the hard reward cliff (left) with a smooth ramp (middle), producing a steeper log-linear scaling curve (right).
+
+We propose randomized clipping (RC), which replaces the fixed cap with a random cap sampled from a distribution  $\mathcal{D}$ . In expectation, this turns the hard cliff into a smooth penalty as a function of response length. The effective reward becomes
+
+$$R^{(\mathcal{D})}(x,y) := \mathbb{E}_{L \sim \mathcal{D}}[R^{(L)}(x,y)] = \operatorname{score}(x,y) \cdot \mathbb{P}_{L \sim \mathcal{D}}(|y| \le L) = \operatorname{score}(x,y) \cdot (1 - F_{\mathcal{D}}(|y|)), \tag{2}$$
+
+where  $F_{\mathcal{D}}$  is the cumulative distribution function of  $\mathcal{D}$ . Because the penalty term  $1 - F_{\mathcal{D}}(|y|)$  multiplies  $\mathrm{score}(x,y)$ , it only affects correct solutions; incorrect solutions still receive zero reward regardless of length. This preserves the model's incentive to explore longer reasoning on difficult problems. Different choices of  $\mathcal{D}$  induce different smooth penalties: a Gaussian yields a sigmoid-shaped decay, a truncated exponential yields an exponential decay, and a uniform distribution yields a linear ramp. For simplicity, we use  $\mathcal{D} = \mathrm{Uniform}(a,b)$ , which gives the following piecewise linear reward:
+
+$$R^{(\mathcal{D})}(x,y) = \operatorname{score}(x,y) \cdot \begin{cases} 1 & \text{if } |y| \le a, \\ \frac{b - |y|}{b - a} & \text{if } a < |y| < b, \\ 0 & \text{if } |y| \ge b, \end{cases}$$
+
+$$(3)$$
+
+We set b = 90000 to match the original hard limit and a = 60000 as a more economical budget within which most correct solutions already fit; see Figure 2 (middle). As shown in Figure 2 (right), RC steepens the log-linear scaling curve relative to the baseline, yielding better accuracy at a fixed reasoning token budget.
+
+Remark. While prior work has explored explicit length penalties added to the reward [1, 25, 46], RC offers a principled perspective rooted in randomized smoothing techniques from zeroth order optimization [9, 27]: the effective penalty arises implicitly from randomizing the existing token limit, with the penalty shape controlled entirely by the choice of distribution  $\mathcal{D}$ .
+
+Shifting the starting point via verification RL warmup. Before the generation RL described in Section 2.1, we first train the model on a verification task using RL: given a problem and a candidate solution, predict whether the solution is correct. Here, the model produces a chain-of-thought analysis that traces execution, tests edge cases, and constructs counterexamples before outputting a binary verdict, where only the final verdict is used for scoring. After RL training, verification takes on average approximately 10K tokens, reflecting the depth of reasoning required to catch subtle algorithmic errors such as off-by-one flaws in combinatorial formulas or data structure misuse. Figure 3 illustrates the full training pipeline.
+
+<span id="page-3-1"></span>> **[图片提取文字 (无描述)]:**
+> -6k gen. trajectories -2k <mark>ver</mark>. trajectories ~160k sampled solutions \_10k problems Ver. RL Gen. RL Base model Final model Ver. RL Gen. RL starting point starting point
+![](_page_3_Figure_2.jpeg)
+
+**Figure 3** Training pipeline: SFT cold start with generation and verification trajectories, followed by verification RL and generation RL.
+
+In particular, the SFT cold start of verification RL uses approximately 6K generation trajectories alongside 2K verification trajectories created by rejection sampling from a generation RL checkpoint. Verification RL then trains on approximately 160K candidate solutions collected from previous generation RL runs, each automatically labeled correct or incorrect by execution against unit tests. The reward is +1 for a correct verdict and 0 otherwise, using the same RL configuration as generation training described in Section 2.1.
+
+The verification RL training dynamics is shown in Figure 4 (left). Recall starts high at  $\sim 0.96$  and remains stable throughout training, while precision climbs steadily from  $\sim 0.78$  to  $\sim 0.89$ . This indicates that the SFT checkpoint already detects most correct solutions, but frequently misclassifies incorrect ones as correct. Verification RL primarily reduces these false positives. By step 420, accuracy reaches  $\sim 0.89$ .
+
+The resulting verification RL checkpoint then serves as initialization for generation RL. As shown in Figure 4 (right), verification RL warmup shifts the log-linear scaling curve upward: generation RL initialized from the verification checkpoint achieves higher accuracy than generation RL alone at any given token budget. At the standard 90K maximum context length, generation RL without verification warmup plateaus at  $\sim 0.33$  once the average generation length reaches  $\sim 70 \, \mathrm{K}$  tokens, whereas the warm-started run reaches  $\sim 0.38$  using a similar number of tokens. Continuing the warm-started run with an extended 120K maximum context length allows it to keep improving beyond the original budget range while remaining consistent with the same overall trend. We hypothesize that verification training improves the model's ability to internally evaluate solution correctness, yielding a stronger starting point and thus a more favorable scaling trajectory for subsequent generation RL.
+
+Remark. The success of verification RL warmup suggests a broader principle: incorporating data that exercises sub-capabilities useful for generation may further improve the generation scaling curve. We leave systematic exploration of this direction to future work.
+
+#### <span id="page-3-0"></span>2.4 The Compute Wall
+
+<span id="page-3-2"></span>The empirical log-linear trend suggests that, within the range we observe, longer generations are associated with higher validation accuracy. However, directly pushing sequence length further during RL training quickly becomes impractical. With full attention, the computational cost scales quadratically with sequence length. At an average response length of  $\sim 100 \mathrm{K}$  tokens, a single RL training step takes approximately 4 hours on 256 A100s, making further scaling prohibitively expensive. Efficient attention mechanisms [4, 17] might alleviate this bottleneck, but this compute wall motivates our test-time approach described in the next section.
+
+<span id="page-4-0"></span>> **[图片提取文字 (无描述)]:**
+> 0.950.90Rate 0.850.80 Recall Precision Accuracy 0.75100 200 300 400 Verification RL step
+![](_page_4_Figure_0.jpeg)
+
+> **[图片提取文字 (无描述)]:**
+> 0.400.35 Accuracy 0.30 0.25Gen. RL after Ver. RL Gen. RL only 0.2020k40k 80k 100k60k Average tokens (log scale)
+![](_page_4_Figure_1.jpeg)
+
+**Figure 4** Verification RL warmup. **Left**: recall remains high while precision and accuracy improve during verification RL. **Right**: initializing generation RL from the verification checkpoint shifts the log-linear scaling curve upward.
+
+# **3 Scaling Reasoning Tokens via Parallel Thinking at Test Time**
+
+To scale reasoning tokens beyond the compute wall identified in [Section 2.4,](#page-3-0) we introduce a parallel thinking framework that distributes the reasoning budget across independent threads, each executing multiple rounds of self-verification and self-refinement. Each individual generation remains short, sidestepping the quadratic attention bottleneck, while the total generated tokens extend by over an order of magnitude beyond what is feasible at training time. We describe the inference pipeline in [Section 3.1,](#page-4-1) the training procedure that aligns the model with this multi-round structure in [Section 3.2,](#page-5-0) and the resulting scaling behavior in [Section 3.3.](#page-7-0)
+
+#### <span id="page-4-1"></span>**3.1 Pipeline Overview**
+
+We now detail the test-time inference procedure; see [Figure 5](#page-5-1) for an overview. Given a problem x, the parallel thinking system spawns N independent threads. Each thread executes up to M rounds, where each round consists of the following two steps:
+
+- 1. **Generate/Refine**: In the first round, the model produces a candidate solution from scratch. In subsequent rounds, the model generates a refined solution conditioned on the previous attempt and a negative verification verdict from the previous round.
+- 2. **Verify**: Given a solution y, the model produces V verdicts via V independent sampling calls, each containing a correctness judgment and its corresponding reasoning. If all V verdicts unanimously deem the solution correct, the thread terminates early.
+
+The total reasoning token budget is at most N × M × Tround, where Tround is the average tokens per round, and is often less due to early termination. After all threads complete, the system selects a final answer from all solutions produced across all threads and rounds. Let yn,m denote the solution produced at round m of thread n, with verification verdicts vn,m,j ∈ {0, 1} for j = 1, . . . , V . Each solution is scored by its number of positive verdicts:
+
+$$s_{n,m} = \sum_{j=1}^{V} v_{n,m,j}.$$
+ (4)
+
+The solution with the highest score is selected as the final answer, with ties broken by preferring earlier rounds and remaining ties broken randomly. We prefer earlier rounds because refinement can degrade correct solutions when guided by incorrect verdicts. Among equally scored solutions, the one requiring fewer refinement steps is more likely to be correct.
+
+**Why self-verification?** Unlike mathematical reasoning where majority voting on final answers is effective [\[40\]](#page-11-4), competitive programming solutions are code and cannot be meaningfully compared by output equivalence alone. An alternative is to check candidates against brute-force solvers with self-generated unit tests [\[21\]](#page-10-10), but producing correct-by-construction test generators and reference solutions is itself a challenging problem. We
+
+<span id="page-5-1"></span>> **[图片提取文字 (无描述)]:**
+> Problem Round 1 Round 1 Round 1 Generate Generate Generate Solution 0 Solution 0 Solution 0 Verify Verify Verify Verdict(s) 0 Verdict(s) 0 Verdict(s) 0 Round 2 Round 2 Round 2 Refine Refine Refine Solution 1 Solution 1 Solution 1 Verify Verify Verify Verdict(s) 1 Verdict(s) 1 Verdict(s) 1 Round M Round M Round M Refine Refine Refine Solution M Solution M Solution M Verify Verify Verify Verdict(s) M Verdict(s) M Verdict(s) M Thread 2 Thread 1 Thread N Rank solutions by verdicts Final solution
+![](_page_5_Figure_0.jpeg)
+
+**Figure 5** The parallel thinking inference pipeline. The system spawns N independent threads. Each thread **generates** a candidate solution, then **verifies** it via V independent sampling calls, each producing a correctness judgment and reasoning. If all V verdicts unanimously deem the solution correct, the thread terminates early; otherwise, one negative verdict is randomly selected and the model **refines** the solution conditioned on the previous attempt and the selected reasoning. This verify-refine loop repeats for up to M rounds. After all threads complete, all solutions across threads and rounds are ranked by verification vote count, and the highest-scoring one is returned.
+
+instead rely on self-verification, where the same model trained via verification RL, as shown in [Section 2.3,](#page-2-0) judges each candidate, providing both the ranking signal for selecting among candidate solutions and the feedback that drives refinement, with no external oracle required.
+
+**Beyond independent threads.** Our pipeline can be naturally extended in several directions: (1) incorporating unit-test-based verification oracle alongside self-verification, as our preliminary experiments show this further improves performance; (2) using unit test execution signals, such as failing test cases, to directly guide solution refinement; (3) replacing the linear verify-refine chain with tree search over refinement paths, using verification scores to prune and expand branches [\[43,](#page-11-5) [49\]](#page-11-6); (4) crossing solutions and verification reasoning across threads via summarization, akin to a neural evolutionary algorithm [\[20,](#page-10-11) [28,](#page-10-12) [31\]](#page-10-13); and (5) combining the vote-count ranking with more fine-grained selection strategies such as pairwise comparison or learned ranking models. In this work, we focus on the simplest instantiation, i.e., independent threads with linear verify-refine chains, and show that it already yields strong scaling. We leave systematic exploration of the aforementioned richer strategies to future work.
+
+#### <span id="page-5-0"></span>**3.2 Training for Parallel Thinking**
+
+**Separate training.** The simplest approach is rather to deploy the checkpoint produced by the verification RL followed by generation RL pipeline in [Section 2.3.](#page-2-0) However, its training context is misaligned with the multiround test-time pipeline in [Section 3.1.](#page-4-1) In particular, each capability is trained independently on single-round
+
+contexts, whereas at inference the verifier must evaluate on-policy solutions from the current generator, and refinement must be conditioned on the verification critique of the current solution. This mismatch between training and inference contexts motivates end-to-end RL training on the full multi-round pipeline.
+
+**End-to-end RL.** To close this train—test gap, we train the model end-to-end on the full multi-round pipeline via RL, starting from the verification RL checkpoint of Section 2.3. For each problem x, we sample a group of trajectories, each consisting of M rounds of alternating turns:
+
+$$\tau = (\underbrace{y_{\text{gen}}^1, y_{\text{ver}}^1, \underbrace{y_{\text{ref}}^2, y_{\text{ver}}^2, \dots, \underbrace{y_{\text{ref}}^M, y_{\text{ver}}^M}_{\text{round } 1}), \tag{5}$$
+
+where  $y_{\mathtt{role}}^i$  denotes the model output at round i with the given role. Each round consists of a generation or refinement turn followed by a verification turn. Unlike test time where each verification turn produces V independent verdicts, training uses a single verdict (V = 1) to reduce rollout cost. Early termination follows the same rule, i.e., refinement is skipped if the verdict deems the solution correct. We now describe the reward structure and policy optimization.
+
+**Per-turn rewards.** Each turn t is optimized for its own immediate reward  $r_t$ , determined by its role:
+
+$$r_t = \begin{cases} \exp(x, y_t) & \text{if } y_t \text{ is a generation or refinement step,} \\ \mathbb{1}[\operatorname{verdict}(y_t) = \exp(x, y_{t-1})] & \text{if } y_t \text{ is a verification step,} \end{cases}$$
+ (6)
+
+where  $\operatorname{exec}(x,y) \in \{0,1\}$  is the execution result of solution y against the test suite for problem x,  $\operatorname{verdict}(y_t) \in \{0,1\}$  is the binary correctness prediction extracted from the verification output  $y_t$ , and  $y_{t-1}$  is the solution being verified. In other words, generation and refinement are rewarded for producing correct code, while verification is rewarded for predicting correctness accurately. Training on multi-round rollouts aligns the context distribution with the test-time pipeline, i.e., each turn is optimized in the presence of all preceding turns, so the model learns to generate, verify, and refine in context.
+
+Remark. Optimizing the policy based on the immediate reward of each turn makes the underlying problem a multi-task contextual bandit [8]. A natural extension is to propagate credit across turns via a discounted return  $R_t = \sum_{k=t}^T \gamma^{k-t} r_k$  with  $\gamma > 0$ , so that the return of each turn reflects downstream outcomes. For instance, a generation step would be rewarded not only for immediate correctness but also for producing solutions that are easy to diagnose via verification when incorrect, and the verifier would receive gradients that reflect how its feedback is used during refinement. Here, we adopt  $\gamma = 0$  for simplicity, because propagating credit across turns introduces additional hyperparameter sensitivity. We leave that direction to future work.
+
+**Policy optimization.** Since generation, verification, and refinement have heterogeneous reward distributions, advantage normalization is non-trivial. We consider the following two approaches.
+
+- REINFORCE with batch-level whitening. The advantage of turn t is  $A_t = (r_t \mu)/(\sigma + \delta)$ , where  $\mu$  and  $\sigma$  are the mean and standard deviation of all rewards  $\{r_k\}$  in the batch regardless of role. This treats all turns uniformly, but normalizing across roles with different reward distributions may distort their respective advantage and gradient signals.
+- Turn-grouped GRPO. Standard GRPO [33] is a contextual bandit algorithm that computes advantages within a group of responses to the same prompt. Here, we extend it by computing advantages separately for each turn. The advantage of turn t in a given trajectory is
+
+<span id="page-6-0"></span>
+$$A_t = r_t - \mu_t, \quad \mu_t = \mathbb{E}_{\text{batch}}[r_t], \tag{7}$$
+
+where  $\mu_t$  is the mean reward at turn t across all trajectories in the batch. Note that we do not divide by the turn-grouped standard deviation in Equation (7), as mean-centering alone suffices. Since each turn t maps to a fixed role, this calibrates the gradient signal per turn and role independently, avoiding the distortion from batch-level whitening.
+
+In both cases, the policy is updated using the clipped surrogate objective [32]:
+
+$$\mathcal{L}(\theta) = -\mathbb{E}_t \Big[ \min \big( \rho_t(\theta) A_t, \operatorname{clip}(\rho_t(\theta), 1 - \varepsilon, 1 + \varepsilon) A_t \big) \Big], \tag{8}$$
+
+where  $\rho_t(\theta) = \pi_{\theta}(y_t \mid c_t)/\pi_{\theta_{\text{old}}}(y_t \mid c_t)$  is the importance sampling ratio between the current and previous policies,  $\varepsilon$  is the clipping parameter, and  $c_t$  denotes the context at turn t, comprising the problem statement and respective model outputs from preceding turns.
+
+#### <span id="page-7-0"></span>3.3 Scaling Results
+
+We now evaluate how parallel thinking scales with reasoning tokens. All experiments use the end-to-end RL model trained with turn-grouped GRPO from Section 3.2 with V=8 verdicts per verification step unless noted otherwise. The starting point for all test-time scaling curves is a single generation from the end-to-end RL checkpoint, at  $\sim 0.34$  accuracy and  $\sim 60 \text{K}$  tokens. Figure 6 (left) places RL training-time scaling and test-time parallel thinking on a unified token budget axis, and Figure 6 (right) isolates the effect of end-to-end RL. Additional ablations on the effect of varying the number of threads and verdicts are provided in Section A. A few observations are in order.
+
+<span id="page-7-1"></span>> **[图片提取文字 (无描述)]:**
+> RL scaling Test-time scaling 0.60 0.60 0.55 0.550.50 Accuracy 0. GPT-5-high Accuracy 0.45 -0.35 0.40 0.30 → Sequential + parallel 0.25 -- Separate training - Sequential 0.35Ver. RL End-to-end RL (turn-grouped GRPO) · • Parallel 0.20 • SFT - End-to-end RL End-to-end RL (REINFORCE) 0.30 20k 40k 80k 2.56M5.12M40k 80k 160k 320k 640k 1.28M2.56M5.12M160k 320k 640k 1.28MToken budget (log scale) Token budget (log scale)
+![](_page_7_Figure_3.jpeg)
+
+Figure 6 Left: Unified token budget axis spanning training-time RL scaling from 20K to 60K tokens and test-time parallel thinking with the end-to-end RL model from 60K to 7.6M tokens. Sequential refinement outperforms parallel generation at every token budget; combining both extends scaling beyond the sequential plateau and surpasses GPT-5-high by a wide margin. Right: Effect of end-to-end RL on sequential-plus-parallel scaling. Separate training initially outperforms end-to-end RL with turn-grouped GRPO due to stronger single-round generation, but the latter catches up by ~2M tokens and overtakes it at higher budgets. End-to-end RL with REINFORCE scales substantially worse.
+
+Sequential refinement is more token-efficient than parallel generation. Sequential scaling fixes the number of threads to N=1 and increases the number of verify-refine rounds from M=1 to M=16. This reaches  $\sim 0.49$  by 160K tokens, surpassing GPT-5-high [36] at  $\sim 0.46$  within a few refinement rounds, and continues to climb to  $\sim 0.55$  at  $\sim 500$ K tokens before plateauing. This steep trajectory reflects the core advantage of sequential scaling, i.e., each refinement round is conditioned on verification feedback from the previous attempt, so the model can diagnose and correct specific errors adaptively rather than regenerating blindly.
+
+Parallel scaling is less token-efficient but reduces wall-clock time. Parallel scaling fixes the number of rounds to M=1 and increases the number of threads from N=1 to N=16, with each thread generating a single solution that is then ranked by verification score. This consistently lags sequential refinement at the same token budget, e.g.,  $\sim 0.45$  versus  $\sim 0.49$  at 160K tokens. This gap is expected because parallel threads generate independently without leveraging verification feedback, so they behave like best-of-N with a learned ranker. The practical value of parallelism lies in wall-clock latency reduction rather than token efficiency, since all threads execute concurrently.
+
+Combining sequential and parallel scaling yields the best results. Sequential-plus-parallel scaling first applies M=16 verify-refine rounds within each thread, then increases the number of threads from N=1 to N=16. At the full configuration of N=16 threads and M=16 rounds, accuracy reaches  $\sim 0.61$  at 7.6M tokens, well beyond the sequential-only plateau of  $\sim 0.55$ . This demonstrates that parallelism adds complementary value once sequential refinement within each thread has saturated, i.e., different threads explore different solution
+
+<span id="page-7-2"></span><sup>&</sup>lt;sup>2</sup>Due to limited computational resources, we evaluate the REINFORCE checkpoint only up to N=8 threads and M=8 rounds. Even within this truncated range, it remains substantially below the other methods at comparable token budgets.
+
+strategies, and verification-based ranking selects the best one across all threads and rounds. The full pipeline surpasses GPT-5-high [\[36\]](#page-10-6) by a substantial margin.
+
+**End-to-end RL overtakes separate training at scale.** [Figure 6](#page-7-1) (right) compares the separately trained model from [Section 2.3](#page-2-0) with the end-to-end RL model under sequential-plus-parallel scaling. The separately trained model[3](#page-8-0) starts ∼4 points higher at 65.5K tokens, 0.38 versus 0.34, reflecting its stronger single-generation quality from independently optimized generation and verification stages. However, the end-to-end RL model catches up by ∼2M tokens and reaches ∼0.61 at the highest budgets, slightly exceeding the separately trained model at ∼0.60. While the final gap is modest, the scaling trajectory is qualitatively different. In particular, end-to-end training trades single-round quality for improved multi-round coherence, as the verifier learns to critique on-policy generations and the refiner learns to act on on-policy verification feedback, a coordination that separate training cannot achieve. [Figure 6](#page-7-1) (right) also shows that turn-grouped GRPO substantially outperforms REINFORCE with batch-level whitening at ∼0.61 versus ∼0.51 at the highest budgets, confirming that calibrating advantages per turn and role is important for multi-round training.
+
+## **4 Related Work**
+
+**RL for LLM reasoning.** Chain-of-thought (CoT) prompting [\[42\]](#page-11-0) establishes that LLMs benefit from generating intermediate reasoning steps before producing a final answer. RL extends this paradigm by training models to produce much longer and more effective reasoning traces. OpenAI o1 [\[29\]](#page-10-1) first demonstrates large-scale RL for reasoning, and later DeepSeek-R1 [\[7\]](#page-9-2) shows that RL alone can incentivize long CoT directly from a base model without any cold-start. DeepSeekMath [\[33\]](#page-10-3) introduces GRPO for mathematical reasoning, which we adapt as our core policy optimization algorithm. DeepSeekMath-V2 [\[34\]](#page-10-15) extends this line by training LLM verifiers for self-verifiable mathematical reasoning, relying on human annotations to supervise verification. Relevant work explores various RL recipes, including dynamic sampling, clip-higher, REINFORCE++, prolonged training schedules, entropy stabilization, and length control [\[1,](#page-9-6) [5,](#page-9-10) [14,](#page-9-11) [24,](#page-10-5) [46\]](#page-11-3). Kimi k1.5 [\[18\]](#page-10-16) employs a variant of online mirror descent for policy optimization and jointly trains on text and vision data for multimodal reasoning, while Qwen3 [\[45\]](#page-11-7) introduces hybrid thinking that dynamically switches between thinking and non-thinking modes. The influence of the base model on long CoT RL training is also studied, with work questioning whether RL genuinely expands reasoning beyond base model capabilities [\[47\]](#page-11-8), investigating how different base models respond to zero-RL training [\[48\]](#page-11-9), and analyzing the training dynamics of R1-Zero-like approaches [\[26\]](#page-10-17). Our work documents an empirical log-linear trend between accuracy and reasoning tokens during RL training on competitive programming, and introduces randomized clipping and verification RL warmup as two techniques that improve the observed trend.
+
+**Test-time compute scaling.** Test-time compute can be scaled through several complementary mechanisms. Best-of-N sampling and majority voting [\[40\]](#page-11-4) generate multiple independent solutions, while tree search methods, including Monte Carlo tree search [\[15,](#page-9-12) [49\]](#page-11-6) and best-first search [\[43,](#page-11-5) [44\]](#page-11-10), explore branching paths. In competitive programming, AlphaCode [\[21\]](#page-10-10) pioneers competition-level code generation by generating up to one million samples per problem and clustering them by behavioral equivalence on generated test inputs, while AlphaCode 2 [\[10\]](#page-9-13) achieves improved performance by leveraging a stronger base model and learned scoring. Process reward models provide step-level supervision to guide search, using human annotations [\[22\]](#page-10-18), automated labeling [\[39\]](#page-11-11), or implicit rewards derived from outcome signals [\[6\]](#page-9-14). Recent work shows that optimally allocating test-time compute can be more effective than scaling model parameters [\[37\]](#page-10-2), and meta RL can further improve token efficiency at test time [\[30\]](#page-10-19). SCoRe [\[19\]](#page-10-20) and Goedel-Prover-V2 [\[23\]](#page-10-21) train self-correction via multi-turn RL. Seed-Prover [\[3\]](#page-9-15) scales test-time compute by decomposing proofs into lemmas cached in a reusable memory pool. Our parallel thinking framework combines parallel generation with sequential self-verification and self-refinement, and trains the model end-to-end on the multi-turn pipeline via RL.
+
+<span id="page-8-0"></span><sup>3</sup>We use an earlier checkpoint from the separately trained pipeline with ∼0.38 accuracy and ∼65.5K average generation length, rather than the final checkpoint which exceeds 100K tokens and makes multi-round rollouts prohibitively slow. See [Figure 4](#page-4-0) (right) for the corresponding scaling curve.
+
+# **5 Conclusion**
+
+We studied scaling reasoning tokens for competitive programming through two complementary mechanisms. At training time, we observe an approximately log-linear relationship between validation accuracy and average generated tokens over successive RL checkpoints, and we demonstrate two examples of improving this trend: randomized clipping steepens the slope, while verification RL warmup shifts the starting point upward by training atomic sub-capabilities of generation. Since the quadratic attention cost imposes a compute wall on single-generation length, we introduced a parallel thinking framework that scales reasoning tokens across N independent threads, each executing up to M rounds of verify-refine, extending the effective token budget by over an order of magnitude. Sequential refinement outperforms parallel generation at every token budget, and their combination yields the best results. End-to-end co-training further improves performance by aligning the training objective with the test-time structure. Starting from Seed-OSS-36B-Base, the full pipeline achieves pass@1 accuracy matching the oracle pass@16 of the underlying RL model using 7.6M tokens per problem on average, and surpasses GPT-5-high on 456 hard problems from AetherCode. By unifying training-time RL and test-time search along a common reasoning token budget axis, our framework provides a scalable path for improving reasoning on complex tasks.
+
+# **References**
+
+- <span id="page-9-6"></span>[1] Pranjal Aggarwal and Sean Welleck. L1: Controlling how long a reasoning model thinks with reinforcement learning. arXiv preprint arXiv:2503.04697, 2025.
+- <span id="page-9-4"></span>[2] ByteDance Seed Team. Seed-oss open-source models. <https://github.com/ByteDance-Seed/seed-oss>, 2025.
+- <span id="page-9-15"></span>[3] Luoxin Chen, Jinming Gu, Liankai Huang, et al. Seed-prover: Deep and broad reasoning for automated theorem proving. arXiv preprint arXiv:2507.23726, 2025.
+- <span id="page-9-8"></span>[4] Rewon Child, Scott Gray, Alec Radford, and Ilya Sutskever. Generating long sequences with sparse transformers. arXiv preprint arXiv:1904.10509, 2019.
+- <span id="page-9-10"></span>[5] Ganqu Cui, Yuchen Zhang, Jiacheng Chen, Lifan Yuan, Zhi Wang, Yuxin Zuo, Haozhan Li, Yuchen Fan, Huayu Chen, Weize Chen, et al. The entropy mechanism of reinforcement learning for reasoning language models. arXiv preprint arXiv:2505.22617, 2025.
+- <span id="page-9-14"></span>[6] Ganqu Cui et al. Process reinforcement through implicit rewards. arXiv preprint arXiv:2502.01456, 2025.
+- <span id="page-9-2"></span>[7] DeepSeek-AI. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint arXiv:2501.12948, 2025.
+- <span id="page-9-9"></span>[8] Aniket Anand Deshmukh, Urun Dogan, and Clayton Scott. Multi-task learning for contextual bandits. In NeurIPS, 2017.
+- <span id="page-9-7"></span>[9] John C. Duchi, Peter L. Bartlett, and Martin J. Wainwright. Randomized smoothing for stochastic optimization. SIAM Journal on Optimization, 22(2):674–701, 2012.
+- <span id="page-9-13"></span>[10] Google DeepMind. Alphacode 2 technical report. Google DeepMind Blog, December 2023.
+- <span id="page-9-3"></span>[11] Google DeepMind. Gemini 2.5: Deep think is now rolling out. Google Blog, August 2025.
+- <span id="page-9-0"></span>[12] Jordan Hoffmann, Sebastian Borgeaud, Arthur Mensch, et al. Training compute-optimal large language models. In NeurIPS, 2022.
+- <span id="page-9-5"></span>[13] Jian Hu, Xibin Wu, Weixun Wang, Xianyu, Dehao Zhang, and Yu Cao. Openrlhf: An easy-to-use, scalable and high-performance rlhf framework. arXiv preprint arXiv:2405.11143, 2024.
+- <span id="page-9-11"></span>[14] Jian Hu, Jason Klein Liu, Haotian Xu, and Wei Shen. Reinforce++: A simple and efficient approach for aligning large language models. arXiv preprint arXiv:2501.03262, 2025.
+- <span id="page-9-12"></span>[15] Thomas Hubert, Rishi Mehta, Laurent Sartran, et al. Olympiad-level formal mathematical reasoning with reinforcement learning. Nature, 2025.
+- <span id="page-9-1"></span>[16] Jared Kaplan, Sam McCandlish, Tom Henighan, et al. Scaling laws for neural language models. arXiv preprint arXiv:2001.08361, 2020.
+
+- <span id="page-10-9"></span>[17] Angelos Katharopoulos, Apoorv Vyas, Nikolaos Pappas, and François Fleuret. Transformers are rnns: Fast autoregressive transformers with linear attention. In International conference on machine learning, pages 5156– 5165. PMLR, 2020.
+- <span id="page-10-16"></span>[18] Kimi Team. Kimi k1.5: Scaling reinforcement learning with llms. arXiv preprint arXiv:2501.12599, 2025.
+- <span id="page-10-20"></span>[19] Aviral Kumar, Vincent Zhuang, Rishabh Agarwal, Yi Su, Mitchell Wortsman, Samy Bengio, Mohammad Norouzi, et al. Training language models to self-correct via reinforcement learning. ICLR, 2025.
+- <span id="page-10-11"></span>[20] Joel Lehman, Jonathan Gordon, Shawn Jain, Kamal Ndousse, Cathy Yeh, and Kenneth O. Stanley. Evolution through large models. In Handbook of Evolutionary Machine Learning, pages 331–366. Springer, 2024.
+- <span id="page-10-10"></span>[21] Yujia Li, David Choi, Junyoung Chung, et al. Competition-level code generation with alphacode. Science, 378 (6624):1092–1097, 2022.
+- <span id="page-10-18"></span>[22] Hunter Lightman, Vineet Kosaraju, Yura Burda, et al. Let's verify step by step. In ICLR, 2024.
+- <span id="page-10-21"></span>[23] Yong Lin, Shange Tang, Bohan Lyu, et al. Goedel-prover-v2: Scaling formal theorem proving with scaffolded data synthesis and self-correction. arXiv preprint arXiv:2508.03613, 2025.
+- <span id="page-10-5"></span>[24] Mingjie Liu, Shizhe Diao, Ximing Lu, Jian Hu, Xin Dong, Yejin Choi, Jan Kautz, and Yi Dong. Prorl: Prolonged reinforcement learning expands reasoning boundaries in large language models. arXiv preprint arXiv:2505.24864, 2025.
+- <span id="page-10-7"></span>[25] Wei Liu, Ruochen Zhou, Yiyun Deng, Yuzhen Huang, Junteng Liu, Yuntian Deng, Yizhe Zhang, and Junxian He. Learn to reason efficiently with adaptive length-based reward shaping. arXiv preprint arXiv:2505.15612, 2025.
+- <span id="page-10-17"></span>[26] Zichen Liu, Changyu Chen, Wenjun Li, et al. Understanding r1-zero-like training: A critical perspective. arXiv preprint arXiv:2503.20783, 2025.
+- <span id="page-10-8"></span>[27] Yurii Nesterov and Vladimir Spokoiny. Random gradient-free minimization of convex functions. Foundations of Computational Mathematics, 17(2):527–566, 2017.
+- <span id="page-10-12"></span>[28] Alexander Novikov, Ngan Vu, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt Wagner, et al. Alphaevolve: A coding agent for scientific and algorithmic discovery. arXiv preprint arXiv:2506.13131, 2025.
+- <span id="page-10-1"></span>[29] OpenAI. Learning to reason with llms. OpenAI Blog, September 2024.
+- <span id="page-10-19"></span>[30] Yuxiao Qu, Matthew Y. R. Yang, Amrith Setlur, Lewis Tunstall, Edward Emanuel Beeching, Ruslan Salakhutdinov, and Aviral Kumar. Optimizing test-time compute via meta reinforcement fine-tuning. arXiv preprint arXiv:2503.07572, 2025.
+- <span id="page-10-13"></span>[31] Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog, M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming Wang, Omar Fawzi, Pushmeet Kohli, and Alhussein Fawzi. Mathematical discoveries from program search with large language models. Nature, 625:468–475, 2024.
+- <span id="page-10-14"></span>[32] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization algorithms. arXiv preprint arXiv:1707.06347, 2017.
+- <span id="page-10-3"></span>[33] Zhihong Shao, Peiyi Wang, Qihao Zhu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv preprint arXiv:2402.03300, 2024.
+- <span id="page-10-15"></span>[34] Zhihong Shao, Yuxiang Luo, Chengda Lu, et al. Deepseekmath-v2: Towards self-verifiable mathematical reasoning. arXiv preprint arXiv:2511.22570, 2025.
+- <span id="page-10-4"></span>[35] Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. arXiv preprint arXiv:2409.19256, 2024.
+- <span id="page-10-6"></span>[36] Aaditya Singh, Adam Fry, Adam Perelman, Adam Tart, Adi Ganesh, Ahmed El-Kishky, Aidan McLaughlin, Aiden Low, AJ Ostrow, Akhila Ananthram, et al. Openai gpt-5 system card. arXiv preprint arXiv:2601.03267, 2025.
+- <span id="page-10-2"></span>[37] Charlie Snell, Jaehoon Lee, Kelvin Xu, and Aviral Kumar. Scaling llm test-time compute optimally can be more effective than scaling model parameters. arXiv preprint arXiv:2408.03314, 2024.
+- <span id="page-10-0"></span>[38] Rich Sutton. The bitter lesson. <http://www.incompleteideas.net/IncIdeas/BitterLesson.html>, 2019.
+
+- <span id="page-11-11"></span>[39] Peiyi Wang, Lei Li, Zhihong Shao, Runxin Xu, Damai Dai, Yifei Li, Deli Chen, Yu Wu, and Zhifang Sui. Math-shepherd: Verify and reinforce llms step-by-step without human annotations. ACL, 2024.
+- <span id="page-11-4"></span>[40] Xuezhi Wang, Jason Wei, Dale Schuurmans, et al. Self-consistency improves chain of thought reasoning in language models. In ICLR, 2023.
+- <span id="page-11-1"></span>[41] Zihan Wang, Jiaze Chen, Zhicheng Liu, et al. Aethercode: Evaluating llms' ability to win in premier programming competitions. arXiv preprint arXiv:2508.16402, 2025.
+- <span id="page-11-0"></span>[42] Jason Wei, Xuezhi Wang, Dale Schuurmans, et al. Chain-of-thought prompting elicits reasoning in large language models. In NeurIPS, 2022.
+- <span id="page-11-5"></span>[43] Ran Xin, Chenguang Xi, Jie Yang, et al. Bfs-prover: Scalable best-first tree search for llm-based automatic theorem proving. ACL, 2025.
+- <span id="page-11-10"></span>[44] Ran Xin, Zeyu Zheng, Yanchen Nie, Kun Yuan, and Xia Xiao. Scaling up multi-turn off-policy rl and multi-agent tree search for llm step-provers. arXiv preprint arXiv:2509.06493, 2025.
+- <span id="page-11-7"></span>[45] An Yang et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388, 2025.
+- <span id="page-11-3"></span>[46] Qiying Yu, Zheng Zhang, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint arXiv:2503.14476, 2025.
+- <span id="page-11-8"></span>[47] Yang Yue, Zhiqi Chen, Rui Lu, Andrew Zhao, Zhaokai Wang, Yang Yue, Shiji Song, and Gao Huang. Does reinforcement learning really incentivize reasoning capacity in llms beyond the base model? arXiv preprint arXiv:2504.13837, 2025.
+- <span id="page-11-9"></span>[48] Weihao Zeng et al. Simplerl-zoo: Investigating and taming zero reinforcement learning for open base models. arXiv preprint arXiv:2503.18892, 2025.
+- <span id="page-11-6"></span>[49] Dan Zhang, Sining Zhoubian, Ziniu Hu, Yisong Yue, Yuxiao Dong, and Jie Tang. Rest-mcts\*: Llm self-training via process reward guided tree search. NeurIPS, 2024.
+- <span id="page-11-2"></span>[50] Zilin Zhu and Chengxing Xie. slime: An llm post-training framework for rl scaling. [https://github.com/THUDM/](https://github.com/THUDM/slime) [slime](https://github.com/THUDM/slime), 2025.
+
+# **Appendix**
+
+# <span id="page-12-0"></span>**A Ablation on Number of Verdicts in Parallel Thinking**
+
+In this section, we ablate how the number of verification verdicts V affects the accuracy of the parallel thinking pipeline described in [Section 3.](#page-3-2) All experiments use an early checkpoint of the end-to-end RL model trained with turn-grouped GRPO and fix M=1, i.e., no refinement, isolating the contribution of verification from sequential scaling.
+
+<span id="page-12-1"></span>[Figure 7](#page-12-1) shows accuracy as a function of threads N for V ∈ {1, 2, 4, 8} verdicts. Increasing V consistently improves accuracy at every thread count, but the gains are modest: at N=8, moving from V =1 to V =8 improves accuracy from ∼0.43 to ∼0.48, while the oracle pass@8 sits at ∼0.54. The persistent gap indicates that the verification capability to distinguish correct from incorrect solutions, rather than the number of ranking samples, is the primary bottleneck. Prolonged verification RL training and more diverse verification data, for instance, are promising directions for closing this gap. This observation also motivates the sequential refinement approach in [Section 3.3,](#page-7-0) which uses the diagnostic information in negative verdicts to improve solutions rather than only rank them.
+
+> **[图片提取文字 (无描述)]:**
+> 0.55 -0.50 -Accuracy 0.45 -0.40 -Oracle pass@N--- V = 8 -- V = 4 -0-V=20.35 ---- V = 1 Threads N
+![](_page_12_Figure_4.jpeg)
+
+**Figure 7** Parallel scaling accuracy versus number of threads N for varying verdicts V ∈ {1, 2, 4, 8} (colored), with M=1, i.e., no refinement. More verdicts improve ranking quality, but the gap to the oracle pass@N (dashed) remains substantial, suggesting that verifier capability is the primary bottleneck.
+
+### **B** Oracle Pass Rate Scaling
+
+In this section, we evaluate the oracle pass@k scaling behavior of three key checkpoints in our training pipeline: (1) the SFT cold-start checkpoint, (2) the verification RL checkpoint, and (3) the generation RL checkpoint initialized from verification RL<sup>4</sup>, i.e., the full pipeline of Figure 3. We sample up to k=256 generations per problem, and the token budget is computed as k times the average generation length. Experimental results are shown in Figure 8 and two remarks are in order.
+
+Verification RL improves per-sample quality but not coverage. The verification RL checkpoint, despite not being trained on generation, improves over SFT at low k, e.g.,  $\sim 0.26$  versus  $\sim 0.20$  at pass@1, consistent with our hypothesis in Section 2.3 that verification training transfers evaluative capabilities that benefit generation. However, the two checkpoints converge to  $\sim 0.57-0.59$  at pass@256, suggesting that verification RL increases per-sample success rate rather than expanding the set of reachable solutions by, e.g., avoiding common errors.
+
+<span id="page-13-1"></span>**Generation RL expands solution coverage.** The generation RL checkpoint maintains a substantial lead at  $\sim 0.73$  pass@256. Since the gap persists even at large k where sampling diversity is high, generation RL genuinely expands solution coverage beyond what SFT can reach at any sampling budget. This contrasts with the finding of [47], which observes that RL does not expand reasoning beyond the base model on mathematical reasoning tasks. A possible explanation is that competitive programming, with its combinatorially richer solution space and execution-based reward signal, provides a stronger training signal for RL to discover novel strategies outside the SFT distribution.
+
+> **[图片提取文字 (无描述)]:**
+> 0.70 -0.60 -0.50 - $\operatorname{pass@k}$ 0.40 -0.30 -Gen. RL after Ver. RL Verification RL 0.20 -SFT cold start 200k16M20k 60k600k2M6MToken budget (log scale)
+![](_page_13_Figure_4.jpeg)
+
+Figure 8 Oracle pass@k versus token budget for three training stages: SFT cold start, verification RL, and generation RL after verification RL. Generation RL dominates at every token budget. The gap persists even at pass@256, indicating that RL can expand solution coverage beyond the SFT frontier rather than merely concentrating probability on existing solutions.
+
+<span id="page-13-0"></span><sup>&</sup>lt;sup>4</sup>As in Section 3.3, we use an earlier generation RL checkpoint with ~0.38 accuracy and ~65.5K average generation length rather than the final one, which exceeds 100K tokens. See Figure 4 (right) for the corresponding scaling curve.
+
+# **C Prompt Templates**
+
+We provide the prompt templates used for each role in the parallel thinking pipeline described in [Section 3.](#page-3-2) In all templates, {problem} denotes the problem statement including input/output format and examples, {solution} denotes the candidate solution with its explanation and code, and {verdict\_reasoning} denotes the verification reasoning from the previous round.
+
+#### **Generation**
+
+You are solving the given programming contest problem with a C++ solution.
+
+{problem}
+
+#### **Verification**
+
+You are given a programming contest problem and a proposed solution. Your task is to determine whether the solution is correct (should receive Accepted) or incorrect (e.g., Wrong Answer, Time Limit Exceeded, Runtime Error, etc.).
+
+Important requirements:
+
+- Carefully reason about all edge cases and constraints.
+- If you decide the solution is incorrect, you MUST identify at least one clear reason, such as a logical flaw, missing case, incorrect complexity, or a specific counterexample.
+- A counterexample should be described concretely (e.g., a specific input and what goes wrong).
+- Do NOT hedge: pick exactly one verdict, Correct or Incorrect.
+
+Your response MUST follow EXACTLY this format (with no extra text before or after):
+
+```
+Line 1: "Verdict: Correct." or "Verdict: Incorrect."
+```
+
+Line 2+: One or few short paragraphs explaining the reasoning for that verdict. If Incorrect, you MUST mention at least one specific failing scenario, logical flaw, or counterexample.
+
+{problem}
+
+{solution}
+
+# **Refinement**
+
+You are correcting a programming contest submission. A judge provided a verdict explaining why the prior attempt failed. Read the feedback carefully and emit an improved C++ solution. The judge feedback may be noisy and the previous solution might actually be correct, but you must still output a solution using the same format (solution explanation followed by reference code).
+
+```
+{problem}
+{solution}
+{verdict_reasoning}
+```

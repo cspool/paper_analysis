@@ -1,0 +1,549 @@
+## ADJOINT SHARDING FOR VERY LONG CONTEXT TRAINING OF STATE SPACE MODELS
+
+Xingzi Xu <sup>1</sup>,2<sup>∗</sup> Amir Tavanaei <sup>1</sup> Kavosh Asadi <sup>1</sup> Karim Bouyarmane <sup>1</sup>
+
+<sup>1</sup> Amazon Seattle, WA 98109, USA {xingzixu,atavanae,kavasadi,bouykari}@amazon.com
+
+<sup>2</sup> Duke University Durham, NC 27708, USA xingzi.xu@duke.edu
+
+December 31, 2024
+
+## ABSTRACT
+
+Despite very fast progress, efficiently training large language models (LLMs) in very long contexts remains challenging. Existing methods fall back to training LLMs with short contexts (a maximum of a few thousands tokens in training) and use inference time techniques when evaluating on long contexts (above 1M tokens context window at inference). As opposed to long-context-inference, training on very long context input prompts is quickly limited by GPU memory availability and by the prohibitively long training times it requires on state-of-the-art hardware. Meanwhile, many real-life applications require not only inference but also training/fine-tuning with long context on specific tasks. Such applications include, for example, augmenting the context with various sources of raw reference information for fact extraction, fact summarization, or fact reconciliation tasks. We propose adjoint sharding, a novel technique that comprises sharding gradient calculation during training to reduce memory requirements by orders of magnitude, making training on very long context computationally tractable. Adjoint sharding is based on the adjoint method and computes equivalent gradients to backpropagation. We also propose truncated adjoint sharding to speed up the algorithm while maintaining performance. We provide a distributed version, and a paralleled version of adjoint sharding to further speed up training. Empirical results show the proposed adjoint sharding algorithm reduces memory usage by up to 3X with a 1.27B parameter large language model on 1M context length training. This allows to increase the maximum context length during training or fine-tuning of a 1.27B parameter model from 35K tokens to above 100K tokens on a training infrastructure composed of five AWS P4 instances. [3](#page-0-0)
+
+## 1 Introduction
+
+Foundation models are a new paradigm in artificial intelligence research focused on building large, general-purpose models that adapt to different tasks [\[44,](#page-12-0) [40,](#page-11-0) [7,](#page-10-0) [51\]](#page-12-1). Extensive training on large datasets equips foundation models with broad capabilities, which are then fine-tuned on smaller datasets for specific applications. Foundation models commonly employ the transformer architecture [\[60\]](#page-12-2). Despite the immense success, training transformer-based models requires memory growing quadratically with the context length L, limiting their applications on long context tasks [\[36\]](#page-11-1). Researchers developed various techniques to conquer this problem, ranging from inference time context window expansion [\[19,](#page-10-1) [18\]](#page-10-2), IO-aware algorithms [\[16,](#page-10-3) [13,](#page-10-4) [55\]](#page-12-3), and various linearly scaling language model architectures [\[23,](#page-11-2) [15,](#page-10-5) [49,](#page-12-4) [6\]](#page-10-6). On another note, distributed learning enables training large models with a big number of GPUs, and efficient
+
+<sup>∗</sup>Work done during internship at Amazon.
+
+<span id="page-0-0"></span><sup>3</sup>Additional material for this paper can be found at: <https://adjoint-sharding.github.io>.
+
+![](_page_1_Figure_1.jpeg)
+
+Figure 1: Compared to backpropagation (red lines), adjoint sharding (blue lines) significantly reduces memory requirements at training. Showing memory cost to train 32M, 63M, 127M, 225M, and 1.27B parameter State Space Model (SSM) with batch size 2 and Adam optimizer on one GPU.
+
+training methods like activation checkpointing, model/gradient sharding, and mixed-precision computing have further reduced the memory requirement of training a large model [\[61,](#page-12-5) [69,](#page-13-0) [53,](#page-12-6) [41,](#page-11-3) [30\]](#page-11-4). However, current methodologies are entirely based on backpropagation and compute the gradient as a whole, inevitably requiring a memory growing rapidly with model size and context length [\[12\]](#page-10-7). Current sharding methods ignore the activations and only consider the model weights and optimizer states, constituting only a small fraction of the total memory cost [\[56\]](#page-12-7). Activation checkpointing is among the limited techniques that consider activation values. Activation checkpointing offloads necessary intermediate states to the CPU and recompute them on the fly, trading compute time for memory reduction [\[56,](#page-12-7) [52\]](#page-12-8). The substantial time required for offloading to the CPU hinders the effectiveness of activation checkpointing.
+
+We propose adjoint sharding to dissemble gradient computation of residual and/or recurrent based models to achieve orders of magnitude lower memory usage during training.
+
+Adjoint method The adjoint sharding method is based on the adjoint method for recurrent models [\[8,](#page-10-8) [32\]](#page-11-5). Given an optimization problem of a parametric recurrent forward process, the adjoint method is concerned with computations of the gradients regarding the process's parameters. Backpropagation saves intermediate states to calculate gradients, whereas the adjoint method relies on a backward adjoint process to compute gradients. The adjoint method is a constant-memory optimization technique for dynamical systems [\[9,](#page-10-9) [66\]](#page-13-1). In this paper, we are only concerned with the adjoint method for recurrent relations.
+
+Vector-Jacobian product Adjoint sharding dissembles the gradient computation of a large language model (LLM) into independent vector-Jacobian product (VJP) computations. By left-multiplying the Jacobian with a vector, it becomes unnecessary to compute the expensive Jacobian. Modern VJPs are as fast as a forward function call of the model, and can be thousands of times faster than Jacobian computations [\[2\]](#page-10-10). We speed up adjoint sharding by employing the VJPs.
+
+![](_page_1_Figure_7.jpeg)
+
+Figure 2: Adjoint sharding dissembles large models' gradient computations along the sequence dimension t and the layer dimension k. When evaluating the gradient at time t, we perform t vector-Jacobian products along the adjoint dimension i for every layer indices k.
+
+**Truncated adjoint sharding** Sharding the gradient computation allows us to prioritize the important gradients and disregard the rest, resulting in faster computation. We term this novel method truncated adjoint sharding, and empirically showcase its performance.
+
+**Distributed and parallel computation** In addition, we have developed a distributed multi-GPU variant of adjoint sharding to further improve the scalability of LLM training. We also analyze the memory cost of parallel computation of adjoint sharding, opening up directions for massive speedups.
+
+**State-space models and residual networks** Residual networks (ResNets) are a commonly applied neural network structure. We illustrate adjoint sharding assuming a ResNet structure [28]. State-space models (Mamba) have achieved performances on par with attention based models while possessing a linear scaling regarding the context length L, a polynomial speedup compared to the  $L^2$  scaling of transformers [60, 22].
+
+#### 2 Related works
+
+**Linear LLMs** [17, 5, 49] proposed LLM architectures with a linear inference time complexity. Each of them is formed by stacking K residual layers together, where each layer has a recurrent relation. However, their temporal relationships are nonlinear, which limits the application of adjoint sharding to dissemble the gradients into independent vector-Jacobian products.
+
+**Backpropagation through time** Applying the adjoint method for recurrent models leads to backpropagation through time (BPTT) [64]. BPTT is a training algorithm developed for recurrent neural networks (RNNs). RNN models suffer from the exploding and vanishing gradient because of the  $\prod_{j=i+1}^t \partial \mathbf{f}(\mathbf{x}^j, \mathbf{h}^{j-1}, \mathbf{W_h})/\partial \mathbf{h}^{j-1}$  term [46]. SSMs provide remedies with careful parameterization of the recurrent dynamics inspired by classical SSM theory [21, 24, 25, 27, 45, 33]. Linear temporal relations allow efficient evaluations of the model, while preserving universal approximation capabilities [63]. By a similar token, truncated adjoint sharding can be seen as a more general version of the truncated backpropagation through time [31, 57].
+
+**Neural ordinary differential equations** The adjoint method has also been applied to the optimization of continuous systems, especially the ordinary differential equations (ODEs) [9, 20]. Optimizing neural ODEs with autograd requires backpropagating through numerical solvers along every step, using an unrealistic amount of memory. The adjoint method does not backpropagate through the operations of the solver and uses a constant amount of memory. However, applying the adjoint method for continuous systems requires solving a costly ODE initial value problem with dimensionality of the number of parameters.
+
+Low memory training methods Researchers proposed various low memory training techniques to train big models in long contexts. ZERO provides data- and model-parallel training while retaining low communication volume, while eliminating memory redundancies [53]. PyTorch FSDP provides a streamline for model, gradient, and data parallelization [69]. Activation checkpointing discards intermediate values during the forward step, and recompute on the fly during the training phase [56]. CPU offloading scales large model training by offloading data and computations to the CPU, trading computing time for memory reduction [54]. Ring attention leverages the blockwise computation of self-attention and feedforward to distribute long sequences across multiple devices while fully overlapping the communication of key-value blocks with the computation of blockwise attention, enabling very-long context training of attention-based methods [38, 39]. The proposed adjoint sharding distributes state-space model computations across multiple devices as well as multiple multi-GPU-instances (MIG) to enable very-long context training of state-space models.
+
+Context length extension methods Existing context length extension method separate into two classes. The first type is fine-tuning free methods, including Positional Interpolation (PI) [10], the NTKAware Scale ROPE (NTK) [59], and StreamingLLM [65]. The second type is fine-tuning methods, including LongChat [35], LongAlpaca [11], YaRN [50], and LongLlama [11]. Additional methods such as activation beacon do tune a network separate from the LLM [68]. As shown in Figure 3, fine-tuning methods achieve better performances than that of fine-tuning free methods at lengths that they have been fine-tuned on. However, fine-tuning methods suffer from a high computational cost and require a potentially intractable amount of GPU memory during fine-tuning.
+
+<span id="page-3-0"></span>![](_page_3_Figure_1.jpeg)
+
+Figure 3: Lines in red are fine-tuning free methods and lines in blue are fine-tuning methods. Fine-tuning methods achieve better performances than fine-tuning free method but often suffer from out of memory issues [10, 59, 65, 35, 11, 50, 68, 58]. Lower values are better across all three tasks.
+
+### 3 Background
+
+We first give a concise introduction to the state-space models, the residual networks, and the adjoint method.
+
+#### 3.1 State-space models
+
+While our method generally applies to all recurrent models, we illustrate the idea using state-space models (SSMs), which have shown performances at least on par with transformers at small to medium scale [14]. Given an input token sequence  $\{\mathbf{x}_t\}_{t=1}^T$ , the SSMs first calculate the corresponding matrices  $\mathbf{A}^t$ ,  $\mathbf{B}^t$ , and  $\mathbf{C}^t$  to evolve the dynamics as follows:
+
+$$\mathbf{A}^t = \mathcal{A}(\mathbf{x}^t); \ \mathbf{B}^t = \mathcal{B}(\mathbf{x}^t); \ \mathbf{C}^t = \mathcal{C}(\mathbf{x}^t).$$
+
+The SSMs evolve a latent dynamics  $\mathbf{h}^t$ , whose initial condition  $\mathbf{h}^0$  is often assumed to be zero. With  $\mathbf{h}^0$  and  $\mathbf{A}^t$ ,  $\mathbf{B}^t$  defined, the dynamics evolves as:
+
+$$\mathbf{h}^t = \mathbf{A}^t \mathbf{h}^{t-1} + \mathbf{B}^t \mathbf{x}^t$$
+
+The matrices  $\mathbf{C}^t$  then maps the latent dynamics  $\mathbf{h}^t$  back to token space as  $\mathbf{y}^t = \mathbf{C}^t \mathbf{h}^t$ , with  $\mathbf{y}^t$  being the predicted token at t. For a sequence of T tokens, we denote:
+
+$$\mathbf{A} = (\mathbf{A}^1, \mathbf{A}^2, \dots, \mathbf{A}^T), \ \mathbf{B} = (\mathbf{B}^1, \mathbf{B}^2, \dots, \mathbf{B}^T), \ \mathbf{C} = (\mathbf{C}^1, \mathbf{C}^2, \dots, \mathbf{C}^T),$$
+$$\mathbf{H} = (\mathbf{h}^1, \mathbf{h}^2, \dots, \mathbf{h}^T), \ \mathbf{X} = (\mathbf{x}^1, \mathbf{x}^2, \dots, \mathbf{x}^T), \ \mathbf{Y} = (\mathbf{y}^1, \mathbf{y}^2, \dots, \mathbf{y}^T).$$
+
+In the most general case, we have  $\mathbf{H} \in \mathbb{R}^{T \times N}, \mathbf{A} \in \mathbb{R}^{T \times N \times N}, \mathbf{B} \in \mathbb{R}^{T \times N \times P}, \mathbf{C} \in \mathbb{R}^{T \times P \times N}, \mathbf{X} \in \mathbb{R}^{T \times P}, \mathbf{Y} \in \mathbb{R}^{T \times P}$ , where N is the hidden state dimension, and P is the input/output dimension. We evolve the dynamics for  $t = 1, \dots, T$ , and assume that  $\mathbf{h}^0$  is a fixed and predefined constant.
+
+The input to an SSM is **X** and  $\mathbf{h}^0$ , and the output is **Y**. We define SSM(·) as performing the following five steps:
+
+- 1.  $\{\mathbf{A}^t\}_{t=1}^T = \{\mathcal{A}(\mathbf{x}^t)\}_{t=1}^T$ ,
+- 2.  $\{\mathbf{B}^t\}_{t=1}^T = \{\mathbf{\mathcal{B}}(\mathbf{x}^t)\}_{t=1}^T$ ,
+- 3.  $\{\mathbf{C}^t\}_{t=1}^T = \{\mathcal{C}(\mathbf{x}^t)\}_{t=1}^T$ ,
+- 4.  $\{\mathbf{h}^t\}_{t=1}^T = \{\mathbf{A}^t \mathbf{h}^{t-1} + \mathbf{B}^t \mathbf{x}^t\}_{t=1}^T;$
+- 5.  $\{\mathbf{y}^t\}_{t=1}^T = \{\mathbf{C}^t \mathbf{h}^t\}_{t=1}^T$ .
+
+The input to the five steps is X, and the output is Y. We can then write SSM(X) = Y. SSMs decrease the quadratic computational complexity with sequence length on transformers to linear and decrease the large inference-time memory requirements from the key-value cache. SSM-based models at a small to medium scale have shown performances on par with or better than transformer-based models. For instance, [51, 1] shows that SSM-based mixture-of-experts
+
+(MOE) model outperforms baseline transformer-based MOE model on model sizes as big as 2400M parameters. [62] performed an extensive empirical study and found that while SSMs outperform transformers on various tasks, they underperform on tasks which require strong copying, in-context learning, or long-context reasoning abilities. [62] also experimented with a SSM-transformer hybrid model, which outperforms transformers and is up to eight times faster when generating tokens at inference time. [37] trained a 52B parameter model and further affirmed the hybrid models performances.
+
+#### <span id="page-4-1"></span>3.2 Residual Networks
+
+In practice, we have K SSMs stacked together, and we have a large language head (LLH)  $\Omega \in \mathbb{R}^{\mathbb{T} \times P}$ , where  $\mathbb{T}$  is the number of all possible tokens. To predict a token, we have  $\mathbf{o}^t = \Omega \hat{\mathbf{y}}_K^t$ . Define  $(\mathbf{y}_K^1, \dots, \mathbf{y}_K^T) = \mathbf{Y}_K$ , a ResNet computes  $\mathbf{Y}_K$  as follows:
+
+$$(\mathbf{y}_{K}^{1}, \dots, \mathbf{y}_{K}^{T}) = \mathbf{Y}_{K-1} + \mathrm{SSM}_{K}(\hat{\mathbf{Y}}_{K-1})$$
+
+$$= \mathbf{Y}_{0} + \mathrm{SSM}_{1}(\hat{\mathbf{Y}}_{0}) + \dots + \mathrm{SSM}_{K}(\hat{\mathbf{Y}}_{K-1})$$
+
+$$= \mathbf{Y}_{0} + \sum_{k=1}^{K} \mathrm{SSM}_{k}(\hat{\mathbf{Y}}_{k-1}) = \mathbf{Y}_{0} + \sum_{k=1}^{K} \tilde{\mathbf{Y}}_{k},$$
+
+where  $\hat{\mathbf{Y}}_k = (\hat{\mathbf{y}}_k^1, \dots, \hat{\mathbf{y}}_k^T) = (\operatorname{Norm}(\mathbf{y}_k^1), \dots, \operatorname{Norm}(\mathbf{y}_k^T))$  and  $\operatorname{SSM}_k(\hat{\mathbf{Y}}_{k-1}) = \tilde{\mathbf{Y}}_k$ . Therefore, for a latent state at time t we have  $\mathbf{y}_K^t = \mathbf{y}_0^t + \sum_{k=1}^K \tilde{\mathbf{y}}_k^t$ .
+
+ResNet has been the foundation of numerous modern networks, including the transformers, diffusion models, segmentation models, SSMs, and more [29, 26, 34, 48]. ResNet's residual structure allows for a separation between gradients of each layer by applying differentiation on summations.
+
+#### 3.3 Adjoint method
+
+The adjoint method is concerned with optimizing  $\mathbf{y}(\mathbf{h}(\boldsymbol{\theta}), \boldsymbol{\theta})$  with respect to  $\boldsymbol{\theta}$ , where  $\mathbf{h}(\boldsymbol{\theta}) \in \mathbb{R}^P$  is the solution to  $\mathbf{f}(\mathbf{h}(\boldsymbol{\theta}), \boldsymbol{\theta}) = 0$  [8]. To employ gradient based algorithms like the stochastic gradient descent (SGD) or the Adam, we compute the derivative of  $\mathbf{y}$  regarding  $\boldsymbol{\theta} \in \mathbb{R}^{|\boldsymbol{\theta}|}$ :
+
+$$\frac{\mathrm{d}\mathbf{y}}{\mathrm{d}\boldsymbol{\theta}} = \frac{\partial\mathbf{y}}{\partial\boldsymbol{\theta}} + \frac{\partial\mathbf{y}}{\partial\mathbf{h}}\frac{\partial\mathbf{h}}{\partial\boldsymbol{\theta}},\tag{1}$$
+
+with d being the total derivative, and  $\partial$  being the partial derivative. The adjoint method converts computing  $d\mathbf{y}/d\boldsymbol{\theta}$  to solving an adjoint equation. In our case, we need the adjoint method for recurrence relations, where  $\mathbf{y}$  is given by  $\mathbf{y} = \mathbf{y}^t \equiv \mathbf{y}(\mathbf{h}^t(\boldsymbol{\theta}), \boldsymbol{\theta})$ , and  $\mathbf{h}$  is given by
+
+<span id="page-4-0"></span>
+$$\begin{cases} \mathbf{h}^0 &= \mathbf{b}(\boldsymbol{\theta}), \\ \mathbf{h}^t &= \mathbf{f}(t, \mathbf{h}^{t-1}, \boldsymbol{\theta}). \end{cases}$$
+ (2)
+
+We have
+
+$$\frac{\mathrm{d}\mathbf{f}(t,\mathbf{h}^{t-1},\boldsymbol{\theta})}{\mathrm{d}\boldsymbol{\theta}} = \frac{\partial\mathbf{f}(t,\mathbf{h}^{t-1},\boldsymbol{\theta})}{\partial\boldsymbol{\theta}} + \frac{\partial\mathbf{f}(t,\mathbf{h}^{t-1},\boldsymbol{\theta})}{\partial\mathbf{h}^{t-1}} \frac{\partial\mathbf{h}^{t-1}}{\partial\boldsymbol{\theta}}.$$
+ (3)
+
+<span id="page-4-2"></span>**Proposition 1** [8] When the states  $\mathbf{h}$  are defined as Equation 2, the gradient of  $\mathbf{y}$  with respect to  $\boldsymbol{\theta}$  is given as:
+
+$$\begin{cases}
+d\mathbf{y}^{t}/d\boldsymbol{\theta} &= \partial \mathbf{y}^{t}/\partial \boldsymbol{\theta} + \boldsymbol{\lambda}^{0} \mathbf{b}(\boldsymbol{\theta}) + \sum_{i=1}^{t} \boldsymbol{\lambda}^{i} \left( \partial \mathbf{f}(i, \mathbf{h}^{i-1}, \boldsymbol{\theta}) / \partial \boldsymbol{\theta} \right), \\
+\boldsymbol{\lambda}^{t} &= \partial \mathbf{y}^{t}/\partial \mathbf{h}^{t}, \\
+\boldsymbol{\lambda}^{i-1} &= \boldsymbol{\lambda}^{i} \left( \partial \mathbf{f}(i, \mathbf{h}^{i-1}, \boldsymbol{\theta}) / \partial \mathbf{h}^{i-1} \right).
+\end{cases} \tag{4}$$
+
+Equivalently, we have  $\lambda^i = (\partial \mathbf{y}^t / \partial \mathbf{h}^t) \left( \prod_{j=t}^{i+1} \left( \partial \mathbf{f}(j, \mathbf{h}^{j-1}, \boldsymbol{\theta}) / \partial \mathbf{h}^{j-1} \right) \right)$  [32].
+
+After computing adjoint states  $\{\lambda^i\}_{i=0}^t$ , the computation of the elements of  $\lambda^i(\partial \mathbf{f}(i,\mathbf{h}^{i-1},\boldsymbol{\theta})/\partial\boldsymbol{\theta})$  are independent, allowing parallelism. This computation is a vector-Jacobian product (vjp), with  $\lambda^i$  as the vector and  $\partial \mathbf{f}(i,\mathbf{h}^{i-1},\boldsymbol{\theta})/\partial\boldsymbol{\theta}$  as the Jacobian. vjps can be evaluated with the reverse-mode automatic differentiation and initializing the reverse phase with  $\lambda^i$  [3]. As each vjp only requires saving their corresponding computation graph, and can be disposed
+
+after the computation, we can compute vjps in parallel on modern GPUs. We will discuss this in more details in subsection 4.5. Adjoint sharding aims to use the adjoint method to replace backpropagation, which solves:
+
+$$\begin{split} \frac{\mathrm{d}\mathbf{y}^{t}}{\mathrm{d}\boldsymbol{\theta}} &= \frac{\partial\mathbf{y}^{t}}{\partial\boldsymbol{\theta}} + \frac{\partial\mathbf{y}^{t}}{\partial\mathbf{h}^{t}} \bigg( \frac{\partial\mathbf{f}(t, \mathbf{h}^{t-1}, \boldsymbol{\theta})}{\partial\boldsymbol{\theta}} + \frac{\partial\mathbf{f}(t, \mathbf{h}^{t-1}, \boldsymbol{\theta})}{\partial\boldsymbol{h}^{t-1}} \\ & \bigg[ \frac{\partial\mathbf{f}(t-1, \mathbf{h}^{t-2}, \boldsymbol{\theta})}{\partial\boldsymbol{\theta}} + \frac{\partial\mathbf{f}(t-1, \mathbf{h}^{t-2}, \boldsymbol{\theta})}{\partial\boldsymbol{h}^{t-2}} \bigg\{ \frac{\partial\mathbf{f}(t-2, \mathbf{h}^{t-3}, \boldsymbol{\theta})}{\partial\boldsymbol{\theta}} + \dots \bigg\} \bigg] \bigg). \end{split}$$
+
+The backpropagation requires a sequential accumulation of the gradients, computing from the outmost layer inwards, therefore needs to save the computation graph for computations at all time t's and creates memory bottlenecks.
+
+### 4 Adjoint sharding
+
+We now introduce the adjoint sharding technique. We first illustrate the method assuming only one layer of SSM, and generalize to K layers.
+
+#### <span id="page-5-1"></span>4.1 Adjoint sharding for one SSM
+
+Large scale neural networks are usually trained with the autograd framework [4, 47]. However, this framework suffers from a high memory cost when used with networks of recurrent nature [4]. Although activation checkpointing has been developed, which discards part of the intermediate values and recomputes them later on the fly, the memory cost is still high [30]. We employ the adjoint method for recurrence relations to further reduce the memory cost, and more importantly, to break the temporal dependencies of activations and parallelize their computations.
+
+Define  $\theta = \langle \theta_{\mathcal{A}}, \theta_{\mathcal{B}}, \theta_{\mathcal{C}} \rangle$  as  $\mathcal{A}$ 's,  $\mathcal{B}$ 's, and  $\mathcal{C}$ 's parameters, for loss  $l^t = l(\mathbf{y}^t)$ , in the context of a single-layer SSM, we prove:
+
+<span id="page-5-0"></span>**Proposition 2** The gradient  $dl^t/d\theta$  is given as
+
+$$\frac{\mathrm{d}l^t}{\mathrm{d}\boldsymbol{\theta}} = \left[\sum_{i=1}^t \mathrm{vjp}_{\boldsymbol{\mathcal{A}}^i} (\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} \boldsymbol{\lambda}^{t,i} \otimes \mathbf{h}^{i-1})\right] \oplus \left[\sum_{i=1}^t \mathrm{vjp}_{\boldsymbol{\mathcal{B}}^i} (\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} \boldsymbol{\lambda}^{t,i} \otimes \hat{\mathbf{x}}^i)\right] \oplus \mathrm{vjp}_{\boldsymbol{\mathcal{C}}^t} (\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} \otimes \mathbf{h}^t), \tag{5}$$
+
+where the adjoint state  $\lambda^{t,\tau} = \mathbf{C}^t(\prod_{i=1}^{t-\tau} \mathbf{A}^{t+1-i})$ ,  $\operatorname{vjp}_{\operatorname{Net}^i}(v) = v \cdot \operatorname{Net}_{\boldsymbol{\theta}}(\operatorname{Input}^i)$ , with  $\boldsymbol{\theta}$  being  $\operatorname{Net}$ 's parameters and i being the index of  $\operatorname{Input}$ ,  $\otimes$  is the vector outer product, and  $\oplus$  is vector concatenation.
+
+<span id="page-5-2"></span>The proof of proposition 2 is in section A.1. The gradient for parameters of  $\mathcal{A}$ , and  $\mathcal{B}$  are each separated into  $\{\operatorname{vjp}_{\mathcal{A}^i}(\frac{\mathrm{d}^{l^t}}{\mathrm{d}\mathbf{y}^t}\boldsymbol{\lambda}^{t,i}\otimes\mathbf{h}^{i-1})\}_{i=1}^t,\{\operatorname{vjp}_{\mathcal{B}^i}(\frac{\mathrm{d}^{l^t}}{\mathrm{d}\mathbf{y}^t}\boldsymbol{\lambda}^{t,i}\otimes\hat{\mathbf{x}}^i)_{i=1}^t,\text{ and the gradient for parameters of }\mathcal{C}\text{ only depend on inputs at time }t.$  After computing the adjoint states, these vjp computations are separate from each other on both the network and the temporal level.
+
+![](_page_5_Figure_13.jpeg)
+
+Figure 4: The adjoint states are computed sequentially backwards.
+
+### 4.2 Adjoint sharding for multiple SSMs
+
+We now generalize the results from subsection 4.1 to the general case of K SSMs concatenated together. As introduced in subsection 3.2, the outputs of each SSM layer are added to the results of the last layer and normalized before it is fed into the next layer. Define the loss over all token predictions  $L = \sum_{t=1}^{T} l^t$ , using the residual structure we have
+
+$$\frac{\mathrm{d}L}{\mathrm{d}\boldsymbol{\theta}} = \sum_{t=1}^T \frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}_K^t} \frac{\mathrm{d}\mathbf{y}_K^t}{\mathrm{d}\boldsymbol{\theta}} = \sum_{t=1}^T \frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}_K^t} \frac{\mathrm{d}(\mathbf{y}_0^t + \sum_{k=1}^K \tilde{\mathbf{y}}_k^t)}{\mathrm{d}\boldsymbol{\theta}} = \sum_{t=1}^T \frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}_K^t} \sum_{k=1}^K \frac{\mathrm{d}\tilde{\mathbf{y}}_k^t}{\mathrm{d}\boldsymbol{\theta}}.$$
+
+Combining with proposition 2, we have
+
+<span id="page-6-0"></span>**Proposition 3** The gradient of the total loss L with respect to the SSM parameters  $\theta$  is given as
+
+$$\frac{\mathrm{d}L}{\mathrm{d}\boldsymbol{\theta}} = \left(\sum_{t=1}^{T} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\boldsymbol{\mathcal{A}}_{k}^{i}} \left(\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \mathbf{h}_{k}^{i-1}\right)\right)$$
+
+$$\oplus \left(\sum_{t=1}^{T} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\boldsymbol{\mathcal{B}}_{k}^{i}} \left(\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^{i}\right)\right)$$
+
+$$\oplus \left(\sum_{t=1}^{T} \sum_{k=1}^{K} \mathrm{vjp}_{\boldsymbol{\mathcal{C}}_{k}^{t}} \left(\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \otimes \mathbf{h}_{k}^{t}\right)\right),$$
+(6)
+
+where the input to  $\operatorname{vjp}_{\mathcal{C}_k^t}(\frac{\mathrm{d}^{l^t}}{\mathrm{d}\mathbf{y}_K^t}\otimes\mathbf{h}_k^t)$ ,  $\operatorname{vjp}_{\mathcal{A}_k^i}(\frac{\mathrm{d}^{l^t}}{\mathrm{d}\mathbf{y}_K^t}\boldsymbol{\lambda}_k^{t,i}\otimes\mathbf{h}_k^{i-1})$ , and  $\operatorname{vjp}_{\mathcal{B}_k^i}(\frac{\mathrm{d}^{l^t}}{\mathrm{d}\mathbf{y}_K^t}\boldsymbol{\lambda}_k^{t,i}\otimes\hat{\mathbf{y}}_{k-1}^i)$  are computed with the k-th SSM and the  $\hat{\mathbf{y}}_{k-1}^i=\operatorname{Norm}(\mathbf{y}_{k-2}^i+\operatorname{SSM}_{k-1}(\hat{\mathbf{Y}}_{k-2})^i)$  (the normalized output sequence of the (k-1)-th SSM). The adjoint state at layer k is defined as  $\boldsymbol{\lambda}_k^{t,\tau}=\mathbf{C}_k^t(\prod_{i=1}^{t-\tau}\mathbf{A}_{i}^{t+1-i})$ .
+
+We provide the proof to proposition 3 in section A.2. Define  $\Lambda_k^t = \{\lambda_k^{t,\tau}\}_{\tau=1}^t$ , proposition 3 shows that the gradients of each network's parameters computed with each token only correlate through the adjoint states  $\{\Lambda_k^t\}_{k,t=1,1}^{K,T}$ . The adjoint states can be easily computed after a forward pass. The adjoint states can also be computed on the fly in the gradient computation phase, as it only depends on  $\mathbf{C}_k^t$  and  $\mathbf{A}_k^t$  and has no dependencies on the network Jacobians regarding the network parameters. The adjoint sharding method breaks down the backpropagation computation both layer-wise and token-wise into foundational vjp computations that do not have any dependencies on each other.
+
+We show a schematic of the computations to  $\mathrm{d}l^t/\mathrm{d}\boldsymbol{\theta}_{\boldsymbol{\mathcal{A}}_k}$ ,  $\mathrm{d}l^t/\mathrm{d}\boldsymbol{\theta}_{\boldsymbol{\mathcal{B}}_k}$ , and  $\mathrm{d}l^t/\mathrm{d}\boldsymbol{\theta}_{\boldsymbol{\mathcal{C}}_k}$  in Figure 5 and a schematic for computing the adjoint states in Figure 4.
+
+#### 4.3 Truncated adjoint sharding
+
+One limitation of adjoint sharding is that the number of vjps performed increases polynomially regarding the number of tokens T. In particular, adjoint sharding computes the vjp for  $\mathcal{A}_k$  and  $\mathcal{B}_k$  (1+T)T/2 times, and for
+
+<span id="page-6-1"></span>![](_page_6_Figure_8.jpeg)
+
+Figure 5: Computation schematic of  $dl^t/d\theta_{A_k}$ ,  $dl^t/d\theta_{B_k}$ , and  $dl^t/d\theta_{C_k}$ .
+
+ $C_k$  T times. When training large networks with many layers and long context length T, applying adjoint sharding becomes computationally expensive. We propose truncated adjoint sharding, with which we argue that we can get similar results by computing a linearly growing number of vjps, and empirically showcase its performance.
+
+Attention mechanisms have suffered from the  $\mathcal{O}(T^2)$  complexities arising from the self-attention structure [60]. To enable training with longer context lengths, global-local attention has been proposed, where we divide the contexts into sections, and compute the attention between sections rather than tokens [67]. [57] proposed truncated backpropagation through time (T-BPTT) to avoid gradient explosion/vanishing when training with long contexts by only counting a fixed number of state transitions. Here, inspired by global-local attention and T-BPTT, instead of computing the full gradient given in Equation 11, we propose to train the SSMs to depend on up to  $\bar{T}$  states:
+
+<span id="page-6-2"></span>
+$$\frac{\mathrm{d}L}{\mathrm{d}\boldsymbol{\theta}} = \left(\sum_{t=1}^{T} \sum_{k=1}^{K} \mathrm{vjp}_{\boldsymbol{\mathcal{C}}_{k}^{t}} \left(\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \otimes \mathbf{h}_{k}^{t}\right)\right)$$
+
+$$\oplus \left(\sum_{t=1}^{\bar{T}} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\boldsymbol{\mathcal{A}}_{k}^{i}} \left(\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \mathbf{h}_{k}^{i-1}\right) + \sum_{t=\bar{T}+1}^{T} \sum_{k=1}^{K} \sum_{i=t+1-\bar{T}}^{t} \mathrm{vjp}_{\boldsymbol{\mathcal{A}}_{k}^{i}} \left(\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \mathbf{h}_{k}^{i-1}\right)\right)$$
+
+$$\oplus \left(\sum_{t=1}^{\bar{T}} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\boldsymbol{\mathcal{B}}_{k}^{i}} \left(\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^{i}\right) + \sum_{t=\bar{T}+1}^{T} \sum_{k=1}^{K} \sum_{i=t+1-\bar{T}}^{t} \mathrm{vjp}_{\boldsymbol{\mathcal{B}}_{k}^{i}} \left(\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^{i}\right)\right)$$
+
+$$(7)$$
+
+As shown in Equation 7 above, we perform the same computations for  $t=1,\ldots,\bar{T}$  as before, and only perform the vjps back to the last  $\bar{T}$  states for  $t>\bar{T}$ . With truncated adjoint sharding, we perform  $\bar{T}T+\bar{T}(\bar{T}-1)/2$  vjps, which grows linearly. We show the number of vjps performed with and without truncated adjoint sharding in Figure 6. When  $\bar{T}=2000$ , truncated adjoint sharding reduces 64% of the vjps when training with a context length of  $10\mathrm{K}$ .
+
+The essence of the truncated adjoint sharding method is that we only explicitly count gradients related to the last  $\bar{T}$  states. As each state depends on its prior state, states still implicitly depend on all their prior states. We leave investigation of  $\bar{T}$ 's impact on performances for future works.
+
+#### 4.4 Distributed training
+
+We now discuss how to distribute the storage and compute of the adjoint sharding method, assuming that we have  $\Upsilon$  GPUs. Given the networks  $\{A_k, \mathcal{B}_k, \mathcal{C}_k\}_{k=1}^K$ , initial tokens  $\{\hat{\mathbf{y}}_0^t\}_{t=1}^T = \{\text{Norm}(\mathbf{x}^t)\}_{t=1}^T$ , and initial conditions  $\{\mathbf{h}_k^0\}_{k=1}^K$  (usually set to 0), we can call algorithm 1 to get all necessary vectors for computing the gradient with adjoint sharding.
+
+#### <span id="page-7-0"></span>**Algorithm 1** Forward step in evaluation mode on a distributed system
+
+```
+1: Inputs: \{\hat{y}_0^t\}_{t=1}^T, \{\mathbf{h}_k^0\}_{k=1}^K, \{A_k, \mathcal{B}_k, \mathcal{C}_k\}_{k=1}^K, \Omega
+
+2: On devices v = 1, \dots, \Upsilon, in parallel do
+
+3: for SSM model index k = (v-1)(K//\Upsilon) + 1, \dots, v(K//\Upsilon) do
+
+4: for Time step index t = 1, \dots, T do
+
+5: Compute: \mathbf{A}_k^t = A_k(\hat{\mathbf{y}}_{k-1}^t); \mathbf{B}_k^t = \mathcal{B}_k(\hat{\mathbf{y}}_{k-1}^t); \mathbf{C}_k^t = \mathcal{C}_k(\hat{\mathbf{y}}_{k-1}^t); \mathbf{h}_k^t = \mathbf{A}_k^t \mathbf{h}_k^{t-1} + \mathbf{B}_k^t \hat{\mathbf{y}}_{k-1}^t; \mathbf{y}_k^t = \mathbf{C}_k^t \mathbf{h}_k^t.
+
+6: Compute: \mathbf{y}_k^t = \mathbf{y}_{k-1}^t + \tilde{\mathbf{y}}_k^t.
+
+7: Compute: \hat{\mathbf{y}}_k^t = \operatorname{Norm}(\mathbf{y}_k^t).
+
+8: end for
+
+9: end for
+
+10: Store: \{\mathbf{h}_k^t\}_{(t,k)=(1,(v-1)(K//\Upsilon)+1)}^{T,v(K//\Upsilon)}, \{\mathbf{C}_k^t\}_{(t,k)=(1,(v-1)(K//\Upsilon)+1)}^{T,v(K//\Upsilon)}, \{\hat{\mathbf{y}}_k^t\}_{(t,k)=(1,(v-1)(K//\Upsilon)+1)}^{T,v(K//\Upsilon)-1}, \{\hat{\mathbf{y}}_k^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}, \{\hat{\mathbf{y}}_k^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K//\Upsilon))}^{T,v(K//\Upsilon)-1}\}_{t=1}^{T}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon))}^{T,v(K/(\Upsilon))}\}_{t=1}^{T,v(K/(\Upsilon))}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon)))}^{T,v(K/(\Upsilon))}\}_{t=1}^{T,v(K/(\Upsilon))}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon))}^{T,v(K/(\Upsilon))}\}_{t=1}^{T,v(K/(\Upsilon))}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon))}^{T,v(K/(\Upsilon))}\}_{t=1}^{T,v(K/(\Upsilon))}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon))}^{T,v(K/(\Upsilon))}\}_{t=1}^{T,v(K/(\Upsilon))}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon))}^{T,v(K/(\Upsilon))}\}_{t=1}^{T,v(K/(\Upsilon))}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon))}^{T,v(K/(\Upsilon))}\}_{t=1}^{T,v(K/(\Upsilon))}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon))}^{T,v(K/(\Upsilon))}\}_{t=1}^{T,v(K/(\Upsilon))}, \{\hat{\mathbf{y}}_v^t\}_{(t,k)=(1,(v-1)(K/(\Upsilon))}^{T,v(K/(\Upsilon))}\}
+```
+
+## <span id="page-7-1"></span>**Algorithm 2** Evaluating adjoint states for token index t and ResNet index k with truncated adjoint sharding $\bar{T}$
+
+```
+1: Inputs: t, k, \bar{T}, \mathbf{C}_k^t, \{\mathbf{A}_k^i\}_{i=t+2-\bar{T}}^t
+2: Initialize adjoint state \boldsymbol{\lambda}_k^{t,t} = \mathbf{C}_k^t
+3: Compute: intermediate values:
+4: \boldsymbol{\zeta}^{\bar{T}} = (\mathbf{A}_k^t \mathbf{A}_k^{t-1} \dots \mathbf{A}_k^{t+2-\bar{T}}, \mathbf{A}_k^t \mathbf{A}_k^{t-1} \dots \mathbf{A}_k^{t+3-\bar{T}}, \dots, \mathbf{A}_k^t \mathbf{A}_k^{t-1}, \mathbf{A}_k^t, \mathbb{I}).
+5: Compute: adjoint states \bar{\boldsymbol{\Lambda}}_k^{\bar{T}} = (\boldsymbol{\lambda}_k^{t,t+1-\bar{T}}, \boldsymbol{\lambda}_k^{t,t+2-\bar{T}}, \dots, \boldsymbol{\lambda}_k^{t,t}) = \mathbf{C}_k^t \boldsymbol{\zeta}^{\bar{T}}.
+6: Return: \bar{\boldsymbol{\Lambda}}_k^{\bar{T}}.
+```
+
+As shown in algorithm 3, to compute the vjps' for token index t and ResNet index k, we only need  $t, k, \mathrm{d} l(\mathbf{o}^t)/\mathrm{d}\mathbf{y}_K^t, \{\mathbf{h}_k^i\}_{i=0}^t, \mathbf{C}_k^t, \{\hat{\mathbf{y}}_{k-1}^i\}_{i=1}^t, \{\mathbf{A}_k^i\}_{i=2}^t$ . To compute all the gradients for layer k, we only need  $\mathbf{A}$ ,  $\mathbf{h}$ , and  $\mathbf{C}$  from the k-th layer, and  $\hat{\mathbf{y}}$  from the k-1-th layer. Therefore, we can divide the K layers into  $\Upsilon$  pieces, as shown in the appendix A.4.
+
+As the computations are fully independent and we compute the gradients using only data on local devices, we additionally distribute the model and the gradients, as shown in Table 6, where  $\theta_k$  represents the parameters of  $A_k$ ,  $B_k$ , and  $C_k$ , and Gradient<sub>k</sub> represents the optimizer states for  $\theta_k$ .
+
+The complete training streamline is then as shown in algorithm 4. We fully distribute the activations, computations, gradients, and optimization states across  $\Upsilon$  devices. While the forward evaluation pass results across different devices,
+
+## <span id="page-8-1"></span>Algorithm 3 Evaluating the vjp's for token index t and ResNet index k with truncated adjoint sharding $\bar{T}$
+
+```
+1: Inputs: t, k, \bar{T}, \frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t}, \{\mathbf{h}_k^i\}_{i=t-\bar{T}}^t, \mathbf{C}_k^t, \{\mathbf{y}_{k-1}^i\}_{i=t+1-\bar{T}}^t, \{\mathbf{A}_k^i\}_{i=t+2-\bar{T}}^t
+
+2: Call alg. 2 to compute \{\boldsymbol{\lambda}_k^{t,i}\}_{i=t+1-\bar{T}}^t
+
+3: Compute: \frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \otimes \mathbf{h}_k^t, \{\frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \boldsymbol{\lambda}_k^{t,i} \otimes \mathbf{h}_k^{i-1}\}_{i=t+1-\bar{T}}^t, \{\frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \boldsymbol{\lambda}_k^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^i\}_{i=t+1-\bar{T}}^t
+
+4: Compute: \left(\mathrm{vjp}_{\mathbf{C}_k^t} (\frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \otimes \mathbf{h}_k^t), \sum_{i=t+1-\bar{T}}^t \mathrm{vjp}_{\mathbf{A}_k^i} (\frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \boldsymbol{\lambda}_k^{t,i} \otimes \mathbf{h}_k^{i-1}), \sum_{i=t+1-\bar{T}}^t \mathrm{vjp}_{\mathbf{B}_k^i} (\frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \boldsymbol{\lambda}_k^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^i)\right)
+
+5: Return: \left(\mathrm{vjp}_{\mathbf{C}_k^t} (\frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \otimes \mathbf{h}_k^t), \sum_{i=t+1-\bar{T}}^t \mathrm{vjp}_{\mathbf{A}_k^i} (\frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \boldsymbol{\lambda}_k^{t,i} \otimes \mathbf{h}_k^{i-1}), \sum_{i=t+1-\bar{T}}^t \mathrm{vjp}_{\mathbf{B}_k^i} (\frac{\mathrm{d}(o^t)}{\mathrm{d}\mathbf{y}_K^t} \boldsymbol{\lambda}_k^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^i)\right)
+```
+
+# <span id="page-8-2"></span>**Algorithm 4** Evaluating $\frac{dL}{d\theta}$ with truncated adjoint sharding $\bar{T}$ on $\Upsilon$ devices
+
+```
+1: Inputs: \{\mathbf{y}_0^t\}_{t=1}^T, \{\mathbf{h}_k^0\}_{k=1}^K, \{A_k, \mathcal{B}_k, \mathcal{C}_k\}_{k=1}^K, \Omega, \bar{T}, \Upsilon
+
+2: Call alg. 1 for \{\mathbf{A}_k^t, \mathbf{C}_k^t, \mathbf{h}_k^t, \hat{\mathbf{y}}_k^t\}_{(t,k)=(1,1)}^{(T,K)}, \{\frac{\mathrm{d}(\mathbf{o}^t)}{\mathrm{d}\mathbf{y}_K^t}\}_{t=1}^T and saved on each GPU device.
+
+3: On each device v, in parallel do
+
+4: Initialize gradient \frac{\mathrm{d}L}{\mathrm{d}\theta}
+
+5: for Time step index t=1,\ldots,\bar{T}, layer index k=(v-1)(K//\Upsilon)+1,\ldots,v(K//\Upsilon) do
+
+6: Call alg. 3 for \Xi=\left(\mathrm{vjp}_{\mathbf{C}_k^t}(\frac{\mathrm{d}(\mathbf{o}^t)}{\mathrm{d}\mathbf{y}_K^t}\otimes\mathbf{h}_k^t), \sum_{i=1}^t \mathrm{vjp}_{\mathbf{A}_k^i}(\frac{\mathrm{d}(\mathbf{o}^t)}{\mathrm{d}\mathbf{y}_K^t})\lambda_k^{t,i}\otimes\mathbf{h}_k^{i-1}), \sum_{i=1}^t \mathrm{vjp}_{\mathbf{B}_k^i}(\frac{\mathrm{d}(\mathbf{o}^t)}{\mathrm{d}\mathbf{y}_K^t})\lambda_k^{t,i}\otimes\hat{\mathbf{y}}_{k-1}^i)\right)
+
+7: Compute: \frac{\mathrm{d}L}{\mathrm{d}\theta}+\Xi
+
+8: end for
+
+9: for Time step index t=\bar{T}+1,\ldots,T, layer index k=(v-1)(K//\Upsilon)+1,\ldots,v(K//\Upsilon) do
+
+10: Call alg. 3 for \Xi=\left(\mathrm{vjp}_{\mathbf{C}_k^t}(\frac{\mathrm{d}(\mathbf{o}^t)}{\mathrm{d}\mathbf{y}_K^t})\otimes\mathbf{h}_k^t), \sum_{i=t+1-\bar{T}}^t \mathrm{vjp}_{\mathbf{A}_k^i}(\frac{\mathrm{d}(\mathbf{o}^t)}{\mathrm{d}\mathbf{y}_K^t})\lambda_k^{t,i}\otimes\mathbf{h}_k^{i-1}),
+\sum_{i=t+1-\bar{T}}^t \mathrm{vjp}_{\mathbf{B}_k^i}(\frac{\mathrm{d}(\mathbf{o}^t)}{\mathrm{d}\mathbf{y}_K^t})\lambda_k^{t,i}\otimes\hat{\mathbf{y}}_{k-1}^i)\right)
+
+11: Compute: \frac{\mathrm{d}L}{\mathrm{d}\theta}+\Xi
+
+12: end for
+
+13: Return: \frac{\mathrm{d}L}{\mathrm{d}\theta}
+```
+
+as shown in algorithm 1, the computation of gradients is parallel across the  $\Upsilon$  devices. This will speed up the training as the gradient computation takes most of the computation budget. We will also get a memory per GPU close to Mem/ $\Upsilon$ , with Mem being the memory cost if we only have a single GPU. If we have  $\Upsilon > K$  devices, we can further speed up the forward evaluation by first evaluating  $\mathcal{A}$ ,  $\mathcal{B}$ ,  $\mathcal{C}$  in parallel, and then sequentially add them together on the distributed devices.
+
+#### <span id="page-8-0"></span>4.5 Parallel computing
+
+Adjoint sharding converts the sequential process of backpropagation gradient computation into individual independent vjps, allowing for parallel computation. We analyze the time and memory cost of  $\text{vjp}_{\mathcal{A}_k^i}((\mathrm{d}l^t/\mathrm{d}\mathbf{y}_K^t)\boldsymbol{\lambda}_k^{t,i}\otimes\mathbf{h}_k^{i-1})$ ,  $\text{vjp}_{\mathcal{B}_k^i}((\mathrm{d}l^t/\mathrm{d}\mathbf{y}_K^t)\boldsymbol{\lambda}_k^{t,i}\otimes\hat{\mathbf{y}}_{k-1}^i)$ , and  $\text{vjp}_{\mathcal{C}_k^t}((\mathrm{d}l^t/\mathrm{d}\mathbf{y}_K^t)\otimes\mathbf{h}_k^t)$ .
+
+vjp has a similar time complexity as a forward pass, and a memory complexity of  $bs(|\theta| + \mathbb{O}) + |\theta|$ , where bs is the batch size,  $\mathbb{O}$  is the number of elements in the network output, and  $|\theta|$  is the number of parameters [42]. We provide the memory and FLOPs required to compute the vjps in Table 1 [43].
+
+We analyze training with a dataset containing contexts of lengths T, with  $\Upsilon$  NVIDIA H100 GPUs, and performing computations in FP16. We use a selective diagonal SSM with K layers, and each  $\mathcal{A}_k$ ,  $\mathcal{B}_k$ , and  $\mathcal{C}_k$  network is a single-layer multi-layer perceptron (MLP).
+
+For each data point  $\{\mathbf{x}^t\}_{t=1}^T$ , we store  $\{\mathbf{A}_k^t, \mathbf{C}_k^t, \mathbf{h}_k^t, \mathbf{y}_k^t\}_{(t,k)=(1,1)}^{(T,K)}$  and  $\{\mathrm{d}l(\mathbf{o}^t)/\mathrm{d}\mathbf{y}_K^t\}_{t=1}^T$ , which is TK(2N+P)+TP FP16 numbers. We also save  $\theta_{\mathcal{A}}$ ,  $\theta_{\mathcal{B}}$ , and  $\theta_{\mathcal{C}}$ , each taking PN+N FP16 numbers. We need to store T(2NK+PK+P)+3N(P+1) FP16 numbers before computing the vjp.
+
+<span id="page-9-1"></span>
+
+|                  |        | $^{\text{vjp}}_{\mathcal{A}}$                                                                          | $\mathrm{vjp}_{\mathcal{B}}$                                                                         | $^{\mathrm{vjp}}c$                                                                     |
+|------------------|--------|--------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
+| Unstructured SSM | Memory | $\operatorname{bs}(N^2 +  \boldsymbol{\theta}_{\mathcal{A}} ^*) +  \boldsymbol{\theta}_{\mathcal{A}} $ | $bs(NP +  \boldsymbol{\theta_B} ^*) +  \boldsymbol{\theta_B} $                                       | $bs(NP +  \boldsymbol{\theta_{\mathcal{C}}} ^*) +  \boldsymbol{\theta_{\mathcal{C}}} $ |
+|                  | FLOPs  | $bs(N^2(2P+1))$                                                                                        | bs(NP(2P+1))                                                                                         | $bs(NP \times (2P+1))$                                                                 |
+| Diagonal SSM     | Memory | $\operatorname{bs}(N +  \boldsymbol{\theta}_{\mathcal{A}} ^*) +  \boldsymbol{\theta}_{\mathcal{A}} $   | $\operatorname{bs}(N +  \boldsymbol{\theta_{\mathcal{B}}} ^*) +  \boldsymbol{\theta_{\mathcal{B}}} $ | $bs(N +  \boldsymbol{\theta_c} ^*) +  \boldsymbol{\theta_c} $                          |
+|                  | FLOPs  | bs(N(2P+1))                                                                                            | bs(N(2P+1))                                                                                          | bs(N(2P+1))                                                                            |
+| Scalar SSM       | Memory | $bs(1+ \boldsymbol{\theta}_{\mathcal{A}} ^*)+ \boldsymbol{\theta}_{\mathcal{A}} $                      | $bs(N +  \boldsymbol{\theta_B} ^*) +  \boldsymbol{\theta_B} $                                        | $bs(N +  \boldsymbol{\theta_c} ^*) +  \boldsymbol{\theta_c} $                          |
+|                  | FLOPs  | bs(2P+1)                                                                                               | bs((N(2P+1))                                                                                         | bs(N(2P+1))                                                                            |
+
+Table 1: Memory and FLOPs required to compute the vjps.  $|\theta_{\mathcal{A}}|^*$ ,  $|\theta_{\mathcal{B}}|^*$ , and  $|\theta_{\mathcal{C}}|^*$  represents the number of elements of the biggest parameter vector of  $\mathcal{A}$ ,  $\mathcal{B}$ , and  $\mathcal{C}$ .
+
+As computing all adjoint state sequences takes up to N(2P+1)(1+T)T/2 FLOPs, it takes NP(1+T)/T FLOPs on average for each adjoint state. For T large enough,  $(1+T)/T \approx 1$ , and we approximate the average FLOPs for each adjoint state with NP. Each vjp then takes bs(7NP+3N) FLOPs of computation.
+
+When computing with a selective diagonal SSM with  $P=128,\ N=225,\ {\rm and\ bs}=8,\ {\rm while\ storing}$  and performing computations in FP16, computing  ${\rm vjp}_{\mathcal A}$ ,  ${\rm vjp}_{\mathcal B}$ , and  ${\rm vjp}_{\mathcal C}$  each takes around  $0.6{\rm MB}$  memory and  $1798144\ {\rm FLOPs}$ . The capacity of a modern GPU is mostly characterized by FLOPs/sec, which measures the computation speed; GPU memory bandwidth, which is the rate at which a GPU can move data between its memory and processing cores; GPU Memory, which is the amount of data a GPU can hold; and number of Multi-Instance GPU (MIG) instances, which is the number of fully isolated GPU instances with its own high-bandwidth memory, cache, and compute cores a GPU can host.
+
+An NVIDIA H100 Tensor Core GPU has a GPU memory bandwidth  $3.35 \, \mathrm{TB/s}$  and performs  $1,979 \, \mathrm{tera} \, \mathrm{FP16}$  FLOPS per second. Therefore, the memory bandwidth allows computing  $(3.35 \, \mathrm{TB/s})/0.6 \, \mathrm{MB} = 5.58 \times 10 \, \mathrm{E6}$  batches of vjps per second, and the computing speed allows computing  $(1979 \, \mathrm{tera/s})/1798144 = 3.76 \times 1.1 \, \mathrm{E9}$  batches of vjps per second. At the same time, since the H100 GPU has  $80 \, \mathrm{GB} \, \mathrm{memory}$ , it can hold up to  $80 \, \mathrm{GB}/(0.6 \, \mathrm{MB/vjp}) = 133 \, \mathrm{batches}$  of vjps at the same
+
+<span id="page-9-0"></span>![](_page_9_Figure_6.jpeg)
+
+Figure 6: Training time (/day) per epoch comparison for adjoint sharding, truncated adjoint sharding, and backpropagation with different context lengths. Assumed a 100-layer SSM-ResNet model, a 280x acceleration for adjoint sharding from parallel computing (achievable with five Amazon P4 instances), and T from 15 to 2500.
+
+time if we do not consider any memory overhead. As each H100 GPU can hold up to 7 instances in parallel, we perform the adjoint sharding algorithm with  $7\Upsilon$  instances, offering as much as a 56x speedup on one AWS P4 instance (8 H100 GPUs). Such speedup cannot be achieved for backpropagation because of its sequential nature.
+
+Limitation The adjoint sharding method provides an alternative method of computing gradients to backpropagation. While we analytically proved that the gradients computed from adjoint sharding equals to that from backpropagation, adjoint sharding suffer from a time complexity polynomial regarding the training context length when computing equivalent gradients. We provided the truncated adjoint sharding as a linear time complexity alternative, and leave the analysis of its convergence and further improvements on it for future works. We also provided a distributed and parallel computing algorithm for performing adjoint sharding. However, the overhead of naïve implementation of such algorithm with multi-threading or multiprocessing overweights the speedups when the training context length is small. We leave efficient implementation of the parallel algorithm on a CUDA kernel for future work.
+
+**Conclusion** We introduced adjoint sharding, a distributed and parallel computing algorithm, to facilitate training of LLMs on long contexts. Unlike the sequential backpropagation, the adjoint sharding computes gradients of each LLM layer against each token independently through vector-Jacobian product, allowing for parallel computation. To avoid the limitation of vjps increasing polynomially regarding context length, we propose truncated adjoint sharding to focus on important gradients. We analyzed the memory and FLOP cost of each computation block in adjoint sharding and proposed a method to accelerate it through parallel computing. Empirical results suggest orders of magnitude of memory reduction in training while maintaining the same training results as backpropagation.
+
+## References
+
+- <span id="page-10-17"></span>[1] Quentin Anthony, Yury Tokpanov, Paolo Glorioso, and Beren Millidge. Blackmamba: Mixture of experts for state-space models, 2024. URL <https://arxiv.org/abs/2402.01771>.
+- <span id="page-10-10"></span>[2] Randall Balestriero and Richard Baraniuk. Fast jacobian-vector product for deep networks, 2021. URL [https:](https://arxiv.org/abs/2104.00219) [//arxiv.org/abs/2104.00219](https://arxiv.org/abs/2104.00219).
+- <span id="page-10-18"></span>[3] Atilim Gunes Baydin, Barak A. Pearlmutter, Alexey Andreyevich Radul, and Jeffrey Mark Siskind. Automatic differentiation in machine learning: a survey, 2018. URL <https://arxiv.org/abs/1502.05767>.
+- <span id="page-10-19"></span>[4] Atilim Gunes Baydin, Barak A. Pearlmutter, Alexey Andreyevich Radul, and Jeffrey Mark Siskind. Automatic differentiation in machine learning: a survey, 2018. URL <https://arxiv.org/abs/1502.05767>.
+- <span id="page-10-12"></span>[5] Maximilian Beck, Korbinian Poppel, Markus Spanring, Andreas Auer, Oleksandra Prudnikova, Michael Kopp, ¨ Gunter Klambauer, Johannes Brandstetter, and Sepp Hochreiter. xlstm: Extended long short-term memory, 2024. ¨ URL <https://arxiv.org/abs/2405.04517>.
+- <span id="page-10-6"></span>[6] Iz Beltagy, Matthew E. Peters, and Arman Cohan. Longformer: The long-document transformer, 2020. URL <https://arxiv.org/abs/2004.05150>.
+- <span id="page-10-0"></span>[7] Zheng Cai, Maosong Cao, Haojiong Chen, Kai Chen, Keyu Chen, Xin Chen, et al. Internlm2 technical report, 2024. URL <https://arxiv.org/abs/2403.17297>.
+- <span id="page-10-8"></span>[8] Yang Cao, Shengtai Li, and Linda Petzold. Adjoint sensitivity analysis for differential-algebraic equations: algorithms and software. *Journal of Computational and Applied Mathematics*, 149(1):171–191, 2002. ISSN 0377-0427. doi: https://doi.org/10.1016/S0377-0427(02)00528-9. URL [https://www.sciencedirect.com/](https://www.sciencedirect.com/science/article/pii/S0377042702005289) [science/article/pii/S0377042702005289](https://www.sciencedirect.com/science/article/pii/S0377042702005289). Scientific and Engineering Computations for the 21st Century - Me thodologies and Applications Proceedings of the 15th Toyota Conference.
+- <span id="page-10-9"></span>[9] Ricky T. Q. Chen, Yulia Rubanova, Jesse Bettencourt, and David Duvenaud. Neural ordinary differential equations, 2019. URL <https://arxiv.org/abs/1806.07366>.
+- <span id="page-10-14"></span>[10] Shouyuan Chen, Sherman Wong, Liangjian Chen, and Yuandong Tian. Extending context window of large language models via positional interpolation, 2023. URL <https://arxiv.org/abs/2306.15595>.
+- <span id="page-10-15"></span>[11] Yukang Chen, Shengju Qian, Haotian Tang, Xin Lai, Zhijian Liu, Song Han, and Jiaya Jia. Longlora: Efficient fine-tuning of long-context large language models, 2024. URL <https://arxiv.org/abs/2309.12307>.
+- <span id="page-10-7"></span>[12] Saeed Damadi, Golnaz Moharrer, and Mostafa Cham. The backpropagation algorithm for a math student, 2023. URL <https://arxiv.org/abs/2301.09977>.
+- <span id="page-10-4"></span>[13] Tri Dao. Flashattention-2: Faster attention with better parallelism and work partitioning, 2023. URL [https:](https://arxiv.org/abs/2307.08691) [//arxiv.org/abs/2307.08691](https://arxiv.org/abs/2307.08691).
+- <span id="page-10-16"></span>[14] Tri Dao and Albert Gu. Transformers are ssms: Generalized models and efficient algorithms through structured state space duality, 2024. URL <https://arxiv.org/abs/2405.21060>.
+- <span id="page-10-5"></span>[15] Tri Dao and Albert Gu. Transformers are ssms: Generalized models and efficient algorithms through structured state space duality, 2024. URL <https://arxiv.org/abs/2405.21060>.
+- <span id="page-10-3"></span>[16] Tri Dao, Daniel Y. Fu, Stefano Ermon, Atri Rudra, and Christopher Re. Flashattention: Fast and memory-efficient ´ exact attention with io-awareness, 2022. URL <https://arxiv.org/abs/2205.14135>.
+- <span id="page-10-11"></span>[17] Soham De, Samuel L. Smith, Anushan Fernando, Aleksandar Botev, George Cristian-Muraru, Albert Gu, Ruba Haroun, Leonard Berrada, Yutian Chen, Srivatsan Srinivasan, Guillaume Desjardins, Arnaud Doucet, David Budden, Yee Whye Teh, Razvan Pascanu, Nando De Freitas, and Caglar Gulcehre. Griffin: Mixing gated linear recurrences with local attention for efficient language models, 2024. URL [https://arxiv.org/abs/2402.](https://arxiv.org/abs/2402.19427) [19427](https://arxiv.org/abs/2402.19427).
+- <span id="page-10-2"></span>[18] Yiran Ding, Li Lyna Zhang, Chengruidong Zhang, Yuanyuan Xu, Ning Shang, Jiahang Xu, Fan Yang, and Mao Yang. Longrope: Extending llm context window beyond 2 million tokens. *arXiv preprint arXiv:2402.13753*, 2024.
+- <span id="page-10-1"></span>[19] Yiran Ding, Li Lyna Zhang, Chengruidong Zhang, Yuanyuan Xu, Ning Shang, Jiahang Xu, Fan Yang, and Mao Yang. Longrope: Extending llm context window beyond 2 million tokens, 2024. URL [https://arxiv.org/](https://arxiv.org/abs/2402.13753) [abs/2402.13753](https://arxiv.org/abs/2402.13753).
+- <span id="page-10-13"></span>[20] Emilien Dupont, Arnaud Doucet, and Yee Whye Teh. Augmented neural odes, 2019. URL [https://arxiv.](https://arxiv.org/abs/1904.01681) [org/abs/1904.01681](https://arxiv.org/abs/1904.01681).
+
+- <span id="page-11-8"></span>[21] Daniel Y. Fu, Tri Dao, Khaled K. Saab, Armin W. Thomas, Atri Rudra, and Christopher Re. Hungry hungry ´ hippos: Towards language modeling with state space models, 2023. URL [https://arxiv.org/abs/2212.](https://arxiv.org/abs/2212.14052) [14052](https://arxiv.org/abs/2212.14052).
+- <span id="page-11-7"></span>[22] Albert Gu and Tri Dao. Mamba: Linear-time sequence modeling with selective state spaces, 2024. URL [https:](https://arxiv.org/abs/2312.00752) [//arxiv.org/abs/2312.00752](https://arxiv.org/abs/2312.00752).
+- <span id="page-11-2"></span>[23] Albert Gu and Tri Dao. Mamba: Linear-time sequence modeling with selective state spaces, 2024. URL [https:](https://arxiv.org/abs/2312.00752) [//arxiv.org/abs/2312.00752](https://arxiv.org/abs/2312.00752).
+- <span id="page-11-9"></span>[24] Albert Gu, Isys Johnson, Karan Goel, Khaled Saab, Tri Dao, Atri Rudra, and Christopher Re. Combining ´ recurrent, convolutional, and continuous-time models with linear state-space layers, 2021. URL [https://](https://arxiv.org/abs/2110.13985) [arxiv.org/abs/2110.13985](https://arxiv.org/abs/2110.13985).
+- <span id="page-11-10"></span>[25] Albert Gu, Isys Johnson, Aman Timalsina, Atri Rudra, and Christopher Re. How to train your hippo: State space ´ models with generalized orthogonal basis projections, 2022. URL <https://arxiv.org/abs/2206.12037>.
+- <span id="page-11-19"></span>[26] Meng-Hao Guo, Tian-Xing Xu, Jiang-Jiang Liu, Zheng-Ning Liu, Peng-Tao Jiang, Tai-Jiang Mu, Song-Hai Zhang, Ralph R Martin, Ming-Ming Cheng, and Shi-Min Hu. Attention mechanisms in computer vision: A survey. *Computational visual media*, 8(3):331–368, 2022.
+- <span id="page-11-11"></span>[27] Ankit Gupta, Harsh Mehta, and Jonathan Berant. Simplifying and understanding state space models with diagonal linear rnns, 2023. URL <https://arxiv.org/abs/2212.00768>.
+- <span id="page-11-6"></span>[28] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep residual learning for image recognition, 2015. URL <https://arxiv.org/abs/1512.03385>.
+- <span id="page-11-18"></span>[29] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep residual learning for image recognition. In *Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*, June 2016.
+- <span id="page-11-4"></span>[30] Julien Herrmann, Olivier Beaumont, Lionel Eyraud-Dubois, Julien Hermann, Alexis Joly, and Alena Shilova. Optimal checkpointing for heterogeneous chains: how to train deep neural networks with limited memory, 2019. URL <https://arxiv.org/abs/1911.13214>.
+- <span id="page-11-13"></span>[31] Herbert Jaeger. A tutorial on training recurrent neural networks , covering bppt , rtrl , ekf and the " echo state network " approach - semantic scholar. In *National Research Center for Information Technology, 2002*, 2005. URL <https://api.semanticscholar.org/CorpusID:192593367>.
+- <span id="page-11-5"></span>[32] Steven Johnson. Adjoint methods and sensitivity analysis for recurrence, 01 2007.
+- <span id="page-11-12"></span>[33] Shiva Kaul. Linear dynamical systems as a core computational primitive. In H. Larochelle, M. Ranzato, R. Hadsell, M.F. Balcan, and H. Lin, editors, *Advances in Neural Information Processing Systems*, volume 33, pages 16808–16820. Curran Associates, Inc., 2020. URL [https://proceedings.neurips.cc/paper\\_files/](https://proceedings.neurips.cc/paper_files/paper/2020/file/c3581d2150ff68f3b33b22634b8adaea-Paper.pdf) [paper/2020/file/c3581d2150ff68f3b33b22634b8adaea-Paper.pdf](https://proceedings.neurips.cc/paper_files/paper/2020/file/c3581d2150ff68f3b33b22634b8adaea-Paper.pdf).
+- <span id="page-11-20"></span>[34] Alexander Kirillov, Eric Mintun, Nikhila Ravi, Hanzi Mao, Chloe Rolland, Laura Gustafson, Tete Xiao, Spencer Whitehead, Alexander C Berg, Wan-Yen Lo, et al. Segment anything. In *Proceedings of the IEEE/CVF International Conference on Computer Vision*, pages 4015–4026, 2023.
+- <span id="page-11-16"></span>[35] Dacheng Li\*, Rulin Shao\*, Anze Xie, Ying Sheng, Lianmin Zheng, Joseph E. Gonzalez, Ion Stoica, Xuezhe Ma, and Hao Zhang. How long can open-source llms truly promise on context length?, June 2023. URL <https://lmsys.org/blog/2023-06-29-longchat>.
+- <span id="page-11-1"></span>[36] Tianle Li, Ge Zhang, Quy Duc Do, Xiang Yue, and Wenhu Chen. Long-context llms struggle with long in-context learning, 2024. URL <https://arxiv.org/abs/2404.02060>.
+- <span id="page-11-17"></span>[37] Opher Lieber, Barak Lenz, Hofit Bata, Gal Cohen, Jhonathan Osin, Itay Dalmedigos, Erez Safahi, Shaked Meirom, Yonatan Belinkov, Shai Shalev-Shwartz, Omri Abend, Raz Alon, Tomer Asida, Amir Bergman, Roman Glozman, Michael Gokhman, Avashalom Manevich, Nir Ratner, Noam Rozen, Erez Shwartz, Mor Zusman, and Yoav Shoham. Jamba: A hybrid transformer-mamba language model, 2024. URL [https:](https://arxiv.org/abs/2403.19887) [//arxiv.org/abs/2403.19887](https://arxiv.org/abs/2403.19887).
+- <span id="page-11-14"></span>[38] Hao Liu, Matei Zaharia, and Pieter Abbeel. Ring attention with blockwise transformers for near-infinite context, 2023. URL <https://arxiv.org/abs/2310.01889>.
+- <span id="page-11-15"></span>[39] Hao Liu, Wilson Yan, Matei Zaharia, and Pieter Abbeel. World model on million-length video and language with blockwise ringattention, 2024. URL <https://arxiv.org/abs/2402.08268>.
+- <span id="page-11-0"></span>[40] Meta et al. The llama 3 herd of models, 2024. URL <https://arxiv.org/abs/2407.21783>.
+- <span id="page-11-3"></span>[41] Paulius Micikevicius, Sharan Narang, Jonah Alben, Gregory Diamos, Erich Elsen, David Garcia, Boris Ginsburg, Michael Houston, Oleksii Kuchaiev, Ganesh Venkatesh, and Hao Wu. Mixed precision training, 2018. URL <https://arxiv.org/abs/1710.03740>.
+
+- <span id="page-12-18"></span>[42] Roman Novak, Jascha Sohl-Dickstein, and Samuel S. Schoenholz. Fast finite width neural tangent kernel, 2022. URL <https://arxiv.org/abs/2206.08720>.
+- <span id="page-12-19"></span>[43] NVIDIA. Matrix multiplication background user's guide, 2024. URL [https://docs.nvidia.com/](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html) [deeplearning/performance/dl-performance-matrix-multiplication/index.html](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html).
+- <span id="page-12-0"></span>[44] OpenAI et al. Gpt-4 technical report, 2024. URL <https://arxiv.org/abs/2303.08774>.
+- <span id="page-12-10"></span>[45] Antonio Orvieto, Samuel L Smith, Albert Gu, Anushan Fernando, Caglar Gulcehre, Razvan Pascanu, and Soham De. Resurrecting recurrent neural networks for long sequences, 2023. URL [https://arxiv.org/abs/2303.](https://arxiv.org/abs/2303.06349) [06349](https://arxiv.org/abs/2303.06349).
+- <span id="page-12-9"></span>[46] Razvan Pascanu, Tomas Mikolov, and Yoshua Bengio. On the difficulty of training recurrent neural networks, 2013. URL <https://arxiv.org/abs/1211.5063>.
+- <span id="page-12-17"></span>[47] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, Alban Desmaison, Andreas Kopf, Edward Yang, Zach DeVito, ¨ Martin Raison, Alykhan Tejani, Sasank Chilamkurthy, Benoit Steiner, Lu Fang, Junjie Bai, and Soumith Chintala. Pytorch: An imperative style, high-performance deep learning library, 2019. URL [https://arxiv.org/abs/](https://arxiv.org/abs/1912.01703) [1912.01703](https://arxiv.org/abs/1912.01703).
+- <span id="page-12-16"></span>[48] William Peebles and Saining Xie. Scalable diffusion models with transformers. In *Proceedings of the IEEE/CVF International Conference on Computer Vision*, pages 4195–4205, 2023.
+- <span id="page-12-4"></span>[49] Bo Peng, Eric Alcaide, Quentin Anthony, Alon Albalak, Samuel Arcadinho, Stella Biderman, Huanqi Cao, Xin Cheng, Michael Chung, Matteo Grella, Kranthi Kiran GV, Xuzheng He, Haowen Hou, Jiaju Lin, Przemyslaw Kazienko, Jan Kocon, Jiaming Kong, Bartlomiej Koptyra, Hayden Lau, Krishna Sri Ipsit Mantri, Ferdinand Mom, Atsushi Saito, Guangyu Song, Xiangru Tang, Bolun Wang, Johan S. Wind, Stanislaw Wozniak, Ruichong Zhang, Zhenyuan Zhang, Qihang Zhao, Peng Zhou, Qinghua Zhou, Jian Zhu, and Rui-Jie Zhu. Rwkv: Reinventing rnns for the transformer era, 2023. URL <https://arxiv.org/abs/2305.13048>.
+- <span id="page-12-14"></span>[50] Bowen Peng, Jeffrey Quesnelle, Honglu Fan, and Enrico Shippole. Yarn: Efficient context window extension of large language models, 2023. URL <https://arxiv.org/abs/2309.00071>.
+- <span id="page-12-1"></span>[51] Maciej Pioro, Kamil Ciebiera, Krystian Kr ´ ol, Jan Ludziejewski, Michał Krutul, Jakub Krajewski, Szymon An- ´ toniak, Piotr Miłos, Marek Cygan, and Sebastian Jaszczur. Moe-mamba: Efficient selective state space models ´ with mixture of experts, 2024. URL <https://arxiv.org/abs/2401.04081>.
+- <span id="page-12-8"></span>[52] Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He. Zero: Memory optimizations toward training trillion parameter models, 2020. URL <https://arxiv.org/abs/1910.02054>.
+- <span id="page-12-6"></span>[53] Samyam Rajbhandari, Jeff Rasley, Olatunji Ruwase, and Yuxiong He. Zero: Memory optimizations toward training trillion parameter models, 2020. URL <https://arxiv.org/abs/1910.02054>.
+- <span id="page-12-12"></span>[54] Jie Ren, Samyam Rajbhandari, Reza Yazdani Aminabadi, Olatunji Ruwase, Shuangyan Yang, Minjia Zhang, Dong Li, and Yuxiong He. Zero-offload: Democratizing billion-scale model training, 2021. URL [https:](https://arxiv.org/abs/2101.06840) [//arxiv.org/abs/2101.06840](https://arxiv.org/abs/2101.06840).
+- <span id="page-12-3"></span>[55] Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ramani, and Tri Dao. Flashattention-3: Fast and accurate attention with asynchrony and low-precision, 2024. URL [https://arxiv.org/abs/2407.](https://arxiv.org/abs/2407.08608) [08608](https://arxiv.org/abs/2407.08608).
+- <span id="page-12-7"></span>[56] Nimit S. Sohoni, Christopher R. Aberger, Megan Leszczynski, Jian Zhang, and Christopher Re. Low-memory ´ neural network training: A technical report, 2022. URL <https://arxiv.org/abs/1904.10631>.
+- <span id="page-12-11"></span>[57] Corentin Tallec and Yann Ollivier. Unbiasing truncated backpropagation through time, 2017. URL [https:](https://arxiv.org/abs/1705.08209) [//arxiv.org/abs/1705.08209](https://arxiv.org/abs/1705.08209).
+- <span id="page-12-15"></span>[58] Szymon Tworkowski, Konrad Staniszewski, Mikołaj Pacek, Yuhuai Wu, Henryk Michalewski, and Piotr Miłos.´ Focused transformer: Contrastive training for context scaling, 2023. URL [https://arxiv.org/abs/2307.](https://arxiv.org/abs/2307.03170) [03170](https://arxiv.org/abs/2307.03170).
+- <span id="page-12-13"></span>[59] Reddit users. Ntk-aware scaled rope, 2023. URL [https://www.reddit.com/r/LocalLLaMA/comments/](https://www.reddit.com/r/LocalLLaMA/comments/ 14lz7j5/ntkaware_scaled_rope_allows_llama_models_to_have/.) [14lz7j5/ntkaware\\_scaled\\_rope\\_allows\\_llama\\_models\\_to\\_have/.](https://www.reddit.com/r/LocalLLaMA/comments/ 14lz7j5/ntkaware_scaled_rope_allows_llama_models_to_have/.)
+- <span id="page-12-2"></span>[60] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. Attention is all you need, 2023. URL <https://arxiv.org/abs/1706.03762>.
+- <span id="page-12-5"></span>[61] Joost Verbraeken, Matthijs Wolting, Jonathan Katzy, Jeroen Kloppenburg, Tim Verbelen, and Jan S. Rellermeyer. A survey on distributed machine learning. *ACM Computing Surveys*, 53(2):1–33, March 2020. ISSN 1557-7341. doi: 10.1145/3377454. URL <http://dx.doi.org/10.1145/3377454>.
+
+- <span id="page-13-6"></span>[62] Roger Waleffe, Wonmin Byeon, Duncan Riach, Brandon Norick, Vijay Korthikanti, Tri Dao, Albert Gu, Ali Hatamizadeh, Sudhakar Singh, Deepak Narayanan, Garvit Kulshreshtha, Vartika Singh, Jared Casper, Jan Kautz, Mohammad Shoeybi, and Bryan Catanzaro. An empirical study of mamba-based language models, 2024. URL https://arxiv.org/abs/2406.07887.
+- <span id="page-13-3"></span>[63] Shida Wang and Beichen Xue. State-space models with layer-wise nonlinearity are universal approximators with exponential decaying memory, 2023. URL https://arxiv.org/abs/2309.13414.
+- <span id="page-13-2"></span>[64] P.J. Werbos. Backpropagation through time: what it does and how to do it. *Proceedings of the IEEE*, 78(10): 1550–1560, 1990. doi: 10.1109/5.58337.
+- <span id="page-13-4"></span>[65] Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song Han, and Mike Lewis. Efficient streaming language models with attention sinks, 2024. URL https://arxiv.org/abs/2309.17453.
+- <span id="page-13-1"></span>[66] Xingzi Xu, Ali Hasan, Khalil Elkhalil, Jie Ding, and Vahid Tarokh. Characteristic neural ordinary differential equations, 2022. URL https://arxiv.org/abs/2111.13207.
+- <span id="page-13-8"></span>[67] Jianwei Yang, Chunyuan Li, Pengchuan Zhang, Xiyang Dai, Bin Xiao, Lu Yuan, and Jianfeng Gao. Focal self-attention for local-global interactions in vision transformers, 2021. URL https://arxiv.org/abs/2107.00641.
+- <span id="page-13-5"></span>[68] Peitian Zhang, Zheng Liu, Shitao Xiao, Ninglu Shao, Qiwei Ye, and Zhicheng Dou. Soaring from 4k to 400k: Extending llm's context with activation beacon, 2024. URL https://arxiv.org/abs/2401.03462.
+- <span id="page-13-0"></span>[69] Yanli Zhao, Andrew Gu, Rohan Varma, Liang Luo, Chien-Chin Huang, Min Xu, Less Wright, Hamid Shojanazeri, Myle Ott, Sam Shleifer, Alban Desmaison, Can Balioglu, Pritam Damania, Bernard Nguyen, Geeta Chauhan, Yuchen Hao, Ajit Mathews, and Shen Li. Pytorch fsdp: Experiences on scaling fully sharded data parallel, 2023. URL https://arxiv.org/abs/2304.11277.
+
+### A Appendix
+
+#### <span id="page-13-7"></span>A.1 Proof for proposition 2
+
+**Proof 1** Define  $\partial \tilde{\mathbf{y}}/\partial \mathbf{h}^t = \tilde{\mathbf{y}}^t_{\mathbf{h}^t}$ ,  $\partial \tilde{\mathbf{h}}^t/\partial \mathbf{h}^{t-1} = \tilde{\mathbf{h}}^t_{\mathbf{h}^{t-1}}$ , and  $\partial \tilde{\mathbf{y}}/\partial \boldsymbol{\theta} = \tilde{\mathbf{y}}^t_{\boldsymbol{\theta}}$ ,  $\partial \tilde{\mathbf{h}}^t/\partial \boldsymbol{\theta} = \tilde{\mathbf{h}}^t_{\boldsymbol{\theta}}$ , by plugging in the expression for  $\tilde{\mathbf{y}}^t$  from subsection 3.2, proposition 1 states that
+
+$$\frac{\mathrm{d}\tilde{\mathbf{y}}^t}{\mathrm{d}\boldsymbol{\theta}} = \tilde{\mathbf{y}}_{\mathbf{h}^t}^t \left[ (\prod_{i=1}^{t-1} \mathbf{h}_{\mathbf{h}^{t-i}}^{t-i+1}) \mathbf{h}_{\boldsymbol{\theta}}^1 + (\prod_{i=1}^{t-2} \mathbf{h}_{\mathbf{h}^{t-i}}^{t-i+1}) \mathbf{h}_{\boldsymbol{\theta}}^2 + \dots + \mathbf{h}_{\mathbf{h}^{t-1}}^t \mathbf{h}_{\boldsymbol{\theta}}^{t-1} + \mathbf{h}_{\boldsymbol{\theta}}^t \right] + \tilde{\mathbf{y}}_{\boldsymbol{\theta}}^t.$$
+
+*In the context of* SSM, *we have:* 
+
+$$\mathbf{h}^{t} = \mathbf{A}^{t} \mathbf{h}^{t-1} + \mathbf{B}^{t} \hat{\mathbf{x}}^{t}, \mathbf{h}_{\mathbf{h}^{t-1}}^{t} = \mathbf{A}^{t}, \mathbf{h}_{\boldsymbol{\theta}}^{t} = \mathbf{A}_{\boldsymbol{\theta}}^{t} \mathbf{h}^{t-1} + \mathbf{B}_{\boldsymbol{\theta}}^{t} \hat{\mathbf{x}}^{t}, \tilde{\mathbf{y}}^{t} = \mathbf{C}^{t} \mathbf{h}^{t}, \tilde{\mathbf{y}}_{\mathbf{h}^{t}}^{t} = \mathbf{C}^{t}, \tilde{\mathbf{y}}_{\boldsymbol{\theta}}^{t} = \mathbf{C}_{\boldsymbol{\theta}}^{t} \mathbf{h}^{t}. \tag{8}$$
+
+Plugging in these relations, we get:
+
+$$\frac{\mathrm{d}\tilde{\mathbf{y}}^t}{\mathrm{d}\boldsymbol{\theta}} = \mathbf{C}^t \left[ \left( \prod_{i=1}^{t-1} \mathbf{A}^{t+1-i} \right) \mathbf{h}_{\boldsymbol{\theta}}^1 + \left( \prod_{i=1}^{t-2} \mathbf{A}^{t+1-i} \right) \mathbf{h}_{\boldsymbol{\theta}}^2 + \dots + \left( \prod_{i=1}^{2} \mathbf{A}^{t+1-i} \right) \mathbf{h}_{\boldsymbol{\theta}}^{t-2} + \mathbf{A}^t \mathbf{h}_{\boldsymbol{\theta}}^{t-1} + \mathbf{h}_{\boldsymbol{\theta}}^t \right] + \tilde{\mathbf{y}}_{\boldsymbol{\theta}}^t. \tag{9}$$
+
+Define the adjoint state  $\lambda^{t,\tau} = \mathbf{C}^t(\prod_{i=1}^{t-\tau} \mathbf{A}^{t+1-i})$ , we have
+
+$$\frac{\mathrm{d}\tilde{\mathbf{y}}^t}{\mathrm{d}\boldsymbol{\theta}} = \boldsymbol{\lambda}^{t,1}\mathbf{h}_{\boldsymbol{\theta}}^1 + \boldsymbol{\lambda}^{t,2}\mathbf{h}_{\boldsymbol{\theta}}^2 + \dots + \boldsymbol{\lambda}^{t,t-1}\mathbf{h}_{\boldsymbol{\theta}}^{t-1} + \boldsymbol{\lambda}^{t,t}\mathbf{h}_{\boldsymbol{\theta}}^t + \tilde{\mathbf{y}}_{\boldsymbol{\theta}}^t$$
+
+Therefore, we have
+
+$$\frac{\mathrm{d}l^t}{\mathrm{d}\boldsymbol{\theta}} = \frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} \frac{\mathrm{d}(\tilde{\mathbf{y}}^t + \hat{\mathbf{x}}^t)}{\mathrm{d}\boldsymbol{\theta}} 
+= \frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} \frac{\mathrm{d}\tilde{\mathbf{y}}^t}{\mathrm{d}\boldsymbol{\theta}} 
+= \frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} [\boldsymbol{\lambda}^{t,1} \mathbf{h}_{\boldsymbol{\theta}}^1 + \boldsymbol{\lambda}^{t,2} \mathbf{h}_{\boldsymbol{\theta}}^2 + \dots + \boldsymbol{\lambda}^{t,t-1} \mathbf{h}_{\boldsymbol{\theta}}^{t-1} + \boldsymbol{\lambda}^{t,t} \mathbf{h}_{\boldsymbol{\theta}}^t + \tilde{\mathbf{y}}_{\boldsymbol{\theta}}^t]$$
+
+Plug in everything, we have
+
+$$\frac{\mathrm{d}l^{t}}{\mathrm{d}\boldsymbol{\theta}} = \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}^{t}} [\boldsymbol{\lambda}^{t,1} (\mathbf{A}_{\boldsymbol{\theta}}^{1} \mathbf{h}^{0} + \mathbf{B}_{\boldsymbol{\theta}}^{1} \hat{\mathbf{x}}^{1}) + \boldsymbol{\lambda}^{t,2} (\mathbf{A}_{\boldsymbol{\theta}}^{2} \mathbf{h}^{1} + \mathbf{B}_{\boldsymbol{\theta}}^{2} \hat{\mathbf{x}}^{2}) + \dots + \boldsymbol{\lambda}^{t,t} (\mathbf{A}_{\boldsymbol{\theta}}^{t} \mathbf{h}^{t-1} + \mathbf{B}_{\boldsymbol{\theta}}^{t} \hat{\mathbf{x}}^{t}) + \mathbf{C}_{\boldsymbol{\theta}}^{t} \mathbf{h}^{t}$$
+
+$$= \left[ \sum_{i=1}^{t} \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}^{t}} \boldsymbol{\lambda}^{t,i} (\mathbf{A}_{\boldsymbol{\theta}}^{i} \mathbf{h}^{i-1} + \mathbf{B}_{\boldsymbol{\theta}}^{i} \hat{\mathbf{x}}^{i}) \right] + \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}^{t}} \mathbf{C}_{\boldsymbol{\theta}}^{t} \mathbf{h}^{t}$$
+
+$$= \left[ \sum_{i=1}^{t} \mathrm{vjp}_{\boldsymbol{\mathcal{A}}^{i}} (\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}^{t}} \boldsymbol{\lambda}^{t,i} \otimes \mathbf{h}^{i-1}) + \mathrm{vjp}_{\boldsymbol{\mathcal{B}}^{i}} (\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}^{t}} \boldsymbol{\lambda}^{t,i} \otimes \hat{\mathbf{x}}^{i}) \right] + \mathrm{vjp}_{\boldsymbol{\mathcal{C}}^{t}} (\frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}^{t}} \otimes \mathbf{h}^{t})$$
+
+where we define  $\operatorname{vjp}_{NN^i}(v) = v \cdot NN_{\boldsymbol{\theta}}(\operatorname{Input}^i)$ , with  $\boldsymbol{\theta}$  being NN's parameters and i being the index of Input. Now, as  $\operatorname{vjp}_{\boldsymbol{\mathcal{A}}^i}(\frac{\operatorname{d}l^t}{\operatorname{d}\mathbf{y}^t}\boldsymbol{\lambda}^{t,i}\otimes\mathbf{h}^{i-1})$ ,  $\operatorname{vjp}_{\boldsymbol{\mathcal{B}}^i}(\frac{\operatorname{d}l^t}{\operatorname{d}\mathbf{y}^t}\boldsymbol{\lambda}^{t,i}\otimes\hat{\mathbf{x}}^i)$ , and  $\operatorname{vjp}_{\boldsymbol{\mathcal{C}}^t}(\frac{\operatorname{d}l^t}{\operatorname{d}\mathbf{y}^t}\otimes\mathbf{h}^t)$  are separate, we have
+
+$$\frac{\mathrm{d}l^t}{\mathrm{d}\boldsymbol{\theta}} = \left[\sum_{i=1}^t \mathrm{vjp}_{\boldsymbol{\mathcal{A}}^i} \left(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} \boldsymbol{\lambda}^{t,i} \otimes \mathbf{h}^{i-1}\right)\right] \oplus \left[\sum_{i=1}^t \mathrm{vjp}_{\boldsymbol{\mathcal{B}}^i} \left(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} \boldsymbol{\lambda}^{t,i} \otimes \hat{\mathbf{x}}^i\right)\right] \oplus \mathrm{vjp}_{\boldsymbol{\mathcal{C}}^t} \left(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t} \otimes \mathbf{h}^t\right),\tag{10}$$
+
+where  $\oplus$  is vector concatenation.
+
+#### <span id="page-14-0"></span>A.2 Proof for proposition 3
+
+**Proof 2** First, using the structure of ResNet, we have
+
+$$\frac{\mathrm{d}L}{\mathrm{d}\boldsymbol{\theta}} = \sum_{t=1}^{T} \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \frac{\mathrm{d}\mathbf{y}_{K}^{t}}{\mathrm{d}\boldsymbol{\theta}}$$
+
+$$= \sum_{t=1}^{T} \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \frac{\mathrm{d}(\mathbf{y}_{0}^{t} + \sum_{k=1}^{K} \tilde{\mathbf{y}}_{k}^{t})}{\mathrm{d}\boldsymbol{\theta}}$$
+
+$$= \sum_{t=1}^{T} \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \sum_{k=1}^{K} \frac{\mathrm{d}\tilde{\mathbf{y}}_{k}^{t}}{\mathrm{d}\boldsymbol{\theta}}$$
+
+$$= \sum_{t=1}^{T} \sum_{k=1}^{K} \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \frac{\mathrm{d}\tilde{\mathbf{y}}_{k}^{t}}{\mathrm{d}\boldsymbol{\theta}}$$
+
+from proposiiton 2, we have proven that for a single SSM model, we have
+
+$$\frac{\mathrm{d}l^t}{\mathrm{d}\boldsymbol{\theta}} = \left[\sum_{i=1}^t \mathrm{vjp}_{\boldsymbol{\mathcal{A}}^i}(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t}\boldsymbol{\lambda}^{t,i}\otimes\mathbf{h}^{i-1})\right] \oplus \left[\sum_{i=1}^t \mathrm{vjp}_{\boldsymbol{\mathcal{B}}^i}(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t}\boldsymbol{\lambda}^{t,i}\otimes\hat{\mathbf{x}}^i)\right] \oplus \mathrm{vjp}_{\boldsymbol{\mathcal{C}}^t}(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}^t}\otimes\mathbf{h}^t),$$
+
+so for the ResNet model, we have
+
+<span id="page-15-0"></span>
+$$\frac{\mathrm{d}L}{\mathrm{d}\theta} = \sum_{t=1}^{T} \sum_{k=1}^{K} \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \frac{\mathrm{d}\tilde{\mathbf{y}}_{k}^{t}}{\mathrm{d}\theta} \\
+= \sum_{t=1}^{T} \sum_{k=1}^{K} \left\{ \left[ \sum_{i=1}^{t} \mathrm{vjp}_{\mathcal{A}_{k}^{i}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \mathbf{h}_{k}^{i-1} \right) \right] \oplus \left[ \sum_{i=1}^{t} \mathrm{vjp}_{\mathcal{B}_{k}^{i}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{x}}_{k}^{i} \right) \right] \oplus \mathrm{vjp}_{\mathcal{C}_{k}^{t}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \otimes \mathbf{h}_{k}^{t} \right) \right\} \\
+= \left( \sum_{t=1}^{T} \sum_{k=1}^{K} \mathrm{vjp}_{\mathcal{C}_{k}^{i}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \mathbf{h}_{k}^{i-1} \right) \right) \\
+\oplus \left( \sum_{t=1}^{T} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\mathcal{B}_{k}^{i}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{x}}_{k}^{i} \right) \right) \\
+= \left( \sum_{t=1}^{T} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\mathcal{C}_{k}^{i}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{x}}_{k}^{i} \right) \right) \\
+\oplus \left( \sum_{t=1}^{T} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\mathcal{A}_{k}^{i}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^{i} \right) \right) \\
+\oplus \left( \sum_{t=1}^{T} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\mathcal{A}_{k}^{i}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^{i} \right) \right) \\
+\oplus \left( \sum_{t=1}^{T} \sum_{k=1}^{K} \sum_{i=1}^{t} \mathrm{vjp}_{\mathcal{B}_{k}^{i}} \left( \frac{\mathrm{d}l^{t}}{\mathrm{d}\mathbf{y}_{K}^{t}} \boldsymbol{\lambda}_{k}^{t,i} \otimes \hat{\mathbf{y}}_{k-1}^{i} \right) \right)$$
+
+where the input to  $\operatorname{vjp}_{\mathcal{C}_k^t}(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}_k^t}\otimes\mathbf{h}_k^t)$ ,  $\operatorname{vjp}_{\mathcal{A}_k^i}(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}_k^t}\boldsymbol{\lambda}_k^{t,i}\otimes\mathbf{h}_k^{i-1})$ , and  $\operatorname{vjp}_{\mathcal{B}_k^i}(\frac{\mathrm{d}l^t}{\mathrm{d}\mathbf{y}_k^t}\boldsymbol{\lambda}_k^{t,i}\otimes\hat{\mathbf{y}}_{k-1}^i)$  are computed with the k-th SSM and the  $\hat{\mathbf{x}}_k^i=\hat{\mathbf{y}}_{k-1}^i=\operatorname{RMSNorm}(\mathbf{y}_{k-2}^i+\operatorname{SSM}_{k-1}(\hat{\mathbf{Y}}_{k-2})^i)$  (the normalized output sequence of the (k-1)-th SSM), and the adjoint state  $\boldsymbol{\lambda}_k^{t,\tau}=\mathbf{C}_k^t(\prod_{i=1}^{t-\tau}\mathbf{A}_k^{t+1-i})$ .
+
+#### A.3 Proof of concept for VJP
+
+As a proof of concept of why  $(dl^t/d\mathbf{y}^t)\mathbf{C}_{\boldsymbol{\theta}}^t\mathbf{h}^t$  can computed with vjp, we present an explicit and simple example. We have  $\mathbf{y} = [y_1, y_2]$ ,  $\mathbf{h} = [h_1, h_2, h_3]$ ,  $\boldsymbol{\theta} = \vec{\boldsymbol{\theta}}$ . We then have
+
+$$\frac{dl}{d\mathbf{y}} = \begin{bmatrix} l_{y_1} & l_{y_2} \end{bmatrix} \in \mathbb{R}^{1 \times P}$$
+
+$$\mathbf{C}_{\boldsymbol{\theta}} = \begin{bmatrix} C_{11}^{\vec{\theta}} & C_{12}^{\vec{\theta}} & C_{13}^{\vec{\theta}} \\ C_{21}^{\vec{\theta}} & C_{22}^{\vec{\theta}} & C_{23}^{\vec{\theta}} \end{bmatrix} \in \mathbb{R}^{P \times N \times |\boldsymbol{\theta}|}$$
+
+$$\mathbf{h} = \begin{bmatrix} h_1 \\ h_2 \\ h_3 \end{bmatrix} \in \mathbb{R}^{N \times 1}$$
+
+With each  $C_{ij}^{\vec{\theta}} = [\partial C_{ij}/\partial \theta_1, \dots, \partial C_{ij}/\partial \theta_{|\theta|}] \in \mathbb{R}^{|\theta|}$ . We have
+
+$$\frac{\mathrm{d}l}{\mathrm{d}y} \mathbf{C}_{\theta} \mathbf{h} = C_{11}^{\vec{\theta}} l_{y_1} h_1 + C_{21}^{\vec{\theta}} l_{y_2} h_1 + C_{12}^{\vec{\theta}} l_{y_1} h_2 + C_{22}^{\vec{\theta}} l_{y_2} h_2 + C_{13}^{\vec{\theta}} l_{y_1} h_3 + C_{23}^{\vec{\theta}} l_{y_2} h_3$$
+
+$$= [l_{y_1} h_1 \ l_{y_1} h_2 \ l_{y_1} h_3 \ l_{y_2} h_1 \ l_{y_2} h_2 \ l_{y_2} h_3] \cdot [C_{11}^{\vec{\theta}} \ C_{12}^{\vec{\theta}} \ C_{13}^{\vec{\theta}} C_{21}^{\vec{\theta}} \ C_{22}^{\vec{\theta}} \ C_{23}^{\vec{\theta}}]$$
+
+$$= \operatorname{sum} \left( \left( \begin{bmatrix} l_{y_1} \\ l_{y_2} \end{bmatrix} \otimes [h_1 \ h_2 \ h_3] \right) \circ \begin{bmatrix} C_{11}^{\vec{\theta}} \ C_{12}^{\vec{\theta}} \ C_{23}^{\vec{\theta}} \ C_{23}^{\vec{\theta}} \end{bmatrix} \right)$$
+
+where  $\cdot$  is vector dot product,  $\otimes$  is vector outer product,  $\circ$  is element-wise product, and sum means summing all elements in a matrix.
+
+#### <span id="page-16-0"></span>A.4 Distributed tensors' locations
+
+We provide the specific location for each tensors in distributed training:
+
+Table 2: Tensors stored on each GPU, part 1.
+
+| GPU index          | $\mid \mathrm{d}l(\mathbf{o}^t)/\mathrm{d}y_K^t$ | $h_k^t$                                                                                                                           |
+|--------------------|--------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| v = 1              | $t = 1, \ldots, T$                               | $t=1,\ldots,T;\ k=1,\ldots K//\Upsilon$<br>$t=1,\ldots,T;\ k=K//\Upsilon+1,\ldots,2(K//\Upsilon)$                                 |
+| v=2                | $t=1,\ldots,T$                                   | $t=1,\ldots,T;\ k=K//\Upsilon+1,\ldots,2(K//\Upsilon)$                                                                            |
+|                    |                                                  |                                                                                                                                   |
+| $v = \Upsilon - 1$ | $t=1,\ldots,T$                                   | $t=1,\ldots,T; k=(\Upsilon-2)(K//\Upsilon)+1,\ldots,(\Upsilon-1)(K//\Upsilon)$                                                    |
+| $v = \Upsilon$     | $t=1,\ldots,T$                                   | $t = 1,, T; k = (\Upsilon - 2)(K//\Upsilon) + 1,, (\Upsilon - 1)(K//\Upsilon) t = 1,, T; k = (\Upsilon - 1)(K//\Upsilon) + 1,, K$ |
+
+Table 3: Tensors stored on each GPU, part 2.
+
+| GPU index                                                        | $\mid C_k^t$                                                                                                                                   |
+|------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| $ \begin{aligned} \upsilon &= 1 \\ \upsilon &= 2 \end{aligned} $ | $ \begin{vmatrix} t = 1, \dots, T; \ k = 1, \dots K//\Upsilon \\ t = 1, \dots, T; \ k = K//\Upsilon + 1, \dots, 2(K//\Upsilon) \end{vmatrix} $ |
+|                                                                  | $ \begin{array}{l} \dots \\ t = 1, \dots, T \\ t = 1, \dots, T; \ k = (\Upsilon - 1)(K//\Upsilon) + 1, \dots, K \end{array} $                  |
+
+Table 4: Tensors stored on each GPU, part 3.
+
+$$\begin{array}{c|c} \text{GPU index} & \hat{y}_k^t \\ \hline v = 1 & t = 1, \dots, T; \ k = 0, \dots K//\Upsilon - 1 \\ v = 2 & t = 1, \dots, T; \ k = K//\Upsilon, \dots, 2(K//\Upsilon) - 1 \\ \dots & \dots & \dots \\ v = \Upsilon - 1 & t = 1, \dots, T; \ k = (\Upsilon - 2)(K//\Upsilon), \dots, (\Upsilon - 1)(K//\Upsilon) - 1 \\ v = \Upsilon & t = 1, \dots, T; \ k = (\Upsilon - 1)(K//\Upsilon), \dots, K - 1 \\ \hline \end{array}$$
+
+Table 5: Tensors stored on each GPU, part 4.
+
+$$\begin{array}{c|c} \text{GPU index} & A_k^t \\ \hline v=1 & t=2,\ldots,T; \ k=1,\ldots K//\Upsilon \\ v=2 & t=2,\ldots,T; \ k=K//\Upsilon+1,\ldots,2(K//\Upsilon) \\ \ldots & \cdots \\ v=\Upsilon-1 & t=2,\ldots,T; \ k=(\Upsilon-2)(K//\Upsilon)+1,\ldots,(\Upsilon-1)(K//\Upsilon) \\ v=\Upsilon & t=2,\ldots,T; \ k=(\Upsilon-1)(K//\Upsilon)+1,\ldots,K \end{array}$$
+
+Table 6: Tensors stored on each GPU, part 5.
+
+<span id="page-16-1"></span>
+
+| rable of Tensors stored on each of o, part 3. |                                                                                                                              |                                                                           |  |  |
+|-----------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------|--|--|
+| GPU index                                     | $\mid \boldsymbol{\theta}_k$                                                                                                 | $\operatorname{Gradient}_k$                                               |  |  |
+| v = 1                                         | $k = 1, \dots K/\Upsilon$                                                                                                    | $k=1,\ldots K//\Upsilon$                                                  |  |  |
+| $\upsilon = 2$                                | $\begin{vmatrix} k = 1, \dots K//\Upsilon \\ k = K//\Upsilon + 1, \dots, 2(K//\Upsilon) \end{vmatrix}$                       | $k = K//\Upsilon + 1, \dots, 2(K//\Upsilon)$                              |  |  |
+|                                               |                                                                                                                              | • • •                                                                     |  |  |
+| $v = \Upsilon - 1$                            | $k = (\Upsilon - 2)(K//\Upsilon) + 1, \dots, (\Upsilon - 1)(K//\Upsilon)$<br>$k = (\Upsilon - 1)(K//\Upsilon) + 1, \dots, K$ | $k = (\Upsilon - 2)(K//\Upsilon) + 1, \dots, (\Upsilon - 1)(K//\Upsilon)$ |  |  |
+| $v = \Upsilon$                                | $k = (\Upsilon - 1)(K//\Upsilon) + 1, \dots, K$                                                                              | $k = (\Upsilon - 1)(K//\Upsilon) + 1, \dots, K$                           |  |  |

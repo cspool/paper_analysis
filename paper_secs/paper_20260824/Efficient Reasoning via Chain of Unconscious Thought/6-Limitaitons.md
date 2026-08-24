@@ -1,0 +1,6 @@
+# 6 Limitaitons
+
+Although CoUT show significant improvements in token efficiency and accuracy across various models, there are some limitations when applied to specific large models like Qwen/QwQ-32B. During experiments with Qwen/QwQ-32B, we observed that no matter what prompt was used, the model's response token count remained consistently high, making it difficult to significantly reduce the number of tokens required for generating a response.
+
+Despite this challenge, CoUT still demonstrates the most balanced performance across the four datasets in Table [1.](#page-5-0) For example, on GSM8K, CoUT achieves an impressive 96% accuracy while using only 472.81 tokens—significantly outperforming CoD which uses 45% more tokens yet achieves only 52% accuracy. This pattern repeats across datasets, with CoUT consistently delivering the best accuracy-to-token ratio. What's particularly interesting is comparing these results with the CoT baseline. On SVAMP, for instance, CoUT achieves 97% accuracy with 400.91 tokens, which is almost identical to CoT's token count (404.09) but with slightly better accuracy. This suggests that on certain tasks, CoUT can match or even exceed the performance of explicit reasoning while maintaining similar token efficiency.
+

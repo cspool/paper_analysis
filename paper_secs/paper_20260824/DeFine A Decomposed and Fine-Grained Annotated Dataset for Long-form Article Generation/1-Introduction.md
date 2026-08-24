@@ -1,0 +1,34 @@
+# 1 Introduction
+
+The task of Long-Form Article Generation (LFAG) aims to enable large language models to automatically generate articles that are comprehensive, coherent, and factually accurate on various topics [\(Kasneci et al.,](#page-9-0) [2023;](#page-9-0) [Bubeck et al.,](#page-8-0) [2023a\)](#page-8-0). This
+
+<span id="page-0-1"></span>> **[图片提取文字 (无描述)]:**
+> (1) Outline Data Instruction: Please generate a directory structure for a long-form article based on the theme of 'AlphaGo'. The directory should include multiple main sections and subsections to ensure all aspects of the topic are covered. output: 1.Abstract\n 2.Main text\n 2.1 History\n 2.1.1 Match against Fan Hui\n 2.2 Versions\n 2.3 Algorithm\n 2.4 Style of play\n (2) Reference Abstract Set Data Original wikipedia page: entry name: Go is considered much more difficult for AlphaGo computers to win than other games such as[1].... Title: Deepmind AlphaGo Time: 16 September 2019 Reference[1]:-Title: Main text Source: Google Research Abstract: AlphaGo defeated a human.... Subtitle: 2.1 hsitory Outline Reference[2]: ....... (3) QA Data entry name: AlphaGo question: How did AlphaGo's matches mark a turning point in the Title + Subtitle: History + Matches history of AI? Instruction: Based on the provided references: Reference[1]: ...Reference[2].... Answering the follow question with no less than 300 words: How did AlphaGo's matches mark a turning point in the history of AI? output: AlphaGo (white) won the first game.Lee appeared to be in control throughout much of the match...
+![](_page_0_Picture_10.jpeg)
+
+Figure 1: DeFine dataset example. In our dataset, there are three distinct types of data: outline data, abstract set data, and question-answer data. These are utilized to train the model for different functions: generating outlines based on a given article topic, extracting summaries from retrieved references, and generating longform text based on the extracted summaries and outlines.
+
+task requires models not only to cover relevant topics in depth, but also to maintain consistency in logical structure and narrative flow [\(Chen et al.,](#page-8-1) [2023\)](#page-8-1). However, achieving high-quality long-form article generation remains a significant challenge due to the complexity of handling large volumes of information and maintaining coherence over extended texts.
+
+With the advent of large-scale pre-trained language models such as Gemini [\(Google,](#page-8-2) [2023\)](#page-8-2) and GPT-4 [\(OpenAI,](#page-9-1) [2023\)](#page-9-1), significant advances have been made in long-form article generation. For in-
+
+<span id="page-0-0"></span><sup>1</sup> https://github.com/DeFine-LFAG/DeFine\_Dataset
+
+<sup>1\*</sup>Minghao Hu and Li He are the corresponding authors. Contact: humh573@163.com (Minghao Hu), heli@ncut.edu.cn (Li He).
+
+stance, STORM [\(Shao et al.,](#page-9-2) [2024\)](#page-9-2) improves the quality of long-form article generation through a two-stage generation strategy; Co-STORM [\(Jiang](#page-8-3) [et al.,](#page-8-3) [2024\)](#page-8-3) introduces a collaborative dialogue mechanism, employing a round-based management strategy to facilitate AI agent discussions and collaborative research; AGENTS' ROOM [\(Huot et al.,](#page-8-4) [2024\)](#page-8-4) utilizes intelligent agent technology to simulate interactions among experts for the generation of long-form articles. Despite these advancements, these methods rely heavily on prompt engineering and AI agents, lacking datasets specifically designed for LFAG tasks to enhance fine-tuning.
+
+A significant bottleneck in LFAG research is the absence of high-quality datasets specifically designed for both outline construction and detailed long-form article generation. Existing datasets like LongLaMP [\(Kumar et al.,](#page-9-3) [2024\)](#page-9-3), while providing a benchmark for personalized long-text generation, focus primarily on individualization rather than structured article synthesis. Similarly, LongWriter [\(Bai et al.,](#page-8-5) [2024a\)](#page-8-5) enables ultra-long text generation but lacks explicit hierarchical structure and task decomposition crucial for long-form article construction. In addition, HelloBench [\(Que et al.,](#page-9-4) [2024\)](#page-9-4) provides an evaluation benchmark designed to assess LLMs' ability to generate coherent longform texts across multiple genres and tasks, yet it serves only as an evaluation tool without providing training data for model improvement. Finally, while ELI5 [\(Fan et al.,](#page-8-6) [2019\)](#page-8-6) and ASQA [\(Stelmakh](#page-9-5) [et al.,](#page-9-5) [2023\)](#page-9-5) encourage long, detailed, and wellgrounded responses for question-answer tasks, they do not offer the structured, multi-step annotations necessary for fine-grained control over long-form article generation.
+
+In this work, we address these challenges by introducting DeFine, a hierarchically decomposed and fine-grained annotated dataset specifically designed to support long-form article generation. De-Fine includes: (1) a structured breakdown of the generation process into distinct three stages: outline creation, reference retrieval and extraction, question-answer data generation, ensuring logical coherence and content organization, and (2) finegrained annotations at each stage, ensuring logical coherence and content organization. As shown in Figure [1,](#page-0-1) DeFine provides detailed supervision and control over generated content, enabling better management of task decomposition and model performance.
+
+To construct DeFine efficiently, we employ a
+
+multi-agent collaboration pipeline, where each agent specializes in a specific aspect of dataset creation. This pipeline is a combination of: (1) Data Miner: extracts and organizes structural titles and subtitles from high-quality articles to construct hierarchical outline data. (2) Cite Retriever: retrieves referenced URLs and refines the data into contentabstraction sets. (3) Q&A Annotator: generates question-answer data by applying hallucination detection algorithms and context-aware prompts. (4) Data Cleaner: ensures data integrity through rigorous cleaning from multiple perspectives, including richness, relevance, and coverage.
+
+Our main contributions are as follows:
+
+- 1) We introduce DeFine, a novel hierarchical decomposed and fine-grained annotated dataset designed to enhance long-form article generation;
+- 2) We propose a multi-agent collaboration pipeline to construct long-form article generation dataset.
+- 3) We validate the effectiveness of DeFine through the application of three LFAG baselines: web retrieval, local retrieval, and grounded reference. Experimental results show that models finetuned with DeFine outperform existing LFAG approaches in logical coherence, factual accuracy, and citation reliability.
+

@@ -1,0 +1,8 @@
+# **BudgetThinker: Empowering Budget-Aware LLM Reasoning with Control Tokens**
+
+**Hao Wen**1,<sup>∗</sup> **, Xinrui Wu**1,∗,‡ **, Yi Sun**<sup>1</sup> **, Feifei Zhang**<sup>1</sup> **, Liye Chen**1,‡ **, Jie Wang**1,‡ **, Yunxin Liu**<sup>1</sup> **, Yunhao Liu**<sup>2</sup> **, Ya-Qin Zhang**<sup>1</sup> **, Yuanchun Li**1,†
+
+**Source Code**: <https://github.com/MobileLLM/BudgetThinker>
+
+**Recent advancements in Large Language Models (LLMs) have leveraged increased test-time computation to enhance reasoning capabilities, a strategy that, while effective, incurs significant latency and resource costs, limiting their applicability in real-world time-constrained or cost-sensitive scenarios. This paper introduces BudgetThinker, a novel framework designed to empower LLMs with budget-aware reasoning, enabling precise control over the length of their thought processes. We propose a methodology that periodically inserts special control tokens during inference to continuously inform the model of its remaining token budget. This approach is coupled with a comprehensive two-stage training pipeline, beginning with Supervised Fine-Tuning (SFT) to familiarize the model with budget constraints, followed by a curriculum-based Reinforcement Learning (RL) phase that utilizes a length-aware reward function to optimize for both accuracy and budget adherence. We demonstrate that BudgetThinker significantly surpasses strong baselines in maintaining performance across a variety of reasoning budgets on challenging mathematical benchmarks. Our method provides a scalable and effective solution for developing efficient and controllable LLM reasoning, making advanced models more practical for deployment in resource-constrained and real-time environments.**
+

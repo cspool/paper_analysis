@@ -1,0 +1,2 @@
+# C. Scaling Laws
+

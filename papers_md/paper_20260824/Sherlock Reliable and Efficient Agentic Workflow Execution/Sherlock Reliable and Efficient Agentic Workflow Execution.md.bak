@@ -1,0 +1,651 @@
+# *Sherlock*: RELIABLE AND EFFICIENT AGENTIC WORKFLOW EXECUTION
+
+Yeonju Ro † \* Haoran Qiu ‡ ´Inigo Goiri ˜ ‡ Rodrigo Fonseca ‡ Ricardo Bianchini § Aditya Akella † Zhangyang Wang † Mattan Erez † Esha Choukse ‡
+
+‡Microsoft Azure Research §Microsoft Azure †The University of Texas at Austin
+
+# ABSTRACT
+
+With the increasing adoption of large language models (LLM), *agentic workflows*, which compose multiple LLM calls with tools, retrieval, and reasoning steps, are increasingly replacing traditional applications. However, such workflows are inherently error-prone: incorrect or partially correct output at one step can propagate or even amplify through subsequent stages, compounding the impact on the final output. Recent work proposes integrating *verifiers* that validate LLM output or actions, such as self-reflection, debate, or LLM-as-a-judge mechanisms. Yet, verifying every step introduces significant latency and cost overheads. In this work, we seek to answer three key questions: which nodes in a workflow are *most error-prone* and thus deserve costly verification, how to select the most *appropriate verifier for each node*, and how to use verification with minimal *impact to latency*? Our solution, *Sherlock*, addresses these using counterfactual analysis on agentic workflows to identify error-prone nodes and selectively attaching cost-optimal verifiers only where necessary. At runtime, *Sherlock* speculatively executes downstream tasks to reduce latency overhead, while verification runs in the background. If verification fails, execution is rolled back to the last verified output. Compared to the non-verifying baseline, *Sherlock* delivers an 18.3% accuracy gain on average across benchmarks. *Sherlock* reduces workflow execution time by up to 48.7% over non-speculative execution and lowers verification cost by 26.0% compared to the Monte Carlo search–based method, demonstrating that principled, fault-aware verification effectively balances efficiency and reliability in agentic workflows.
+
+# 1 INTRODUCTION
+
+Large language models (LLMs) are increasingly used across domains, from general-purpose tasks such as reasoning [\(Yao](#page-12-0) [et al.,](#page-12-0) [2023b;](#page-12-0) [Gou et al.,](#page-10-0) [2023\)](#page-10-0) and coding [\(Huang et al.,](#page-11-0) [2023;](#page-11-0) [Zhang et al.,](#page-12-0) [2024b\)](#page-12-0) to high-stakes applications like medical diagnosis [\(Ghezloo et al.,](#page-10-0) [2025\)](#page-10-0), scientific research [\(Aygun et al.](#page-10-0) ¨ , [2025\)](#page-10-0), and data center management [\(Zhaodong Wang & Zhang,](#page-12-0) [2025\)](#page-12-0). For complex tasks, a single inference often proves insufficient; instead, these tasks are decomposed into multiple LLM calls (i.e., subtasks) involving tool use, retrieval, and aggregation. This decomposition results in an *agentic workflow*, naturally modeled as a graph where nodes represent operations (e.g., API call or LLM inference) and edges capture information flow and dependencies.
+
+Motivation. LLM inference is inherently error-prone and may produce incorrect results due to hallucinations, reasoning flaws, or inadequate context [\(Yao et al.,](#page-12-0) [2023a;](#page-12-0) [Boye](#page-10-0) [& Moell,](#page-10-0) [2025\)](#page-10-0). In agentic workflows, these errors are particularly problematic: mistakes made in the early nodes propagate down along the edges, amplifying as they go downstream, and contaminate the final output. To address this, researchers have proposed numerous verification methods, such as self-reflection [\(Madaan et al.,](#page-11-0) [2023\)](#page-11-0), debate [\(Du](#page-10-0) [et al.,](#page-10-0) [2023\)](#page-10-0), self-consistency [\(Wang et al.,](#page-12-0) [2023\)](#page-12-0), and LLMas-a-Judge [\(Zheng et al.,](#page-12-0) [2023\)](#page-12-0), to validate LLM outputs and improve the safety and reliability of LLM inferences. While effective, each verification incurs additional LLM calls, significantly increasing both latency along the critical path and monetary cost (e.g., up to 28.9× and 53.2× for instructionfollowing and coding benchmarks, respectively). Verifying only the terminal node in a workflow wastes compute resources and misses opportunities to stop error propagation early in the graph, and exhaustive verification across all nodes adds a prohibitively high overhead.
+
+Challenges. Despite its importance, verification remains poorly understood, with several challenges limiting its deployment. First, identifying vulnerable nodes is difficult—existing frameworks offer little insight into how local errors affect final outcomes, leading to uninformed verifier
+
+<sup>\*</sup> Yeonju Ro is affiliated with the University of Texas at Austin, but was at Microsoft Azure Research during this work. Correspondence to: Esha Choukse <esha.choukse@microsoft.com>, Yeonju Ro <yro@cs.utexas.edu>.
+
+placement or costly end-to-end tuning (Niu et al., 2025; Zhang et al., 2024a; Hu et al., 2024; Sun et al., 2021). Second, verifier effectiveness and cost vary across tasks and node types, making it hard to balance accuracy and efficiency; expensive verifiers are not always the most cost-effective for a given accuracy. Third, verification can stall execution, as downstream nodes wait for verifiers to finish, creating bottlenecks and latency issues that undermine online responsiveness.
+
+Our Work. We present Sherlock, an agent-serving framework that achieves cost-efficient and reliable execution of agentic workflows through selective verification and speculative execution. Unlike static strategies, Sherlock adapts to workflow structure and task context through a learningbased design. It first performs fault-injection-based vulnerability analysis (§5) to identify error-prone nodes and quantify their influence on final outputs, enabling globally informed verifier placement. The policies learned in this phase are topological, rather than graph-specific, allowing the application of Sherlock to dynamically generated agentic workflows. A learning-based selector (§6) then predicts the cost-optimal verifier per node via preference learning that models each verifier's relative utility considering performance and cost. Finally, a speculative execution runtime (§7) overlaps verification and computation to mask verifier latency, adaptively managing rollback to balance latency reduction and re-execution cost.
+
+Sherlock enables executing complex and dynamically generated agentic workflows efficiently while maintaining high reliability and controllable verification cost. In summary, our key contributions are:
+
+- Vulnerability-Guided Verifier Placement. We perform counterfactual fault injection—based vulnerability analysis to identify error-prone nodes and guide globally informed verifier placement across the workflow.
+- Cost-Optimal Verifier Selection. We develop an intelligent, dynamic verifier selector that learns to choose the most cost-effective verifier for a given node, balancing accuracy improvement against verification cost.
+- Speculative Verification Runtime. We introduce a speculative execution framework that overlaps verification and computation, supported by rollback and recovery mechanisms to ensure correctness under detected errors.
+- End-to-end Evaluation. We integrate these components into *Sherlock*, a unified system that delivers both high reliability and low latency for complex agentic workflows. Compared to a non-verifying baseline, *Sherlock* delivers an 18.3% accuracy gain on average—best in class compared to verifying baselines, while achieving up to 48.7% execution time reduction and 26.0% cost reduction.
+
+![](_page_1_Figure_8.jpeg)
+
+Figure 1. Example agentic workflow where a user submits a task in natural language and an LLM-based planner generates a workflow composed of multiple subtasks (W1–W4). Each node may involve various tools (e.g., web search, file retrieval). In this work, we assume adding per-node verifiers (V1–V4).
+
+![](_page_1_Figure_10.jpeg)
+
+Figure 2. State-of-the-art LLM verifiers. Grey indicates extra LLM calls from verification, and each dollar emoji indicates an advanced model (more expensive). Judge indicates a judge LLM.
+
+# 2 BACKGROUND
+
+#### 2.1 Agentic Workflows
+
+In an agentic workflow, a complex task is decomposed into *subtasks* that collectively form a *workflow*, typically represented as a graph. Each node in the workflow represents a *subtask* handled by an agent consisting of an LLM call, optionally augmented with tool invocations (e.g., web search or retrieval). Each edge represents the *output* (or history *context*) passed from the upstream node to its child node.
+
+An agentic workflow can be statically defined using state-of-the-art agent programming frameworks such as Lang-Graph (LangChain, 2025) and Agent Framework (Microsoft, 2025). Recently, *dynamic* workflow generation methods (Sun et al., 2021; Niu et al., 2025; Hu et al., 2024; Zhang et al., 2024a) propose using *LLM planners* to constructs the workflow on demand from task descriptions. Figure 1 shows an example workflow generated from a user task.
+
+#### 2.2 LLM Verifiers
+
+LLM outputs and agent actions are error-prone, and may contain hallucinations or logical errors (Cemri et al., 2025; Lin et al., 2025), requiring additional *verifier* stages (Figure 2). *Self-refine* (Madaan et al., 2023) recalls the same model to critique and revise its output, while a stronger vari-
+
+<span id="page-2-0"></span>![](_page_2_Figure_1.jpeg)
+
+Figure 3. Verifier Characterization. Comparison of different verifiers' performance across task categories. Latency and cost are normalized to baseline execution latency and cost.
+
+ant (Advanced-Refine) delegates the critique to a larger external model that is more capable but costly. Self-consistency (Wang et al., 2023) instead relies on statistical agreement, sampling multiple answers and trusting the majority. LLM-as-a-Judge (Zheng et al., 2023) and Debate (Du et al., 2023) both introduce an external evaluator: the former compares independent responses, whereas the latter allows the models to argue and refine iteratively before judgment. Although we focus on these representative verifier types, Sherlock can seamlessly integrate new verifier paradigms as they develop.
+
+# 3 VERIFIER CHARACTERISTICS
+
+#### 3.1 Verifier Overhead
+
+While verifiers improve the reliability of LLM outputs, they also add measurable latency and cost. Figure 3 quantifies each verifier's accuracy gain, normalized cost, and latency across task categories<sup>1</sup>. Verification can increase inference latency and monetary cost by up to **28.9×** and **53.2×**, respectively, compared to execution without verification—largely due to additional LLM calls and token usage for feedback generation, judgment, or multi-round reasoning. These results represent the overhead for a *single verifier* applied to a single output. In agentic workflows with multiple intermediate nodes, verifying only the final node misses opportunities for early correction and efficient re-execution with verifier feedback, whereas verifying every node compounds overhead through repeated verification steps.
+
+<u>Insight 1:</u> Verifiers bring significant cost and latency overhead, underscoring the need for principled verifier placement strategies in an agentic workflow.
+
+![](_page_2_Figure_9.jpeg)
+
+Figure 4. Verifier utility by task. Utility is computed as  $accuracy\_gain - \lambda \cdot cost$ , with higher values indicating better cost effectiveness. Detailed explanation on verifiers utility in §6.
+
+## 3.2 Task-Dependent Accuracy-Cost Tradeoff
+
+Figure 3 shows the tradeoff between accuracy and cost across verifiers. This relationship is *non-monotonic*: higher cost does not necessarily yield better accuracy. In some cases, excessive or misapplied verification can even *reduce* accuracy, as redundant checks introduce inconsistencies or conflicting judgments. Because verifier efficacy and cost vary substantially across tasks, certain verifiers provide meaningful accuracy gains, while others incur comparable or higher costs with only marginal improvement.
+
+Figure 4 shows the utility for each task and verifier. Tasks within the same category can favor *different* cost-optimal verifiers, revealing fine-grained variability in their effectiveness. This heterogeneity makes a single global verifier configuration inefficient, underscoring the need for a cost-aware, task-specific verifier selection strategy that dynamically balances accuracy and efficiency at runtime.
+
+Insight 2: Verifiers have distinct accuracy improvements and cost behaviors, which are highly task dependent.
+
+<sup>&</sup>lt;sup>1</sup>Details on cost computation and benchmarks in Appx. A.
+
+<span id="page-3-0"></span>Figure 5. Verified Output Redundancy. Match rate denotes the proportion of verified outputs matching the originals.
+
+#### 3.3 Verification Redundancy
+
+We measure how often a verifier's revised output matches the original LLM output. Figure 5 reports the match rate across task categories. Most verifiers retain a large portion of original outputs, with match rates commonly above 0.6-0.8 for Instruction, Code, and Math tasks. Self-Refine and Adv-Refine show lower rates in Code and Tool tasks, indicating more frequent revisions, while Self-Consistency and LLM-as-a-Judge generally preserve high fidelity. The Tool category shows the most variation, with some verifiers dropping to 0.10-0.13, underscoring strong task dependence. Overall, verifications often introduce only minor changes—motivating *speculative execution*, where downstream subtasks proceed in parallel with verification to cut latency without sacrificing output quality.
+
+<u>Insight 3:</u> Revised output after verification may not necessarily change from its original output.
+
+![](_page_3_Figure_6.jpeg)
+
+Figure 6. Overview of the Sherlock architecture.
+
+#### 4 SHERLOCK OVERVIEW
+
+Driven by the insights from our characterization (§3), we design *Sherlock*, a framework that enables reliable and efficient execution of agentic workflows by dynamically (1) identifying vulnerable nodes, (2) selecting and deploying the cost-optimal verifier for those nodes, and (3) enabling speculative execution to further reduce the performance overhead imposed by verifiers. To achieve this on dynamically generated agentic workflows, *Sherlock* only requires on-boarding for new *domains*, rather than for each new workflow.
+
+**Online Phase.** As depicted in Figure 6, during the online
+
+phase of *Sherlock*, a learned topological vulnerability estimator (§5) is used to decide the priority order of nodes for attaching verifiers, and a learned verifier selector (§6) is used to select the cost-optimal verifiers for each of those nodes. All of this is done to maximize the accuracy while meeting the cost budget SLO from the user. To minimize latency, *Sherlock* employs **speculative execution** (§7), a fast-path strategy that proceeds to subsequent nodes without waiting for verifier results. If a verifier later revises an output, the similarity between revised output and initial output is computed. If the similarity is lower than threshold, **selective rollback** of affected nodes is performed, trading off recomputation for reduced end-to-end latency. The aggressiveness of speculation and rollback is tunable, allowing adaptation to different reliability–performance trade-offs.
+
+**Domain On-boarding Phase.** There are three learned parts in Sherlock: a topological vulnerability estimator, a verifier selector, and a similarity threshold to decide whether to rollback. For a new domain, Sherlock needs example workflows with representative execution traces that include the prompts, outputs generated per execution node, and the ground truth for the final output. Sherlock can then analyze these traces to characterize node-level fault patterns and verifier effectiveness. From these observations, a topologyaware verifier placement policy (§5) is derived, that prioritizes vulnerable nodes to verify within a given cost budget. In parallel, a **verifier selector** (§6) is trained, that learns to choose the most cost-efficient verifier for each task prompt and context. The selector is trained using Group Relative Policy Optimisation (GRPO) (Shao et al., 2024) on preference data defined by the trade-off between accuracy gain and verification cost. Furthermore, Sherlock quantifies the similarity between generated outputs and ground-truth execution traces, empirically establishing per-metric thresholds to decide when two answers can be considered equivalent.
+
+*Sherlock* distills structural and empirical priors from onboarding into runtime policies that unify *offline* learning and *online* control, achieving Pareto-optimal trade-offs among accuracy, latency, and cost.
+
+#### 5 IDENTIFYING ERROR-PRONE NODES
+
+Given the substantial overhead of verifier execution (Insight 1), a natural question arises: which nodes in a work-
+
+flow deserve such costly verification? To answer that question, we need to understand the fault propagation patterns of workflows. In this section, we define a fault model, introduce a fault injection method that emulates real-world agent failure modes to derive each node's vulnerability, and finally, propose a topological vulnerability estimator that allows dynamic application to new workflows.
+
+#### 5.1 Fault Model for Agents
+
+Accurate vulnerability estimation requires injected faults to closely replicate realistic failure modes and their empirical occurrence frequencies. Each node in an agentic workflow can be abstracted as a composition of four elements: (1) the context received from upstream nodes, (2) the node's objective or instruction prompt, (3) the agent executor (e.g., LLM generation or tool invocation), and (4) the node's output. We apply fault injection to (1), (2), and (4), to understand the importance of each executor node, leading to three primary classes of failure modes (Table 1):
+
+- Behavioral deviation using prompt replacement: simulates behavior deviation by modifying the original task directive.
+- *Context-loss*: simulates context-loss by removing full or partial conversation history from upstream.
+- Execution faults using output replacement: simulates execution faults by replacing outputs with faulty or inconsistent ones.
+
+Table 1 also presents the failure occurrence rates derived from prior work (Cemri et al., 2025), which analyzed large-scale execution traces of multi-agent workflows to quantify how often each failure class occurs in practice. We adopt their empirical distribution, after mapping their scenarios to our failure modes, to ensure our injected faults reflect realistic operational conditions<sup>2</sup>.
+
+![](_page_4_Figure_8.jpeg)
+
+Figure 7. Failure rate by sampling configuration changes.
+
+### 5.2 Fault Injection in Workflows
+
+The fault injection begins by executing the pipeline under normal conditions to obtain the baseline output y. For any selected node n, we sample a fault from the fault model and generate a counterfactual outputs  $\{o'_n\}$  from that node.
+
+Then the downstream computations are re-executed to yield an alternative final result y'. We quantify the deviation  $\Delta(y,y')$  for each fault using final accuracy metric, capturing how much the final outcome shifts due to the injected fault. Finally, we aggregate these deviations into an overall sensitivity score, defined as:
+
+vulnerability\_estimate
+$$(n) = \mathbb{E}_{\text{faults}}[\Delta]$$
+.
+
+This captures the expected degradation in pipeline correctness if node n were to experience errors, and serves as a basis for guiding verifier placement.
+
+However, a unique confounding factor in LLMs is the stochasticity introduced by sampling configurations (e.g., temperature, Top-p, Top-k) (Troshin et al., 2025), which directly affects the observed failure rate (Figure 7). To eliminate this source of randomness, we fix the temperature to 0 during fault injection experiments.
+
+![](_page_4_Figure_17.jpeg)
+
+Figure 8. Error distribution by node position and parent count.
+
+#### 5.3 Topological Error Distribution
+
+Based on our fault model, we systematically inject faults into each node of the workflows generated by the LLM planner (Niu et al., 2025) while running a diverse set of benchmarks: *CoTCollection* (Kim et al., 2023), *OMEGA* (Sun et al., 2025) and *HumanEval* (Chen et al., 2021), resulting in 100+ different graphs and 15K+ execution traces. Figure 8 summarizes the aggregated error distribution across all experiments, highlighting how structural and positional properties of workflow nodes affect error propagation, leading to three key observations:
+
+Position-wise Sensitivity. Terminal nodes are the most vulnerable to faults, followed by initial nodes, while intermediate nodes contribute least to end-to-end failure propagation. This occurs because downstream nodes can often correct intermediate errors, whereas terminal nodes lack recovery paths. Initial nodes are an exception as early misinterpretations of the instruction can cascade through the workflow.
+
+**Fan-in Degree.** Fan-in degree (the number of incoming dependencies) shows a strong positive correlation with node vulnerability: nodes that aggregate multiple inputs are more likely to amplify or propagate upstream errors.
+
+**Fan-out Degree.** We observe little to no correlation between fan-out (the number of child nodes) and the overall error
+
+<sup>&</sup>lt;sup>2</sup>Frequencies are rescaled after excluding control-flow-related failures (e.g., step repetition, termination control), as well as verification-related failures, which we address in this paper.
+
+Sherlock: Reliable and Efficient Agentic Workflow Serving with Selective Verification and Speculative Execution
+
+<span id="page-5-0"></span>
+
+| Failure Mode         | Example                                                                                                                      | Injected Fault     | Injected Fault Detail                                       | Frequency |
+|----------------------|------------------------------------------------------------------------------------------------------------------------------|--------------------|-------------------------------------------------------------|-----------|
+| Behavioral deviation | Misinterpretation of instruction or assigned role                                                                            | Prompt replacement | Modifying the original task directive                       | 28.63%    |
+| Context-loss         | Loss of full or partial conversational history; missing inter-agent information                                              | Context dropping   | Removing full or partial conversation history from upstream | 18.68%    |
+| Execution faults     | Erroneous reasoning; task derailment; incoherent reasoning-action sequence; runtime failure (e.g., syntax/formatting errors) | Output replacement | Replacing outputs with faulty or inconsistent ones          | 52.69%    |
+
+Table 1. Mapping between failure modes, representative examples, corresponding injected faults, and their empirical frequencies.
+
+magnitude (therefore not shown in the figure), suggesting that branching alone does not amplify vulnerability.
+
+#### 5.4 Derived Topology-based Policy
+
+Motivated by the observed error distribution in the domains of our tested benchmarks, we design a simple yet effective heuristic to guide verifier placement under a cost budget for verification. Our policy prioritizes nodes that contribute most to final output corruption (Algorithm 1). First, terminal nodes are always selected, as they directly determine the correctness of the final result. Next, initial nodes are prioritized to detect early-stage faults that propagate broadly. For intermediate nodes, higher fan-in leads to higher priority. Based on this priority, we decide which nodes to verify within the available budget by focusing on the most vulnerable nodes.
+
+Although we observe that this policy is very robust, and generalizes well across the domains our benchmarks represent, the policy can be learned for each new domain. Furthermore, it can be extended to include more features like model-type, or node functionality, as per the domain's needs. However, it is important to keep it independent of any workflow-specific features, to allow dynamic agentic workflows in runtime.
+
+## Algorithm 1 Topology-driven Verifier Placement
+
+**Require:** Workflow graph G = (V, E), verifier budget k
+
+- 1:  $order \leftarrow []$
+- 2: order.append(terminal\_node)
+- 3: order.append(initial\_node)
+- $4: intermediates \leftarrow sort\_by\_fanin(intermediate\_nodes)$
+- 5: order.extend(intermediates)
+- 6:  $selected \leftarrow order[: k]$
+- 7: return selected
+
+## 6 COST-OPTIMAL VERIFIER SELECTION
+
+After identifying the error-prone nodes to add verifiers, the next step is to select which verifier to attach at each node. Verifier behavior varies significantly across tasks (Figure 4), and their accuracy—cost relationship is highly non-linear: higher cost does not necessarily translate to higher accuracy (Insight 2). This task-dependent variability makes a single global configuration or rule-based verifier selection (e.g., building a lookup table) inefficient, motivating a learning-
+
+based approach that adapts to node- and task-specific dynamics. We formalize the verifier selection problem and propose a runtime, learning-based method for dynamic workflows.
+
+#### 6.1 Verifier Selection Problem
+
+Given a node to verify, we formulate the verifier selection as a preference learning problem (Chu & Ghahramani, 2005), aiming to learn a policy that captures task-specific preferences among candidate verifiers. For a set of verifiers  $\mathcal{V} = \{v_1, v_2, \dots, v_N\}$  and their observed accuracy-cost pairs  $(P(v_i, \tau), C(v_i, \tau))$  on prompts  $\tau$  sampled from the dataset  $\mathcal{D}$ , we define a preference score for each verifier as
+
+$$U(v_i, \tau) = P(v_i, \tau) - \lambda C(v_i, \tau), \tag{1}$$
+
+where  $\lambda$  is a tunable hyperparameter that controls the trade-off between performance and cost.  $P(v_i,\tau)$  denotes the performance gain (i.e., accuracy improvement) achieved by verifier  $v_i$  on task  $\tau$ , and  $C(v_i,\tau)$  represents the additional computational cost incurred by using  $v_i$  on task  $\tau$ .
+
+We formulate this as the Lagrangian relaxation of a constrained optimization problem. Intuitively,  $\lambda$  represents the *willingness to pay*—the marginal cost the system is willing to incur for improved performance. *Sherlock* allows users to balance accuracy and cost by tuning the parameter  $\lambda$ , which serves as a system-level knob to control this trade-off.
+
+## 6.2 Preference-Based Policy Optimization
+
+We train a policy model  $f_{\theta}(\cdot \mid \tau)$  that, given a task prompt  $\tau \in \mathcal{D}$ , outputs a probability distribution over the candidate verifiers  $\mathcal{V} = \{v_1, v_2, \ldots, v_N\}$ . Each probability  $f_{\theta}(v_i \mid \tau)$  represents the likelihood of selecting verifier  $v_i$  conditioned on the prompt  $\tau$ . We optimize the policy via Group Relative Policy Optimization (GRPO), which maximizes the expected log-likelihood of verifier selections weighted by their relative advantages:
+
+$$J_{\text{GRPO}}(\theta) = \mathbb{E}_{\tau \sim \mathcal{D}} \left[ \sum_{i=1}^{N} A(v_i, \tau) \log f_{\theta}(v_i \mid \tau) \right]. \quad (2)$$
+
+where the advantage term  $A(v_i,\tau)$  normalizes each verifier's preference score within the group:
+
+$$A(v_i, \tau) = U(v_i, \tau) - \frac{1}{N} \sum_{j=1}^{N} U(v_j, \tau).$$
+ (3)
+
+<span id="page-6-0"></span>In implementation, we minimize the negative objective,  $\mathcal{L}_{GRPO} = -J_{GRPO}$ , to perform gradient descent.
+
+This formulation enables the model to learn verifier preferences that are robust to variations in task utility scales, allowing it to adapt to task-specific trade-offs between accuracy and cost. At inference time, given a new task prompt  $\tau$ , the Verifier Selector outputs a distribution  $f_{\theta}(v_i \mid \tau)$  over all candidate verifiers, from which the verifier with the highest predicted preference is selected for runtime deployment.
+
+#### 6.3 Training Data and Model
+
+Our training dataset  $\mathcal{D}$  consists of task prompts  $\tau_i$  (sampled from a diverse set of agentic benchmarks described in Appendix. A) paired with the observed accuracy and cost of all candidate verifiers  $\mathcal{V} = \{v_1, \dots, v_N\}$ . Each sample is represented as follows.
+
+$$d_i = (\tau_i, \{P(v_j, \tau_i), C(v_j, \tau_i)\}_{j=1}^N)$$
+
+Each prompt  $\tau_i$  is encoded into a feature vector  $x_i = \phi(\tau_i)$  using the pretrained distilbert-base encoder (Sanh et al., 2019). These representations serve as input features for the policy model  $f_{\theta}(\cdot \mid \tau)$ , while the preference scores determine the per-task relative advantages during optimization. The policy model  $f_{\theta}(\cdot \mid \tau)$  applies linear layers to the encoded features to produce logits over  $\mathcal{V}$ , which are normalized into a preference distribution that defines the model's selection policy.
+
+#### 7 SPECULATIVE EXECUTION
+
+Our characterization in §3 shows that verifier-revised outputs often remain semantically consistent with the model's original outputs (Insight 3). This reveals a key inefficiency in existing workflows: the system idles during verification even though most outputs are correct. To mitigate this, we introduce *speculative execution*, which overlaps verification of a node with its downstream nodes' computation to hide verifier latency, while being able to *rollback* when the verifier outcomes diverge.
+
+Figure 9 shows an example of speculative execution. Once node W1 completes, *Sherlock* immediately launches its verifier in the background while concurrently executing child nodes (W2, W3). If verification later confirms that W1's output was correct, the speculative results are retained. Otherwise, they are rolled back to restore correctness.
+
+When verification fails, it indicates that the speculative paths were executed with an incorrect intermediate output. In this case, *Sherlock* performs a **rollback** to the failed node, discarding all dependent speculative results (Figure 10). The verifier's corrected output is then propagated forward, and the invalidated nodes are rescheduled for execution.
+
+![](_page_6_Figure_11.jpeg)
+
+Figure 9. An example speculative execution timeline.
+
+![](_page_6_Figure_13.jpeg)
+
+Figure 10. Rollback after verification.
+
+## 7.1 When to Run Ahead: Trade-offs and Cost Model
+
+Speculative execution introduces a fundamental **cost-latency trade-off**. By speculating deeper along the workflow, *Sherlock* overlaps more downstream computation with verification, reducing total latency but at the risk of wasting more compute when a rollback occurs. Hence, latency generally decreases at a higher speculative cost.
+
+**Speculation Depth Bound.** In *Sherlock*, speculation is bounded by the verifier latency of the current node. Once the verifier for node i completes, the system either commits or discards all speculative results based on the verification outcome. This sets a hard bound on how far the pipeline can safely advance. We define the set of downstream nodes that can be speculated within this latency window as:
+
+$$N_{\text{spec}} = \left\{ j \mid \sum_{k=i}^{j} \operatorname{lat}_{\text{exec}}^{(k)} < \operatorname{lat}_{\text{vrf}}^{(i)} \right\}. \tag{4}$$
+
+That is, only nodes in the downstream region whose cumulative execution latency fits within the verifier's latency window are eligible for speculation.
+
+**Budget-Constrained Speculation.** Within this bound, users can further tune a *speculation budget* B, which controls how much additional compute overhead is acceptable. The total speculative cost at node i must satisfy:
+
+$$C_{\text{spec}}(d) \le B,$$
+ (5)
+
+The interplay between the verifier latency and cost budget defines the feasible speculation region or depth for each node in the workflow graph. <span id="page-7-0"></span>**Cost Model.** To quantify speculative cost, we leverage the *match rate*  $m_i$ —the probability that the verifier agrees with the executor output (see Figure 5). Rollback occurs with probability  $(1-m_i)$ , incurring wasted compute across all speculated nodes within  $N_{\rm spec}$ . The expected speculative cost at node i is therefore:
+
+$$C_{spec}^{i} = (1 - m_i) \cdot \sum_{j \in N_{spec}} \left( C_{exec}^{j} + C_{vrf}^{j} \right)$$
+ (6)
+
+This formulation ties speculation depth, verifier latency, and budget into a unified model, allowing *Sherlock* to reason about when speculation is beneficial and how aggressively to execute it.
+
+**Parallel Downstream Execution.** The previous equations assume sequential downstream execution. In practice, nodes at the same depth may execute in parallel. We therefore refine the latency constraint as follows:
+
+$$\sum_{l=1}^{d} \max_{j \in \mathcal{D}_l} \operatorname{lat}_{\operatorname{exec}}^{(j)} < \operatorname{lat}_{\operatorname{vrf}}^{(i)}, \tag{7}$$
+
+where  $\mathcal{D}l$  is the set of nodes at depth l downstream of node i, and  $latexec^{(j)}$  denotes the execution latency of node j. The summation proceeds over depth levels up to d. Accordingly, the set of eligible speculative nodes is:
+
+$$N_{\text{spec}} = \left\{ j \mid \sum_{l=1}^{\text{depth}(j)} \max_{k \in \mathcal{D}_l} \text{lat}_{\text{exec}}^{(k)} < \text{lat}_{\text{vrf}}^{(i)} \right\}. \tag{8}$$
+
+## 7.2 Selective Rollback
+
+When verification revises an output, *Sherlock* determines whether the speculative results can still be retained. If the verifier's revision is semantically equivalent to the original output, rollback is unnecessary. Otherwise, dependent nodes are reverted and re-executed.
+
+To make this decision efficiently, *Sherlock* defines task-specific similarity metrics that quantify output equivalence. Because LLM responses are often verbose or stylistically diverse, simple string matching is too rigid to capture nuanced similarity (Bulian et al., 2022). While LLM-based evaluators can assess semantic similarity more accurately (Adlakha et al., 2024), they require additional inference calls and introduce substantial latency (i.e., each LLM call takes 2–3 seconds on average, whereas these metrics run in under 0.05 seconds). To avoid this overhead, *Sherlock* uses lightweight similarity metrics widely adopted in natural language evaluation (Song et al., 2024; Niwattanakul et al., 2013; Lin, 2004; Papineni et al., 2002; Makhoul et al., 1999).
+
+In the offline analysis (Appx. C), we evaluate each metric's alignment with ground-truth answer equivalence using Spearman correlation and AUC (Table 5). ROUGE-L
+
+| Component       | Model                   | Size | GPUs |
+|-----------------|-------------------------|------|------|
+| LLM-as-a-Judge  | Qwen2.5-Instruct        | 7B   | 1    |
+| Debate          | Qwen2.5-Instruct        | 7B   | 1    |
+| Advanced-Refine | Llama-3.3-Instruct      | 70B  | 4    |
+| Judge Model     | Selene-1-Mini-Llama-3.1 | 8B   | 1    |
+
+Table 2. LLM configurations used for different verifiers. Models of LLM-as-a-Judge and Debate indicate a secondary executor. The primary executor is Llama-3.1-Instruct-8B with 2 GPUs.
+
+achieves the highest consistency for instruction-following and tool-use tasks ( $\rho\approx0.55,\,\mathrm{AUC}\approx0.85),\,\mathrm{while}$  all metrics collapse to random performance for code and math (AUC  $\approx0.5).\,$  Accordingly, at runtime, <code>Sherlock</code> retains speculative results when ROUGE-L exceeds a threshold for instruction-following and tool-use tasks, but conservatively defaults to full rollback for code and math tasks.
+
+#### 8 EVALUATION
+
+#### 8.1 Setup and Evaluation Methodology
+
+**Setup and Models.** Our experiments run on a server with 8×NVIDIA A100 GPUs (80 GB each). We use vLLM (Kwon et al., 2023) to serve the models. For the base executor, we use meta-llama/Llama-3.1-8B-Instruct (Dubey et al., 2024) on 2 GPUs. Advanced-Refine verifier uses meta-llama/Llama-3.3-70B-Instruct (Dubey et al., 2024) running on 4 GPUs. The secondary executor for LLM-as-a-Judge and Debate verifier uses Qwen/Qwen2.5-7B-Instruct (Bai et al., 2023b) on 1 GPU. We use AtlaAI/Selene-1-Mini-Llama-3.1-8B (Alexandru et al., 2025) on 1 GPU as the judge model in LLM-as-a-Judge verifier.
+
+Benchmarks. We evaluate *Sherlock* on representative agent benchmarks including CoTCollection (Kim et al., 2023), OMEGA (Sun et al., 2025), and LiveCodeBench (Jain et al., 2024). CoTCollection consists of instruction-following tasks that demand multi-step reasoning and planning capabilities. OMEGA is a math benchmark, and we specifically use its compositional subset, which requires integrating multiple reasoning skills learned in isolation. LiveCodeBench includes diverse code-related tasks such as code generation, code execution, and test output prediction. Each benchmark has a mix of instruction-following, coding, math, and tool-calling subtasks as shown in Figure 11 (right).
+
+**Workflow Generation.** To generate a workflow, we use a state-of-the-art LLM planner, Flow (Niu et al., 2025), with customized prompts Appx. D.8. Figure 11 shows the generated workflow's characteristics per benchmark.
+
+**Baselines** For each component, we compare *Sherlock* against the most relevant baselines. For verifier placement, we evaluate against even and random placement heuristics under the same cost budget. For verifier selection,
+
+<span id="page-8-0"></span>![](_page_8_Figure_1.jpeg)
+
+Figure 11. Benchmark characterization for topological properties of the node.
+
+we compare with (1) *static* selections of the same verifier across the board, (2) *Aflow*, a Monte Carlo search-based approach (Zhang et al., 2024a) that incrementally expands workflows by adding new nodes such as debate and self-consistency modules during iterative search, (3) a *tabular* approach that selects the cost-optimal verifier for each task category, and (4) an *oracle*, that chooses the cheapest verifier that gives the correct answer for each node.
+
+The *tabular* approach classifies each node into four categories: instruction-following, coding, math, or tool-use. We train a task classifier using microbenchmark prompts as inputs and their task categories as labels. We use ModernBERT as a classifier, which achieves near 98% task classification F1 score.
+
+**Evaluation Metrics.** We evaluate *Sherlock* along three dimensions: accuracy, latency, and cost. For *accuracy*, we adopt the default metric in each benchmark, i.e., percentage points for CoTCollection and OMEGA, and pass@1 rate for LiveCodeBench. For *latency*, we define two complementary metrics: (1) *Time to End Execution* (T<sub>exec</sub>) measures how long it takes to finish all execution in one graph, reflecting the latency of *the fast path* that is achievable by speculative execution. (2) *Time to End Verification* (T<sub>vrf</sub>) measures the total duration until the final verified output is available, representing the latency of *the slow path* that includes all verification stages. Figure 9 visualizes these two metrics. Finally, we compute the *verifier cost* according to a cost model (Appx. A.2) since we serve open-source models locally.
+
+#### 8.2 Verifier Placement
+
+We evaluate *Sherlock*'s topology-aware verifier placement (§5.4) by comparing it to random and evenly spaced placements under the same verification budget. All methods use the same verifier selection, isolating placement as the only variable. Figure 12 shows that *Sherlock* consistently achieves higher final accuracy with less budget. This demonstrates that *Sherlock* allocates verification resources more effectively than uninformed strategies by leveraging observed error distributions.
+
+![](_page_8_Figure_8.jpeg)
+
+Figure 12. Accuracy improvement with different placement strategy. Sherlock uses the policy described in Section 5.4.
+
+![](_page_8_Figure_10.jpeg)
+
+Figure 13. Accuracy-cost trade-off across verifier selections. Sher-lock (blue dots) lies on the Pareto frontier (red dashed line) and approaches the oracle, achieving high cost efficiency.
+
+#### **8.3** Verifier Selection
+
+Figure 13 shows the accuracy–cost trade-off achieved by *Sherlock*'s verifier selector (§6). Using the microbenchmark described in Appx. A, we train the selector and evaluate its accuracy and average cost per task based on the verifier it chooses. For each problem, we define the oracle verifier as the one that achieves the highest accuracy gain at the lowest cost. Compared to static verifier assignments, *Sherlock* consistently follows the Pareto frontier. It achieves higher accuracy for the same cost and approaches the accuracy of
+
+the oracle (i.e., the best accuracy that can be achieved with the given set of executors and verifiers).
+
+Using the cost-optimal verifier selector checkpoint, we evaluate the end-to-end accuracy of three agentic benchmarks with *Sherlock*. Figure 14 shows the final accuracy and total verification cost comparison. Compared to the tabular approach, *Sherlock* consistently achieves higher accuracy at a lower cost. We also compare *Sherlock* against AFlow (Zhang et al., 2024a), a Monte Carlo Tree Search–based framework for discovering agentic workflows. Across all tasks, *Sherlock* consistently delivers higher accuracy and lower cost, primarily due to its dynamic verifier selector that adapts flexibly to task characteristics.
+
+![](_page_9_Figure_3.jpeg)
+
+Figure 14. End-to-end comparison with the state-of-the-art approaches in final accuracy and verifier cost.
+
+#### 8.4 Speculative Execution
+
+Figure 15 shows the CDFs of *Sherlock*'s time to end execution ( $T_{\rm exec}$ ) and time to end verification ( $T_{\rm vrf}$ ) latencies (§7). Table 3 summarizes the latency reductions achieved through speculative execution. Speculative execution substantially reduces latency across all benchmarks, with the largest gains observed in **LiveCodeBench**, where mean  $T_{\rm exec}$  drops by **62.9%** and  $T_{\rm vrf}$  by **48.7%**. These results show that overlapping verification with downstream execution can effectively hide verifier delays, particularly in complex multi-step reasoning tasks. CoTCollection and OMEGA also show consistent  $T_{\rm exec}$  reductions exceeding **50%**, confirming that the benefit generalizes across diverse workflows and latency profiles.
+
+![](_page_9_Figure_7.jpeg)
+
+Figure 15. Comparison of Time to end execution ( $T_{\rm exec}$ ) and Time to end verification ( $T_{\rm vrf}$ ) regarding Sherlock speculation.
+
+|               |                                                    | Mean           | P50            | P90            | P99            |
+|---------------|----------------------------------------------------|----------------|----------------|----------------|----------------|
+| CoTCollection | $T_{exec} \\ T_{vrf}$                              | 51.4%<br>21.9% | 44.8%<br>18.5% | 60.8%<br>24.9% | 67.7%<br>52.0% |
+| OMEGA         | $\begin{array}{c} T_{exec} \\ T_{vrf} \end{array}$ | 53.4%<br>30.6% | 64.5%<br>41.1% | 72.7%<br>34.7% | 4.8%<br>5.5%   |
+| LiveCodeBench | T <sub>exec</sub><br>T <sub>vrf</sub>              | 62.9%<br>48.7% | 61.3%<br>49.1% | 65.9%<br>53.3% | 62.1%<br>52.6% |
+
+Table 3. Latency reduction with speculative execution.
+
+### 9 RELATED WORK
+
+Agentic Workflow Generation and Optimization. Recent work has explored automating agentic workflow generation to improve response quality through iterative search (Hu et al., 2024; Zhang et al., 2024a), LLM-based generation (Li et al., 2024; Liu et al., 2025b; Niu et al., 2025), and finetuning (Wu et al., 2025). This line of work is complementary to *Sherlock* and can benefit from *Sherlock*'s selective verification and speculative execution to balance accuracy, cost, and latency. Compared to iterative-search or fine-tuning-based approaches, *Sherlock* employs a lightweight strategy that combines heuristics and learned verifier selection for fast adaptability to online tasks. Compared to LLM-based workflow generators, *Sherlock* systematically augments generated workflows with its dynamic verification policies.
+
+Serving Agentic Workflows. Murrakab (Chaudhry et al., 2025) highlights the inefficiency of existing agent-serving systems that treat workflows as opaque sequences of model and tool calls, tightly coupling agent logic with hardware and model choices. Circinus (Liu et al., 2025a) introduces an SLO-aware query planner for compound AI workloads, optimizing operator placement and configuration across heterogeneous infrastructure. Complementary to these, Parrot (Luo et al., 2025b), Autellix (Luo et al., 2025a), and AI Metropolis (Xie et al., 2024) explore scheduling and orchestration for multi-step agentic workflows. LLMSelector (Chen et al., 2025) further shows that end-to-end performance improves with stronger individual nodes in a workflow. Speculative Actions (Ye et al., 2025) and Conveyor (Xu et al., 2024) enable asynchronous execution of LLM actions and tool calls in the background. Sherlock is the first framework that holistically explores the trade-offs between cost, accuracy, and latency by exploiting speculative execution opportunities with intelligent verifier selection for agentic workflows.
+
+#### 10 CONCLUSION
+
+We presented *Sherlock*, a principled serving framework for agentic workflows that jointly optimizes latency, cost, and accuracy. *Sherlock* identifies and verifies error-prone nodes through counterfactual analysis and dynamic verifier selection, effectively balancing reliability and efficiency. To
+
+<span id="page-10-0"></span>further reduce verification overhead, it employs selective speculative execution and rollback, overlapping verification with downstream computation while controlling rollback cost. *Sherlock* also exposes user-configurable knobs to flexibly trade off reliability, latency, and cost on demand. Overall, *Sherlock* delivers up to 48.7% execution latency reduction and 26.0% cost reduction over baselines.
+
+# REFERENCES
+
+- Adlakha, V., BehnamGhader, P., Lu, X. H., Meade, N., and Reddy, S. Evaluating correctness and faithfulness of instruction-following models for question answering. *Transactions of the Association for Computational Linguistics*, 12:681–699, 2024.
+- Alexandru, A., Calvi, A., Broomfield, H., Golden, J., Dai, K., Leys, M., Burger, M., Bartolo, M., Engeler, R., Pisupati, S., et al. Atla selene mini: A general purpose evaluation model. *arXiv preprint arXiv:2501.17195*, 2025.
+- Austin, J., Odena, A., Nye, M., Bosma, M., Michalewski, H., Dohan, D., Jiang, E., Cai, C., Terry, M., Le, Q., et al. Program synthesis with large language models. *arXiv preprint arXiv:2108.07732*, 2021.
+- Aygun, E., Belyaeva, A., Comanici, G., Coram, M., Cui, H., ¨ Garrison, J., Kast, R. J. A., McLean, C. Y., Norgaard, P., Shamsi, Z., Smalling, D., Thompson, J., Venugopalan, S., Williams, B. P., He, C., Martinson, S., Plomecka, M., Wei, L., Zhou, Y., Zhu, Q.-Z., Abraham, M., Brand, E., Bulanova, A., Cardille, J. A., Co, C., Ellsworth, S., Joseph, G., Kane, M., Krueger, R., Kartiwa, J., Liebling, D., Lueckmann, J.-M., Raccuglia, P., Xuefei, Wang, Chou, K., Manyika, J., Matias, Y., Platt, J. C., Dorfman, L., Mourad, S., and Brenner, M. P. An ai system to help scientists write expert-level empirical software, 2025. URL <https://arxiv.org/abs/2509.06503>.
+- Bai, J., Bai, S., Chu, Y., Cui, Z., Dang, K., Deng, X., Fan, Y., Ge, W., Han, Y., Huang, F., Hui, B., Ji, L., Li, M., Lin, J., Lin, R., Liu, D., Liu, G., Lu, C., Lu, K., Ma, J., Men, R., Ren, X., Ren, X., Tan, C., Tan, S., Tu, J., Wang, P., Wang, S., Wang, W., Wu, S., Xu, B., Xu, J., Yang, A., Yang, H., Yang, J., Yang, S., Yao, Y., Yu, B., Yuan, H., Yuan, Z., Zhang, J., Zhang, X., Zhang, Y., Zhang, Z., Zhou, C., Zhou, J., Zhou, X., and Zhu, T. Qwen technical report, 2023a. URL [https://arxiv.org/](https://arxiv.org/abs/2309.16609) [abs/2309.16609](https://arxiv.org/abs/2309.16609).
+- Bai, J., Bai, S., Chu, Y., Cui, Z., Dang, K., Deng, X., Fan, Y., Ge, W., Han, Y., Huang, F., et al. Qwen technical report. *arXiv preprint arXiv:2309.16609*, 2023b.
+- Boye, J. and Moell, B. Large language models and mathematical reasoning failures. *arXiv preprint arXiv:2502.11574*, 2025.
+
+- Bulian, J., Buck, C., Gajewski, W., Borschinger, B., and ¨ Schuster, T. Tomayto, tomahto. beyond token-level answer equivalence for question answering evaluation. *arXiv preprint arXiv:2202.07654*, 2022.
+- Cemri, M., Pan, M. Z., Yang, S., Agrawal, L. A., Chopra, B., Tiwari, R., Keutzer, K., Parameswaran, A., Klein, D., Ramchandran, K., et al. Why do multi-agent llm systems fail? *arXiv preprint arXiv:2503.13657*, 2025.
+- Chaudhry, G. I., Choukse, E., Qiu, H., Goiri, ´I., Fonseca, R., Belay, A., and Bianchini, R. Murakkab: Resourceefficient agentic workflow orchestration in cloud platforms. *arXiv preprint arXiv:2508.18298*, 2025.
+- Chen, L., Davis, J. Q., Hanin, B., Bailis, P., Zaharia, M., Zou, J., and Stoica, I. Optimizing model selection for compound ai systems. *arXiv preprint arXiv:2502.14815*, 2025.
+- Chen, M., Tworek, J., Jun, H., Yuan, Q., Pinto, H. P. D. O., Kaplan, J., Edwards, H., Burda, Y., Joseph, N., Brockman, G., et al. Evaluating large language models trained on code. *arXiv preprint arXiv:2107.03374*, 2021.
+- Chu, W. and Ghahramani, Z. Preference learning with Gaussian processes. In *Proceedings of the 22nd international conference on Machine learning*, pp. 137–144, 2005.
+- Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H., Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano, R., et al. Training verifiers to solve math word problems. *arXiv preprint arXiv:2110.14168*, 2021.
+- Du, Y., Li, S., Torralba, A., Tenenbaum, J. B., and Mordatch, I. Improving factuality and reasoning in language models through multiagent debate. In *Forty-first International Conference on Machine Learning*, 2023.
+- Dua, D., Wang, Y., Dasigi, P., Stanovsky, G., Singh, S., and Gardner, M. Drop: A reading comprehension benchmark requiring discrete reasoning over paragraphs. *arXiv preprint arXiv:1903.00161*, 2019.
+- Dubey, A., Jauhri, A., Pandey, A., Kadian, A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A., Yang, A., Fan, A., et al. The llama 3 herd of models. *arXiv e-prints*, pp. arXiv–2407, 2024.
+- Ghezloo, F., Seyfioglu, M. S., Soraki, R., Ikezogwo, W. O., Li, B., Vivekanandan, T., Elmore, J. G., Krishna, R., and Shapiro, L. Pathfinder: A multi-modal multi-agent system for medical diagnostic decision-making applied to histopathology, 2025. URL [https://arxiv.org/](https://arxiv.org/abs/2502.08916) [abs/2502.08916](https://arxiv.org/abs/2502.08916).
+- Gou, Z., Shao, Z., Gong, Y., Shen, Y., Yang, Y., Huang, M., Duan, N., and Chen, W. Tora: A tool-integrated
+
+- <span id="page-11-0"></span>reasoning agent for mathematical problem solving. *arXiv preprint arXiv:2309.17452*, 2023.
+- Hu, S., Lu, C., and Clune, J. Automated design of agentic systems. *arXiv preprint arXiv:2408.08435*, 2024.
+- Huang, D., Zhang, J. M., Luck, M., Bu, Q., Qing, Y., and Cui, H. Agentcoder: Multi-agent-based code generation with iterative testing and optimisation. *arXiv preprint arXiv:2312.13010*, 2023.
+- HuggingFaceH4. instruction-dataset, 2025a. [https://huggingface.co/datasets/](https://huggingface.co/datasets/HuggingFaceH4/instruction-dataset) [HuggingFaceH4/instruction-dataset](https://huggingface.co/datasets/HuggingFaceH4/instruction-dataset).
+- HuggingFaceH4. MATH500, 2025b. [https://huggingface.co/datasets/](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) [HuggingFaceH4/MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500).
+- Jain, N., Han, K., Gu, A., Li, W.-D., Yan, F., Zhang, T., Wang, S., Solar-Lezama, A., Sen, K., and Stoica, I. Livecodebench: Holistic and contamination free evaluation of large language models for code. *arXiv preprint arXiv:2403.07974*, 2024.
+- Kim, S., Joo, S. J., Kim, D., Jang, J., Ye, S., Shin, J., and Seo, M. The CoT collection: Improving zero-shot and fewshot learning of language models via chain-of-thought fine-tuning. *arXiv preprint arXiv:2305.14045*, 2023.
+- Kwon, W., Li, Z., Zhuang, S., Sheng, Y., Zheng, L., Yu, C. H., Gonzalez, J., Zhang, H., and Stoica, I. Efficient memory management for large language model serving with pagedattention. In *Proceedings of the 29th symposium on operating systems principles*, pp. 611–626, 2023.
+- LangChain. LangGraph, 2025. [https://www.](https://www.langchain.com/langgraph) [langchain.com/langgraph](https://www.langchain.com/langgraph).
+- Li, Z., Xu, S., Mei, K., Hua, W., Rama, B., Raheja, O., Wang, H., Zhu, H., and Zhang, Y. Autoflow: Automated workflow generation for large language model agents. *arXiv preprint arXiv:2407.12821*, 2024.
+- Lin, C.-Y. Rouge: A package for automatic evaluation of summaries. In *Text summarization branches out*, pp. 74–81, 2004.
+- Lin, X., Ning, Y., Zhang, J., Dong, Y., Liu, Y., Wu, Y., Qi, X., Sun, N., Shang, Y., Cao, P., et al. LLM-based agents suffer from hallucinations: A survey of taxonomy, methods, and directions. *arXiv preprint arXiv:2509.18970*, 2025.
+- Liu, B., Lin, W.-Y., Fang, M., Jiang, Y., and Lai, F. Circinus: Efficient query planner for compound ML serving. *arXiv preprint arXiv:2504.16397*, 2025a.
+
+- Liu, J., Zeng, Y., Zhang, S., Zhang, C., Højmark-Bertelsen, M., Gadeberg, M. N., Wang, H., and Wu, Q. Divide, optimize, merge: Fine-grained llm agent optimization at scale, 2025b. URL [https://arxiv.org/abs/](https://arxiv.org/abs/2505.03973) [2505.03973](https://arxiv.org/abs/2505.03973).
+- Luo, M., Shi, X., Cai, C., Zhang, T., Wong, J., Wang, Y., Wang, C., Huang, Y., Chen, Z., Gonzalez, J. E., et al. Autellix: An efficient serving engine for LLM agents as general programs. *arXiv preprint arXiv:2502.13965*, 2025a.
+- Luo, Y., Yang, Z., Meng, F., Li, Y., Zhou, J., and Zhang, Y. An empirical study of catastrophic forgetting in large language models during continual fine-tuning, 2025b. URL <https://arxiv.org/abs/2308.08747>.
+- Madaan, A., Tandon, N., Gupta, P., Hallinan, S., Gao, L., Wiegreffe, S., Alon, U., Dziri, N., Prabhumoye, S., Yang, Y., et al. Self-refine: Iterative refinement with selffeedback. *Advances in Neural Information Processing Systems*, 36:46534–46594, 2023.
+- Makhoul, J., Kubala, F., Schwartz, R., Weischedel, R., et al. Performance measures for information extraction. In *Proceedings of DARPA broadcast news workshop*, volume 249, pp. 252. Herndon, VA, 1999.
+- Microsoft. Agent Framework, 2025. [https://github.](https://github.com/microsoft/agent-framework) [com/microsoft/agent-framework](https://github.com/microsoft/agent-framework).
+- Niu, B., Song, Y., Lian, K., Shen, Y., Yao, Y., Zhang, K., and Liu, T. Flow: Modularized agentic workflow automation. *ICLR*, 2025.
+- Niwattanakul, S., Singthongchai, J., Naenudorn, E., and Wanapu, S. Using of jaccard coefficient for keywords similarity. In *Proceedings of the international multiconference of engineers and computer scientists*, volume 1, pp. 380–384, 2013.
+- Papineni, K., Roukos, S., Ward, T., and Zhu, W.-J. Bleu: a method for automatic evaluation of machine translation. In *Proceedings of the 40th annual meeting of the Association for Computational Linguistics*, pp. 311–318, 2002.
+- Sanh, V., Debut, L., Chaumond, J., and Wolf, T. Distilbert, a distilled version of bert: smaller, faster, cheaper and lighter. *arXiv preprint arXiv:1910.01108*, 2019.
+- Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang, H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. *arXiv preprint arXiv:2402.03300*, 2024.
+
+- <span id="page-12-0"></span>Song, Y., Lothritz, C., Tang, D., Bissyande, T. F., and Klein, ´ J. Revisiting code similarity evaluation with abstract syntax tree edit distance. *arXiv preprint arXiv:2404.08817*, 2024.
+- Sun, D., Vlasic, D., Herrmann, C., Jampani, V., Krainin, M., Chang, H., Zabih, R., Freeman, W. T., and Liu, C. Autoflow: Learning a better training set for optical flow. In *Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition*, pp. 10093–10102, 2021.
+- Sun, Y., Hu, S., Zhou, G., Zheng, K., Hajishirzi, H., Dziri, N., and Song, D. Omega: Can llms reason outside the box in math? evaluating exploratory, compositional, and transformative generalization. *arXiv preprint arXiv:2506.18880*, 2025.
+- Troshin, S., Mohammed, W., Meng, Y., Monz, C., Fokkens, A., and Niculae, V. Control the temperature: Selective sampling for diverse and high-quality LLM outputs. In *Proceedings of the Second Conference on Language Modeling (CoLM 2025)*, 2025. URL [https:](https://openreview.net/forum?id=IyOC5GCzv4) [//openreview.net/forum?id=IyOC5GCzv4](https://openreview.net/forum?id=IyOC5GCzv4).
+- Wang, J., Zerun, M., Li, Y., Zhang, S., Chen, C., Chen, K., and Le, X. Gta: a benchmark for general tool agents. *Advances in Neural Information Processing Systems*, 37: 75749–75790, 2024a.
+- Wang, X., Wei, J., Schuurmans, D., Le, Q., Chi, E., Narang, S., Chowdhery, A., and Zhou, D. Self-consistency improves chain of thought reasoning in language models, 2023. URL [https://arxiv.org/abs/2203.](https://arxiv.org/abs/2203.11171) [11171](https://arxiv.org/abs/2203.11171).
+- Wang, Y., Si, S., Li, D., Lukasik, M., Yu, F., Hsieh, C.-J., Dhillon, I. S., and Kumar, S. Two-stage llm fine-tuning with less specialization and more generalization, 2024b. URL <https://arxiv.org/abs/2211.00635>.
+- Wu, S., Sarthi, P., Zhao, S., Lee, A., Shandilya, H., Grobelnik, A. M., Choudhary, N., Huang, E., Subbian, K., Zhang, L., et al. Optimas: Optimizing compound AI systems with globally aligned local rewards. *arXiv preprint arXiv:2507.03041*, 2025.
+- Xie, Z., Kang, H., Sheng, Y., Krishna, T., Fatahalian, K., and Kozyrakis, C. AI metropolis: Scaling large language model-based multi-agent simulation with out-of-order execution. *arXiv preprint arXiv:2411.03519*, 2024.
+- Xu, Y., Kong, X., Chen, T., and Zhuo, D. Conveyor: Efficient tool-aware LLM serving with tool partial execution. *arXiv preprint arXiv:2406.00059*, 2024.
+- Yang, Z., Qi, P., Zhang, S., Bengio, Y., Cohen, W. W., Salakhutdinov, R., and Manning, C. D. Hotpotqa: A dataset for diverse, explainable multi-hop question answering. *arXiv preprint arXiv:1809.09600*, 2018.
+
+- Yao, J.-Y., Ning, K.-P., Liu, Z.-H., Ning, M.-N., Liu, Y.-Y., and Yuan, L. Llm lies: Hallucinations are not bugs, but features as adversarial examples. *arXiv preprint arXiv:2310.01469*, 2023a.
+- Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., and Cao, Y. React: Synergizing reasoning and acting in language models. In *International Conference on Learning Representations (ICLR)*, 2023b.
+- Ye, N., Ahuja, A., Liargkovas, G., Lu, Y., Kaffes, K., and Peng, T. Speculative Actions: A lossless framework for faster agentic systems. *arXiv preprint arXiv:2510.04371*, 2025.
+- Zhang, J., Xiang, J., Yu, Z., Teng, F., Chen, X., Chen, J., Zhuge, M., Cheng, X., Hong, S., Wang, J., et al. Aflow: Automating agentic workflow generation. *arXiv preprint arXiv:2410.10762*, 2024a.
+- Zhang, K., Li, J., Li, G., Shi, X., and Jin, Z. Codeagent: Enhancing code generation with tool-integrated agent systems for real-world repo-level coding challenges. *arXiv preprint arXiv:2401.07339*, 2024b.
+- Zhaodong Wang, Samuel Lin, G. Y. S. G. M. Y. J. Z. N. H. L. B. S. P. S. K. J. Y. and Zhang, Y. Intent-driven network management with multi-agent llms: The confucius framework. In *Proceedings of the ACM SIGCOMM*, 2025.
+- Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin, Z., Li, Z., Li, D., Xing, E., et al. Judging llm-as-a-judge with mt-bench and chatbot arena. *Advances in Neural Information Processing Systems*, 36: 46595–46623, 2023.
+
+# <span id="page-13-0"></span>A COST AND LATENCY OVERHEAD OF VERIFIERS
+
+## A.1 Microbenchmarks
+
+In this paper, we use following microbenchmarks.
+
+- Instruction-following tasks: HotpotQA [\(Yang et al.,](#page-12-0) [2018\)](#page-12-0), DROP [\(Dua et al.,](#page-10-0) [2019\)](#page-10-0), Instruction [\(HuggingFaceH4,](#page-11-0) [2025a\)](#page-11-0)
+- Math tasks: MATH [\(HuggingFaceH4,](#page-11-0) [2025b\)](#page-11-0), GSM8k [\(Cobbe et al.,](#page-10-0) [2021\)](#page-10-0)
+- Coding tasks: Humaneval [\(Chen et al.,](#page-10-0) [2021\)](#page-10-0), MBPP [\(Austin et al.,](#page-10-0) [2021\)](#page-10-0)
+- Tool-calling tasks: GTA [\(Wang et al.,](#page-12-0) [2024a\)](#page-12-0)
+
+#### A.2 Verifier Cost Calculation
+
+Each verifier incurs different costs, which can be calculated as the sum of model cost and GPU cost. Model cost refers to the expense of using closed-source APIs—for example, commercial LLMs—whereas open-source models like the LLaMA family [\(Dubey et al.,](#page-10-0) [2024\)](#page-10-0) and Qwen family [\(Bai et al.,](#page-10-0) [2023a\)](#page-10-0) do not incur model costs. However, serving these open-source models requires compute resources, leading to GPU costs.
+
+Model cost typically depends on the number of tokens in the prompt (input) and response (output), with output tokens generally priced higher. GPU cost is determined by the number of GPUs used and the duration of use. Given unit cost, GPU cost can be calculate as follows.
+
+$$GPU\_cost = \frac{unit\_price \times num\_gpus \times num\_tokens}{throughput_{max} \times cluster\_utilization_{avg}}$$
+(9)
+
+In our setup, we deploy open-source models for the executors, advanced feedback model, and judge on an 8-GPU server costing \$13.60 per hour (*unit price*). We allocate 2 GPUs to the main executor model, 1 GPU to secondary executor model, 1 GPU to the judge model, and 4 GPUs to the advanced feedback model.
+
+## A.3 Judge LLM and Majority Answer
+
+For Self-consistency, the majority answer can be obtained either by generation (sc-gen), where a new response is produced from the set of executor outputs, or by selection (sc-select), where an existing executor response closest to the majority is chosen. sc-gen provides higher-quality outputs by smoothing superficial variations (e.g., wording, formatting) but incurs additional generation cost. By contrast, sc-select is more efficient, requiring only a single token to identify the nearest executor, but cannot reconcile divergent responses when no exact overlap exists.
+
+The relative effectiveness of sc-gen and sc-select varies across tasks, largely due to the specialization of the Judge LLM. Since the Judge model is fine-tuned specifically for evaluation, such specialization can degrade its general instructionfollowing ability [\(Luo et al.,](#page-11-0) [2025b;](#page-11-0) [Wang et al.,](#page-12-0) [2024b\)](#page-12-0), often leading it to disregard formatting constraints given in prompts. This negatively impacts tasks requiring strict output structure, such as code generation or tool invocation. Consequently, sc-gen with a general-purpose model (e.g., LLaMA-8B) outperforms sc-gen with the Judge LLM on Tools and Code tasks. In contrast, for sc-select, the Judge LLM proves more effective, yielding superior solutions on Tools and Code tasks and achieving comparable accuracy on QA tasks (Tab 4).
+
+|                       | QA    |        | Tools | Code      |       |  |  |
+|-----------------------|-------|--------|-------|-----------|-------|--|--|
+|                       | Drop  | Hotpot | GTA   | Humaneval | MBPP  |  |  |
+| No-verify             | 59.0% | 74.5%  | 65.8% | 60.8%     | 44.5% |  |  |
+| sc-gen (Judge LLM)    | 58.0% | 70.5%  | 39.7% | 65.2%     | 49.9% |  |  |
+| sc-gen (llama3-8b)    | 55.0% | 68.0%  | 50.4% | 65.9%     | 52.0% |  |  |
+| sc-select (Judge LLM) | 62.0% | 75.5%  | 71.4% | 76.2%     | 58.1% |  |  |
+| sc-select (llama3-8b) | 63.0% | 76.0%  | 67.7% | 69.5%     | 57.4% |  |  |
+
+Table 4. Generation-based vs. Selection-based Majority Answer (sc-gen vs. sc-select)
+
+# B SPECULATIVE EXECUTION STATE MACHINE DIAGRAM
+
+Internally, *Sherlock* manages workflow execution using a node-state machine. Each node begins in the waiting state, transitions to running during computation, and then to either verifying or completed, depending on whether verification is required. While a node is verifying, its child nodes may begin execution speculatively. If verification succeeds, the node transitions to completed; if verification fails, it transitions to failed, triggering rollback ([§7.2\)](#page-7-0). The full state transition diagram is shown in Figure 16 .
+
+## FSM Definition:
+
+- States: Q = {waiting, running, verifying, completed, failed}
+- Alphabet: Σ = {run, verify, no-verify, success, fail, rerun}
+- Initial state: q<sup>0</sup> = waiting
+- Accepting state: F = {completed}
+- Transition function δ is defined as:
+
+| Current State | Input     | Next State |  |  |
+|---------------|-----------|------------|--|--|
+| waiting       | run       | running    |  |  |
+| running       | verify    | verifying  |  |  |
+| running       | no-verify | completed  |  |  |
+| verifying     | success   | completed  |  |  |
+| verifying     | fail      | failed     |  |  |
+| failed        | rerun     | completed  |  |  |
+
+### State Diagram:
+
+![](_page_14_Figure_16.jpeg)
+
+Figure 16. Finite State Machine definition and diagram
+
+# <span id="page-15-0"></span>C LIGHTWEIGHT SIMILARITY METRICS FOR PRACTICAL ROLLBACK
+
+| Metric             | Instruction |       | Tool     |       | Code     |       | Math     |       |
+|--------------------|-------------|-------|----------|-------|----------|-------|----------|-------|
+|                    | Spearman    | AUC   | Spearman | AUC   | Spearman | AUC   | Spearman | AUC   |
+| Cosine Similarity  | 0.314       | 0.687 | 0.368    | 0.717 | 0.028    | 0.516 | −0.324   | 0.262 |
+| Jaccard Similarity | 0.411       | 0.740 | 0.272    | 0.620 | 0.134    | 0.577 | −0.436   | 0.237 |
+| RougeL             | 0.556       | 0.828 | 0.668    | 0.877 | 0.099    | 0.557 | −0.205   | 0.349 |
+| BLEU               | 0.381       | 0.723 | 0.267    | 0.618 | 0.057    | 0.533 | −0.449   | 0.230 |
+| AST Similarity     | 0.200       | 0.589 | 0.427    | 0.712 | –        | 0.500 | –        | 0.500 |
+
+Table 5. Spearman correlation and AUC of similarity metrics across task categories. Higher values indicate stronger alignment with ground-truth answer equivalence. ROUGE performs best for instruction and tool tasks, while all metrics fail for code and math (AUC ≈ 0.5).
+
+To determine whether a verifier's revision is different enought to invalidate speculative executions on initial answer, we seek lightweight similarity metrics that can replace expensive LLM-based judges. Prior work commonly uses LLM evaluators [\(Adlakha et al.,](#page-10-0) [2024;](#page-10-0) [Bulian et al.,](#page-10-0) [2022\)](#page-10-0), but invoking them along the critical path adds substantial latency and cost. Instead, we examine a set of interpretable alternatives—cosine similarity, Jaccard similarity [\(Niwattanakul et al.,](#page-11-0) [2013\)](#page-11-0), ROUGE-L [\(Lin,](#page-11-0) [2004\)](#page-11-0), BLEU [\(Papineni et al.,](#page-11-0) [2002\)](#page-11-0), and AST similarity [\(Song et al.,](#page-12-0) [2024\)](#page-12-0).
+
+We assess each metric's alignment with the ground-truth equivalence labels (collected once using an LLM judge for calibration) via Spearman correlation and area under the ROC curve (AUC), as summarized in Table 5. For instructionfollowing and tool-use tasks, ROUGE exhibits the strongest association with the ground-truth labels (ρ ≈ 0.56 − 0.77, AUC ≈ 0.83–0.88), indicating that lexical overlap reliably captures answer equivalence in these natural-language settings. In contrast, for code-generation and math-reasoning tasks, all metrics collapse to random or even negative correlation (ρ < 0.2, AUC ≈ 0.5), confirming that lightweight metrics do not sufficiently capture the semantic equivalence.
+
+To further examine discriminative behavior, we visualize the kernel density estimation (KDE) of similarity scores for matching (gt label = 1) and non-matching (gt label = 0) pairs in Figure [17.](#page-16-0) While instruction and tool-use tasks show clear separation between the two distributions, code and math tasks exhibit substantial overlap—consistent with their near-random AUC values despite superficial shape differences in the KDE plots.
+
+These findings collectively indicate that lightweight metrics can safely replace LLM judgment for natural-language tasks but fail to capture semantic equivalence in structured or symbolic domains. Consequently, we conservatively default to rollback for code and math categories, avoiding false equivalence caused by spurious surface-level similarity.
+
+<span id="page-16-0"></span>![](_page_16_Figure_1.jpeg)
+
+Figure 17. Kernel Density Estimation (KDE) plots of similarity metrics across task categories. Each subplot compares the distributions of similarity scores for match with ground truth ( $gt \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \$ 
+
+# D PROMPTS
+
+## D.1 Scorer Prompt
+
+You are a scorer that tells whether two answers are same. I'll provide Ground truth and Prediction. You have to tell that whether the prediction is saying a correct answer same as the ground truth. If the prediction is a sentence that include the ground truth, then it is correct answer. If the prediction is an equation that ends up with the ground truth, then it is correct answer.
+
+If the answer is correct, output your final verdict by strictly following this format: "[[Correct]]" If the answer is incorrect, output your final verdict by strictly following this format: "[[Incorrect]]"
+
+Ground truth: <GROUND TRUTH> Prediction: <PREDICTION>
+
+Verdict:
+
+## D.2 Judge Prompt
+
+Please act as an impartial judge and evaluate the quality of the responses provided by two AI assistants to the user question displayed below. Your evaluation should consider correctness and helpfulness. You will be given a reference answer, assistant A's answer, and assistant B's answer. Your job is to evaluate which assistant's answer is better. Begin your evaluation by comparing both assistants' answers with the reference answer. Identify and correct any mistakes. Avoid any position biases and ensure that the order in which the responses were presented does not influence your decision. Do not allow the length of the responses to influence your evaluation. Do not favor certain names of the assistants. Be as objective as possible. Do not provide your explanation, just directly output your final verdict by strictly following this format: "[[A]]" if assistant A is better, "[[B]]" if assistant B is better, and "[[C]]" for a tie.
+
+Question: <QUESTION>
+
+Assistant A's Answer: <PREDICTION A> Assistant B's Answer: <PREDICTION B>
+
+Verdict:
+
+#### D.3 Majority Vote Prompt
+
+You are a majority voter judge that decides the most common answer. Given a set of answers to the same problem provided by different agents, determine the answer that the majority of agents think as the correct answer. Do not provide any reasoning or additional text. Just the answer.
+
+Question: <QUESTION>
+
+Assistant 1's Answer: <PREDICTION 1> Assistant 2's Answer: <PREDICTION 2> Assistant 3's Answer: <PREDICTION 3>
+
+...
+
+Assistant N's Answer: <PREDICTION N>
+
+Majority Answer:
+
+#### D.4 Rollback Prompt
+
+You are a scorer that tells whether two answers are same. I'll provide Ground truth and Prediction. You have to tell that whether the prediction is saying a correct answer same as the ground truth. If the prediction is a sentence that include the ground truth, then it is correct answer. If the prediction is an equation that ends up with the ground truth, then it is correct answer. If the answer is correct, output your final verdict by strictly following this format: "[[Correct]]" If the answer is incorrect, output your final verdict by strictly following this format: "[[Incorrect]]"
+
+Original Answer: <ORIGINAL ANSWER> Revised Answer: <REVISED ANSWER>
+
+Verdict:
+
+### D.5 Self-Refine/Advanced-Refine Prompt
+
+You are a validator tasked with evaluating the quality of task results. Your job is to provide constructive feedback aimed at improving the answer. Do not provide or suggest a corrected answer—only point out what is misaligned with the given problem, any misleading reasoning, or gaps in logic or execution. If the task involves coding, provide feedback that helps guide the generation of a working solution. This includes checking whether the syntax is correct, whether the code meets the task requirements, and pointing out potential bugs or incorrect assumptions. Again, do not write or suggest the corrected code—only critique what's wrong or missing.
+
+Question: <QUESTION>
+
+Original Answer: <ORIGINAL ANSWER>
+
+Your Feedback:
+
+#### D.6 Debate - Round 2 Prompt
+
+Given the context and question, you have answered like follows. Check your colleagues' answer and revise your answer if necessary. Revise your answer without being verbose;
+
+Question: <QUESTION>
+
+Your Answer: <ORIGINAL ANSWER> Colleague 1's Answer: <PREDICTION 1> Colleague 2's Answer: <PREDICTION 2>
+
+...
+
+Colleague N's Answer: <PREDICTION N>
+
+Revised Answer:
+
+## D.7 Debate - Judge Prompt
+
+Please act as an impartial judge and evaluate the quality of the responses provided by two AI assistants to the user question displayed below. Your evaluation should consider correctness and helpfulness. You will be given a reference answer, assistant A's answer, and assistant B's answer. Your job is to evaluate which assistant's answer is better. Begin your evaluation by comparing both assistants' answers with the reference answer. Identify and correct any mistakes. Avoid any position biases and ensure that the order in which the responses were presented does not influence your decision. Do not allow the length of the responses to influence your evaluation. Do not favor certain names of the assistants. Be as objective as possible. Do not provide your explanation, just directly output your final verdict by strictly following this format: "[[A]]" if assistant A is better, "[[B]]" if assistant B is better, and "[[C]]" for a tie.
+
+Context: <CONTEXT> Question: <QUESTION>
+
+Assistant 1's Answer: <PREDICTION 1> Assistant 2's Answer: <PREDICTION 2>
+
+...
+
+Assistant N's Answer: <PREDICTION N>
+
+Your Verdict:
+
+#### <span id="page-20-0"></span>D.8 LLM Planner Prompt
+
+–
+
+You are a workflow planner. Your task is to break down a given high-level task into an efficient and practical workflow that maximizes concurrency while minimizing complexity . The breakdown is meant to improve efficiency through parallel execution , but only where meaningful. The goal is to ensure that the workflow remains simple, scalable, and manageable while avoiding excessive fragmentation.
+
+Guidelines for Workflow Design
+
+## 1. Subtask Clarity and Completeness
+
+- Each subtask must be well-defined, self-contained, and easy to execute by a single agent.
+- Ensure that the workflow meets all requirements of the task.
+- Keep descriptions concise but informative. Clearly specify the subtask's purpose, the operation it performs, and its role in the overall workflow.
+- Avoid unnecessary subtasks. If a task can be handled efficiently in one step without blocking others, do not split it further.
+- Avoid repeating the same reasoning across tasks or nodes. Solve each problem step by step, and reuse previously computed results instead of redoing reasoning.
+
+## 2. Dependency Optimization and Parallelization
+
+- Identify only necessary dependencies. Do not introduce dependencies unless a subtask \*genuinely\* requires the output of another.
+- Encourage parallel execution, but do not force it. If tasks can run independently without affecting quality, prioritize concurrency. However, avoid excessive parallelization that may lead to synchronization issues.
+- Keep the dependency graph simple. Avoid deep dependency chains that increase complexity.
+- Terminal node should be only one. There should be only one terminal leaf node.
+
+#### 3. Efficient Agent Assignment
+
+- Assign exactly one agent per subtask. Every subtask must have a responsible agent.
+- Use sequential agent IDs starting from "Agent 0". Assign agents in a clear, structured way.
+- Ensure logical role assignments. Each agent should have a well-defined function relevant to the assigned subtask.
+
+#### 4. Workflow Simplicity, Modularity, and Maintainability
+
+- Keep each subtask modular and appropriately scoped . A single node should perform a cohesive, reasonably sized operation that can be executed in one LLM call. Avoid bundling multiple distinct steps (e.g., aggregation plus external tool use plus reasoning) into a single task.
+- Design for global simplicity. The overall workflow should have a balanced number of subtasks—enough to promote clarity and concurrency, but not so many that it creates excessive coordination or cognitive overhead.
+- Maintain clarity and logical flow. The breakdown should be intuitive, avoiding redundant or trivial steps.
+- Prioritize quality over extreme concurrency. Do not split tasks into too many small fragments if it negatively impacts output quality.
+
+### .. *Continued on the next page.*
+
+- 5. Tool Invocation and External Knowledge Access
+- Determine if external tools are needed. If the task requires factual information, real-time knowledge, or external data, consider adding a subtask that invokes tools like web search or document retrieval.
+- Add retrieval nodes explicitly. Create a separate node for fact-gathering with a clear objective, such as "search for the latest information on X".
+- Link dependencies carefully. Ensure that any task using external knowledge depends explicitly on the corresponding retrieval node.
+- Avoid blind tool use. Do not invoke tools unless the task clearly justifies it; prefer reasoning with available context if sufficient.
+- Explicitly mention "Use tools" in the task objective for this retrieval nodes.
+
+Provide the workflow in json format.

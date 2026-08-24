@@ -1,0 +1,6 @@
+# 6 Conclusion
+
+We introduced Matrix, a peer-to-peer multi-agent framework for large-scale synthetic data generation. By representing control and data flow as peer-to-peer messages and delegating computation to distributed services, Matrix eliminates centralized bottlenecks and enables efficient execution of tens of thousands of concurrent agent workflows. Matrix is modular and configurable, allowing users to easily adapt it to diverse data generation tasks and agent roles without modifying core logic. We open-source Matrix at <https://github.com/facebookresearch/matrix> to support reproducibility and further research.
+
+Limitations and future work. Matrix is not a universal fit for all multi-agent workloads. It assumes per-task orchestrator state is serializable and can be passed between agents. It is also less suitable when each step must read/write very large mutable shared state, where data movement or synchronization can dominate costs. Finally, Matrix depends on the Ray actor runtime and therefore inherits its operational constraints and failure semantics. Looking forward, we plan to provide a library of reusable orchestrator patterns and end-to-end examples, so users can instantiate common control-flow templates with minimal custom code. Future extensions will also explore multi-modal data generation and on-policy continuous data synthesis.
+

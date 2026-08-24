@@ -1,0 +1,14 @@
+# 1 Introduction
+
+We have seen an outstanding increase in the number of Transformer-based models [\(Vaswani et al.,](#page-11-0) [2017\)](#page-11-0) developed to tackle tasks from Natural Language Processing (NLP) and other domains [\(Par](#page-11-1)[mar et al.,](#page-11-1) [2018;](#page-11-1) [Dosovitskiy et al.,](#page-10-0) [2021;](#page-10-0) [Arnab](#page-9-0) [et al.,](#page-9-0) [2021;](#page-9-0) [Gong et al.,](#page-10-1) [2021\)](#page-10-1) due to their effectiveness at modeling sequences. However, these models also present critical efficiency challenges. For example, the cost of training these models scales quadratically in the sequence length. In the generation stage, Transformers, in their original form, require large caches to store the previously seen tokens. Several variants of Transformers have been proposed to address these efficiency challenges, but researchers have also explored alternative postTransformer architectures to address these limitations. *Structured state space models (SSMs)*, e.g., S4 [\(Gu et al.,](#page-10-2) [2022\)](#page-10-2), followed by *Selective state space models*, e.g., Mamba [\(Gu and Dao,](#page-10-3) [2023;](#page-10-3) [Dao and Gu,](#page-10-4) [2024\)](#page-10-4) have been proposed as efficient alternatives that achieve training time with linear scaling in sequence length, and during generation, maintain constant state size.
+
+Model compression methods, e.g., pruning and quantization, have been broadly explored and applied to Transformer-based models. However, more must be done to explore compression in their structured state space counterparts. This paper explores the pruning of these alternative architectures, presenting results that provide insights into potential opportunities to increase their efficiency without sacrificing accuracy. The rest of the paper discusses the following contributions:
+
+- A pruning solution, Mamba-Shedder, which targets structures in selective structured state space models, improving their computational and memory efficiency.
+- Comprehensive experiments to determine the tolerance of SSM-based models to the removal of their structures.
+- Insights on how the differences in the SSM building blocks and their interaction with Transformer blocks in hybrid models affect the trade-off between efficiency and accuracy.
+
+The following content is organized as follows: Section [2](#page-1-0) provides the reader with details of the alternative architectures utilized in our study and popular strategies for element removal in large models. Section [3](#page-2-0) describes methods to study network pruning in Mamba and hybrid architectures. Section [4](#page-3-0) presents the results of our experiments and ablation studies, and we offer concluding remarks in Section [5.](#page-8-0) A Related Work section is included in the Appendix.
+
+<sup>\*</sup>Co-first authors.
+

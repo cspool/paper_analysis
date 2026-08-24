@@ -1,0 +1,8 @@
+# 5 Discussion
+
+Conclusion. In this paper, we present RTR, a unified framework for jointly selecting the optimal model and reasoning strategy for each query. To the best of our knowledge, RTR is the first approach to simultaneously address both model and strategy selection in a single routing framework. By representing all candidate models and strategies as learnable embeddings, our framework predicts two key metrics for each query: the expected performance score and the answer token usage across all available model-strategy pairs. These predictions are used to construct a routing table, enabling RTR to dynamically determine the best combination of model and reasoning strategy for each query. Extensive experiments on four in-distribution and three out-of distribution datasets demonstrate that RTR consistently makes effective routing decisions, achieving a favorable trade-off between overall performance and computational cost across all of the baselines. Furthermore, RTR is capable of dynamically deciding when to invoke the reasoning mode in models with binary thinking capabilities.
+
+Limitations and Future Directions. Our current evaluation focuses on single-model selection, although incorporating collaborative decision-making across multiple models represents a promising avenue for future work. Additionally, while our experiments are centered on reasoning tasks, extending evaluation to a broader range of problem domains would further validate the framework's
+
+generality. We believe that efficient and intelligent routing systems are crucial for the future of LLMs, particularly in multi-model and resource-constrained scenarios.
+

@@ -1,0 +1,8 @@
+# **B.4 Theory-of-Mind Tracking**
+
+This task contains diverse theory-of-mind (ToM) story-question pairs that require LCLMs to track the locations and beliefs in stories about object placement. The stories follows the Sally-Anne style [Baron-Cohen et al.](#page-10-11) [\(1985\)](#page-10-11), with adaptions inspired by [He et al.](#page-11-8) [\(2023\)](#page-11-8). Each story attaches one first-order ToM question inquiring about an agent's belief of an object's location. See Prompt [F.4](#page-28-0) for an example data point.
+
+The story consists of a certain number of *steps*, which controls the difficulty of the storyquestion pair. We include five types of steps: (1) an agent moves from one room to another, (2) an agent moves an object (and the agent themselves) from one room to another, (3) an agent moves an object from one container to another within the same room, (4) an agent leaves the current room, (5) an agent enters a room. Each step stems from a random selection among the five types.
+
+The question has the form of *"Where does Agent believe Object is?"* where the target *Agent* and target *Object* are randomly chosen from the story. To reason about the agent's belief, one needs to track the steps in which the agent's belief changes, in particular, the steps where the agent sees the object being moved. As the target output in [F.4](#page-28-0) exemplifies, the search procedure mainly tracks four key aspects in each step: (1) location of target agent, (2) location of target object, (3) whether target agent sees target object, (4) target agent's current belief of target object's location. We instruct the models to closely follow this search procedure.
+

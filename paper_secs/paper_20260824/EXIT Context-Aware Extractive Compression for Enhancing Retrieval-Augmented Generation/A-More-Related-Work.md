@@ -1,0 +1,18 @@
+# A More Related Work
+
+#### A.1 Information Retrieval
+
+Advancements in information retrieval (IR) have improved retrieval efficiency, granularity, and ranking quality. Encoder-based models, such as DPR [\(Karpukhin et al.,](#page-10-10) [2020\)](#page-10-10) and Contriever [\(Izac](#page-10-1)[ard et al.,](#page-10-1) [2022\)](#page-10-1), have been widely adopted for retrieval tasks. More recently, M3-Embedding [\(Chen](#page-9-3) [et al.,](#page-9-3) [2024a\)](#page-9-3) unifies dense, multi-vector, and sparse retrieval via self-knowledge distillation, enabling retrieval across different text granularities.
+
+Decoder-only LLMs have emerged as strong rerankers, leveraging large-scale data for improved ranking at the cost of computational complexity. LLaRA [\(Li et al.,](#page-11-8) [2023a\)](#page-11-8) and RePLlama [\(Ma et al.,](#page-12-11) [2024\)](#page-12-11) employ dense retrieval and multi-stage ranking, while UPR [\(Sachan et al.,](#page-13-6) [2022\)](#page-13-6) and ranking prompting methods [\(Liang et al.,](#page-11-10) [2023;](#page-11-10) [Qin](#page-12-12) [et al.,](#page-12-12) [2024\)](#page-12-12) refine retrieval through generationbased approaches. However, these methods focus on reordering passages rather than compressing retrieved content.
+
+Research on retrieval granularity [\(Seo et al.,](#page-13-9) [2019;](#page-13-9) [Lee et al.,](#page-11-12) [2021;](#page-11-12) [Jeong et al.,](#page-10-11) [2023;](#page-10-11) [Chen](#page-9-5) [et al.,](#page-9-5) [2024b;](#page-9-5) [Hwang et al.,](#page-10-8) [2024\)](#page-10-8) explores balancing precision and contextual coherence. While fine-grained retrieval enhances specificity, excessive fragmentation can distort meaning [\(Choi et al.,](#page-9-0) [2021\)](#page-9-0). Retrieval and ranking aim to maximize recall but do not address post-retrieval redundancy. EXIT operates beyond retrieval and ranking, focusing on adaptive post-retrieval context compression, which selectively filters content to optimize both efficiency and relevance in RAG.
+
+#### A.2 Summarization
+
+Summarization methods are broadly categorized as extractive and abstractive. Extractive summarization retains factual consistency by selecting key sentences but often suffers from redundancy and coherence issues [\(Cheng and Lapata,](#page-9-6) [2016;](#page-9-6) [Narayan](#page-12-13) [et al.,](#page-12-13) [2018\)](#page-12-13). Abstractive summarization improves fluency and readability but is computationally intensive and prone to hallucination [\(See et al.,](#page-13-10) [2017;](#page-13-10) [Lewis et al.,](#page-11-13) [2020a\)](#page-11-13). Despite these challenges, its
+
+ability to generate concise outputs has driven interest in its application [\(Song et al.,](#page-13-11) [2024b;](#page-13-11) [Lee et al.,](#page-11-14) [2024;](#page-11-14) [Song et al.,](#page-13-12) [2024a\)](#page-13-12).
+
+Query-focused summarization refines document content based on relevance to a given query, removing unrelated information while preserving key details [\(Zhang et al.,](#page-14-8) [2024;](#page-14-8) [Xu et al.,](#page-14-9) [2023\)](#page-14-9). However, traditional summarization methods process single documents and prioritize completeness and faithfulness [\(Song et al.,](#page-13-12) [2024a](#page-13-12)[,b\)](#page-13-11). By contrast, post-retrieval compression in RAG requires query-adaptive filtering across multiple retrieved documents. EXIT fills this gap by providing a dynamic and query-adaptive compression strategy, distinguishing between relevant, marginal, and irrelevant content while maintaining both efficiency over latency and answer accuracy.
+

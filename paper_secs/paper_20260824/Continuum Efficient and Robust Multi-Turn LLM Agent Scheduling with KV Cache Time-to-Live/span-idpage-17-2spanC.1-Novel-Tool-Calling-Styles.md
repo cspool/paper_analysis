@@ -1,0 +1,8 @@
+# <span id="page-17-2"></span>C.1 Novel Tool-Calling Styles
+
+Thinking with tools: This pattern interleaves planning with execution: the model emits a structured intermediate plan, calls tools, integrates their feedback, and continues its chain of thought [\[3,](#page-12-5) [13,](#page-12-16) [23,](#page-12-17) [71\]](#page-15-17). In Continuum, once a tool call is emitted, the current request is considered complete; after the tool finishes, a follow-up request is enqueued with the updated context. Continuum can be extended to this scenario by implementing a tool parser as shown in in .
+
+Parallel tool calls: When sub-tasks are independent (e.g., ""How is the weather in US and UK?"), issuing multiple tool calls in parallel can shorten turn latency [\[6,](#page-12-18) [38,](#page-13-14) [52,](#page-14-15) [57,](#page-14-16) [59,](#page-14-17) [74\]](#page-15-6). By design, these calls are commutative: they may execute in any order, and their responses are appended to the context as they complete. Continuum can be extended through a function call predictor from client.
+
+Asynchronous tools: Asynchronous tool calls make execution non-blocking: each call returns a handle (a *future*/promise) that the model can later await, allowing generation to continue while tools run in the background [\[24,](#page-13-15)[26,](#page-13-16)[58\]](#page-14-18). This is especially useful for breadth-first or tree-search behaviors (e.g., deep-research or browsing agents that fan out multiple probes concurrently). This workload suits Continuum well: because the model performs little active computation between awaits, KV-cache reuse is high as long as we avoid premature eviction.
+

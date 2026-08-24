@@ -1,0 +1,8 @@
+# B Further Evaluation of Different Methods
+
+We further evaluate the performance and efficiency of different methods (Ada-R1, DPO, O1-Pruner) across varying levels of problem difficulty, as illustrated in Figure [5](#page-13-0) and Figure [6.](#page-13-1) Figure Figure [5](#page-13-0) presents the accuracy ratio of each method relative to a baseline model across different difficulty levels within the MATH dataset. The results indicate that while performance trends may vary, our proposed Ada-R1 method demonstrates strong robustness. Specifically, as the inherent difficulty of the mathematical problems increases, Ada-R1 is able to consistently maintain a high accuracy ratio.
+
+Figure [6](#page-13-1) show the ratio of average tokens consumed by each method to solve problems across the same difficulty spectrum. As expected, solving more difficult problems generally requires more reasoning steps and thus more tokens. However, Figure 2 reveals that Ada-R1 exhibits favorable token efficiency. Critically, when faced with increasing problem difficulty, Ada-R1 manages to solve these complex problems while utilizing relatively fewer tokens compared to other evaluated methods, showcasing its ability to achieve efficient reasoning even for demanding tasks.
+
+Collectively, these figures highlight Ada-R1's ability to strike a beneficial balance between accuracy and efficiency. It not only maintains high performance on challenging problems (Figure [5\)](#page-13-0) but also does so in a computationally efficient manner, particularly evident in its lower token usage for difficult instances (Figure [6\)](#page-13-1), addressing limitations observed in prior methods.
+
