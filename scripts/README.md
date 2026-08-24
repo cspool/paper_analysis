@@ -55,6 +55,7 @@
 | `paper_download.py` | 按标题或标题文件下载公开可访问论文 | `--title` 或 `--file` | PDF、`results.json` |
 | `pdf_to_md.py` | 复用 Marker 单篇或批量 PDF 转 Markdown/OCR | PDF 或 PDF 目录 | 每篇论文一个 Markdown 子目录 |
 | `paper_mdsplit_batch.py` | 按一级标题拆分每篇 Marker Markdown，并复制 JPEG | 每篇论文一个子目录的根目录 | 可供分析 Agent 使用的论文子目录 |
+| `md_image_ocr_injector.py` | 对 Markdown 引用的本地图片逐张执行 Marker OCR，并把文字原位插入图片前 | Markdown 批次目录 | 回写 Markdown，默认保留 `.bak` 备份 |
 | `run_all_papers.py` | 顺序运行 `paper-experiment-idea` 和 `paper-knowledge` | 论文子目录根目录 | experiment/idea/knowledge 汇总与 checkpoint |
 | `run_all_papers_multi_launch.py` | 并行运行 effAttn、rtrans_ssm、video_image 等硬编码配置 | 脚本内 `CONFIGS` | 多组 repo 与进度文件 |
 | `run_all_papers_multi_launch_2nd_process.py` | 并行运行 MoE、多模态 kernel 等第二组硬编码配置 | 脚本内 `CONFIGS` | 多组 repo 与进度文件 |
@@ -64,6 +65,7 @@
 | `learning_scheduler.ts` | 四阶段学习调度：问题、回答、横向总结、纵向总结 | 自然语言研究问题 | `learning_outputs` run |
 | `monitor_progress.sh` | 只读显示 learning scheduler 进度 | learning run 目录 | 终端进度面板 |
 | `idea_review_orchestrator.ts` | QA/AA 双会话盲评 Idea | Idea note 路径或论文标题 | review、运行日志与 checkpoint |
+| `paper_catch.ts` | 人工触发的后台 Git/Codex 论文更新监控；按固定 batch 启动 fresh Codex 筛选并恢复/汇总 | `human_notes/Catch_Paper_Urls.md` | `paper_catch/YYYYMMDD_HHMMSS.md`、run/batch/checkpoint 审计 |
 | `idea_review_orchestrator.test.ts` | Idea Review marker/protocol 单元测试 | 无 | 测试结果 |
 | `tmp_titles.md` | 单标题下载测试输入，不是可执行脚本 | 一行或多行论文标题 | 供 `paper_download.py --file` 使用 |
 

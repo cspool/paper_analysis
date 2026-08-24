@@ -23,7 +23,7 @@ Checkpoint：    /data3/paper_analysis/paper_extract_checkpoints/new_paper_pdf
 处理链路：
 
 ```text
-PDF → 全文 Markdown → 章节 Markdown → Claude 结构化分析 → 可选的 Obsidian 独立笔记
+PDF → 全文 Markdown → 图片 OCR 文字原位注入 → 章节 Markdown → Claude 结构化分析 → 可选的 Obsidian 独立笔记
 ```
 
 ## 2. PDF 转 Markdown
@@ -58,7 +58,55 @@ python3 scripts/pdf_to_md.py batch \
   --skip-existing
 ```
 
-## 3. 按章节拆分 Markdown
+## 3. 对 Markdown 中的图片执行 OCR 并原位注入
+
+PDF 转 Markdown 完成后、按章节拆分前，对 Markdown 引用的本地图片逐张执行 OCR：
+
+```bash
+# 批次占位符：new_paper_pdf
+# Markdown 输入及回写目录名：papers_md/new_paper_pdf
+cd /data3/paper_analysis
+
+python3 scripts/md_image_ocr_injector.py \
+  --path /data3/paper_analysis/papers_md/new_paper_pdf \
+  --torch-device cuda \
+  --cuda-devices 0,1 \
+  --workers-per-gpu 2 \
+  --marker-root /data3/Projects/marker \
+  --marker-python /home/descfly/miniconda3/bin/python3
+```
+
+脚本递归扫描目录中的 `.md` 文件，对每个本地图片引用调用 Marker 单文件转换脚本，
+并将识别文字以引用块形式插入原图片标签之前，因此 OCR 文字会随图片保留在原文对应位置：
+
+```md
+> **[图片提取文字 (无描述)]:**
+> OCR 识别内容……
+
+![](_page_3_Figure_0.jpeg)
+```
+
+脚本默认在修改前生成 `<原文件>.md.bak` 备份；中断后可重复执行，已有
+`图片提取文字` 标记的图片会自动跳过。网络图片和不存在的本地图片只打印提示并
+保持原文不变。Marker 路径参数与 `pdf_to_md.py` 使用相同的源码目录和 Python
+解释器；也可分别通过 `MARKER_ROOT`、`MARKER_PYTHON` 环境变量覆盖。
+
+示例使用两张 RTX 4090，并按 Marker 对 24GB 显存的估算在每张卡启动 3 个持久
+worker；图片会在两张卡之间均匀分片。每个 worker 只加载一次模型，避免逐图重复加载。
+运行期间终端每 2 秒刷新总完成数、百分比、累计用时及各 GPU 分片进度。
+
+注意：
+
+- 本步骤依赖 PDF 转 Markdown 阶段导出的本地图片，因此不要向 `pdf_to_md.py` 传入
+  `--disable_image_extraction`。
+- `pdf_to_md.py --force_ocr` 用于强制整页 PDF 文字 OCR；本步骤用于对导出的图、表和
+  截图再次 OCR，两者作用不同，可同时使用。
+- 不要传入 `--remove-images`；后续 `paper_mdsplit_batch.py` 还需要将原始图片复制到
+  章节目录。
+- 该脚本没有 dry-run。首次处理新批次时应保留默认备份，并检查终端中的成功、跳过、
+  超时和失败数量。
+
+## 4. 按章节拆分 Markdown
 
 ```bash
 # 批次占位符：new_paper_pdf
@@ -88,7 +136,7 @@ find /data3/paper_analysis/paper_secs/new_paper_pdf \
 `paper_mdsplit_batch.py` 没有 dry-run；单篇拆分失败时会打印错误并继续，因此应检查
 终端输出和目录数量。
 
-## 4. 逐篇执行结构化分析
+## 5. 逐篇执行结构化分析
 
 先只打印第一篇的选择和 Prompt，不启动 Claude、不写 checkpoint：
 
@@ -136,7 +184,7 @@ repo_new_paper_pdf/
 └── knowledge_repo/
 ```
 
-## 5. 可选：拆成 Obsidian 独立笔记
+## 6. 可选：拆成 Obsidian 独立笔记
 
 先写入隔离目录检查结果：
 
@@ -166,7 +214,7 @@ python3 scripts/repo_mdsplit_batch.py \
 
 该步骤可省略。它不调用模型，但没有 dry-run，并会直接覆盖目标目录中的同名笔记。
 
-## 6. ISCA26 示例输出
+## 7. ISCA26 示例输出
 
 本次为避免混入已有的单篇历史结果，输入沿用 `paper_isca26`，全量生成目录使用
 `paper_isca26_full`：
