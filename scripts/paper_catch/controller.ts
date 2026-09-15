@@ -544,7 +544,7 @@ function renderEntry(paper: AggregatePaper): string[] {
   ];
 }
 
-function compareAggregatePapers(a: AggregatePaper, b: AggregatePaper): number {
+export function compareAggregatePapers(a: AggregatePaper, b: AggregatePaper): number {
   const priority = { HIGH: 0, MEDIUM: 1, LOW: 2 };
   const aCode = a.decision.codeUrl || a.candidate.codeUrls.length > 0 ? 0 : 1;
   const bCode = b.decision.codeUrl || b.candidate.codeUrls.length > 0 ? 0 : 1;

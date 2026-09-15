@@ -70,6 +70,29 @@ node scripts/paper_catch.ts start \
 `read-only`、approval 固定为 `never`，并启用 live web search 用于核查候选语义和
 开源链接。使用 `--no-search` 可关闭联网核查；`--model` 可覆盖当前 Codex 默认模型。
 
+## 历史回填与结果合并
+
+新增来源（或为已有来源加新的 README `#fragment`）时，常规 run 只会从最近报告时间
+起算增量。要一次性补齐更早的条目，用回填脚本在独立目录跑一遍，再与常规报告合并：
+
+```bash
+# 1. 只含该来源、回看到 2024-01-01 的独立 run（scan 可先预览候选）
+node scripts/paper_catch_backfill.ts scan --url "https://github.com/AmberLJC/LLMSys-PaperList#llm-for-systems" --since 2024-01-01
+node scripts/paper_catch_backfill.ts run  --url "https://github.com/AmberLJC/LLMSys-PaperList#llm-for-systems" --since 2024-01-01
+
+# 2. 常规增量 run
+node scripts/paper_catch.ts run
+
+# 3. 合并：第一个目录为主，重复标题保留主目录的判断
+node scripts/paper_catch_merge.ts paper_catch paper_catch/backfill_<sourceId>
+```
+
+回填目录默认是 `paper_catch/backfill_<sourceId>/`，内含自动生成的 `config.md`、复制的
+`PAPER_ENTRY_TEMPLATE.md` 以及自己的 `.state/`、`.runs/`；主 `paper_catch/.state` 的
+各来源 HEAD sidecar 不受影响。回填 run 同样支持 PAUSED 后重复执行恢复。合并报告写为
+`<主目录>/<主 run id>_merged.md`，文件名不匹配 `YYYYMMDD_HHMMSS.md`，不会被当作
+下一次 run 的 baseline。
+
 ## 固定条目模板
 
 人类可编辑的展示合同位于：
