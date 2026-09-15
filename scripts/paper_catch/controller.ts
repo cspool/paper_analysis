@@ -279,6 +279,7 @@ export class PaperCatchController {
         provider,
         codexBin: this.options.codexBin,
         claudeBin: this.options.claudeBin,
+        providerSettings: this.options.providerSettings,
         projectRoot: this.options.projectRoot,
         taskPath: this.store.absolute(batch.taskRef),
         schemaPath,

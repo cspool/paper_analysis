@@ -78,7 +78,28 @@ node scripts/paper_catch.ts run --model claude-opus-5
 
 # 切回 Codex（读 ~/.codex/config.toml 的默认模型，或 --model 覆盖）
 node scripts/paper_catch.ts run --provider codex
+
+# 用环境变量做全局默认（cron / shell profile 里切换后端，不改命令）
+export PAPER_CATCH_PROVIDER=codex        # 或 claude
+export PAPER_CATCH_MODEL=claude-sonnet-5
+export PAPER_CATCH_CLAUDE_BIN=/path/to/claude
+export PAPER_CATCH_CODEX_BIN=/path/to/codex
 ```
+
+`node scripts/paper_catch.ts doctor` 会打印当前生效的 provider、模型、二进制和 `PAPER_CATCH_*`
+环境变量。CLI 参数优先于环境变量。
+
+各后端的细粒度开关（都可通过 `paper_catch_backfill.ts` 透传）：
+
+| 开关 | 作用 | 默认 |
+|---|---|---|
+| `--claude-effort LEVEL` | `claude --effort` | CLI 默认（或 `$PAPER_CATCH_CLAUDE_EFFORT`） |
+| `--claude-max-budget-usd N` | `claude --max-budget-usd` | 不限（或 `$PAPER_CATCH_CLAUDE_MAX_BUDGET_USD`） |
+| `--claude-tools LIST` | 覆盖 `--tools/--allowedTools` | `Read,WebSearch,WebFetch`；`--no-search` 时 `Read` |
+| `--claude-setting-sources S` | `claude --setting-sources` | `user` |
+| `--claude-arg ARG`（可重复） | 追加原始参数 | 无 |
+| `--codex-reasoning-effort L` | `model_reasoning_effort` | `high` |
+| `--codex-arg ARG`（可重复） | 在 `exec` 前插入原始参数 | 无 |
 
 Claude 路径的会话参数固定为：`--output-format json --json-schema <合同>`、只开放
 `Read,WebSearch,WebFetch`（`--no-search` 时仅 `Read`）、`--add-dir` 限定到本 run 的

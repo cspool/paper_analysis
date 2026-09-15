@@ -1,5 +1,27 @@
 export type FilterProvider = "codex" | "claude";
 
+/** Per-backend knobs; every field has a default so the CLI can expose each as a switch. */
+export interface ProviderSettings {
+  claude: {
+    /** `--effort`; null keeps the CLI default. */
+    effort: string | null;
+    /** `--max-budget-usd`; null means unlimited. */
+    maxBudgetUsd: number | null;
+    /** `--tools`/`--allowedTools` override; null derives from useWebSearch. */
+    tools: string | null;
+    /** `--setting-sources`; default "user" so project hooks/settings stay out of batch sessions. */
+    settingSources: string;
+    /** Extra raw arguments appended before stdin prompt handoff. */
+    extraArgs: string[];
+  };
+  codex: {
+    /** `model_reasoning_effort`; default "high". */
+    reasoningEffort: string;
+    /** Extra raw arguments inserted before `exec`. */
+    extraArgs: string[];
+  };
+}
+
 export type RunStatus =
   | "INITIALIZING"
   | "FETCHING"
@@ -220,6 +242,7 @@ export interface ControllerOptions {
   model: string | null;
   codexBin: string;
   claudeBin: string;
+  providerSettings: ProviderSettings;
   useWebSearch: boolean;
   maxAttemptsPerInvocation: number;
   codexTimeoutMs: number;

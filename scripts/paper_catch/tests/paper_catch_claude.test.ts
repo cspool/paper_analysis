@@ -169,6 +169,10 @@ console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,resul
     model: null,
     codexBin: "codex-should-not-run",
     claudeBin: fake,
+    providerSettings: {
+      claude: { effort: "high", maxBudgetUsd: 2.5, tools: null, settingSources: "user", extraArgs: ["--verbose"] },
+      codex: { reasoningEffort: "high", extraArgs: [] },
+    },
     useWebSearch: true,
     maxAttemptsPerInvocation: 1,
     codexTimeoutMs: 30_000,
@@ -184,6 +188,9 @@ console.log(JSON.stringify({type:'result',subtype:'success',is_error:false,resul
   assert.equal(args[args.indexOf("--output-format") + 1], "json");
   assert.equal(args[args.indexOf("--tools") + 1], "Read,WebSearch,WebFetch");
   assert.ok(args.includes("--strict-mcp-config"));
+  assert.equal(args[args.indexOf("--effort") + 1], "high");
+  assert.equal(args[args.indexOf("--max-budget-usd") + 1], "2.5");
+  assert.equal(args.at(-1), "--verbose");
   const report = store.readText(`${runId}.md`);
   assert.match(report, /Agentic Kernel 1/);
   assert.match(report, /Agentic Kernel 3/);

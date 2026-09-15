@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseCatchConfig, sourceSpecFromUrl } from "../config.ts";
 import { PaperCatchController } from "../controller.ts";
-import { validateBatchResult } from "../codex_filter.ts";
+import { DEFAULT_PROVIDER_SETTINGS, validateBatchResult } from "../codex_filter.ts";
 import {
   collectSourceUpdate,
   extractPaperCandidateFromLine,
@@ -271,6 +271,7 @@ console.log(JSON.stringify({type:'turn.completed'}));
     model: null,
     codexBin: fake,
     claudeBin: "claude",
+    providerSettings: DEFAULT_PROVIDER_SETTINGS,
     useWebSearch: false,
     maxAttemptsPerInvocation: 1,
     codexTimeoutMs: 30_000,
@@ -327,6 +328,7 @@ fs.writeFileSync(output,JSON.stringify(result));console.log(JSON.stringify({type
     model: null,
     codexBin: fake,
     claudeBin: "claude",
+    providerSettings: DEFAULT_PROVIDER_SETTINGS,
     useWebSearch: false,
     maxAttemptsPerInvocation: 1,
     codexTimeoutMs: 30_000,

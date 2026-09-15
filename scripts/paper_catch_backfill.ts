@@ -26,6 +26,13 @@ const { positionals, values } = parseArgs({
     model: { type: "string" },
     "claude-bin": { type: "string" },
     "codex-bin": { type: "string" },
+    "claude-effort": { type: "string" },
+    "claude-max-budget-usd": { type: "string" },
+    "claude-tools": { type: "string" },
+    "claude-setting-sources": { type: "string" },
+    "claude-arg": { type: "string", multiple: true },
+    "codex-reasoning-effort": { type: "string" },
+    "codex-arg": { type: "string", multiple: true },
     "no-search": { type: "boolean", default: false },
     "max-attempts": { type: "string" },
     "codex-timeout-ms": { type: "string" },
@@ -96,9 +103,15 @@ function main(subcommand: string): void {
       `backfill ${spec.displayName}\n  since=${since.toISOString()} lookback-days=${lookbackDays}\n  config=${configPath}\n  output-dir=${outputDir}\n`,
     );
   }
-  for (const key of ["batch-size", "provider", "model", "claude-bin", "codex-bin", "max-attempts", "codex-timeout-ms"] as const) {
+  for (const key of [
+    "batch-size", "provider", "model", "claude-bin", "codex-bin", "max-attempts", "codex-timeout-ms",
+    "claude-effort", "claude-max-budget-usd", "claude-tools", "claude-setting-sources", "codex-reasoning-effort",
+  ] as const) {
     const value = values[key];
     if (value !== undefined) forwarded.push(`--${key}`, value);
+  }
+  for (const key of ["claude-arg", "codex-arg"] as const) {
+    for (const value of values[key] ?? []) forwarded.push(`--${key}`, value);
   }
   if (values["no-search"]) forwarded.push("--no-search");
 
@@ -124,7 +137,9 @@ Options:
   --base-config PATH         Where to copy 感兴趣主题 from; default: human_notes/Catch_Paper_Urls.md
   --template PATH            Entry template copied into output-dir once; default: paper_catch/PAPER_ENTRY_TEMPLATE.md next to base-config
   --output-dir PATH          Default: paper_catch/backfill_<sourceId>
-  --batch-size, --provider, --model, --claude-bin, --codex-bin, --no-search, --max-attempts, --codex-timeout-ms
-                             Forwarded to paper_catch.ts
+  --batch-size, --provider, --model, --claude-bin, --codex-bin, --no-search, --max-attempts,
+  --codex-timeout-ms, --claude-effort, --claude-max-budget-usd, --claude-tools,
+  --claude-setting-sources, --claude-arg, --codex-reasoning-effort, --codex-arg
+                             Forwarded to paper_catch.ts (see its usage)
 `);
 }

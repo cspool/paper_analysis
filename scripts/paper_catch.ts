@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { parseCatchConfig, sourceSpecFromUrl } from "./paper_catch/config.ts";
 import { PaperCatchController } from "./paper_catch/controller.ts";
 import { PaperCatchStore, timestampId } from "./paper_catch/store.ts";
-import { DEFAULT_CLAUDE_MODEL } from "./paper_catch/codex_filter.ts";
+import { DEFAULT_CLAUDE_MODEL, DEFAULT_PROVIDER_SETTINGS } from "./paper_catch/codex_filter.ts";
 import type { ControllerOptions, FilterProvider, PaperCatchRun, ReportManifest } from "./paper_catch/types.ts";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -28,6 +28,13 @@ const { positionals, values } = parseArgs({
     model: { type: "string" },
     "codex-bin": { type: "string" },
     "claude-bin": { type: "string" },
+    "claude-effort": { type: "string" },
+    "claude-max-budget-usd": { type: "string" },
+    "claude-tools": { type: "string" },
+    "claude-setting-sources": { type: "string" },
+    "claude-arg": { type: "string", multiple: true },
+    "codex-reasoning-effort": { type: "string" },
+    "codex-arg": { type: "string", multiple: true },
     "no-search": { type: "boolean", default: false },
     "max-attempts": { type: "string" },
     "codex-timeout-ms": { type: "string" },
@@ -72,10 +79,26 @@ function options(scanOnly = false): ControllerOptions {
     outputDir: resolve(values["output-dir"] ?? resolve(projectRoot, "paper_catch")),
     batchSize: positiveInteger(values["batch-size"], 20, "batch-size"),
     lookbackDays: positiveNumber(values["lookback-days"], 7, "lookback-days"),
-    provider: filterProvider(values.provider),
-    model: values.model ?? null,
-    codexBin: values["codex-bin"] ?? "codex",
-    claudeBin: values["claude-bin"] ?? "claude",
+    provider: filterProvider(values.provider ?? process.env.PAPER_CATCH_PROVIDER),
+    model: values.model ?? process.env.PAPER_CATCH_MODEL ?? null,
+    codexBin: values["codex-bin"] ?? process.env.PAPER_CATCH_CODEX_BIN ?? "codex",
+    claudeBin: values["claude-bin"] ?? process.env.PAPER_CATCH_CLAUDE_BIN ?? "claude",
+    providerSettings: {
+      claude: {
+        effort: values["claude-effort"] ?? process.env.PAPER_CATCH_CLAUDE_EFFORT ?? null,
+        maxBudgetUsd: optionalPositiveNumber(
+          values["claude-max-budget-usd"] ?? process.env.PAPER_CATCH_CLAUDE_MAX_BUDGET_USD,
+          "claude-max-budget-usd",
+        ),
+        tools: values["claude-tools"] ?? null,
+        settingSources: values["claude-setting-sources"] ?? DEFAULT_PROVIDER_SETTINGS.claude.settingSources,
+        extraArgs: values["claude-arg"] ?? [],
+      },
+      codex: {
+        reasoningEffort: values["codex-reasoning-effort"] ?? DEFAULT_PROVIDER_SETTINGS.codex.reasoningEffort,
+        extraArgs: values["codex-arg"] ?? [],
+      },
+    },
     useWebSearch: !values["no-search"],
     maxAttemptsPerInvocation: positiveInteger(values["max-attempts"], 2, "max-attempts"),
     codexTimeoutMs: positiveInteger(values["codex-timeout-ms"], 900_000, "codex-timeout-ms"),
@@ -180,6 +203,11 @@ function doctorCommand(): void {
     provider: {
       name: config.provider,
       model: config.model ?? (config.provider === "claude" ? DEFAULT_CLAUDE_MODEL : "(codex default)"),
+      bin: config.provider === "claude" ? config.claudeBin : config.codexBin,
+      settings: config.providerSettings[config.provider],
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => key.startsWith("PAPER_CATCH_")),
+      ),
     },
     config: {
       path: parsed.configPath,
@@ -272,6 +300,10 @@ function filterProvider(value: string | undefined): FilterProvider {
   throw new Error(`provider must be claude or codex, got ${value}`);
 }
 
+function optionalPositiveNumber(value: string | undefined, name: string): number | null {
+  return value === undefined ? null : positiveNumber(value, 0, name);
+}
+
 function positiveNumber(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback;
   const parsed = Number(value);
@@ -305,12 +337,23 @@ Options:
   --output-dir PATH          Default: paper_catch
   --batch-size N             Default: 20
   --lookback-days N          First run only; default: 7
-  --provider claude|codex    Batch filter backend; default: claude
-  --model MODEL              Model override; default: ${DEFAULT_CLAUDE_MODEL} for claude, Codex default for codex
-  --claude-bin PATH          Default: claude
-  --codex-bin PATH           Default: codex
+  --provider claude|codex    Batch filter backend; default: $PAPER_CATCH_PROVIDER or claude
+  --model MODEL              Model override; default: $PAPER_CATCH_MODEL, else ${DEFAULT_CLAUDE_MODEL} (claude) / Codex default
+  --claude-bin PATH          Default: $PAPER_CATCH_CLAUDE_BIN or claude
+  --codex-bin PATH           Default: $PAPER_CATCH_CODEX_BIN or codex
   --no-search                Disable live web search in batch sessions
   --max-attempts N           Fresh attempts per batch per invocation; default: 2
   --codex-timeout-ms N       Hard timeout per batch session (either provider); default: 900000
+
+Claude CLI switches (only with --provider claude):
+  --claude-effort LEVEL      Passed as --effort; default: $PAPER_CATCH_CLAUDE_EFFORT or CLI default
+  --claude-max-budget-usd N  Passed as --max-budget-usd; default: $PAPER_CATCH_CLAUDE_MAX_BUDGET_USD or unlimited
+  --claude-tools LIST        Override --tools/--allowedTools; default: Read,WebSearch,WebFetch (Read with --no-search)
+  --claude-setting-sources S Passed as --setting-sources; default: user
+  --claude-arg ARG           Extra raw argument for claude (repeatable)
+
+Codex CLI switches (only with --provider codex):
+  --codex-reasoning-effort L model_reasoning_effort; default: high
+  --codex-arg ARG            Extra raw argument inserted before "exec" (repeatable)
 `);
 }

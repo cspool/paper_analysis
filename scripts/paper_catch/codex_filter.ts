@@ -5,15 +5,31 @@ import type {
   BatchResult,
   BatchTask,
   FilterProvider,
+  ProviderSettings,
   RelevanceLayer,
 } from "./types.ts";
 
 export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
 
+export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
+  claude: {
+    effort: null,
+    maxBudgetUsd: null,
+    tools: null,
+    settingSources: "user",
+    extraArgs: [],
+  },
+  codex: {
+    reasoningEffort: "high",
+    extraArgs: [],
+  },
+};
+
 export interface CodexAttemptOptions {
   provider: FilterProvider;
   codexBin: string;
   claudeBin: string;
+  providerSettings?: ProviderSettings;
   projectRoot: string;
   taskPath: string;
   schemaPath: string;
@@ -82,13 +98,15 @@ export async function invokeCodexBatch(
   const prompt = buildBatchPrompt(options.taskPath, options.correctionPath ?? null);
   await Bunless.writeText(promptPath, `${prompt}\n`);
 
+  const settings = (options.providerSettings ?? DEFAULT_PROVIDER_SETTINGS).codex;
   const args = [
     "-a",
     "never",
     ...(options.useWebSearch ? ["--search"] : ["-c", 'web_search="disabled"']),
     ...(options.model ? ["-m", options.model] : []),
     "-c",
-    'model_reasoning_effort="high"',
+    `model_reasoning_effort="${settings.reasoningEffort}"`,
+    ...settings.extraArgs,
     "exec",
     "--ephemeral",
     "--json",
@@ -169,7 +187,8 @@ export async function invokeClaudeBatch(
   // Claude's schema validator rejects the draft-2020-12 `$schema` declaration;
   // the rest of the contract is draft-07 compatible.
   const { $schema: _ignored, ...schema } = JSON.parse(readFileSync(options.schemaPath, "utf8"));
-  const tools = options.useWebSearch ? "Read,WebSearch,WebFetch" : "Read";
+  const settings = (options.providerSettings ?? DEFAULT_PROVIDER_SETTINGS).claude;
+  const tools = settings.tools ?? (options.useWebSearch ? "Read,WebSearch,WebFetch" : "Read");
   const args = [
     "-p",
     "--model",
@@ -188,7 +207,10 @@ export async function invokeClaudeBatch(
     "--strict-mcp-config",
     "--no-session-persistence",
     "--setting-sources",
-    "user",
+    settings.settingSources,
+    ...(settings.effort ? ["--effort", settings.effort] : []),
+    ...(settings.maxBudgetUsd !== null ? ["--max-budget-usd", String(settings.maxBudgetUsd)] : []),
+    ...settings.extraArgs,
   ];
 
   const raw = createWriteStream(providerRawPath, { flags: "w" });
