@@ -71,6 +71,32 @@ test("extracts linked and venue-prefixed paper titles but rejects descriptions",
   );
 });
 
+test("multi-line card entries yield one candidate from the title bullet only", () => {
+  const entry = [
+    "- **Quant-LLM: Accelerating the Serving of Large Language Models via FP6-Centric Co-Design**<br>",
+    "  Haojun Xia, Zhen Zheng, Xiaoxia Wu, Shiyang Chen, Zhewei Yao<br>",
+    "  *USENIX ATC 2024* · `LLM` `FP6` `GPU Kernels` · [Paper](https://www.usenix.org/conference/atc24/presentation/xia) · [Code](https://github.com/usyd-fsalab/fp6_llm) · [Scholar](https://scholar.google.com/scholar?q=quant-llm)",
+    "  Uses TC-FPx kernels to support non-power-of-two weight formats efficiently on GPUs.",
+  ];
+  const context = entry.join("\n");
+  const title = extractPaperCandidateFromLine(entry[0]!, context, entry[1]);
+  assert.equal(title?.title, "Quant-LLM: Accelerating the Serving of Large Language Models via FP6-Centric Co-Design");
+  assert.equal(title?.paperUrl, "https://www.usenix.org/conference/atc24/presentation/xia");
+  assert.deepEqual(title?.codeUrls, ["https://github.com/usyd-fsalab/fp6_llm"]);
+  for (const [index, line] of entry.slice(1).entries()) {
+    assert.equal(extractPaperCandidateFromLine(line, context, entry[index + 2] ?? ""), null, line);
+  }
+
+  // Table header rows are followed by a separator row; a venue link in double
+  // brackets is a tag, not the title.
+  assert.equal(extractPaperCandidateFromLine("| Resource | What it covers |", "", "|---|---|"), null);
+  const tagged = extractPaperCandidateFromLine(
+    "- [[USENIX ATC](https://www.usenix.org/conference/atc24)] Quant-LLM: Accelerating the Serving of Large Language Models",
+  );
+  assert.equal(tagged?.title, "Quant-LLM: Accelerating the Serving of Large Language Models");
+  assert.equal(extractPaperCandidateFromLine("  booktitle={International Conference on Machine Learning},"), null);
+});
+
 test("finds a GitHub-style anchored section and stops at its sibling", () => {
   const lines = [
     "# Papers",

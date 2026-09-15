@@ -145,7 +145,7 @@ export function collectSourceUpdate(options: CollectSourceOptions): CollectedSou
     }
     const fileLines = readFileLines(mirror, currentHead, line.filePath, contentCache);
     const context = contextFor(fileLines, line.line, 2);
-    const extracted = extractPaperCandidateFromLine(line.text, context);
+    const extracted = extractPaperCandidateFromLine(line.text, context, fileLines[line.line] ?? "");
     if (!extracted) continue;
     if (baselineIndex.titles.has(normalizeTitle(extracted.title))) continue;
     const paperKey = extracted.paperUrl ? canonicalPaperUrl(extracted.paperUrl) : null;
@@ -220,7 +220,7 @@ function readBaselinePaperIndex(
     for (let line = range[0]; line <= range[1]; line += 1) {
       const text = lines[line - 1] ?? "";
       const context = contextFor(lines, line, 2);
-      const candidate = extractPaperCandidateFromLine(text, context);
+      const candidate = extractPaperCandidateFromLine(text, context, lines[line] ?? "");
       if (!candidate) continue;
       titles.add(normalizeTitle(candidate.title));
       if (candidate.paperUrl) paperUrls.add(canonicalPaperUrl(candidate.paperUrl));
@@ -271,12 +271,23 @@ export function mergePaperCandidates(groups: PaperCandidate[][]): PaperCandidate
 export function extractPaperCandidateFromLine(
   line: string,
   context = line,
+  nextLine = "",
 ): Omit<CandidateDraft, "sourceRef"> | null {
   const trimmed = line.trim();
   if (!trimmed || /^(#{1,6}\s|<!--|```)/.test(trimmed)) return null;
-  const links = markdownLinks(line);
+  const isListItem = /^\s*(?:[-*+]|\d+[.)])\s+/.test(line);
+  const isTableRow = /^\s*\|/.test(line);
+  // A table header is immediately followed by its `|---|` separator row.
+  if (isTableRow && /^\s*\|?\s*:?-{3,}/.test(nextLine)) return null;
+  // `[[USENIX ATC](url)] Title` puts the venue in a bracketed link; it is a tag, not a title.
+  const withoutVenueTags = line.replace(VENUE_TAG_LINK, " ");
+  const links = markdownLinks(withoutVenueTags);
   const urls = unique([...urlsIn(context), ...links.map((link) => link.url)]);
   const meaningful = links.filter((link) => isMeaningfulTitleLabel(link.label));
+  // Multi-line entries (title bullet, then indented author / venue / description
+  // lines) share the same context URLs; only the bullet or a line carrying its own
+  // title link may become a candidate.
+  if (!isListItem && !isTableRow && meaningful.length === 0) return null;
   const hasVenuePrefix = /^\s*(?:[-*+]\s*)?(?:\|\s*)?(?:\[[^\]]*(?:19|20)\d{2}[^\]]*\]\s*)+/i.test(line) ||
     /\b(?:arxiv|neurips|icml|iclr|asplos|sosp|osdi|nsdi|mlsys|hpca|isca|micro|eurosys|ppopp|acl|emnlp|cvpr|sigcomm|atc|sc|saa)['’]?\s*\d{2,4}\b/i.test(line);
   const hasScholarlyUrl = urls.some(isScholarlyUrl);
@@ -292,14 +303,16 @@ export function extractPaperCandidateFromLine(
     title = cleanTitle(best.label);
     paperUrl = isCodeUrl(best.url) ? null : best.url;
   } else {
-    const replaced = line.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_all, label: string) =>
+    const replaced = withoutVenueTags.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (_all, label: string) =>
       isGenericLinkLabel(label) ? " " : ` ${label} `
-    );
+    ).replace(/\[\s*\]/g, " ");
     const cells = replaced.split("|").map(cleanTitle).filter(looksLikeTitle);
     title = cells.sort((a, b) => b.length - a.length)[0] ?? cleanTitle(replaced);
   }
   if (!looksLikeTitle(title)) return null;
   if (GENERIC_TITLES.has(title.toLowerCase())) return null;
+  // `*ICLR 2025* · `LLM` `PTQ` · [Paper] · [Code]` metadata rows are tags, not titles.
+  if ((title.match(/·/g)?.length ?? 0) >= 2) return null;
 
   const codeUrls = unique(urls.filter(isCodeUrl));
   paperUrl ??= urls.find((url) => isScholarlyUrl(url) && !isCodeUrl(url)) ?? null;
@@ -607,6 +620,8 @@ function githubSlug(value: string): string {
 function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
 }
+
+const VENUE_TAG_LINK = /\[\[[^\]]+\]\(https?:\/\/[^)]+\)\]/g;
 
 const GENERIC_TITLES = new Set([
   "table of contents",
