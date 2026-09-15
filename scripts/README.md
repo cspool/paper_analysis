@@ -67,7 +67,7 @@
 | `idea_review_orchestrator.ts` | QA/AA 双会话盲评 Idea | Idea note 路径或论文标题 | review、运行日志与 checkpoint |
 | `paper_catch.ts` | 人工触发的后台 Git 论文更新监控；按固定 batch 启动 fresh Claude CLI（默认 `claude-sonnet-5`，`--provider codex` 可切回）筛选并恢复/汇总 | `human_notes/Catch_Paper_Urls.md` | `paper_catch/YYYYMMDD_HHMMSS.md`、run/batch/checkpoint 审计 |
 | `paper_catch_backfill.ts` | 对单个来源 URL 在独立输出目录做一次性历史回填（`--since` 起），不触碰主 `paper_catch/` baseline | `--url`、`--since`，兴趣主题复制自 `Catch_Paper_Urls.md` | `paper_catch/backfill_<sourceId>/YYYYMMDD_HHMMSS.md` |
-| `paper_catch_merge.ts` | 合并多个 paper catch 输出目录的最新报告，按标题去重 | 多个输出目录（可 `:RUN_ID` 指定） | `<主目录>/<run id>_merged.md` |
+| `paper_catch_merge.ts` | 合并多个 paper catch 输出目录的最新报告，按标题去重，并生成可供 `paper_download.py --file` 使用的标题列表 | 多个输出目录（可 `:RUN_ID` 指定） | `<主目录>/<run id>_merged.md`、`<run id>_merged.titles.md` |
 | `idea_review_orchestrator.test.ts` | Idea Review marker/protocol 单元测试 | 无 | 测试结果 |
 | `tmp_titles.md` | 单标题下载测试输入，不是可执行脚本 | 一行或多行论文标题 | 供 `paper_download.py --file` 使用 |
 

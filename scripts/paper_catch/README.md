@@ -126,6 +126,22 @@ node scripts/paper_catch.ts run
 node scripts/paper_catch_merge.ts paper_catch paper_catch/backfill_<sourceId>
 ```
 
+合并同时生成 `<主 run id>_merged.titles.md`（每行 `[标题](论文链接)`），这是
+`scripts/paper_download.py --file` 需要的输入形态（合并报告本身是标题行加条目行，
+不能直接喂给下载器）。接入正式处理链：
+
+```bash
+# 4. 下载入选论文 PDF（先 --dry-run 看解析结果）
+python3 scripts/paper_download.py \
+  --file paper_catch/<run id>_merged.titles.md \
+  --output /data3/paper_analysis/papers_pdf/paper_catch_<日期> --dry-run
+python3 scripts/paper_download.py \
+  --file paper_catch/<run id>_merged.titles.md \
+  --output /data3/paper_analysis/papers_pdf/paper_catch_<日期> --delay 0
+
+# 5. PDF → Markdown → 章节拆分 → 分析 → 笔记，见 scripts/README.md "正式目录完整处理链"
+```
+
 回填目录默认是 `paper_catch/backfill_<sourceId>/`，内含自动生成的 `config.md`、复制的
 `PAPER_ENTRY_TEMPLATE.md` 以及自己的 `.state/`、`.runs/`；主 `paper_catch/.state` 的
 各来源 HEAD sidecar 不受影响。回填 run 同样支持 PAUSED 后重复执行恢复。合并报告写为
