@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Launch Obsidian for obsidian.service in the right mode:
+#   - a graphical session is active  -> normal window on that display
+#   - no graphical session (CLI/SSH) -> Chromium ozone headless, no X needed
+# The Local REST API plugin (127.0.0.1:27123/27124) works identically in both,
+# so the obsidian MCP server never notices the difference.
+set -u
+APP="${OBSIDIAN_APPIMAGE:-$HOME/Applications/Obsidian.AppImage}"
+# --no-sandbox: Ubuntu's apparmor_restrict_unprivileged_userns=1 makes the
+# Chromium SUID sandbox abort when the AppImage is started outside the desktop.
+COMMON=(--no-sandbox)
+
+gui_available() {
+  [ "${OBSIDIAN_FORCE_HEADLESS:-0}" = "1" ] && return 1
+  systemctl --user -q is-active graphical-session.target || return 1
+  if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY}" ]; then
+    return 0
+  fi
+  if [ -n "${DISPLAY:-}" ] && [ -S "/tmp/.X11-unix/X${DISPLAY#:}" ]; then
+    return 0
+  fi
+  return 1
+}
+
+if gui_available; then
+  echo "obsidian-managed: graphical session active, starting with a window (DISPLAY=${DISPLAY:-} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-})"
+  exec "$APP" "${COMMON[@]}"
+else
+  echo "obsidian-managed: no graphical session, starting headless"
+  unset DISPLAY WAYLAND_DISPLAY XAUTHORITY
+  exec "$APP" "${COMMON[@]}" --ozone-platform=headless --disable-gpu
+fi

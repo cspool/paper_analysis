@@ -69,6 +69,8 @@
 | `paper_catch_backfill.ts` | 对单个来源 URL 在独立输出目录做一次性历史回填（`--since` 起），不触碰主 `paper_catch/` baseline | `--url`、`--since`，兴趣主题复制自 `Catch_Paper_Urls.md` | `paper_catch/backfill_<sourceId>/YYYYMMDD_HHMMSS.md` |
 | `paper_catch_merge.ts` | 合并多个 paper catch 输出目录的最新报告，按标题去重，并生成可供 `paper_download.py --file` 使用的标题列表 | 多个输出目录（可 `:RUN_ID` 指定） | `<主目录>/<run id>_merged.md`、`<run id>_merged.titles.md` |
 | `idea_review_orchestrator.test.ts` | Idea Review marker/protocol 单元测试 | 无 | 测试结果 |
+| `obsidian_api.md` | Obsidian Local REST API / `obsidian` MCP 的链路、配置、curl 用法、systemd 托管与排障文档 | 无（文档） | 无 |
+| `obsidian_service/` | `obsidian.service`、`obsidian-gui-switch.service`、`obsidian-managed` 的仓库副本；安装命令见 `obsidian_api.md` §4 | 无 | 部署到 `~/.config/systemd/user/` 与 `~/.local/bin/` |
 | `tmp_titles.md` | 单标题下载测试输入，不是可执行脚本 | 一行或多行论文标题 | 供 `paper_download.py --file` 使用 |
 
 ## Learning Workflow 状态
