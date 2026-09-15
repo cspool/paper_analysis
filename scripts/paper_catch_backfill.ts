@@ -22,7 +22,9 @@ const { positionals, values } = parseArgs({
     template: { type: "string" },
     "output-dir": { type: "string" },
     "batch-size": { type: "string" },
+    provider: { type: "string" },
     model: { type: "string" },
+    "claude-bin": { type: "string" },
     "codex-bin": { type: "string" },
     "no-search": { type: "boolean", default: false },
     "max-attempts": { type: "string" },
@@ -94,7 +96,7 @@ function main(subcommand: string): void {
       `backfill ${spec.displayName}\n  since=${since.toISOString()} lookback-days=${lookbackDays}\n  config=${configPath}\n  output-dir=${outputDir}\n`,
     );
   }
-  for (const key of ["batch-size", "model", "codex-bin", "max-attempts", "codex-timeout-ms"] as const) {
+  for (const key of ["batch-size", "provider", "model", "claude-bin", "codex-bin", "max-attempts", "codex-timeout-ms"] as const) {
     const value = values[key];
     if (value !== undefined) forwarded.push(`--${key}`, value);
   }
@@ -122,7 +124,7 @@ Options:
   --base-config PATH         Where to copy 感兴趣主题 from; default: human_notes/Catch_Paper_Urls.md
   --template PATH            Entry template copied into output-dir once; default: paper_catch/PAPER_ENTRY_TEMPLATE.md next to base-config
   --output-dir PATH          Default: paper_catch/backfill_<sourceId>
-  --batch-size, --model, --codex-bin, --no-search, --max-attempts, --codex-timeout-ms
+  --batch-size, --provider, --model, --claude-bin, --codex-bin, --no-search, --max-attempts, --codex-timeout-ms
                              Forwarded to paper_catch.ts
 `);
 }

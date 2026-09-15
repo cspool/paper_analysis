@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseCatchConfig, sourceSpecFromUrl } from "./config.ts";
 import {
-  invokeCodexBatch,
+  invokeFilterBatch,
   readAndValidateBatchResult,
 } from "./codex_filter.ts";
 import {
@@ -142,6 +142,7 @@ export class PaperCatchController {
       baselineTimestamp,
       lookbackDays: this.options.lookbackDays,
       batchSize: this.options.batchSize,
+      provider: this.options.provider,
       model: this.options.model,
       useWebSearch: this.options.useWebSearch,
       sourceSnapshotsRef: null,
@@ -265,15 +266,19 @@ export class PaperCatchController {
       const attemptId = `attempt-${String(batch.attempts).padStart(2, "0")}`;
       const attemptRef = `.runs/${run.runId}/batches/${batch.batchId}/${attemptId}`;
       const startedAt = new Date().toISOString();
+      const provider = this.options.provider;
       process.stderr.write(
-        `[paper-catch] Codex ${batch.batchId} (${batch.batchIndex}/${run.batches.length}) ${attemptId}\n`,
+        `[paper-catch] ${provider} ${batch.batchId} (${batch.batchIndex}/${run.batches.length}) ${attemptId}\n`,
       );
       this.event(run.runId, "BATCH_ATTEMPT_STARTED", [batch.taskRef], {
         batchId: batch.batchId,
         attempt: batch.attempts,
+        provider,
       });
-      const outcome = await invokeCodexBatch({
+      const outcome = await invokeFilterBatch({
+        provider,
         codexBin: this.options.codexBin,
+        claudeBin: this.options.claudeBin,
         projectRoot: this.options.projectRoot,
         taskPath: this.store.absolute(batch.taskRef),
         schemaPath,
@@ -283,11 +288,11 @@ export class PaperCatchController {
         timeoutMs: this.options.codexTimeoutMs,
         correctionPath,
       });
-      const validation = outcome.exitCode === 0 && !outcome.timedOut
+      const validation = outcome.exitCode === 0 && !outcome.timedOut && !outcome.error
         ? readAndValidateBatchResult(outcome.outputPath, task)
         : {
           result: null,
-          errors: [outcome.error ?? `Codex exit=${outcome.exitCode} signal=${outcome.signal} timedOut=${outcome.timedOut}`],
+          errors: [outcome.error ?? `${provider} exit=${outcome.exitCode} signal=${outcome.signal} timedOut=${outcome.timedOut}`],
         };
       const endedAt = new Date().toISOString();
       this.store.writeJson(`${attemptRef}/attempt.json`, {

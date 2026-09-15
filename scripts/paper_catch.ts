@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 import { parseCatchConfig, sourceSpecFromUrl } from "./paper_catch/config.ts";
 import { PaperCatchController } from "./paper_catch/controller.ts";
 import { PaperCatchStore, timestampId } from "./paper_catch/store.ts";
-import type { ControllerOptions, PaperCatchRun, ReportManifest } from "./paper_catch/types.ts";
+import { DEFAULT_CLAUDE_MODEL } from "./paper_catch/codex_filter.ts";
+import type { ControllerOptions, FilterProvider, PaperCatchRun, ReportManifest } from "./paper_catch/types.ts";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = resolve(dirname(scriptPath), "..");
@@ -23,8 +24,10 @@ const { positionals, values } = parseArgs({
     "output-dir": { type: "string" },
     "batch-size": { type: "string" },
     "lookback-days": { type: "string" },
+    provider: { type: "string" },
     model: { type: "string" },
     "codex-bin": { type: "string" },
+    "claude-bin": { type: "string" },
     "no-search": { type: "boolean", default: false },
     "max-attempts": { type: "string" },
     "codex-timeout-ms": { type: "string" },
@@ -69,8 +72,10 @@ function options(scanOnly = false): ControllerOptions {
     outputDir: resolve(values["output-dir"] ?? resolve(projectRoot, "paper_catch")),
     batchSize: positiveInteger(values["batch-size"], 20, "batch-size"),
     lookbackDays: positiveNumber(values["lookback-days"], 7, "lookback-days"),
+    provider: filterProvider(values.provider),
     model: values.model ?? null,
     codexBin: values["codex-bin"] ?? "codex",
+    claudeBin: values["claude-bin"] ?? "claude",
     useWebSearch: !values["no-search"],
     maxAttemptsPerInvocation: positiveInteger(values["max-attempts"], 2, "max-attempts"),
     codexTimeoutMs: positiveInteger(values["codex-timeout-ms"], 900_000, "codex-timeout-ms"),
@@ -167,9 +172,15 @@ function doctorCommand(): void {
   const sources = parsed.urls.map(sourceSpecFromUrl);
   const git = commandVersion("git", ["--version"]);
   const codex = commandVersion(config.codexBin, ["--version"]);
+  const claude = commandVersion(config.claudeBin, ["--version"]);
+  const providerOk = config.provider === "claude" ? claude.ok : codex.ok;
   const template = resolve(config.outputDir, "PAPER_ENTRY_TEMPLATE.md");
   const report = {
-    valid: git.ok && codex.ok && existsSync(template),
+    valid: git.ok && providerOk && existsSync(template),
+    provider: {
+      name: config.provider,
+      model: config.model ?? (config.provider === "claude" ? DEFAULT_CLAUDE_MODEL : "(codex default)"),
+    },
     config: {
       path: parsed.configPath,
       hash: parsed.configHash,
@@ -180,6 +191,7 @@ function doctorCommand(): void {
     template: { path: template, exists: existsSync(template) },
     git,
     codex,
+    claude,
     defaults: {
       batchSize: config.batchSize,
       lookbackDays: config.lookbackDays,
@@ -254,6 +266,12 @@ function positiveInteger(value: string | undefined, fallback: number, name: stri
   return parsed;
 }
 
+function filterProvider(value: string | undefined): FilterProvider {
+  if (value === undefined || value === "claude") return "claude";
+  if (value === "codex") return "codex";
+  throw new Error(`provider must be claude or codex, got ${value}`);
+}
+
 function positiveNumber(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback;
   const parsed = Number(value);
@@ -287,10 +305,12 @@ Options:
   --output-dir PATH          Default: paper_catch
   --batch-size N             Default: 20
   --lookback-days N          First run only; default: 7
-  --model MODEL              Optional Codex model override
+  --provider claude|codex    Batch filter backend; default: claude
+  --model MODEL              Model override; default: ${DEFAULT_CLAUDE_MODEL} for claude, Codex default for codex
+  --claude-bin PATH          Default: claude
   --codex-bin PATH           Default: codex
-  --no-search                Disable live web search in Codex batch sessions
+  --no-search                Disable live web search in batch sessions
   --max-attempts N           Fresh attempts per batch per invocation; default: 2
-  --codex-timeout-ms N       Hard timeout per batch session; default: 900000
+  --codex-timeout-ms N       Hard timeout per batch session (either provider); default: 900000
 `);
 }

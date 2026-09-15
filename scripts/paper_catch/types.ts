@@ -1,3 +1,5 @@
+export type FilterProvider = "codex" | "claude";
+
 export type RunStatus =
   | "INITIALIZING"
   | "FETCHING"
@@ -160,6 +162,8 @@ export interface PaperCatchRun {
   baselineTimestamp: string;
   lookbackDays: number;
   batchSize: number;
+  /** Absent on runs created before the Claude CLI provider existed (Codex). */
+  provider?: FilterProvider;
   model: string | null;
   useWebSearch: boolean;
   sourceSnapshotsRef: string | null;
@@ -212,8 +216,10 @@ export interface ControllerOptions {
   outputDir: string;
   batchSize: number;
   lookbackDays: number;
+  provider: FilterProvider;
   model: string | null;
   codexBin: string;
+  claudeBin: string;
   useWebSearch: boolean;
   maxAttemptsPerInvocation: number;
   codexTimeoutMs: number;

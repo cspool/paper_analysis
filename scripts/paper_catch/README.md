@@ -1,6 +1,6 @@
-# Paper Catch Git/Codex Batch Loop
+# Paper Catch Git/Claude(Codex) Batch Loop
 
-该流程由人工按需要定时调用，但实际抓取和 Codex 筛选可在后台执行。它读取：
+该流程由人工按需要定时调用，但实际抓取和语义筛选（默认 Claude CLI，可切 Codex）可在后台执行。它读取：
 
 ```text
 /data3/paper_analysis/human_notes/Catch_Paper_Urls.md
@@ -21,7 +21,7 @@
   → 对 URL fragment 限定到对应 README 章节
   → 提取、合并、去重新论文标题
   → 固定 batch
-  → 每个 batch 启动一个 fresh `codex exec` 会话
+  → 每个 batch 启动一个 fresh `claude -p`（或 `codex exec`）会话
   → output-schema + 候选全覆盖校验
   → checkpoint 已完成 batch
   → Script 确定性汇总所有 batch Result
@@ -66,9 +66,27 @@ node scripts/paper_catch.ts start \
   --codex-timeout-ms 900000
 ```
 
-默认每个 batch 最多尝试两个 fresh ephemeral Codex 会话，sandbox 固定为
-`read-only`、approval 固定为 `never`，并启用 live web search 用于核查候选语义和
-开源链接。使用 `--no-search` 可关闭联网核查；`--model` 可覆盖当前 Codex 默认模型。
+默认每个 batch 最多尝试两个 fresh 会话，并启用 live web search 用于核查候选语义和
+开源链接。使用 `--no-search` 可关闭联网核查；`--model` 可覆盖模型。
+
+## 筛选后端：Claude CLI（默认）或 Codex CLI
+
+```bash
+# 默认：claude -p，模型 claude-sonnet-5，结构化输出直接按 batch_result.schema.json 校验
+node scripts/paper_catch.ts run
+node scripts/paper_catch.ts run --model claude-opus-5
+
+# 切回 Codex（读 ~/.codex/config.toml 的默认模型，或 --model 覆盖）
+node scripts/paper_catch.ts run --provider codex
+```
+
+Claude 路径的会话参数固定为：`--output-format json --json-schema <合同>`、只开放
+`Read,WebSearch,WebFetch`（`--no-search` 时仅 `Read`）、`--add-dir` 限定到本 run 的
+batch 与 inputs 目录、`--strict-mcp-config`、`--no-session-persistence`、
+`--setting-sources user`。stdout 的 JSON envelope 原样保存在 `provider_raw.jsonl`，
+其 `structured_output` 提取为 `output.json` 后走与 Codex 相同的候选全覆盖校验。
+Codex 路径保持 sandbox `read-only`、approval `never`、`--output-schema` 不变。
+`--codex-timeout-ms` 对两种后端都生效。
 
 ## 历史回填与结果合并
 

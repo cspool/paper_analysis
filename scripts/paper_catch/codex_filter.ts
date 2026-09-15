@@ -1,14 +1,19 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import type {
   BatchResult,
   BatchTask,
+  FilterProvider,
   RelevanceLayer,
 } from "./types.ts";
 
+export const DEFAULT_CLAUDE_MODEL = "claude-sonnet-5";
+
 export interface CodexAttemptOptions {
+  provider: FilterProvider;
   codexBin: string;
+  claudeBin: string;
   projectRoot: string;
   taskPath: string;
   schemaPath: string;
@@ -35,7 +40,7 @@ export function buildBatchPrompt(
   correctionPath: string | null = null,
 ): string {
   return [
-    "你是 Paper Catch 批处理 Loop 中的一个 fresh Codex 筛选会话。",
+    "你是 Paper Catch 批处理 Loop 中的一个 fresh 筛选会话（Codex CLI 或 Claude CLI）。",
     "Script 已完成 Git 增量统计、标题提取、去重和 batch 绑定；你不控制 Loop，也不引入 batch 外论文。",
     "",
     `本批冻结任务：${taskPath}`,
@@ -60,6 +65,10 @@ export function buildBatchPrompt(
       ]
       : []),
   ].join("\n");
+}
+
+export function invokeFilterBatch(options: CodexAttemptOptions): Promise<CodexAttemptOutcome> {
+  return options.provider === "claude" ? invokeClaudeBatch(options) : invokeCodexBatch(options);
 }
 
 export async function invokeCodexBatch(
@@ -140,6 +149,134 @@ export async function invokeCodexBatch(
     promptPath,
     error: spawnError,
   };
+}
+
+// Claude CLI path: `claude -p` with structured output. The prompt goes in on
+// stdin, the single JSON result envelope is kept verbatim as provider_raw.jsonl
+// and its `structured_output` is extracted to output.json so the validator sees
+// the same contract as the Codex path.
+export async function invokeClaudeBatch(
+  options: CodexAttemptOptions,
+): Promise<CodexAttemptOutcome> {
+  mkdirSync(options.attemptDir, { recursive: true });
+  const outputPath = resolve(options.attemptDir, "output.json");
+  const providerRawPath = resolve(options.attemptDir, "provider_raw.jsonl");
+  const stderrPath = resolve(options.attemptDir, "stderr.log");
+  const promptPath = resolve(options.attemptDir, "prompt.txt");
+  const prompt = buildBatchPrompt(options.taskPath, options.correctionPath ?? null);
+  await Bunless.writeText(promptPath, `${prompt}\n`);
+
+  // Claude's schema validator rejects the draft-2020-12 `$schema` declaration;
+  // the rest of the contract is draft-07 compatible.
+  const { $schema: _ignored, ...schema } = JSON.parse(readFileSync(options.schemaPath, "utf8"));
+  const tools = options.useWebSearch ? "Read,WebSearch,WebFetch" : "Read";
+  const args = [
+    "-p",
+    "--model",
+    options.model ?? DEFAULT_CLAUDE_MODEL,
+    "--output-format",
+    "json",
+    "--json-schema",
+    JSON.stringify(schema),
+    "--tools",
+    tools,
+    "--allowedTools",
+    tools,
+    "--add-dir",
+    dirname(options.taskPath),
+    dirname(options.schemaPath),
+    "--strict-mcp-config",
+    "--no-session-persistence",
+    "--setting-sources",
+    "user",
+  ];
+
+  const raw = createWriteStream(providerRawPath, { flags: "w" });
+  const stderr = createWriteStream(stderrPath, { flags: "w" });
+  const stdoutChunks: Buffer[] = [];
+  let timedOut = false;
+  let spawnError: string | null = null;
+  const child = spawn(options.claudeBin, args, {
+    cwd: options.projectRoot,
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdoutChunks.push(chunk);
+    raw.write(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr.write(chunk);
+    process.stderr.write(chunk);
+  });
+  child.on("error", (error) => {
+    spawnError = `${error.name}: ${error.message}`;
+  });
+  child.stdin.on("error", () => {});
+  child.stdin.end(prompt);
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGTERM");
+    setTimeout(() => {
+      if (child.exitCode === null) child.kill("SIGKILL");
+    }, 10_000).unref();
+  }, options.timeoutMs);
+  timer.unref();
+
+  const completion = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolveCompletion) => {
+      child.on("close", (code, signal) => resolveCompletion({ code, signal }));
+    },
+  );
+  clearTimeout(timer);
+  await Promise.all([closeStream(raw), closeStream(stderr)]);
+
+  let error = spawnError;
+  if (!error && completion.code === 0 && !timedOut) {
+    const extracted = extractClaudeStructuredOutput(Buffer.concat(stdoutChunks).toString("utf8"));
+    if (extracted.error) error = extracted.error;
+    else writeFileSync(outputPath, `${JSON.stringify(extracted.value, null, 2)}\n`, "utf8");
+  }
+  return {
+    exitCode: completion.code,
+    signal: completion.signal,
+    timedOut,
+    outputPath,
+    providerRawPath,
+    stderrPath,
+    promptPath,
+    error,
+  };
+}
+
+export function extractClaudeStructuredOutput(
+  stdout: string,
+): { value: unknown; error: string | null } {
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(stdout);
+  } catch (caught) {
+    return {
+      value: null,
+      error: `Claude output is not a JSON envelope: ${caught instanceof Error ? caught.message : String(caught)}`,
+    };
+  }
+  if (!isObject(envelope)) return { value: null, error: "Claude output envelope must be an object" };
+  if (envelope.is_error === true || envelope.subtype !== "success") {
+    const detail = typeof envelope.result === "string" ? envelope.result.slice(0, 500) : String(envelope.subtype);
+    return { value: null, error: `Claude turn failed (${String(envelope.subtype)}): ${detail}` };
+  }
+  if (envelope.structured_output !== undefined) return { value: envelope.structured_output, error: null };
+  if (typeof envelope.result === "string") {
+    const text = envelope.result.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    try {
+      return { value: JSON.parse(text), error: null };
+    } catch {
+      return { value: null, error: "Claude result has no structured_output and is not JSON" };
+    }
+  }
+  return { value: null, error: "Claude result has no structured_output" };
 }
 
 export function readAndValidateBatchResult(
