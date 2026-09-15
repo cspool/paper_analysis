@@ -95,6 +95,14 @@ test("multi-line card entries yield one candidate from the title bullet only", (
   );
   assert.equal(tagged?.title, "Quant-LLM: Accelerating the Serving of Large Language Models");
   assert.equal(extractPaperCandidateFromLine("  booktitle={International Conference on Machine Learning},"), null);
+
+  // A short link label keeps the line's own URL ahead of a neighbour's.
+  const neighbours = [
+    "- [AVO](https://arxiv.org/abs/2603.24517): Agentic Variation Operators for GPU Attention Kernels | CMU",
+    "- [FlashInfer-Bench](https://arxiv.org/abs/2601.00227): Building the Virtuous Cycle for AI-driven LLM Systems | UW",
+  ];
+  const second = extractPaperCandidateFromLine(neighbours[1]!, neighbours.join("\n"));
+  assert.equal(second?.paperUrl, "https://arxiv.org/abs/2601.00227");
 });
 
 test("finds a GitHub-style anchored section and stops at its sibling", () => {

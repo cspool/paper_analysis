@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mergeReports, type LoadedReport } from "../../paper_catch_merge.ts";
+import { mergeReports, renderTitleList, type LoadedReport } from "../../paper_catch_merge.ts";
 import type {
   AggregatePaper,
   PaperCandidate,
@@ -166,4 +166,9 @@ test("mergeReports dedupes by normalized title, keeps the primary decision, and 
   assert.equal((markdown.match(/^### /gm) ?? []).length, 3);
   assert.match(markdown, /run 20260915_120000/);
   assert.match(markdown, /run 20260915_110000/);
+
+  const titles = renderTitleList(aggregate).trimEnd().split("\n");
+  assert.equal(titles.length, 3);
+  assert.equal(titles[0], "[ARGUS GPU Optimization](https://arxiv.org/abs/argusgpuoptimization)");
+  assert.ok(titles.every((line) => /^\[[^\]]+\]\(https?:\/\/[^)]+\)$/.test(line)));
 });

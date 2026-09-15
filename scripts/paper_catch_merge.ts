@@ -43,6 +43,8 @@ function main(): void {
     allowPositionals: true,
     options: {
       out: { type: "string" },
+      "titles-out": { type: "string" },
+      "no-titles": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
     },
   });
@@ -54,16 +56,34 @@ function main(): void {
   const reports = positionals.map(loadReport);
   const { markdown, aggregate } = mergeReports(reports);
   const outPath = resolve(values.out ?? resolve(reports[0]!.dir, `${aggregate.runId}.md`));
-  if (existsSync(outPath) && !values.force) {
-    throw new Error(`refusing to overwrite ${outPath}; pass --force or --out`);
+  const titlesPath = values["no-titles"]
+    ? null
+    : resolve(values["titles-out"] ?? outPath.replace(/\.md$/, "") + ".titles.md");
+  for (const path of [outPath, titlesPath]) {
+    if (path && existsSync(path) && !values.force) {
+      throw new Error(`refusing to overwrite ${path}; pass --force or --out/--titles-out`);
+    }
   }
   writeFileSync(outPath, markdown, "utf8");
+  if (titlesPath) writeFileSync(titlesPath, renderTitleList(aggregate), "utf8");
   process.stdout.write(`${JSON.stringify({
     out: outPath,
+    titlesOut: titlesPath,
     reports: reports.map((report) => ({ dir: report.dir, reportRef: report.manifest.reportRef })),
     candidateCount: aggregate.candidateCount,
     selectedCount: aggregate.selectedCount,
   }, null, 2)}\n`);
+}
+
+// One `[Title](paper url)` per selected paper, in report order, for
+// scripts/paper_download.py --file (which reads Markdown links and skips
+// heading lines, so the merged report itself is not a valid title list).
+export function renderTitleList(aggregate: AggregateResult): string {
+  const lines = aggregate.selected.map(({ candidate }) => {
+    const title = candidate.title.replace(/[\[\]]/g, " ").replace(/\s+/g, " ").trim();
+    return candidate.paperUrl ? `[${title}](${candidate.paperUrl})` : title;
+  });
+  return `${lines.join("\n")}\n`;
 }
 
 export function mergeReports(reports: LoadedReport[]): { markdown: string; aggregate: AggregateResult } {
@@ -150,7 +170,9 @@ unless :RUN_ID (YYYYMMDD_HHMMSS) pins one. The first DIR is primary: its interes
 and config are kept, and duplicate titles keep its decision.
 
 Options:
-  --out PATH    Default: <first DIR>/<primary run id>_merged.md
-  --force       Overwrite an existing --out file
+  --out PATH         Default: <first DIR>/<primary run id>_merged.md
+  --titles-out PATH  Title list for scripts/paper_download.py --file; default: <out>.titles.md
+  --no-titles        Skip writing the title list
+  --force            Overwrite existing output files
 `);
 }

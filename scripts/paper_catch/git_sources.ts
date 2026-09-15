@@ -282,7 +282,9 @@ export function extractPaperCandidateFromLine(
   // `[[USENIX ATC](url)] Title` puts the venue in a bracketed link; it is a tag, not a title.
   const withoutVenueTags = line.replace(VENUE_TAG_LINK, " ");
   const links = markdownLinks(withoutVenueTags);
-  const urls = unique([...urlsIn(context), ...links.map((link) => link.url)]);
+  // The line's own links come first so a short-label entry such as
+  // `- [AVO](url): Title` never inherits the previous entry's URL from context.
+  const urls = unique([...links.map((link) => link.url), ...urlsIn(line), ...urlsIn(context)]);
   const meaningful = links.filter((link) => isMeaningfulTitleLabel(link.label));
   // Multi-line entries (title bullet, then indented author / venue / description
   // lines) share the same context URLs; only the bullet or a line carrying its own
