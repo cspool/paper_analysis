@@ -92,20 +92,75 @@ node --test scripts/paper_catch/tests/*.test.ts
 `PAPER_CATCH_CODEX_BIN`；更多开关见 `node scripts/paper_catch.ts` 的 usage 和
 [paper_catch/README.md](paper_catch/README.md)。
 
-### 3.2 下载 PDF
+### 3.2 下载 PDF（`paper_download.py`）
+
+功能：按标题或标题文件下载公开可访问的论文 PDF，不调用模型。它复用
+`/data3/Projects/agent_research/download_papers.py`（可用 `--backend PATH` 或
+`PAPER_DOWNLOAD_BACKEND` 覆盖）。每篇论文按顺序尝试：
+
+1. 标题文件里给出的链接（`source_link`）：arXiv abs/pdf、usenix、mlsys 等直接可解析 PDF 的地址
+2. 探测来源页面（`source_page`）：从链接页面找 PDF 地址（`--skip-source-discovery` 关闭）
+3. arXiv 标题检索（`--no-arxiv-fallback` 关闭）
+4. OpenAlex 按 DOI/标题检索开放版本（`--no-oa-fallback` 关闭）
+5. DBLP 检索（`--no-dblp-fallback` 关闭）
+6. 已记录的公开来源表（`--no-known-public-fallback` 关闭）
+
+标题文件格式（`--file`，可重复）：
+
+- 含 Markdown 链接的行按 `[标题](链接)` 解析，链接作为首选来源——`paper_catch_merge.ts`
+  生成的 `<run>_merged.titles.md` 就是这种形式
+- 纯 Markdown 标题行（`#` 开头且无链接）跳过；表格分隔行、代码围栏跳过
+- 其余非空行整行视为论文标题（去掉列表符号、`*_` 等修饰）
+- 合并报告 `<run>_merged.md` **不能**直接作为标题文件（条目行会被当作标题）
 
 ```bash
+cd /data3/paper_analysis
+
+# 从合并结果批量下载：先 --dry-run 看解析出的标题与来源，再正式下载
 python3 scripts/paper_download.py \
   --file paper_catch/20260915_223659_merged.titles.md \
-  --output papers_pdf/paper_catch_20260915 --dry-run          # 先看解析
+  --output papers_pdf/paper_catch_20260915 --dry-run
 python3 scripts/paper_download.py \
   --file paper_catch/20260915_223659_merged.titles.md \
   --output papers_pdf/paper_catch_20260915 --delay 0
-python3 scripts/paper_download.py --title "<论文标题>" --output papers_pdf/paper_catch_20260915
+
+# 单篇 / 多篇按标题下载（--title 可重复）
+python3 scripts/paper_download.py \
+  --title "FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision" \
+  --output papers_pdf/paper_catch_20260915
+
+# 只信任标题文件里的链接，不做来源页探测与检索回退（更快、更可控）
+python3 scripts/paper_download.py \
+  --file paper_catch/20260915_223659_merged.titles.md \
+  --output papers_pdf/paper_catch_20260915 \
+  --skip-source-discovery --no-arxiv-fallback --no-oa-fallback --no-dblp-fallback
+
+# 网络慢时放宽超时（秒）与间隔
+python3 scripts/paper_download.py --file <标题文件> --output <目录> --max-time 120 --delay 1.5
 ```
 
-查 `papers_pdf/paper_<批次>/results.json` 中 `failed` 项；ACM 链接需浏览器手动下载，
-会议页拿到的幻灯片要移到 `slides/` 子目录。
+输出：PDF 命名为去掉标点的标题（`AccelOpt Self-Improving LLM Agentic System for Kernel Optimization.pdf`），
+同目录写 `results.json`：顶层 `total / success / downloaded / exists / failed`，`results[]`
+每条含 `title`、`status`（`downloaded` / `exists` / `failed`）、`pdf_source`、`pdf_url`、
+`reason`（如 `no_pdf_url_found`、`response_is_not_pdf_or_too_small`）。重复运行会跳过已存在文件。
+
+检查与补漏：
+
+```bash
+# 列出失败项及原因
+python3 -c "import json;[print(x['status'],x.get('reason'),'|',x['title']) for x in json.load(open('papers_pdf/paper_catch_20260915/results.json'))['results'] if x['status']!='downloaded']"
+
+# 逐个确认拿到的是论文而不是幻灯片/网页（页数、页面尺寸、首页文字）
+for f in papers_pdf/paper_catch_20260915/*.pdf; do echo "== $f"; pdfinfo "$f" | grep -E '^Pages|^Page size'; done
+```
+
+- `failed` 且原因为 `no_pdf_url_found` / 非 PDF 响应：多为 ACM DL（对非浏览器客户端返回 403）
+  或只有网页版的报告。用浏览器打开 DOI 链接下载，按上述命名规则存入同目录；
+  也可先在 arXiv / NSF PAR / Hugging Face 找开放副本，再用 `--title` 或直接 `curl -o` 保存。
+- 会议页（如 `mlsys.org/.../Slides/*.pdf`）常被当作论文下载下来，实际是幻灯片：
+  移到 `papers_pdf/paper_<批次>/slides/`，再用 `--title` 或 arXiv 链接补正文。
+  `pdf_to_md.py batch` 只处理目录直下的 PDF，子目录不会被转换。
+- 手工补下的来源记在 `papers_pdf/paper_<批次>/manual_fetch.json`（自由格式），`results.json` 保持下载器原始记录。
 
 ### 3.3 PDF → Markdown → 图片 OCR 注入 → 章节拆分
 
