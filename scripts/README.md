@@ -189,26 +189,73 @@ Marker 位置可用 `MARKER_ROOT` / `MARKER_PYTHON` 覆盖（默认 `/data3/Proj
 
 ### 3.4 结构化分析 → 笔记
 
+`run_all_papers.py` 通过裸 `claude` 命令逐篇启动 Agent，模型来自 `--model`，不传时用脚本
+第 38 行的默认值 `deepseek-v4-flash[1m]`。两种模型来源：
+
+| 模型 | 走哪里 | 前提 |
+|---|---|---|
+| `claude-sonnet-5` 等官方模型 | Anthropic 官方账号（已 `/login`） | 无 |
+| `deepseek-v4-flash[1m]` / `deepseek-v4-pro[1m]` | 本地代理 `~/deepseek-local-proxy/proxy.py`（`127.0.0.1:8787`）转发到 DeepSeek | 代理在跑 **且** 当前命令带 `ANTHROPIC_BASE_URL` 等变量 |
+
+`.bashrc` **不会**导出这些变量（登录时反而 `unset ANTHROPIC_*`，保证默认走官方）；它只定义了
+`deepseek-proxy-ensure`（拉起代理）和 `cc-deepseek`（仅对那一次 `claude` 注入变量）。
+`run_all_papers.py` 不经过 `cc-deepseek`，所以用 DeepSeek 时必须在**这条命令上手动注入**，
+否则请求发到官方 API，日志出现 `unrecognized_model` / `terminal_reason: api_error`，每篇立即失败。
+
+#### 3.4.1 用 DeepSeek（默认模型）
+
 ```bash
-# 先 dry-run 核对路径和 prompt
+cd /data3/paper_analysis
+deepseek-proxy-ensure                                   # .bashrc 函数；已在跑则直接返回
+ss -ltn | grep ':8787' && tail -2 /tmp/deepseek-proxy.log
+
+# token 直接取 .bashrc 里 cc-deepseek 用的那一个，不要复制到别处
+DS_TOKEN=$(grep -oP 'ANTHROPIC_AUTH_TOKEN="\K[^"]+' ~/.bashrc)
+
+ANTHROPIC_BASE_URL="http://127.0.0.1:8787" \
+ANTHROPIC_AUTH_TOKEN="$DS_TOKEN" \
+ANTHROPIC_MODEL="deepseek-v4-flash[1m]" \
+ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]" \
+ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-flash[1m]" \
+ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash[1m]" \
+CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash[1m]" \
 python3 scripts/run_all_papers.py \
   --paper-base-dir paper_secs/secs_catch_20260915 \
   --checkpoint-dir paper_extract_checkpoints/catch_20260915 \
-  --output-repo-dir repos/repo_catch_20260915 \
-  --model claude-sonnet-5 --dry-run
+  --output-repo-dir repos/repo_catch_20260915
+```
 
-# 正式执行（付费）；--title "<论文子目录名>" 只跑一篇，--limit N 只跑前 N 篇
+要用 `deepseek-v4-pro[1m]`，加 `--model "deepseek-v4-pro[1m]"`。变量只作用于这一条命令；
+若想在当前 shell 连续跑多个批次，把上面 7 个赋值改成 `export ...`，跑完 `unset` 回官方。
+
+#### 3.4.2 用官方 Claude 模型
+
+```bash
 python3 scripts/run_all_papers.py \
   --paper-base-dir paper_secs/secs_catch_20260915 \
   --checkpoint-dir paper_extract_checkpoints/catch_20260915 \
   --output-repo-dir repos/repo_catch_20260915 \
   --model claude-sonnet-5
+```
+
+#### 3.4.3 通用
+
+```bash
+# 先 dry-run 核对路径和 prompt（不启动 Agent、不写 progress）；DeepSeek 时同样带上 3.4.1 的变量
+python3 scripts/run_all_papers.py --paper-base-dir ... --checkpoint-dir ... --output-repo-dir ... --dry-run
+
+# 只跑一篇 / 前 N 篇
+python3 scripts/run_all_papers.py ... --title "<论文子目录名>"
+python3 scripts/run_all_papers.py ... --limit 3
+
+# 进度与确认：progress.json 只跳过 done，failed 会在重跑时重试
+python3 -c "import json;p=json.load(open('paper_extract_checkpoints/catch_20260915/progress.json'));print('done',len(p['done']),'failed',len(p['failed']),p['last_updated'])"
+grep -o '"terminal_reason":"[^"]*"' paper_extract_checkpoints/catch_20260915/logs/001_*.jsonl | tail -1   # 期望 completed
+grep -l 'unrecognized_model' paper_extract_checkpoints/catch_20260915/logs/*.jsonl                        # 有输出 = 没走代理
 
 # 拆成独立笔记，写入 vault 根目录下的 experiment_notes / idea_notes / knowledge_notes
 python3 scripts/repo_mdsplit_batch.py repos/repo_catch_20260915 --notes-base /data3/paper_analysis
 ```
-
-`run_all_papers.py` 不传 `--model` 时默认 `deepseek-v4-flash[1m]`（脚本第 38 行）。
 
 ### 3.5 Learning / Direction / Idea Review
 
