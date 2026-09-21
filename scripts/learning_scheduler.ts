@@ -433,7 +433,7 @@ function spawnClaude(prompt: string, workDir: string, logPrefix: string): ChildP
     CLAUDE_CMD, "-p", prompt,
     "--output-format", "stream-json",
     "--verbose", "--include-partial-messages",
-    "--permission-mode", "acceptEdits",
+    "--permission-mode", "bypassPermissions",
     "--add-dir", VAULT_ROOT,
   ];
   const proc = spawn(cmd[0], cmd.slice(1), {
