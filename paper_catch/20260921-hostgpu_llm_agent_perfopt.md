@@ -86,7 +86,7 @@
 - CUDA-L1: Improving CUDA Optimization via Contrastive Reinforcement Learning
 - GEAK: Introducing Triton Kernel AI Agent & Evaluation Benchmarks
 - Astra: A Multi-Agent System for GPU Kernel Performance Optimization
-- Autocomp: LLM-Driven Code Optimization for Tensor Accelerators
+- [Autocomp: A Powerful and Portable Code Optimizer for Tensor Accelerators](https://arxiv.org/abs/2505.18574)
 
 ## G. Agent 自动优化系统 / 编译 / 训练推理配置
 - [InferenceBench: A Benchmark for Open-Ended LLM Inference Optimization by AI Agents](https://arxiv.org/abs/2607.20468)
