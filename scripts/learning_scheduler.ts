@@ -10,12 +10,30 @@
  *
  * Usage:
  *   npx tsx /data3/paper_analysis/scripts/learning_scheduler.ts --work-dir <dir> --user-input "..."
+ *
+ * Cross-run reuse (skip work that already has a usable result):
+ *   --reuse-from <dir>        a previous run dir (or a job root holding one); its
+ *                             question spaces / answers / horizon summaries / summary.md
+ *                             are imported and the matching work is skipped
+ *   --reuse-skip L4,L5,Q3.2   never reuse these layers' answers+horizons — redo them
+ *   --reuse-exclude <regex>   an artifact whose CONTENT matches is not reusable
+ *                             (default: the "my evidence retrieval failed" signature;
+ *                              pass `none` to disable the content gate entirely)
+ *   --reuse-require <regex>   an artifact must match this to be reusable
+ *   --reuse-min-bytes <n>     size floor for a reusable artifact (default 512)
+ *   --dry-run                 decide and print what would be reused vs redone, import
+ *                             the reusable artifacts, and start NO agents; re-run the
+ *                             same --work-dir without the flag to continue for real
+ *
+ * Reuse cascades: redoing an answer invalidates its layer's horizon summary, and any
+ * redone horizon invalidates the vertical summary. Question spaces are always reused
+ * when valid so question IDs stay stable and imported answers keep matching them.
  */
 
 import { spawn, ChildProcess } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { existsSync, createWriteStream } from "fs";
+import { existsSync, createWriteStream, readdirSync } from "fs";
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -310,6 +328,192 @@ async function saveCheckpoint(workDir: string, cp: Checkpoint): Promise<void> {
   await fs.writeFile(checkpointPath(workDir), JSON.stringify(cp, null, 2), "utf-8");
 }
 
+// ─── Cross-run Reuse ─────────────────────────────────────────────────────────
+//
+// Resuming inside one work dir already works via the checkpoint. What this adds is
+// reuse ACROSS runs: point a fresh run at a previous one and it imports every
+// artifact that still looks usable, so only the broken work is redone.
+//
+// The content gate is the whole point. A DONE signal only proves an agent finished,
+// not that it produced anything — the 2026-09-21 run wrote six perfectly
+// "complete" L4/L5/L6 answers whose own text says every note lookup failed because
+// the Obsidian API was down. Reusing those would launder the outage into the next
+// run's summary, so an artifact that reports its own evidence retrieval as failed is
+// treated as absent.
+
+interface ReuseOptions {
+  fromDir: string;
+  skipIds: Set<string>;
+  excludeRe: RegExp | null;
+  requireRe: RegExp | null;
+  minBytes: number;
+}
+
+interface ReuseReport {
+  from: string;
+  question_spaces: { reused: string[]; redo: Record<string, string> };
+  answers: { reused: string[]; redo: Record<string, string> };
+  horizons: { reused: string[]; redo: Record<string, string> };
+  vertical: { reused: boolean; reason: string };
+}
+
+const DEFAULT_REUSE_EXCLUDE = [
+  "Unable to connect",
+  "Omnisearch unreachable",
+  "failed after \\d+ attempts",
+  "(?:Obsidian|API|MCP)[^\\n]{0,16}不可达",
+  "(?:均|全部|全)无 note evidence",
+  "note evidence[^\\n]{0,8}(?:为|=|:)\\s*0(?![0-9])",
+].join("|");
+
+function newReuseReport(fromDir: string): ReuseReport {
+  return {
+    from: fromDir,
+    question_spaces: { reused: [], redo: {} },
+    answers: { reused: [], redo: {} },
+    horizons: { reused: [], redo: {} },
+    vertical: { reused: false, reason: "未评估" },
+  };
+}
+
+/** A job root (…/job_xxx) holds the real run in a timestamped subdir; descend into it. */
+function resolveReuseDir(given: string): string {
+  if (existsSync(path.join(given, "dispatch.json"))) return given;
+  try {
+    const subs = readdirSync(given, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => path.join(given, d.name))
+      .filter(d => existsSync(path.join(d, "dispatch.json")))
+      .sort();
+    if (subs.length > 0) return subs[subs.length - 1];
+  } catch { /* fall through and let the caller report a missing dir */ }
+  return given;
+}
+
+function reuseIdSkipped(qid: string, lid: string, skipIds: Set<string>): boolean {
+  return skipIds.has(lid) || skipIds.has(qid) || skipIds.has(`${qid}_${lid}`);
+}
+
+async function reuseVerdict(file: string, doneSignal: string, ro: ReuseOptions): Promise<{ ok: boolean; reason: string }> {
+  if (!existsSync(file)) return { ok: false, reason: "源产物缺失" };
+  let content: string;
+  try {
+    content = await fs.readFile(file, "utf-8");
+  } catch {
+    return { ok: false, reason: "源产物不可读" };
+  }
+  if (Buffer.byteLength(content, "utf-8") < ro.minBytes) return { ok: false, reason: `过小 (<${ro.minBytes}B)` };
+  if (!content.includes(doneSignal)) return { ok: false, reason: "无 DONE 信号" };
+  if (ro.requireRe && !ro.requireRe.test(content)) return { ok: false, reason: "未匹配 --reuse-require" };
+  if (ro.excludeRe) {
+    const hit = content.match(ro.excludeRe);
+    if (hit) return { ok: false, reason: `命中 --reuse-exclude: ${JSON.stringify(hit[0].slice(0, 48))}` };
+  }
+  return { ok: true, reason: "可复用" };
+}
+
+/** Before Phase 1: import question spaces so question IDs (and therefore answers) line up. */
+async function reuseQuestionSpaces(workDir: string, ro: ReuseOptions, rep: ReuseReport): Promise<void> {
+  for (const lid of LAYER_ORDER) {
+    const name = `${lid}_问题空间.md`;
+    const dst = path.join(workDir, name);
+    if (existsSync(dst)) { rep.question_spaces.reused.push(lid); continue; }
+    const src = path.join(ro.fromDir, name);
+    const v = await reuseVerdict(src, `[QUESTION_AGENT_DONE] ${lid}`, ro);
+    if (v.ok) {
+      await fs.copyFile(src, dst);
+      rep.question_spaces.reused.push(lid);
+    } else {
+      rep.question_spaces.redo[lid] = v.reason;
+    }
+  }
+}
+
+/** After Phase 1: import answers and mark their pool entries done. */
+async function reuseAnswers(workDir: string, cp: Checkpoint, ro: ReuseOptions, rep: ReuseReport): Promise<void> {
+  for (const entry of cp.question_pool) {
+    const name = `${entry.questionId}_${entry.layerId}_answer.md`;
+    const id = `${entry.questionId}/${entry.layerId}`;
+    if (existsSync(path.join(workDir, name))) continue;
+    if (reuseIdSkipped(entry.questionId, entry.layerId, ro.skipIds)) {
+      rep.answers.redo[id] = "--reuse-skip 指定重做";
+      continue;
+    }
+    const src = path.join(ro.fromDir, name);
+    const v = await reuseVerdict(src, `[ANSWER_AGENT_DONE] ${entry.questionId}`, ro);
+    if (v.ok) {
+      await fs.copyFile(src, path.join(workDir, name));
+      setWorkStatus(entry, "done");
+      rep.answers.reused.push(id);
+    } else {
+      rep.answers.redo[id] = v.reason;
+    }
+  }
+  await saveCheckpoint(workDir, cp);
+}
+
+/**
+ * After answers are settled: import a horizon summary only when NONE of its layer's
+ * answers will be redone, and the vertical summary only when every horizon came over.
+ * Without this cascade a run would keep a summary that was written from the answers
+ * we just decided to throw away.
+ */
+async function reuseHorizonsAndVertical(workDir: string, cp: Checkpoint, ro: ReuseOptions, rep: ReuseReport): Promise<void> {
+  const dirtyLayers = new Set(cp.question_pool.filter(e => !isWorkDone(e)).map(e => e.layerId));
+  for (const lid of LAYER_ORDER) {
+    if (cp.phase3_layers_done.includes(lid)) { rep.horizons.reused.push(lid); continue; }
+    if (ro.skipIds.has(lid)) { rep.horizons.redo[lid] = "--reuse-skip 指定重做"; continue; }
+    if (dirtyLayers.has(lid)) { rep.horizons.redo[lid] = "本层有答案将重做，级联失效"; continue; }
+    const name = `${lid}_horizon_summary.md`;
+    const src = path.join(ro.fromDir, name);
+    const v = await reuseVerdict(src, `[HORIZON_SUMMARY_DONE] ${lid}`, ro);
+    if (v.ok) {
+      await fs.copyFile(src, path.join(workDir, name));
+      cp.phase3_layers_done.push(lid);
+      rep.horizons.reused.push(lid);
+    } else {
+      rep.horizons.redo[lid] = v.reason;
+    }
+  }
+  cp.phase3_layers_done = [...new Set(cp.phase3_layers_done)];
+
+  const allHorizons = LAYER_ORDER.every(lid => rep.horizons.reused.includes(lid));
+  if (!allHorizons) {
+    rep.vertical = { reused: false, reason: "存在需重做的 horizon，纵向总结必须重算" };
+  } else {
+    const src = path.join(ro.fromDir, "summary.md");
+    const v = await reuseVerdict(src, "[VERTICAL_SUMMARY_DONE]", ro);
+    if (v.ok) {
+      await fs.copyFile(src, path.join(workDir, "summary.md"));
+      cp.phase4_done = true;
+      rep.vertical = { reused: true, reason: "全部上游产物均复用" };
+    } else {
+      rep.vertical = { reused: false, reason: v.reason };
+    }
+  }
+  await saveCheckpoint(workDir, cp);
+}
+
+async function writeReuseReport(workDir: string, rep: ReuseReport): Promise<void> {
+  await fs.writeFile(path.join(workDir, "reuse_report.json"), JSON.stringify(rep, null, 2), "utf-8");
+}
+
+function printReuseSummary(rep: ReuseReport): void {
+  const redoAnswers = Object.keys(rep.answers.redo);
+  const redoHorizons = Object.keys(rep.horizons.redo);
+  console.log(`\n${C.C}═══ 跨 run 复用 ═══${C.R}`);
+  console.log(`  来源: ${rep.from}`);
+  console.log(`  问题空间: 复用 ${rep.question_spaces.reused.length}/6，重做 ${Object.keys(rep.question_spaces.redo).length}`);
+  console.log(`  答案:     复用 ${rep.answers.reused.length}，重做 ${redoAnswers.length}`);
+  console.log(`  horizon:  复用 ${rep.horizons.reused.length}/6，重做 ${redoHorizons.length}`);
+  console.log(`  纵向总结: ${rep.vertical.reused ? "复用" : `重做（${rep.vertical.reason}）`}`);
+  const sample = redoAnswers.slice(0, 8);
+  for (const id of sample) console.log(`    ${C.Y}重做${C.R} ${id}: ${rep.answers.redo[id]}`);
+  if (redoAnswers.length > sample.length) console.log(`    … 另有 ${redoAnswers.length - sample.length} 个答案重做`);
+  for (const lid of redoHorizons) console.log(`    ${C.Y}重做${C.R} horizon ${lid}: ${rep.horizons.redo[lid]}`);
+  console.log("");
+}
+
 // ─── Progress Visualization ──────────────────────────────────────────────────
 
 // ANSI escape helpers
@@ -484,6 +688,23 @@ async function buildQuestionPrompt(lid: string, workDir: string, ui: UserInput):
   return fillSkillInput(skillBody, params);
 }
 
+/** Parse question IDs out of whatever question-space files exist in workDir. */
+async function buildPoolFromQuestionSpaces(workDir: string): Promise<WorkEntry[]> {
+  const pool: WorkEntry[] = [];
+  for (const lid of LAYER_ORDER) {
+    const f = path.join(workDir, `${lid}_问题空间.md`);
+    if (!existsSync(f)) continue;
+    const content = await fs.readFile(f, "utf-8");
+    const matches = content.match(/Q\d\.\d+/g);
+    if (matches) {
+      for (const qid of [...new Set(matches)]) {
+        pool.push({ questionId: qid, layerId: lid, status: "pending", isDone: false });
+      }
+    }
+  }
+  return pool;
+}
+
 async function phase1_questions(workDir: string, ui: UserInput, cp: Checkpoint, timeoutMs: number): Promise<WorkEntry[]> {
   console.log(`\n${"=".repeat(60)}\nPhase 1: Spawning 6 Question Agents\n${"=".repeat(60)}\n`);
 
@@ -529,18 +750,7 @@ async function phase1_questions(workDir: string, ui: UserInput, cp: Checkpoint, 
 
   // Build work pool from question spaces. Answer completion is reconciled
   // from DONE signals when an existing checkpoint is loaded.
-  const pool: WorkEntry[] = [];
-  for (const lid of LAYER_ORDER) {
-    const f = path.join(workDir, `${lid}_问题空间.md`);
-    if (!existsSync(f)) continue;
-    const content = await fs.readFile(f, "utf-8");
-    const matches = content.match(/Q\d\.\d+/g);
-    if (matches) {
-      for (const qid of [...new Set(matches)]) {
-        pool.push({ questionId: qid, layerId: lid, status: "pending", isDone: false });
-      }
-    }
-  }
+  const pool = await buildPoolFromQuestionSpaces(workDir);
 
   cp.phase1_done = true;
   cp.question_pool = pool;
@@ -783,7 +993,7 @@ async function phase4_vertical(workDir: string, ui: UserInput, cp: Checkpoint, t
 
 // ─── Main Pipeline ───────────────────────────────────────────────────────────
 
-async function run(workDir: string, userInputText: string): Promise<number> {
+async function run(workDir: string, userInputText: string, reuse: ReuseOptions | null = null, dryRun = false): Promise<number> {
   const totalStart = Date.now();
   const ui = parseUserInput(userInputText);
 
@@ -821,12 +1031,49 @@ async function run(workDir: string, userInputText: string): Promise<number> {
     await saveCheckpoint(workDir, cp);
   }
 
+  // ── Cross-run reuse, part 1: question spaces (Phase 1 then skips those layers) ──
+  const reuseReport = reuse ? newReuseReport(reuse.fromDir) : null;
+  if (reuse && reuseReport) {
+    console.log(`\n${C.C}复用来源: ${reuse.fromDir}${C.R}`);
+    await reuseQuestionSpaces(workDir, reuse, reuseReport);
+  }
+
+  // --dry-run stops here: decide and report what would be reused vs redone, and
+  // start no agents. Phase 1's pool is rebuilt from the question-space files alone,
+  // so this costs nothing. The imported artifacts stay in workDir, which means the
+  // same --work-dir can simply be re-run without --dry-run to continue for real.
+  if (dryRun) {
+    cp.question_pool = await buildPoolFromQuestionSpaces(workDir);
+    await saveCheckpoint(workDir, cp);
+    if (reuse && reuseReport) {
+      await reuseAnswers(workDir, cp, reuse, reuseReport);
+      await reuseHorizonsAndVertical(workDir, cp, reuse, reuseReport);
+      await writeReuseReport(workDir, reuseReport);
+      printReuseSummary(reuseReport);
+    }
+    const todo = cp.question_pool.filter(e => !isWorkDone(e));
+    console.log(`${C.Y}--dry-run：未启动任何 agent。${C.R}`);
+    console.log(`  pool ${cp.question_pool.length} 题，其中 ${todo.length} 题将真实执行: ${todo.map(e => `${e.questionId}/${e.layerId}`).join(", ") || "(无)"}`);
+    console.log(`  horizon 待做: ${LAYER_ORDER.filter(l => !cp.phase3_layers_done.includes(l)).join(", ") || "(无)"}`);
+    console.log(`  纵向总结待做: ${cp.phase4_done ? "否" : "是"}`);
+    console.log(`  去掉 --dry-run 并沿用同一 --work-dir 即可继续真实运行。\n`);
+    return 0;
+  }
+
   // Phase 1: Question Agents → build work pool
   if (!cp.phase1_done) {
     const pool = await phase1_questions(workDir, ui, cp, 7_200_000);
     if (pool.length === 0) { console.error("Phase 1 failed: no question spaces"); return 1; }
   } else {
     console.log("Phase 1 already done (checkpoint). Skipping to Phase 2.");
+  }
+
+  // ── Cross-run reuse, part 2: answers, then the cascade into horizons + vertical ──
+  if (reuse && reuseReport) {
+    await reuseAnswers(workDir, cp, reuse, reuseReport);
+    await reuseHorizonsAndVertical(workDir, cp, reuse, reuseReport);
+    await writeReuseReport(workDir, reuseReport);
+    printReuseSummary(reuseReport);
   }
 
   // Phase 2: Answer Agents (2 workers)
@@ -875,7 +1122,57 @@ function parseArgs() {
       parsed[key] = args[i + 1] && !args[i + 1].startsWith("--") ? args[++i] : "true";
     }
   }
-  return { workDir: parsed["work-dir"] || "", userInput: parsed["user-input"] || "" };
+  return {
+    workDir: parsed["work-dir"] || "",
+    userInput: parsed["user-input"] || "",
+    reuseFrom: parsed["reuse-from"] || "",
+    reuseSkip: parsed["reuse-skip"] || "",
+    reuseExclude: parsed["reuse-exclude"] || "",
+    reuseRequire: parsed["reuse-require"] || "",
+    reuseMinBytes: parsed["reuse-min-bytes"] || "",
+    dryRun: parsed["dry-run"] === "true",
+  };
+}
+
+/** Build reuse options from CLI flags, or null when --reuse-from was not given. */
+function buildReuseOptions(opts: ReturnType<typeof parseArgs>, actualWorkDir: string): ReuseOptions | null {
+  const given = opts.reuseFrom;
+  if (!given || given === "true") return null;
+
+  const fromDir = resolveReuseDir(path.resolve(given));
+  if (!existsSync(fromDir)) {
+    console.error(`Error: --reuse-from 目录不存在: ${fromDir}`);
+    process.exit(1);
+  }
+  if (path.resolve(fromDir) === path.resolve(actualWorkDir)) {
+    console.error(`Error: --reuse-from 与本次 work dir 相同（同目录续跑用 checkpoint 即可，无需 --reuse-from）: ${fromDir}`);
+    process.exit(1);
+  }
+  if (!existsSync(path.join(fromDir, "dispatch.json"))) {
+    console.error(`Error: --reuse-from 不像一个 run 目录（缺 dispatch.json）: ${fromDir}`);
+    process.exit(1);
+  }
+
+  const compile = (src: string, flag: string): RegExp | null => {
+    if (!src || src === "true") return null;
+    try {
+      return new RegExp(src);
+    } catch (err) {
+      console.error(`Error: ${flag} 不是合法正则: ${src}\n  ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  };
+
+  const excludeSrc = opts.reuseExclude === "none" ? "" : (opts.reuseExclude && opts.reuseExclude !== "true" ? opts.reuseExclude : DEFAULT_REUSE_EXCLUDE);
+  const minBytes = Number(opts.reuseMinBytes);
+
+  return {
+    fromDir,
+    skipIds: new Set(opts.reuseSkip.split(",").map(s => s.trim()).filter(s => s && s !== "true")),
+    excludeRe: compile(excludeSrc, "--reuse-exclude"),
+    requireRe: compile(opts.reuseRequire, "--reuse-require"),
+    minBytes: Number.isFinite(minBytes) && minBytes > 0 ? minBytes : 512,
+  };
 }
 
 /** Generate a human-readable subdirectory name from timestamp + input keywords */
@@ -934,7 +1231,9 @@ async function main() {
     actualWorkDir = path.join(rootOrGiven, subdir);
   }
 
-  process.exit(await run(actualWorkDir, opts.userInput));
+  const reuse = buildReuseOptions(opts, actualWorkDir);
+
+  process.exit(await run(actualWorkDir, opts.userInput, reuse, opts.dryRun));
 }
 
 main().catch(err => { console.error("Scheduler crashed:", err); process.exit(1); });
