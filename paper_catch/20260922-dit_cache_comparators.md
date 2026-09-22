@@ -69,10 +69,21 @@ python3 scripts/paper_mdsplit_batch.py \
   /data3/paper_analysis/paper_secs/secs_dit_cache_comparators
 
 # 4) 顺序分析
+#    ⚠️ run_all_papers.py 默认模型是 deepseek-v4-flash[1m]，但 .bashrc 不导出代理变量，
+#       不手动注入则请求发到官方 API，日志出现 unrecognized_model，每篇立即失败（README §3.4）
+deepseek-proxy-ensure
+DS_TOKEN=$(grep -oP 'ANTHROPIC_AUTH_TOKEN="\K[^"]+' ~/.bashrc)
+ANTHROPIC_BASE_URL="http://127.0.0.1:8787" \
+ANTHROPIC_AUTH_TOKEN="$DS_TOKEN" \
+ANTHROPIC_MODEL="deepseek-v4-flash[1m]" \
+ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]" \
+ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-flash[1m]" \
+ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash[1m]" \
+CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash[1m]" \
 python3 scripts/run_all_papers.py \
-  --paper-base-dir /data3/paper_analysis/paper_secs/secs_dit_cache_comparators \
-  --checkpoint-dir /data3/paper_analysis/paper_extract_checkpoints/dit_cache_comparators \
-  --output-repo-dir /data3/paper_analysis/repos/repo_dit_cache_comparators
+  --paper-base-dir paper_secs/secs_dit_cache_comparators \
+  --checkpoint-dir paper_extract_checkpoints/dit_cache_comparators \
+  --output-repo-dir repos/repo_dit_cache_comparators
 
 # 5) repo 汇总拆分入库
 python3 scripts/repo_mdsplit_batch.py \
