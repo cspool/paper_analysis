@@ -11,6 +11,7 @@ reconciles the split bytes against the source and fails loudly when they disagre
 """
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -25,10 +26,27 @@ MAX_HEADING_CHARS = 120
 # healthy papers at >=100% and only a handful between 90% and 100%.
 MIN_BYTE_RETENTION = 0.90
 
+_WORD = re.compile(r"\w", re.UNICODE)
+
 
 def unusable_heading(body):
-    """True when mdsplit cannot build a filename from this level-1 heading text."""
-    return "$$" in body or len(body) > MAX_HEADING_CHARS
+    """True when mdsplit cannot build a filename from this level-1 heading text.
+
+    Three forms have been seen in Marker output:
+    - a LaTeX ``$$...$$`` block promoted to level 1
+    - an OCR degeneration repeating a phrase for thousands of characters
+    - decoration only, such as ``# #####``, which leaves mdsplit with an empty
+      filename and makes it raise ValueError (killing the whole file's split)
+    """
+    if "$$" in body:
+        return True
+    if len(body) > MAX_HEADING_CHARS:
+        return True
+    # mdsplit strips markdown/HTML before building the name; no word character left
+    # means it ends up with "" and raises.
+    if not _WORD.search(re.sub(r"<[^>]*>", "", body)):
+        return True
+    return False
 
 
 def sanitize_headings(md_file, scratch_dir):
