@@ -161,3 +161,17 @@ python3 scripts/repo_mdsplit_batch.py \
 ```
 
 **提示**：第 3 步跑完先确认产出子目录数为 31（Marker 若某篇失败会静默少一个）；第 4 步想先验证路径加 `--dry-run`（DeepSeek 变量同样要带），只试一篇用 `--limit 1`。第 4 步是唯一耗时长的（逐篇起 Agent）。`Self-Orchestrating Language Models` 有 117 页，转换与分析都会明显慢于其他篇。
+
+## ⚠️ 第 3 步实际踩到的两个坑（2026-09-28，均已解决）
+
+**坑 1：目标路径写成了 `paper_secs/secs_new_model_sc`（截断），导致第 4 步 `FileNotFoundError`。**
+第 3 步不校验目录名，会直接在截断路径下建出完整的 31 个子目录，**看起来完全成功**，直到第 4 步才报错。已用正确路径重跑。若 `paper_secs/secs_new_model_sc` 还在，它是纯重复的派生产物，可安全删除。
+
+**坑 2：⚑ LoopFormer 在拆分时静默丢了 71% 正文，且丢的正是 Method 与 Experiments。**
+根因：Marker 把 **Algorithm 1 的整块 LaTeX 公式误判成一级标题**（`# <span id="page-5-0"></span> $$\label{eq:algorithm}...`），`paper_mdsplit_batch.py` 拿它当章节名建文件失败，于是从该行到 ACKNOWLEDGEMENTS 之间的内容整段被丢弃 —— 源 75,085 B 只剩 22,138 B（29%），而拆出的三个文件本身看不出异常。
+
+处置：把源 md 里含 `$$` / `<span id=` / 超长的伪一级标题降级为 `##` 后重拆，内容恢复到 **100%**，修正后的源 md 已回写 `papers_md/`（避免重跑时复现）。
+
+**遗留口径（分析时必须知道）**：该文源 md 的第 3/4/5 节**根本没有 `# ` 一级标题**，所以 **Method 与 Experiments 现在位于 `2-RELATED-WORK.md` 的尾部**（13,915 → 33,739 B），不是独立文件。读该篇时不要只看文件名。
+
+**通用纪律**：拆分后应按"源 md 字节数 vs 拆后各 .md 字节和"逐篇对账（本批 31 篇最终全部字节一致）。**只看子目录数或章节数发现不了这类丢失。**
