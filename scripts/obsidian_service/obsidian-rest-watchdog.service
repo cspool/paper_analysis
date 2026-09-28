@@ -1,0 +1,15 @@
+[Unit]
+Description=Restart obsidian.service only when its Local REST API is down AND the process shows no CPU progress (indexing must not count as a failure)
+After=obsidian.service
+
+[Service]
+Type=oneshot
+# 判据与全部参数都在脚本里，见 ~/.local/bin/obsidian-rest-watchdog 顶部注释。要点：
+#   - 加载/建索引期间 CPU 持续增长 => 判为正常，永不重启。
+#     旧版用固定 180s 宽限期，在 62k 文件的 vault 上每 ~190s 掐一次，
+#     导致 Obsidian 永远启动不完（死亡循环）。任何固定时长都是猜测：
+#     猜短了循环，猜长了真崩溃也发现不了。
+#   - 端口不通且 10s 内几乎无 CPU 增长，连续 3 轮才重启。
+#   - 每小时最多重启 3 次，超限只告警不再重启 => 结构上排除重启循环。
+#   - 51361(Omnisearch) 只记录不作为重启依据：它比 27123 晚就绪。
+ExecStart=/home/descfly/.local/bin/obsidian-rest-watchdog
